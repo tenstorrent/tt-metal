@@ -6,6 +6,7 @@
 
 #include <variant>
 
+#include "device/tmp/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -201,6 +202,7 @@ ttnn::Tensor bound_matmul(
     // TODO: create parameters struct
     auto matmul_params =
         create_matmul_struct(input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+
     auto output_tensor = ttnn::prim::matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
@@ -211,20 +213,15 @@ ttnn::Tensor bound_matmul(
         matmul_params.output_mem_config,
         matmul_params.output_dtype,
         matmul_params.compute_kernel_config,
+        matmul_params.untilize_out,
         matmul_params.user_core_coord,
         matmul_params.user_fused_activation,
+        matmul_params.user_run_batched,
         matmul_params.transpose_a,
         matmul_params.transpose_b,
         matmul_params.output_tile,
         matmul_params.global_cb,
         matmul_params.sub_device_id);
-
-    // auto output_tensor = matmul(
-    //     input_tensor_a_adjusted,
-    //     input_tensor_b_adjusted,
-    //     post_process_bias ? std::nullopt : bias,
-    //     parameters,
-    //     optional_output_tensor);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(

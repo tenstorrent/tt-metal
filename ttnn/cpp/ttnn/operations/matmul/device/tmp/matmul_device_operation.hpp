@@ -4,10 +4,10 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
 
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_program_factory.hpp"
-// #include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_program_factory.hpp"
 #include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
@@ -46,6 +46,9 @@ struct MatmulDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -56,8 +59,10 @@ struct MatmulDeviceOperation {
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<DataType>& output_dtype = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+        bool untilize_out = false,
         const std::optional<CoreCoord>& user_core_coord = std::nullopt,
         const std::optional<ttnn::operations::unary::UnaryWithParam>& user_fused_activation = std::nullopt,
+        bool user_run_batched = false,
         bool transpose_a = false,
         bool transpose_b = false,
         const std::optional<tt::tt_metal::Tile>& output_tile = std::nullopt,

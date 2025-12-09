@@ -12,21 +12,6 @@ namespace ttnn::operations::matmul {
 
 namespace {
 
-bool is_input_batched(const ttnn::Shape& shape) {
-    if (shape.rank() < 2) [[unlikely]] {
-        return false;
-    }
-
-    auto is_batched = false;
-    for (auto i = 0; i < shape.rank() - 2; ++i) {
-        if (shape[i] > 1) {
-            is_batched = true;
-            break;
-        }
-    }
-    return is_batched;
-}
-
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
@@ -1103,12 +1088,14 @@ tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
     auto factory = select_program_factory(attributes, args);
 
     auto hash = tt::tt_metal::operation::hash_operation<MatmulDeviceOperation>(
-        attributes, factory.index(), input_tensor_a.dtype(), input_tensor_a.memory_config());
-
-    hash = tt::stl::hash::hash_objects(hash, input_tensor_b.dtype(), input_tensor_b.memory_config());
+        attributes, factory.index(), input_tensor_a, input_tensor_b);
 
     if (bias.has_value()) {
-        hash = tt::stl::hash::hash_objects(hash, bias->dtype(), bias->memory_config());
+        hash = tt::stl::hash::hash_objects(hash, bias.value());
+    }
+
+    if (args.output_tensor.has_value()) {
+        hash = tt::stl::hash::hash_objects(hash, args.output_tensor.value());
     }
 
     return hash;
@@ -1125,20 +1112,15 @@ MatmulDeviceOperation::invoke(
     const std::optional<const MemoryConfig>& optional_memory_config,
     const std::optional<DataType>& output_dtype,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const bool untilize_out,
     const std::optional<CoreCoord>& user_core_coord,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& user_fused_activation,
+    bool user_run_batched,
     bool transpose_a,
     bool transpose_b,
     const std::optional<tt::tt_metal::Tile>& output_tile,
     const std::optional<GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool user_run_batched = is_input_batched(input_tensor_b.logical_shape());
-    const bool untilize_out =
-        program_config.has_value() &&
-                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
-            ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
-            : false;
-
     auto memory_config = optional_memory_config.has_value() ? optional_memory_config.value()
                                                             : tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     MatmulProgramConfig determined_config;
@@ -1187,6 +1169,56 @@ MatmulDeviceOperation::invoke(
             global_cb,
             sub_device_id},
         tensor_args_t{input_tensor_a, input_tensor_b, bias, optional_output_tensor}};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+MatmulDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    using namespace tt::tt_metal;
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto& input_tensor_b = tensor_args.input_tensor_b;
+
+    const auto& in_a_shape = input_tensor_a.logical_shape();
+    const auto& out_shape = output_tensor.logical_shape();
+
+    const auto& t = output_tensor;
+    if (t.storage_type() != StorageType::DEVICE) {
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+
+    const CoreCoord compute_grid = t.device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
+
+    // Calculate number of mul/add operations
+    // TODO: add bias modeling
+    int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
+    uint32_t batch_size = get_batch_size(out_shape);
+    int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
+
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(operation_attributes.compute_kernel_config);
+
+    int ideal_dev_clock_cycles = std::ceil(
+        ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
+        (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
+
+    operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor_a, input_tensor_b}, {output_tensor}, ideal_dev_clock_cycles);
+#if 0
+        log_info(tt::LogOp, "Matmul PerfModel:");
+        for (auto i = 0; i < out_shape.rank() - 2; i++) {
+            log_info(tt::LogOp, "\t Batch Values: (Index: {}, Value: {})", i, out_shape[i]);
+        }
+        log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[-2], in_a_shape[-1]);
+        log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[-2], in_b_shape[-1]);
+        log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[-2], out_shape[-1]);
+        log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+#endif
+    return result;
 }
 
 }  // namespace ttnn::operations::matmul
