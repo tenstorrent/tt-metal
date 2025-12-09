@@ -108,6 +108,7 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
             constexpr uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
 
+            // TODO: Should these be VC relative? If so, we don't need to add the base sender channel.
             // Create sender channels (3 or 4 depending on router type)
             for (uint32_t i = 0; i < mesh_vc1_sender_count; ++i) {
                 sender_channel_map_[LogicalSenderChannelKey{1, i}] =

@@ -115,16 +115,34 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         // 4. Even when VC1 is enabled on mesh routers (via IntermeshVCConfig), INTRA_MESH connections
         //    continue to use VC0, while inter-mesh connections use VC1
         // 5. The VC assignment is determined by the connection type, not the router capabilities
+        // VC0: For intra-mesh traffic (mesh-to-mesh communication within a single mesh)
+        // VC1: For intra-mesh routers in multi-mesh, forward inter-mesh traffic received on VC1
         //
         TT_FATAL(outbound_directions.size() <= builder_config::num_downstream_edms_2d_vc0, "Outbound directions size must be less than or equal to num_downstream_edms_2d_vc0");
+        
+        // Add VC0 targets for intra-mesh traffic
         for (size_t i = 0; i < outbound_directions.size(); ++i) {
             mapping.add_target(
-                0,  // VC0 - hardcoded for INTRA_MESH (see documentation above)
+                0,  // VC0 - for intra-mesh traffic
                 0,  // Receiver channel 0
                 ConnectionTarget(
                     ConnectionType::INTRA_MESH,
-                    0,      // Target VC0 - hardcoded for INTRA_MESH (see documentation above)
+                    0,      // Target VC0
                     i + 1,  // Target sender channel
+                    outbound_directions[i]));
+        }
+        
+        // Add VC1 targets for intra-mesh routers (to forward inter-mesh traffic)
+        // VC1 connections are only for intra-mesh routers in multi-mesh topologies
+        // They forward inter-mesh traffic that was received via VC1
+        for (size_t i = 0; i < outbound_directions.size(); ++i) {
+            mapping.add_target(
+                1,  // VC1 - for inter-mesh traffic forwarding
+                0,  // Receiver channel 0 (VC1 only has one receiver channel)
+                ConnectionTarget(
+                    ConnectionType::INTRA_MESH,
+                    1,      // Target VC1
+                    i,      // Target sender channel (0-2 for VC1)
                     outbound_directions[i]));
         }
     }
