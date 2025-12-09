@@ -9,8 +9,8 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl {
-namespace llama_all_gather_matmul_async {
+
+namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
 LlamaAllGatherMatmulAsyncDeviceOperation::program_factory_t
 LlamaAllGatherMatmulAsyncDeviceOperation::select_program_factory(
@@ -213,5 +213,5 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
         tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor}};
 }
 
-}  // namespace llama_all_gather_matmul_async
-}  // namespace ttnn::operations::experimental::ccl
+} // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+

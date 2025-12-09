@@ -31,8 +31,8 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl {
-namespace llama_all_gather_matmul_async::program {
+
+namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program {
 
 LlamaAllGatherMatmulAsyncProgramFactory::cached_mesh_workload_t
 LlamaAllGatherMatmulAsyncProgramFactory::create_mesh_workload(
@@ -550,5 +550,5 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
     }
 }
 
-}  //  namespace llama_all_gather_matmul_async::program
-}  //  namespace ttnn::operations::experimental::ccl
+} // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program
+
