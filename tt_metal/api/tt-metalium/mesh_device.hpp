@@ -63,6 +63,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
+class MeshCommandQueueBase;
 
 using DeviceIds = std::vector<int>;
 
@@ -114,7 +115,7 @@ private:
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
-    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
@@ -126,6 +127,13 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+    // Recursively quiesce all submeshes.
+    void quiesce_internal();
+
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
@@ -184,6 +192,8 @@ public:
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
@@ -298,6 +308,17 @@ public:
 
     const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+
+    /**
+     * @brief Synchronize with all devices derived from this mesh (including submeshes).
+     *
+     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed. Use this to
+     * insert a barrier between phases that use overlapping submeshes on the same physical devices. After this call
+     * returns, it is safe to enqueue new work on this mesh or any submesh derived from this mesh that may overlap with
+     * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
+     * called.
+     */
+    void quiesce_devices();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);

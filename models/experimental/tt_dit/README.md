@@ -2,21 +2,45 @@
 
 This directory contains the implementation of the Tenstorrent Diffusion Transformer (TT-DiT) architecture, designed for optimized parallelism of DiTs for image and video generation.
 
+## Supported Models
+
+For detailed information about each model including performance metrics, usage instructions, and specific requirements, see:
+
+- **[Stable Diffusion 3.5 Large](models/StableDiffusion35.md)** - Text-to-image generation
+- **[Flux 1](models/Flux1.md)** - Text-to-image generation (schnell & dev variants)
+- **[Motif](models/Motif.md)** - Text-to-image generation model
+- **[Mochi-1](models/Mochi_1.md)** - Video generation model
+- **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
+
 ## Directory Structure
 
 ```
 tt_dit/
 ├── layers/              # Core neural network layers
-├── models/              # Model architectures
-│   ├── autoencoders/    # Autoencoder implementations
-│   └── transformers/    # Transformer model implementations
+├── models/              # Model architectures and documentation
+│   ├── transformers/    # Transformer implementations (SD35, Mochi, Wan, Flux1, Motif)
+│   ├── vae/            # VAE/Autoencoder implementations
+│   ├── StableDiffusion35.md  # SD3.5 model documentation
+│   ├── Flux1.md         # Flux 1 model documentation
+│   ├── Motif.md         # Motif model documentation
+│   ├── Mochi_1.md       # Mochi-1 model documentation
+│   └── Wan2_2.md        # Wan2.2 model documentation
+├── encoders/            # Text encoder implementations
+│   ├── clip/           # CLIP encoder
+│   └── t5/             # T5 encoder
 ├── parallel/            # Parallelization utilities
 │   ├── config.py        # Parallel configuration
 │   └── manager.py       # Parallel execution management
-├── pipelines/           # Model pipelines
-│   └── stable_diffusion_35_large/
+├── pipelines/           # End-to-end model pipelines
+│   ├── stable_diffusion_35_large/
+│   ├── mochi/
+│   ├── wan/
+│   ├── flux1/
+│   └── motif/
 ├── tests/              # Test suite
-│   ├── models/         # Model-level tests
+│   ├── models/         # Model-level tests (sd35, mochi, wan2_2, flux1, motif)
+│   ├── encoders/       # Encoder tests
+│   ├── blocks/         # Block-level tests
 │   └── unit/          # Unit tests for layers
 └── utils/             # Utility functions
     ├── check.py       # Validation utilities
@@ -34,19 +58,27 @@ tt_dit/
 - **Normalization**: Layer normalization implementations
 
 ### Models
-- **Transformers**: SD3.5-specific transformer implementations
-  - `attention_sd35.py`: Attention mechanisms
-  - `transformer_sd35.py`: Main transformer architecture
+- **Transformers**: DiT transformer implementations for various generative models
+  - Support for multiple architectures including SD3.5, Mochi, Wan2.2, Flux1, and Motif
+  - Model-specific attention mechanisms and transformer architectures
+- **Autoencoders**: VAE implementations for different models
 
 ### Parallel Processing
 - **Config**: Parallel configuration management with `DiTParallelConfig`
 - **Manager**: Parallel execution and device management
 
 ### Pipelines
-- **Stable Diffusion 3.5**: Large model pipeline implementation
-  - Automatic parallel configuration
-  - Optimized for different device configurations
-  - Comprehensive timing collection
+End-to-end pipeline implementations for multiple generative models:
+- **Stable Diffusion 3.5 Large**: Text-to-image generation (1024x1024px)
+- **Flux 1**: Text-to-image generation (schnell & dev variants, 1024x1024px)
+- **Motif**: Text-to-image generation (6B model, 1024x1024px)
+- **Mochi-1**: Video generation model (824x480px, 168 frames)
+- **Wan2.2-T2V-A14B**: Text-to-video generation
+
+Each pipeline includes:
+- Automatic parallel configuration for different device meshes
+- Optimized execution on Wormhole systems
+- Comprehensive timing collection and profiling
 
 ## Testing
 
@@ -67,11 +99,15 @@ Running tests:
 # Run unit tests
 python -m pytest tests/unit/
 
-# Run model tests
+# Run all model tests
 python -m pytest tests/models/
 
-# Run specific test file
-python -m pytest tests/models/test_pipeline_sd35.py -v
+# Run specific model pipeline tests
+python -m pytest tests/models/sd35/test_pipeline_sd35.py -v
+python -m pytest tests/models/flux1/test_pipeline_flux1.py -v
+python -m pytest tests/models/motif/test_pipeline_motif.py -v
+python -m pytest tests/models/mochi/test_pipeline_mochi.py -v
+python -m pytest tests/models/wan2_2/test_pipeline_wan.py -v
 ```
 
 ## Key Features

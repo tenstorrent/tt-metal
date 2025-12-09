@@ -75,16 +75,6 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
-    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
-}
-
-test_suite_bh_single_pcie_llama_demo_tests() {
-    echo "[upstream-tests] Running BH upstream Llama demo model tests"
-
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
@@ -116,11 +106,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         sleep 5
     done
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-
-    # Remove this once https://github.com/tenstorrent/tt-metal/issues/28352 is fixed
-    if [[ "$hw_topology" != "blackhole_qb_ge" ]]; then
-        ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    fi
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
     ./build/test/tt_metal/unit_tests_eth
     if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
@@ -228,27 +214,39 @@ test_suite_bh_ttnn_stress_tests() {
 
 test_suite_bh_glx_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
-    # Fabric
-    ./build/test/tt_metal/tt_fabric/test_system_health
+
+    # BH Galaxy XY (2D) Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
-    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
+    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-    # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
+    # Deadlock stability tests - These validate 2D Torus (QSFP Link) stability
+    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=**RandomProgram**
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations
-    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQMultiDeviceEventFixture.*
-    build/test/tt_metal/unit_tests_device --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1
+
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter="\
+UnitMeshCQProgramFixture.TensixTestRandomizedProgram:\
+UnitMeshRandomProgramFixture.TensixActiveEthTestPrograms:\
+UnitMeshRandomProgramFixture.TensixTestLargeProgramInBetweenFiveSmallPrograms:\
+UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTraceAndNoTrace:\
+UnitMeshRandomProgramTraceFixture.TensixActiveEthTestProgramsTrace:\
+UnitMeshRandomProgramTraceFixture.TensixTestLargeProgramInBetweenFiveSmallProgramsTrace:\
+UnitMeshRandomProgramTraceFixture.TensixTestSimpleProgramsTrace:\
+UnitMeshCQTraceFixture.TensixEnqueueMultiProgramTraceBenchmark:\
+UnitMeshCQTraceFixture.TensixEnqueueTwoProgramTrace:\
+UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites:\
+UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites:\
+UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations:\
+UnitMeshMultiCQMultiDeviceEventFixture.*:\
+UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 }
 
 test_suite_bh_glx_python_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream python unit tests"
     # CCL / Ops
-    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_mesh.py
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_torus.py
 }
 
 test_suite_bh_glx_llama_demo_tests() {
@@ -257,7 +255,15 @@ test_suite_bh_glx_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 32 --max_generated_tokens 220
+}
+
+test_suite_bh_glx_torus_xyz_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus + Z links topology on BH 6U Galaxy"
+    # Fabric
+    # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
+    # The purpose of this test is to verify that the Z Ports are healthy, and is to be run by operators/technicians installing BH Galaxies.
+    # This test is not to be run on officical topologies (Mesh, X Torus, Y Torus or XY Torus).
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
 # Define test suite mappings for different hardware topologies

@@ -44,6 +44,8 @@ extern uint32_t traceCount;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
+constexpr uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC / sizeof(uint32_t);
+constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
@@ -53,6 +55,11 @@ constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
 constexpr bool TRACE_ON_TENSIX = true;
 #else
 constexpr bool TRACE_ON_TENSIX = false;
+#endif
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+constexpr bool DO_SUM = true;
+#else
+constexpr bool DO_SUM = false;
 #endif
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
@@ -101,7 +108,7 @@ __attribute__((noinline)) void init_profiler(
         sums[i] = 0;
     }
 
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
@@ -195,7 +202,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0))
 
 // Saves several NoC register states restores them
 // when the NocRegisterStateSave is destroyed
@@ -275,23 +282,24 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
 
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    bool do_noc = true;
-    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
-        do_noc = false;
-    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+    bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
 
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+        bool do_noc = true;
+        if (!is_dram_set) {
+            do_noc = false;
+        }
 #if defined(COMPILE_FOR_IDLE_ERISC)
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
 #else
@@ -351,9 +359,9 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
+#if (                                                                                               \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
+    (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
     auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
@@ -426,9 +434,9 @@ __attribute__((noinline)) void quick_push() {
 // DRAM in the event that a long series of linked multicast will prevent
 // flushing and cause dropped events.
 void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
+#if (                                                                                               \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
+    (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
     if (!linked) {
         return;
     }
@@ -533,11 +541,15 @@ struct profileScopeAccumulate {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
     inline __attribute__((always_inline)) profileScopeAccumulate() {
-        start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        if constexpr (kernel_profiler::DO_SUM) {
+            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        }
     }
     inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        sumIDs[index] = timer_id;
-        sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        if constexpr (kernel_profiler::DO_SUM) {
+            sumIDs[index] = timer_id;
+            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        }
     }
 };
 
@@ -591,6 +603,7 @@ __attribute__((noinline)) void trace_only_init() {
 }  // namespace kernel_profiler
 
 #include "noc_event_profiler.hpp"
+#include "perf_counters.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
@@ -713,5 +726,10 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+
+// null macros when perf counters are disabled
+#define StartPerfCounters()
+#define StopPerfCounters()
+#define RecordPerfCounters()
 
 #endif

@@ -1,2 +1,0 @@
-#!/bin/bash
-streamlit run yolov6l.py -- "$@"

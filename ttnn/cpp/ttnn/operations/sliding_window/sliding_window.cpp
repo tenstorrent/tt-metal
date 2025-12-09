@@ -184,11 +184,20 @@ std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() 
     uint32_t strided_input_height = ((input_hw.first - 1) * stride_hw.first) + 1;
     uint32_t strided_input_width = ((input_hw.second - 1) * stride_hw.second) + 1;
 
-    uint32_t input_pad_top = (full_input_shape[1] - strided_input_height) / 2;
-    uint32_t input_pad_bottom = full_input_shape[1] - strided_input_height - input_pad_top;
+    uint32_t base_pad_height = dilation_hw.first * (window_hw.first - 1);
+    uint32_t base_pad_width = dilation_hw.second * (window_hw.second - 1);
+    uint32_t input_pad_top = base_pad_height - padding[0];
+    uint32_t input_pad_bottom = base_pad_height - padding[1];
 
-    uint32_t input_pad_left = (full_input_shape[2] - strided_input_width) / 2;
-    uint32_t input_pad_right = full_input_shape[2] - strided_input_width - input_pad_left;
+    uint32_t input_pad_left = base_pad_width - padding[2];
+    uint32_t input_pad_right = base_pad_width - padding[3];
+
+    TT_FATAL(
+        full_input_shape[1] - strided_input_height == input_pad_top + input_pad_bottom + output_pad_hw.first,
+        "Calculated input padding height does not match the expected value.");
+    TT_FATAL(
+        full_input_shape[2] - strided_input_width == input_pad_left + input_pad_right + output_pad_hw.second,
+        "Calculated input padding width does not match the expected value.");
 
     return {std::pair{input_pad_top, input_pad_bottom}, std::pair{input_pad_left, input_pad_right}};
 }
@@ -1023,7 +1032,7 @@ std::string SlidingWindowConfig::to_string() const {
            "_dil_h=" + std::to_string(std::get<0>(dilation_hw)) + "_dil_w=" + std::to_string(std::get<1>(dilation_hw)) +
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window
@@ -1062,7 +1071,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), padding=(({}, {}), "
         "({}, {})), output_padding = ({}, {}), "
-        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
+        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={}, is_transpose={})",
         t.batch_size,
         t.input_hw.first,
         t.input_hw.second,
@@ -1080,7 +1089,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.dilation_hw.second,
         t.num_cores_nhw,
         t.num_cores_c,
-        t.core_range_set.str());
+        t.core_range_set.str(),
+        t.is_transpose);
     return fmt::format_to(ctx.out(), "{}", str);
 }
 

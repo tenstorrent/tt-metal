@@ -17,9 +17,11 @@
 #include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
+class AllocatorImpl;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -95,6 +97,8 @@ public:
 
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
@@ -180,7 +184,7 @@ public:
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
-    std::unique_ptr<Allocator> initialize_allocator(
+    std::unique_ptr<AllocatorImpl> initialize_allocator(
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
@@ -224,7 +228,6 @@ private:
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<CommandQueue>> command_queues_;
 
-    std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
@@ -238,6 +241,10 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+
+    // Friend declaration for experimental API
+    friend uint32_t experimental::Device::get_worker_noc_hop_distance(
+        IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
 };
 
 }  // namespace tt::tt_metal

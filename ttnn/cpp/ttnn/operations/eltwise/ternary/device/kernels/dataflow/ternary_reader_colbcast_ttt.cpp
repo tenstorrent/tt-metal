@@ -51,15 +51,36 @@ void kernel_main() {
     constexpr auto false_cb = get_compile_time_arg_val(2);
 
     // Compile-time args layout mirrors no-bcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<3>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
+    constexpr auto src0_args = TensorAccessorArgs<3, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
+    constexpr auto src2_args =
+        TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, src_addr, get_tile_size(predicate_cb));
-    const auto s1 = TensorAccessor(src1_args, true_addr, get_tile_size(true_cb));
-    const auto s2 = TensorAccessor(src2_args, false_addr, get_tile_size(false_cb));
+#if SRC_SHARDED_A
+    cb_reserve_back(predicate_cb, src_num_tiles);
+    cb_push_back(predicate_cb, src_num_tiles);
+#else
+    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
+    const auto s0 = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+#endif
+#if SRC_SHARDED_B
+    cb_reserve_back(true_cb, true_num_tiles);
+    cb_push_back(true_cb, true_num_tiles);
+#else
+    const uint32_t src1_tile_bytes = get_tile_size(true_cb);
+    const auto s1 = TensorAccessor(src1_args, true_addr, src1_tile_bytes);
+#endif
+#if SRC_SHARDED_C
+    cb_reserve_back(false_cb, false_num_tiles);
+    cb_push_back(false_cb, false_num_tiles);
+#else
+    const uint32_t src2_tile_bytes = get_tile_size(false_cb);
+    const auto s2 = TensorAccessor(src2_args, false_addr, src2_tile_bytes);
+#endif
 
     constexpr uint32_t onetile = 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -75,7 +96,7 @@ void kernel_main() {
     uint32_t start_c = offset_n / HtWt;
     uint32_t start_th = offset_c / Wt;
     uint32_t start_tw = offset_c % Wt;
-    uint32_t end_tw = (dst_shard_width != 0) ? (start_tw + dst_shard_width) : Wt;
+    uint32_t end_tw = has_sharding ? (start_tw + dst_shard_width) : Wt;
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
@@ -179,7 +200,7 @@ void kernel_main() {
 #endif
                         }
                         // next row of tiles should start at the first column for non-sharded case
-                        if (dst_shard_width == 0) {
+                        if constexpr (!has_sharding) {
                             start_tw = 0;
                         }
 #if !SRC_BCAST_A && !SRC_SHARDED_A
