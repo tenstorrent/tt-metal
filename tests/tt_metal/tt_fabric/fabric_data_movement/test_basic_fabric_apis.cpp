@@ -881,6 +881,25 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoords) {
     }
 }
 
+// UDM Mode All-to-All Tests - all devices send to all other devices simultaneously
+// Senders are on top half of compute grid, receivers are on bottom half
+// Each receiver receives from N-1 senders at different L1 locations
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_INLINE_WRITE);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_READ);
+}
+
 // Mux-to-Mux Forwarding Tests - test the mux's ability to forward packets to the correct downstream mux
 // These tests intentionally send packets with a non-optimal initial direction to verify mux forwarding works
 // Test cases cover scenarios where the worker sends a packet to a mux in a different direction,
