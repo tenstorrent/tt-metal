@@ -5,11 +5,11 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
-#include "tt_metal/hw/inc/risc_attribs.h"
-#include "firmware_common.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/risc_attribs.h"
+#include "internal/firmware_common.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 #include "tt_metal/hw/firmware/src/trisc.cc"
 
 // Those values come from generated files, so hardcode values here
