@@ -103,15 +103,19 @@ std::filesystem::path get_dprint_log_dir() {
         return get_null_device_path();
     }
 
-    // Verify the directory is writable by checking permissions
-    auto perms = std::filesystem::status(log_dir, ec).permissions();
-    if (ec || (perms & std::filesystem::perms::owner_write) == std::filesystem::perms::none) {
-        log_warning(
-            tt::LogMetal,
-            "DPRINT log directory '{}' is not writable. DPRINT output will be discarded.",
-            log_dir.string());
-        return get_null_device_path();
+    // Verify the directory is writable by attempting to create and remove a temporary file
+    std::filesystem::path test_file = log_dir / ".write_test";
+    {
+        std::ofstream test_stream(test_file);
+        if (!test_stream) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT log directory '{}' is not writable. DPRINT output will be discarded.",
+                log_dir.string());
+            return get_null_device_path();
+        }
     }
+    std::filesystem::remove(test_file, ec);
 
     return log_dir;
 }
