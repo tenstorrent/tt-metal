@@ -5,6 +5,7 @@ import os
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 from transformers import AutoConfig, AutoModelForVision2Seq
 from transformers.models.mllama.modeling_mllama import MllamaVisionAttention
@@ -108,9 +109,14 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
 
     # Create PT input
     ar = torch.tensor([[1, 2]])
-    pt_block_input = ((torch.rand(batch, num_chunks, ntok, dim) * 2) - 1) * 0.1
+    pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
     tt_attention_input = pt_block_input.clone()
-
+    num_padding_patches = (8 - (pt_block_input.shape[-2] % 8)) % 8
+    # Compute padding tuple for pad function
+    padding = (0, 0, 0, num_padding_patches)  # (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
+    # Pad the tensor
+    pt_block_input = F.pad(pt_block_input, padding, mode="constant", value=0)
+    slice_index = -num_padding_patches if num_padding_patches > 0 else None
     # Create PT attention mask
     mask = build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
@@ -149,7 +155,8 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
     reference_output = reference_model(pt_block_input, attention_mask=mask)[0]
-    reference_output = reference_output.reshape(batch, num_chunks, ntok, dim)
+    reference_output = reference_output.reshape(batch, num_chunks, ntok - slice_index, dim)
+    reference_output = reference_output[:, :, :slice_index, :]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
