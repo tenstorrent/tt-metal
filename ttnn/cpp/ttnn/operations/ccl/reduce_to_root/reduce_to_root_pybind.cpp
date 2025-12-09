@@ -23,7 +23,7 @@ void py_bind_reduce_to_root(py::module& module) {
                 input_tensor_l: the input tensor is a vector of values l of SDPA.
                 input_tensor_s: the input tensor is a vector of state s of SDPA.
                 input_tensor_m: the input tensor is a vector of state m of SDPA.
-                root_coord (ttnn.MeshCoordinate): Coordinate of the root device. Should be (1,0) or (2,0)
+                root_coord (ttnn.MeshCoordinate): Coordinate of the root device. Should be (1,0) for 4 devices setup.
 
             Keyword Args:
                 topology (ttnn.Topology): Fabric topology.

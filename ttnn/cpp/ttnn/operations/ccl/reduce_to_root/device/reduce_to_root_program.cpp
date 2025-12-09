@@ -158,10 +158,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     bool is_root2_device = false;
     bool is_sender_device = false;
     bool is_leftmost = false;
-    if (is_sender_device && forward_coord.has_value() && forward_coord.value() == root_coord) {
-        is_leftmost = false;
-    }
-
     if (device_coordinate == root_coord) {
         // this is the root device
         is_root_device = true;
