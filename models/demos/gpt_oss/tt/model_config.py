@@ -100,7 +100,7 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = self.max_prefill_warmup_seq_len
+        DEFAULT_VALUE = self.max_prefill_chunk_size
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "gpt-oss-120b": 4096
