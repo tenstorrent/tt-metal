@@ -266,7 +266,7 @@ class Generator:
         empty_slots=None,
         enable_trace=False,
         model_id_warmup=None,
-        start_pos=None,  # Cached prefixes lengths
+        start_pos: list[int] = None,  # Cached prefixes lengths
         **kwargs,
     ):
         self.mode = "prefill"
@@ -318,10 +318,10 @@ kwargs: {kwargs}"
             # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
             prefill_ids = torch.cat(
                 [
-                    tokens[idx : idx + 1, num_cached_tokens:seq_len],  # Select this user  # Skip the cached tokens
-                    torch.zeros(1, prefill_seq_len - (seq_len - num_cached_tokens)).long(),
+                    tokens[idx : idx + 1, num_cached_tokens:seq_len],  # Select this user, skip the cached tokens
+                    torch.zeros(1, prefill_seq_len - (seq_len - num_cached_tokens)).long(),  # Pad
                 ],
-                dim=-1,  # Pad the rest of the prompt
+                dim=-1,
             )
 
             enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
@@ -349,6 +349,15 @@ kwargs: {kwargs}"
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
+            print("prefill_forward_text debug:")
+            print(f"prefill_ids shape: {prefill_ids.shape}")
+            print(f"page_table_user shape: {page_table_user.shape}")
+            print(f"last_token_idx: {last_token_idx}")
+            print(f"num_cached_tokens: {num_cached_tokens}")
+            print(f"start_pos: {start_pos}")
+            print(f"seq_len: {seq_len}")
+            print(f"prefill_seq_len: {prefill_seq_len}")
+
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
@@ -375,7 +384,9 @@ kwargs: {kwargs}"
                 # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                 # We need to do this here, because we can't do this part in forward() if we have trace enabled
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+                logits = self.model[model_id].process_logits_after_prefill_trace(
+                    logits, last_token_idx - num_cached_tokens
+                )
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             out_list.append(logits.cpu(blocking=False))
@@ -391,14 +402,14 @@ kwargs: {kwargs}"
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx - num_cached_tokens) % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
     def prefill_forward_single_user_text(
         self,
-        tokens,  # New tokens to prefill (without the cached tokens)
+        tokens,  # New tokens to prefill (without the cached tokens), padded to 128, power of 2 or multiple of 2048
         page_table,  # Cached and new pages
         user_id,
         last_token_idx,  # Last token index of the full prompt, including the cached tokens
@@ -427,18 +438,17 @@ kwargs: {kwargs}"
             ), "last_token_idx must be provided and less than seq_len + num_cached_tokens"
 
             if use_chunked_prefill:
-                # If prefix caching is needed, we want to use the maximum chunk size.
-                chunk_size = get_max_prefill_chunk_size(
-                    seq_len + num_cached_tokens, self.model_args[model_id].max_prefill_chunk_size
-                )
+                # If chunked prefill (more than one chunk is needed), we want to use the maximum chunk size.
+                chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
             else:
                 # Otherwise we only have one chunk.
                 chunk_size = seq_len
 
+            last_token_idx_in_seq = last_token_idx - num_cached_tokens  # Excluding the cached tokens
             block_size = get_block_size(kv_cache)
-            last_token_idx_in_chunk = (last_token_idx - num_cached_tokens) % chunk_size
+            last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
             # Calculate which chunk contains the last_token_idx
-            last_chunk_start = ((last_token_idx - num_cached_tokens) // chunk_size) * chunk_size
+            last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
             page_table_user = page_table[user_id : user_id + 1, :]
             # Pad page table to match number of blocks in seq_len
             num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
@@ -452,10 +462,16 @@ kwargs: {kwargs}"
                 chunk_end = chunk_start + chunk_size
                 assert (
                     chunk_end <= seq_len
-                ), f"Chunk end should be less than seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
+                ), f"Chunk end should be less or equal to seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
                 chunk_tokens = tokens[:, chunk_start:chunk_end]
-                chunk_page_table = page_table_user[
-                    :, num_cached_blocks + chunk_start // block_size : num_cached_blocks + chunk_end // block_size
+                # Only include blocks for actual tokens, not padded tokens
+                # actual_chunk_end is the exclusive end (1-based count of actual tokens)
+                actual_chunk_end = min(chunk_end, last_token_idx_in_seq + 1)
+                # Calculate the end block index: the block containing (actual_chunk_end - 1) is the last block we need
+                # Since actual_chunk_end is exclusive, we need blocks up to and including the block for (actual_chunk_end - 1)
+                actual_chunk_end_block = num_cached_blocks + (actual_chunk_end - 1) // block_size + 1
+                chunk_page_table = page_table_user_padded[
+                    :, num_cached_blocks + chunk_start // block_size : actual_chunk_end_block
                 ]
 
                 (
@@ -478,15 +494,17 @@ kwargs: {kwargs}"
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
-                    chunk_start_idx=num_cached_tokens + chunk_start,
+                    chunk_start_idx=num_cached_blocks + chunk_start // block_size,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                     **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
+                    print(f"Returning tt_logits for chunk_start: {chunk_start}, last_chunk_start: {last_chunk_start}")
                     return tt_logits
                 else:
+                    print(f"Deleting tt_logits for chunk_start: {chunk_start}, last_chunk_start: {last_chunk_start}")
                     del tt_logits
         else:
             (
@@ -507,9 +525,8 @@ kwargs: {kwargs}"
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=last_token_idx // 32 * 32,
+                get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
-                **kwargs,
             )
             return tt_logits
 
