@@ -14,8 +14,7 @@
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 namespace v2 {
 struct TensorSlice {
     using ords_t = Shape4D<uint32_t>;
@@ -667,5 +666,4 @@ struct CclCommandHeader {
 static_assert(sizeof(CclCommandHeader) == sizeof(uint32_t));
 
 }  // namespace cmd
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

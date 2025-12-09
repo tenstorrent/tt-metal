@@ -19,8 +19,7 @@ using ttnn::operations::unary::UnaryWithParam;
 
 using Activation = std::variant<std::string, UnaryWithParam>;
 
-namespace operations {
-namespace matmul {
+namespace operations::matmul {
 
 namespace detail {
 
@@ -111,8 +110,8 @@ struct SparseMatmulOperation {
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
-}  // namespace matmul
-}  // namespace operations
+}  // namespace operations::matmul
+
 constexpr auto matmul = ttnn::register_operation<"ttnn::matmul", operations::matmul::MatmulOperation>();
 constexpr auto linear = ttnn::register_operation<"ttnn::linear", operations::matmul::LinearOperation>();
 constexpr auto addmm = ttnn::register_operation<"ttnn::addmm", operations::matmul::AddmmOperation>();

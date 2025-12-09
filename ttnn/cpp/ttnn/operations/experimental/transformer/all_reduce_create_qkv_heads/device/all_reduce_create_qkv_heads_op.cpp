@@ -309,9 +309,7 @@ tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
@@ -358,9 +356,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     return {output_tensors[0], output_tensors[1], output_tensors[2], output_tensors[3]};
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,

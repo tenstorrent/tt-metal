@@ -21,14 +21,12 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

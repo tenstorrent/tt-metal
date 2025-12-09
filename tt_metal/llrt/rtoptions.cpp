@@ -21,9 +21,7 @@
 
 using std::vector;
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 
 const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
@@ -1587,6 +1585,4 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     return dispatch_core_config;
 }
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

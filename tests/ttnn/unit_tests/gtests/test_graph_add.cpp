@@ -35,10 +35,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 struct AddOpGraphTestParam {
     ttnn::Shape a_Shape;
@@ -240,7 +237,4 @@ INSTANTIATE_TEST_SUITE_P(
         return ss.str();
     });
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test

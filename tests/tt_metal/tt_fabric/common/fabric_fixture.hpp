@@ -19,8 +19,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
@@ -416,5 +415,4 @@ void RunEDMConnectionStressTest(
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

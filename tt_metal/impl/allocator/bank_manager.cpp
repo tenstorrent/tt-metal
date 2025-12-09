@@ -19,9 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
@@ -702,6 +700,4 @@ bool BankManager::can_apply_state(const AllocatorState::BufferTypeState& state) 
            alignment_bytes_ == state.alignment_bytes;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

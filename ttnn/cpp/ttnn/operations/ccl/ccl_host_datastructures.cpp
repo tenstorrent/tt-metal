@@ -9,8 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 std::size_t EriscDatamoverConfig::get_eth_channel_sync_size_bytes() { return eth_channel_sync_size_bytes; }
 
@@ -110,5 +109,4 @@ std::map<std::string, std::string> CCLOpConfig::emit_worker_defines() const {
     return worker_defines;
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl
