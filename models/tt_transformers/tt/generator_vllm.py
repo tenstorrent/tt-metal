@@ -558,6 +558,67 @@ class MultiModalProcessor(BaseMultiModalProcessor):
         )
         return mm_inputs
 
+    class TTGemma3ForCausalLM(Generator):
+        """Text-only Gemma3 model for vLLM integration (e.g., gemma-3-1b-it)"""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        @classmethod
+        def initialize_vllm_model(
+            cls,
+            hf_config,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=131072,
+            n_layers=None,
+            tt_data_parallel=1,
+            optimizations: str = "performance",
+        ):
+            from models.demos.gemma3.demo.text_demo import create_tt_model
+            from models.tt_transformers.tt.model_config import DecodersPrecision
+
+            optimizations = (
+                DecodersPrecision.from_string(optimizations)
+                if optimizations is not None
+                else DecodersPrecision.performance
+            )
+
+            submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+            model_args = []
+            model = []
+            state_dict = None
+
+            for submesh in submesh_devices:
+                model_args_i, model_i, _, state_dict = create_tt_model(
+                    mesh_device=submesh,
+                    instruct=True,  # gemma-3-1b-it is an instruct model
+                    max_batch_size=max_batch_size // tt_data_parallel,
+                    optimizations=optimizations,
+                    max_seq_len=max_seq_len,
+                    dtype=ttnn.bfloat8_b,
+                    state_dict=state_dict,
+                    num_layers=n_layers,
+                )
+                model_args.append(model_args_i)
+                model.append(model_i)
+
+            return cls(model, model_args, mesh_device)
+
+        @property
+        def cache_path(self):
+            return self.model_args[0].model_cache_path
+
+        def prefill_forward(self, *args, **kwargs):
+            return super().prefill_forward_text(*args, **kwargs)
+
+        def decode_forward(self, *args, **kwargs):
+            return super().decode_forward_text(*args, **kwargs)
+
+        def allocate_kv_cache(self, *args, **kwargs):
+            return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
 
 @MULTIMODAL_REGISTRY.register_processor(
     Gemma3MultiModalProcessor if envs.VLLM_USE_V1 else MultiModalProcessor,
