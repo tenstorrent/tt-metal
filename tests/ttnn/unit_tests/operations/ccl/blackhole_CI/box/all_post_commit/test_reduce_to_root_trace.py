@@ -8,6 +8,7 @@ import ttnn
 from loguru import logger
 from tracy import signpost
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.common.utility_functions import skip_for_wormhole_b0
 
 
 def compute_reference_reduce_to_root(
@@ -85,6 +86,7 @@ def compute_reference_reduce_to_root(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
     [
