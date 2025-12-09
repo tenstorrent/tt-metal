@@ -68,9 +68,11 @@ CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor* input_tensor_b,
     const std::optional<Tensor>& output_tensor,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // If sub_core_grids is provided, use it directly
     if (sub_core_grids.has_value()) {
+        log_debug(tt::LogOp, "Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
 
@@ -86,16 +88,60 @@ CoreRangeSet get_worker_grid(
         __builtin_unreachable();
     };
 
-    if (input_tensor_a.is_sharded()) {
-        return get_tensor_grid(input_tensor_a);
-    }
-    if (input_tensor_b && input_tensor_b->is_sharded()) {
-        return get_tensor_grid(*input_tensor_b);
-    }
     if (output_tensor.has_value() && output_tensor->is_sharded()) {
+        log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
         return get_tensor_grid(*output_tensor);
     }
 
+    if (memory_config.has_value() && memory_config->is_sharded()) {
+        // Use the shard spec from memory config if provided
+        const auto& shard_spec_opt = memory_config->shard_spec();
+        if (shard_spec_opt.has_value()) {
+            log_debug(tt::LogOp, "Using memory config shard spec grid for worker grid {}", shard_spec_opt->grid.str());
+            auto* device = input_tensor_a.device();
+            for (const auto& sub_device_id : device->get_sub_device_ids()) {
+                const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+                if (sub_device_workers.intersects(shard_spec_opt->grid)) {
+                    return sub_device_workers;
+                }
+            }
+        }
+    }
+
+    if (output_tensor.has_value() || memory_config.has_value()) {
+        // If output tensor or memory config is provided but not sharded, use all worker cores
+        log_debug(
+            tt::LogOp, "Using all worker cores of the device for worker grid, output or memory config not sharded");
+        auto* device = input_tensor_a.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    }
+
+    // now c is not specified, gets its shard spec from a or b
+    TensorSpec c = input_tensor_b ? input_tensor_a.is_sharded()    ? input_tensor_a.tensor_spec()
+                                    : input_tensor_b->is_sharded() ? input_tensor_b->tensor_spec()
+                                                                   : input_tensor_a.tensor_spec()
+                                  : input_tensor_a.tensor_spec();
+
+    if (is_native_L1_sharding(
+            input_tensor_a.tensor_spec(),
+            input_tensor_b ? std::optional<TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
+            c)) {
+        if (input_tensor_a.is_sharded()) {
+            log_debug(
+                tt::LogOp,
+                "Native L1 sharding using input tensor A grid for worker grid {}",
+                input_tensor_a.shard_spec()->grid.str());
+            return get_tensor_grid(input_tensor_a);
+        } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+            log_debug(
+                tt::LogOp,
+                "Native L1 sharding using input tensor B grid for worker grid {}",
+                input_tensor_b->shard_spec()->grid.str());
+            return get_tensor_grid(*input_tensor_b);
+        }
+    }
+    // use all worker cores of the device
+    log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
     auto* device = input_tensor_a.device();
     return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
@@ -256,7 +302,8 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         if (i <= -6) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: {}, "
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: "
+                "{}, "
                 "dim b: {}",
                 i,
                 a_dim,

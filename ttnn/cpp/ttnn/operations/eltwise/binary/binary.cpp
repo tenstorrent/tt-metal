@@ -406,7 +406,7 @@ inline auto invoke_binary_ng(
             input_b,
             binary_op_type,
             out_dtype,
-            mem_config,
+            memory_config,
             output,
             fast_and_approximate_mode,
             lhs_activations,
@@ -434,7 +434,7 @@ inline auto invoke_binary_ng(
         input_b,
         binary_op_type,
         input_a.dtype(),
-        mem_config,
+        memory_config,
         output_tensor,
         fast_and_approximate_mode,
         lhs_activations,
@@ -443,6 +443,7 @@ inline auto invoke_binary_ng(
         std::nullopt,
         sub_core_grids);
     return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
+}
 }
 
 }  // namespace detail
