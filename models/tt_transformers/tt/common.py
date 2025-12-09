@@ -542,26 +542,35 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
 
 def get_padded_prefill_len(seq_len: int) -> int:
     """
-    If seq_len is less than 128, pad to 128
-    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
-    TODO: Generalize for max_mm_seq_len different from 2048
+    Get the padded prefill length for a given sequence length.
+    This is used to pad the sequence length to the nearest power of 2.
     """
+    # Changed the way it is padded due to these 2 PR's
+    # https://github.com/tenstorrent/vllm/pull/254
+    # https://github.com/tenstorrent/tt-metal/pull/33143
     if seq_len <= 128:
         return 128
-    pow_2_pad = nearest_pow_2(seq_len)
-    mult_2048_pad = 2048 * math.ceil(seq_len / 2048)
-    min_extended_pad = min(pow_2_pad, mult_2048_pad)
-    return min_extended_pad
+    if seq_len <= 1024:
+        return 1024
+    else:
+        # return next power of 2 greater than seq_len
+        return 2 ** (seq_len - 1).bit_length()
 
 
-def get_all_padded_prefill_lengths(max_len: int = 8192):
-    # Powers of 2 up to max_length (but max 2048)
-    padded_lengths = [v for v in (1 << n for n in range(7, 12)) if v <= max_len]
+def get_all_padded_prefill_lengths(max_len):
+    sequence_lengths = []
 
-    # Multiples of 2048 up to max_len (skip dup 2048)
-    padded_lengths += [v for v in range(2048, max_len + 1, 2048) if v not in padded_lengths]
+    if max_len >= 128:
+        sequence_lengths.append(128)
+    if max_len >= 1024:
+        sequence_lengths.append(1024)
 
-    return sorted(list(padded_lengths))
+    for n in range(11, math.ceil(math.log(max_len))):
+        padded_len = 2**n
+        if max_len >= padded_len:
+            sequence_lengths.append(padded_len)
+
+    return sequence_lengths
 
 
 def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens, model_args_max_seq_len):
