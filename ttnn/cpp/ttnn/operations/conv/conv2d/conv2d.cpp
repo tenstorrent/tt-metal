@@ -671,7 +671,7 @@ Conv2dSliceAttr::Conv2dSliceAttr(
 
 std::tuple<std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape>, std::array<uint32_t, 4>>
 Conv2dSliceAttr::get_input_slice_and_padding(
-    Conv2dSliceAttr::IOShape output_slice_start, Conv2dSliceAttr::IOShape output_slice_end) {
+    const Conv2dSliceAttr::IOShape& output_slice_start, const Conv2dSliceAttr::IOShape& output_slice_end) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
     auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
     auto [input_height, input_width] = input_shape;
@@ -745,12 +745,14 @@ Conv2dSliceAttr::get_input_slice_and_padding(
 }
 
 std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::get_input_slice(
-    IOShape output_slice_start, IOShape output_slice_end) {
+    const IOShape& output_slice_start, const IOShape& output_slice_end) {
     return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
 }
 
 uint32_t Conv2dSliceAttr::get_L1_usage(
-    IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) {
+    const IOShape& output_slice_start,
+    const IOShape& output_slice_end,
+    const op_slicing::Op2DSliceConfig& slice_config) {
     // Remove this->conv_config from scope so that for each slice, conv_config can be calculated independently.
     auto conv_config = this->conv_config;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -813,7 +815,7 @@ uint32_t Conv2dSliceAttr::get_L1_usage(
 }
 
 tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
-    IOShape output_slice_start, IOShape output_slice_end) {
+    const IOShape& output_slice_start, const IOShape& output_slice_end) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
     auto [input_start, input_end] = get_input_slice(output_slice_start, output_slice_end);
     uint32_t input_slice_height = std::get<0>(input_end) - std::get<0>(input_start);
@@ -869,7 +871,7 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
 std::string Conv2dSliceAttr::name() { return "Conv2D"; }
 
 ttnn::Tensor Conv2dSliceAttr::run_L1_op(
-    const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
+    const ttnn::Tensor& sliced_input_tensor, const IOShape& output_slice_start, const IOShape& output_slice_end) {
     // Use helper function to calculate slice bounds and padding
     auto [input_slicing, this_op_padding] = get_input_slice_and_padding(output_slice_start, output_slice_end);
     auto [input_slice_start, input_slice_end] = input_slicing;
