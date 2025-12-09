@@ -539,6 +539,14 @@ install(
         EXCLUDE
 )
 
+install(
+    TARGETS
+        _ttml
+    LIBRARY
+        DESTINATION ${PROJECT_SOURCE_DIR}/ttml
+        COMPONENT ttml
+)
+
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "ttml")
