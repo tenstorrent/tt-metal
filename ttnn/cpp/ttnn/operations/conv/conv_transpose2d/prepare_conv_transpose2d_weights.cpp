@@ -50,7 +50,7 @@ ConvTranspose2dDimensions compute_conv_transpose2d_dimensions(
     uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
 
     // Populate result struct
-    ConvTranspose2dDimensions dims;
+    ConvTranspose2dDimensions dims{};
     dims.output_height = output_shape[1];
     dims.output_width = output_shape[2];
     dims.full_input_height = full_input_shape[1];

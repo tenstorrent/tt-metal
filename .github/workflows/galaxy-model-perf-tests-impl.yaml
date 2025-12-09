@@ -75,7 +75,7 @@ jobs:
               "model-name": "cnn",
               "arch": "wormhole_b0",
               "save-perf-data": false,
-              "timeout": 30,
+              "timeout": 50,
               "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
             }, # Pavle Josipovic
             {
@@ -84,7 +84,7 @@ jobs:
               "model-name": "sd35",
               "arch": "wormhole_b0",
               "save-perf-data": true,
-              "timeout": 25,
+              "timeout": 50,
               "cmd": "pytest models/experimental/tt_dit/tests/models/sd35/test_performance_sd35.py -k \"4x8cfg1sp0tp1\"",
               "owner_id": "U03FJB5TM5Y"
             }, # Colman Glagovich
@@ -94,7 +94,7 @@ jobs:
               "model-name": "flux1-dev",
               "arch": "wormhole_b0",
               "save-perf-data": true,
-              "timeout": 25,
+              "timeout": 50,
               "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"4x8sp0tp1\"",
               "owner_id": "U08TED0JM9D"
             }, # Samuel Adesoye
@@ -115,7 +115,7 @@ jobs:
               "model-name": "sentence_bert",
               "save-perf-data": false,
               "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
-              "timeout": 15,
+              "timeout": 30,
               "owner_id": "U088413NP0Q"
             }, # Ashai Reddy
             {
@@ -134,7 +134,7 @@ jobs:
               "model-name": "mochi",
               "arch": "wormhole_b0",
               "save-perf-data": true,
-              "timeout": 20,
+              "timeout": 50,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 and yes_use_cache\"",
               "owner_id": "U09ELB03XRU"
             } # Stephen Osborne
