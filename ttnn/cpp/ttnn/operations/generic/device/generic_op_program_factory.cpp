@@ -17,7 +17,7 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    Program program{operation_attributes};
+    Program program = create_program_from_descriptor(operation_attributes);
 
     shared_variables_t shared_vars;
 

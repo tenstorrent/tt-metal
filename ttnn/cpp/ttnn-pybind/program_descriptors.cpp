@@ -13,13 +13,15 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn-pybind/export_enum.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program/program_descriptors.hpp>
 
 namespace ttnn::program_descriptors {
 
+using namespace tt::tt_metal::experimental::program_descriptors;
+
 void py_module_types(py::module& module) {
     // Bind CBDescriptor and related types
-    py::class_<tt::tt_metal::CBFormatDescriptor>(module, "CBFormatDescriptor", R"pbdoc(
+    py::class_<CBFormatDescriptor>(module, "CBFormatDescriptor", R"pbdoc(
         Descriptor for command buffer format configuration.
 
         Defines the format settings for sections of the command buffer,
@@ -45,7 +47,7 @@ void py_module_types(py::module& module) {
             py::init([](uint8_t buffer_index, ttnn::DataType data_type, uint32_t page_size) {
                 // DataType to DataFormat conversion
                 tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(data_type);
-                return tt::tt_metal::CBFormatDescriptor(buffer_index, data_format, page_size);
+                return CBFormatDescriptor(buffer_index, data_format, page_size);
             }),
             py::arg("buffer_index"),
             py::arg("data_format"),
@@ -61,14 +63,11 @@ void py_module_types(py::module& module) {
                     page_size: Size of a page in bytes
             )pbdoc")
         .def_readwrite(
-            "buffer_index",
-            &tt::tt_metal::CBFormatDescriptor::buffer_index,
-            "Index of the buffer within the command buffer")
-        .def_readwrite(
-            "data_format", &tt::tt_metal::CBFormatDescriptor::data_format, "Format of the data in the buffer")
-        .def_readwrite("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes");
+            "buffer_index", &CBFormatDescriptor::buffer_index, "Index of the buffer within the command buffer")
+        .def_readwrite("data_format", &CBFormatDescriptor::data_format, "Format of the data in the buffer")
+        .def_readwrite("page_size", &CBFormatDescriptor::page_size, "Size of a page in bytes");
 
-    py::class_<tt::tt_metal::CBDescriptor>(module, "CBDescriptor", R"pbdoc(
+    py::class_<CBDescriptor>(module, "CBDescriptor", R"pbdoc(
         Command Buffer Descriptor.
 
         Describes the structure and configuration of a command buffer,
@@ -78,7 +77,7 @@ void py_module_types(py::module& module) {
             Default constructor for CBDescriptor.
         )pbdoc")
         .def(
-            py::init<uint32_t, CoreRangeSet, tt::tt_metal::CBDescriptor::FormatDescriptors>(),
+            py::init<uint32_t, CoreRangeSet, CBDescriptor::FormatDescriptors>(),
             py::arg("total_size"),
             py::arg("core_ranges"),
             py::arg("format_descriptors"),
@@ -90,19 +89,16 @@ void py_module_types(py::module& module) {
                     core_ranges: Set of core ranges where the command buffer is applicable
                     format_descriptors: Collection of format descriptors for different sections of the buffer
             )pbdoc")
+        .def_readwrite("total_size", &CBDescriptor::total_size, "Total size of the command buffer in bytes")
         .def_readwrite(
-            "total_size", &tt::tt_metal::CBDescriptor::total_size, "Total size of the command buffer in bytes")
-        .def_readwrite(
-            "core_ranges",
-            &tt::tt_metal::CBDescriptor::core_ranges,
-            "Set of core ranges where the command buffer is applicable")
+            "core_ranges", &CBDescriptor::core_ranges, "Set of core ranges where the command buffer is applicable")
         .def_readwrite(
             "format_descriptors",
-            &tt::tt_metal::CBDescriptor::format_descriptors,
+            &CBDescriptor::format_descriptors,
             "Collection of format descriptors for different sections of the buffer");
 
     // Bind KernelDescriptor related types
-    py::class_<tt::tt_metal::ReaderConfigDescriptor>(module, "ReaderConfigDescriptor", R"pbdoc(
+    py::class_<ReaderConfigDescriptor>(module, "ReaderConfigDescriptor", R"pbdoc(
         Configuration descriptor for reader components in a kernel.
 
         Defines how data should be read during kernel execution.
@@ -111,7 +107,7 @@ void py_module_types(py::module& module) {
         Default constructor for ReaderConfigDescriptor.
     )pbdoc");
 
-    py::class_<tt::tt_metal::WriterConfigDescriptor>(module, "WriterConfigDescriptor", R"pbdoc(
+    py::class_<WriterConfigDescriptor>(module, "WriterConfigDescriptor", R"pbdoc(
         Configuration descriptor for writer components in a kernel.
 
         Defines how data should be written during kernel execution.
@@ -123,7 +119,7 @@ void py_module_types(py::module& module) {
     export_enum<UnpackToDestMode>(module, "UnpackToDestMode");
     py::bind_vector<std::vector<UnpackToDestMode>>(module, "VectorUnpackToDestMode");
 
-    py::class_<tt::tt_metal::ComputeConfigDescriptor>(module, "ComputeConfigDescriptor", R"pbdoc(
+    py::class_<ComputeConfigDescriptor>(module, "ComputeConfigDescriptor", R"pbdoc(
         Configuration descriptor for compute operations.
 
         Controls various aspects of computation precision, synchronization,
@@ -134,30 +130,24 @@ void py_module_types(py::module& module) {
         )pbdoc")
         .def_readwrite(
             "math_fidelity",
-            &tt::tt_metal::ComputeConfigDescriptor::math_fidelity,
+            &ComputeConfigDescriptor::math_fidelity,
             "Controls mathematical precision during computation")
         .def_readwrite(
-            "fp32_dest_acc_en",
-            &tt::tt_metal::ComputeConfigDescriptor::fp32_dest_acc_en,
-            "Enable FP32 destination accumulation")
+            "fp32_dest_acc_en", &ComputeConfigDescriptor::fp32_dest_acc_en, "Enable FP32 destination accumulation")
         .def_readwrite(
             "dst_full_sync_en",
-            &tt::tt_metal::ComputeConfigDescriptor::dst_full_sync_en,
+            &ComputeConfigDescriptor::dst_full_sync_en,
             "Enable full synchronization for destinations")
         .def_readwrite(
-            "unpack_to_dest_mode",
-            &tt::tt_metal::ComputeConfigDescriptor::unpack_to_dest_mode,
-            "Mode for unpacking to destination")
+            "unpack_to_dest_mode", &ComputeConfigDescriptor::unpack_to_dest_mode, "Mode for unpacking to destination")
         .def_readwrite(
-            "bfp8_pack_precise",
-            &tt::tt_metal::ComputeConfigDescriptor::bfp8_pack_precise,
-            "Use precise packing for BFP8 format")
+            "bfp8_pack_precise", &ComputeConfigDescriptor::bfp8_pack_precise, "Use precise packing for BFP8 format")
         .def_readwrite(
             "math_approx_mode",
-            &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode,
+            &ComputeConfigDescriptor::math_approx_mode,
             "Approximation mode for mathematical operations");
 
-    py::class_<tt::tt_metal::KernelDescriptor> kernel_descriptor_class(module, "KernelDescriptor", R"pbdoc(
+    py::class_<KernelDescriptor> kernel_descriptor_class(module, "KernelDescriptor", R"pbdoc(
         Descriptor for a computational kernel.
 
         Contains all the information needed to compile and execute a kernel,
@@ -165,13 +155,13 @@ void py_module_types(py::module& module) {
     )pbdoc");
 
     // Bind SourceType as a nested enum within KernelDescriptor
-    py::enum_<tt::tt_metal::KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
+    py::enum_<KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
         Source type for kernel source code.
 
         Defines whether the kernel source is provided as a file path or inline source code.
     )pbdoc")
-        .value("FILE_PATH", tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH, "Kernel source is a file path")
-        .value("SOURCE_CODE", tt::tt_metal::KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code");
+        .value("FILE_PATH", KernelDescriptor::SourceType::FILE_PATH, "Kernel source is a file path")
+        .value("SOURCE_CODE", KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code");
 
     kernel_descriptor_class
         .def(py::init<>(), R"pbdoc(
@@ -180,21 +170,21 @@ void py_module_types(py::module& module) {
         .def(
             py::init<
                 const std::string&,
-                tt::tt_metal::KernelDescriptor::SourceType,
+                KernelDescriptor::SourceType,
                 CoreRangeSet,
-                tt::tt_metal::KernelDescriptor::CompileTimeArgs,
-                tt::tt_metal::KernelDescriptor::Defines,
-                tt::tt_metal::KernelDescriptor::RuntimeArgs,
-                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs,
+                KernelDescriptor::CompileTimeArgs,
+                KernelDescriptor::Defines,
+                KernelDescriptor::RuntimeArgs,
+                KernelDescriptor::CommonRuntimeArgs,
                 std::optional<tt::tt_metal::KernelBuildOptLevel>,
-                tt::tt_metal::KernelDescriptor::ConfigDescriptor>(),
+                KernelDescriptor::ConfigDescriptor>(),
             py::arg("kernel_source"),
-            py::arg("source_type") = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
+            py::arg("source_type") = KernelDescriptor::SourceType::FILE_PATH,
             py::arg("core_ranges"),
             py::arg("compile_time_args"),
-            py::arg("defines") = tt::tt_metal::KernelDescriptor::Defines(),
+            py::arg("defines") = KernelDescriptor::Defines(),
             py::arg("runtime_args"),
-            py::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
+            py::arg("common_runtime_args") = KernelDescriptor::CommonRuntimeArgs(),
             py::arg("opt_level") = std::nullopt,
             py::arg("config"),
             R"pbdoc(
@@ -213,25 +203,18 @@ void py_module_types(py::module& module) {
             )pbdoc")
         .def_readwrite(
             "kernel_source",
-            &tt::tt_metal::KernelDescriptor::kernel_source,
+            &KernelDescriptor::kernel_source,
             "Path to kernel source file or inline kernel source code")
+        .def_readwrite("source_type", &KernelDescriptor::source_type, "Type of source (FILE_PATH or INLINE)")
         .def_readwrite(
-            "source_type", &tt::tt_metal::KernelDescriptor::source_type, "Type of source (FILE_PATH or INLINE)")
-        .def_readwrite(
-            "core_ranges",
-            &tt::tt_metal::KernelDescriptor::core_ranges,
-            "Set of core ranges where the kernel will execute")
-        .def_readwrite(
-            "compile_time_args",
-            &tt::tt_metal::KernelDescriptor::compile_time_args,
-            "Arguments provided at compile time")
-        .def_readwrite(
-            "defines", &tt::tt_metal::KernelDescriptor::defines, "Preprocessor definitions for kernel compilation")
-        .def_readwrite("runtime_args", &tt::tt_metal::KernelDescriptor::runtime_args, "Arguments provided at runtime")
-        .def_readwrite("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
+            "core_ranges", &KernelDescriptor::core_ranges, "Set of core ranges where the kernel will execute")
+        .def_readwrite("compile_time_args", &KernelDescriptor::compile_time_args, "Arguments provided at compile time")
+        .def_readwrite("defines", &KernelDescriptor::defines, "Preprocessor definitions for kernel compilation")
+        .def_readwrite("runtime_args", &KernelDescriptor::runtime_args, "Arguments provided at runtime")
+        .def_readwrite("config", &KernelDescriptor::config, "Configuration descriptor for the kernel");
 
     // Bind SemaphoreDescriptor
-    py::class_<tt::tt_metal::SemaphoreDescriptor>(module, "SemaphoreDescriptor", R"pbdoc(
+    py::class_<SemaphoreDescriptor>(module, "SemaphoreDescriptor", R"pbdoc(
         Descriptor for synchronization semaphores.
 
         Used for coordinating execution between different kernels and operations.
@@ -247,12 +230,11 @@ void py_module_types(py::module& module) {
             R"pbdoc(
                 Initialize a SemaphoreDescriptor with core type, core ranges, and initial value.
             )pbdoc")
-        .def_readwrite("core_type", &tt::tt_metal::SemaphoreDescriptor::core_type, "Type of core for the semaphore")
-        .def_readwrite("core_ranges", &tt::tt_metal::SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
-        .def_readwrite(
-            "initial_value", &tt::tt_metal::SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
+        .def_readwrite("core_type", &SemaphoreDescriptor::core_type, "Type of core for the semaphore")
+        .def_readwrite("core_ranges", &SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
+        .def_readwrite("initial_value", &SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
 
-    py::class_<tt::tt_metal::ProgramDescriptor>(module, "ProgramDescriptor", R"pbdoc(
+    py::class_<ProgramDescriptor>(module, "ProgramDescriptor", R"pbdoc(
         Descriptor for a complete program.
 
         A program is a collection of kernels, semaphores, and command buffers
@@ -263,9 +245,9 @@ void py_module_types(py::module& module) {
         )pbdoc")
         .def(
             py::init<
-                tt::tt_metal::ProgramDescriptor::KernelDescriptors,
-                tt::tt_metal::ProgramDescriptor::SemaphoreDescriptors,
-                tt::tt_metal::ProgramDescriptor::CBDescriptors>(),
+                ProgramDescriptor::KernelDescriptors,
+                ProgramDescriptor::SemaphoreDescriptors,
+                ProgramDescriptor::CBDescriptors>(),
             py::arg("kernels"),
             py::arg("semaphores"),
             py::arg("cbs"),
@@ -277,10 +259,9 @@ void py_module_types(py::module& module) {
                     semaphores: Collection of semaphore descriptors
                     cbs: Collection of command buffer descriptors
             )pbdoc")
-        .def_readwrite("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
-        .def_readwrite(
-            "semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_readwrite("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_readwrite("kernels", &ProgramDescriptor::kernels, "Collection of kernel descriptors")
+        .def_readwrite("semaphores", &ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
+        .def_readwrite("cbs", &ProgramDescriptor::cbs, "Collection of command buffer descriptors");
 
     export_enum<tt::CBIndex>(module, "CBIndex");
     py::implicitly_convertible<py::int_, tt::CBIndex>();

@@ -16,7 +16,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program/program_descriptors.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -28,6 +28,7 @@ class Buffer;
 namespace tt::tt_metal {
 
 using CBHandle = uintptr_t;
+using tt::tt_metal::experimental::program_descriptors::CBDescriptor;
 
 class CircularBufferConfig {
 public:

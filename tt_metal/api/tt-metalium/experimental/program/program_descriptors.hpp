@@ -22,17 +22,21 @@
  * actual `Program` object.
  */
 
-namespace tt::tt_metal {
-
+namespace tt {
+namespace tt_metal {
 struct Tile;
 class Buffer;
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
+}  // namespace tt_metal
+}  // namespace tt
+
+namespace tt::tt_metal::experimental::program_descriptors {
 
 struct TileDescriptor {
     TileDescriptor() = default;
-    TileDescriptor(const Tile& tile);
+    TileDescriptor(const tt::tt_metal::Tile& tile);
     TileDescriptor(uint32_t height, uint32_t width, bool transpose) :
         height(height), width(width), transpose(transpose) {}
 
@@ -59,8 +63,8 @@ struct CBDescriptor {
     FormatDescriptors remote_format_descriptors;
 
     // TODO: Investigate avoiding storing pointers here
-    Buffer* buffer = nullptr;
-    const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
+    tt::tt_metal::Buffer* buffer = nullptr;
+    const tt::tt_metal::experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 
 struct SemaphoreDescriptor {
@@ -137,4 +141,4 @@ struct ProgramDescriptor {
     uint32_t add_semaphore(CoreRangeSet core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::program_descriptors

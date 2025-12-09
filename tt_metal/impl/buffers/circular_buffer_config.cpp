@@ -16,6 +16,8 @@ enum class DataFormat : uint8_t;
 
 namespace tt::tt_metal {
 
+using tt::tt_metal::experimental::program_descriptors::CBFormatDescriptor;
+
 // Static circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :

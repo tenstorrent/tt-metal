@@ -12,7 +12,12 @@
 namespace tt::tt_metal {
 
 // Fwd declares
+namespace experimental {
+namespace program_descriptors {
 struct ProgramDescriptor;
+}  // namespace program_descriptors
+}  // namespace experimental
+using experimental::program_descriptors::ProgramDescriptor;
 class CircularBuffer;
 
 namespace detail {
@@ -24,7 +29,7 @@ using ProgramId = std::uint64_t;
 class Program {
 public:
     Program();
-    explicit Program(const ProgramDescriptor& descriptor);
+    friend Program create_program_from_descriptor(const ProgramDescriptor& descriptor);
     ~Program() noexcept;
 
     Program(const Program& other) = delete;
@@ -56,6 +61,8 @@ private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
 };
+
+Program create_program_from_descriptor(const ProgramDescriptor& descriptor);
 
 // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
 class IDevice;

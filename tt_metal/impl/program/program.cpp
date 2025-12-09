@@ -143,6 +143,13 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
 namespace tt::tt_metal {
 
 using detail::ProgramImpl;
+using tt::tt_metal::experimental::program_descriptors::ComputeConfigDescriptor;
+using tt::tt_metal::experimental::program_descriptors::DataMovementConfigDescriptor;
+using tt::tt_metal::experimental::program_descriptors::EthernetConfigDescriptor;
+using tt::tt_metal::experimental::program_descriptors::KernelDescriptor;
+using tt::tt_metal::experimental::program_descriptors::ProgramDescriptor;
+using tt::tt_metal::experimental::program_descriptors::ReaderConfigDescriptor;
+using tt::tt_metal::experimental::program_descriptors::WriterConfigDescriptor;
 
 namespace {
 std::atomic<bool> enable_persistent_kernel_cache = false;
@@ -227,17 +234,24 @@ Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 }
 
-Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
+Program create_program_from_descriptor(const ProgramDescriptor& descriptor) {
+    Program program;
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, program);
 
     for (const auto& cb_descriptor : descriptor.cbs) {
-        internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
+        CircularBufferConfig config(cb_descriptor);
+        if (cb_descriptor.global_circular_buffer) {
+            program.impl().add_circular_buffer(
+                cb_descriptor.core_ranges, config, *cb_descriptor.global_circular_buffer);
+        } else {
+            program.impl().add_circular_buffer(cb_descriptor.core_ranges, config);
+        }
     }
 
     for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
         const auto& semaphore_descriptor = descriptor.semaphores[i];
-        internal_->add_semaphore(
+        program.impl().add_semaphore(
             semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
     }
 
@@ -306,17 +320,19 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.config);
 
         auto kernel_handle =
-            is_file
-                ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
-                : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
+            is_file ? CreateKernel(program, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
+                    : CreateKernelFromString(
+                          program, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
         for (size_t i = 0; i < kernel_descriptor.runtime_args.size(); i++) {
             for (size_t j = 0; j < kernel_descriptor.runtime_args[i].size(); j++) {
-                SetRuntimeArgs(*this, kernel_handle, CoreCoord(i, j), kernel_descriptor.runtime_args[i][j]);
+                SetRuntimeArgs(program, kernel_handle, CoreCoord(i, j), kernel_descriptor.runtime_args[i][j]);
             }
         }
-        SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
+        SetCommonRuntimeArgs(program, kernel_handle, kernel_descriptor.common_runtime_args);
     }
+
+    return program;
 }
 
 namespace {
