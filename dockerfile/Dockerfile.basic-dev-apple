@@ -1,0 +1,95 @@
+ARG UBUNTU_VERSION=22.04
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
+# Re-declare ARG make it available in the build stage
+ARG UBUNTU_VERSION
+
+# Install basic tools to build
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && apt-get update && apt-get install -y \
+    cmake \
+    ninja-build \
+    g++-12 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build OpenMPI 5.0.7 with ULFM support from source (works on all architectures)
+# This replaces the amd64-only .deb package with a native build
+ARG OMPI_TAG=v5.0.7
+ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+WORKDIR /tmp
+RUN set -eux; \
+    apt-get update && \
+    apt-get install -y \
+        wget \
+        ca-certificates \
+        git \
+        autoconf \
+        automake \
+        libtool \
+        flex \
+        libhwloc-dev \
+        libibverbs-dev \
+        libevent-dev \
+        zlib1g-dev \
+        && \
+    git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.git ompi-src && \
+    cd ompi-src && \
+    git submodule update --init --recursive && \
+    ./autogen.pl && \
+    ./configure \
+        --prefix=${OMPI_PREFIX} \
+        --with-ft=ulfm \
+        --enable-wrapper-rpath \
+        --enable-mpirun-prefix-by-default \
+        --disable-mca-dso \
+        --disable-dlopen && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/ompi-src && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set OpenMPI environment variables
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+
+#############################################################
+
+FROM base AS basic-ttnn-runtime
+
+# Install basic runtime dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Skip SFPI installation for local development on Mac
+# SFPI is only needed to compile firmware for Tenstorrent hardware.
+# For local development without hardware, it's not required.
+# If you need SFPI later, you can install it manually or use --platform linux/amd64
+# COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+# COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
+# COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
+# RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+# RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
+
+# Set up virtual environment
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Add PyTorch CPU wheels to pip config
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+
