@@ -21,7 +21,7 @@ body:
         
 
   - type: input
-    id: area1
+    id: area
     attributes:
       label: Component / Area
       description: Which subsystem does this issue belong to? Helps route to the correct team.
