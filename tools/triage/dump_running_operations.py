@@ -126,7 +126,7 @@ def _collect_dispatcher_data(
     dispatcher_data: DispatcherData, location: OnChipCoordinate, risc_name: str, show_all_cores: bool = False
 ) -> DispatcherCoreData | None:
     try:
-        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     except Exception as exc:
         log_check_risc(
             risc_name,
@@ -147,10 +147,6 @@ def _collect_dispatcher_data(
 def _collect_running_operations(
     dispatcher_data: DispatcherData, run_checks: RunChecks, show_all_cores: bool = False
 ) -> list[RunningOperationSummary] | None:
-    device_descriptions: dict[int, DeviceDescription] = {
-        device.unique_id: DeviceDescription(device, run_checks.metal_device_id_mapping) for device in run_checks.devices
-    }
-
     # Use run_checks infrastructure to iterate over all cores
     collected_results = run_checks.run_per_core_check(
         lambda location, risc_name: _collect_dispatcher_data(
@@ -171,7 +167,9 @@ def _collect_running_operations(
     for check_result in collected_results:
         if check_result.result is None:
             continue
-        dispatcher_core_data = check_result.result
+        assert isinstance(check_result.result, DispatcherCoreData)
+        dispatcher_core_data: DispatcherCoreData = check_result.result
+        assert dispatcher_core_data.host_assigned_id is not None
         aggregation = aggregations.setdefault(
             dispatcher_core_data.host_assigned_id, RunningOperationAggregation(dispatcher_core_data.host_assigned_id)
         )
