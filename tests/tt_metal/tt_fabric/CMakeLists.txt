@@ -24,8 +24,6 @@ set(UNIT_TESTS_FABRIC_SRC
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
 
-add_dependencies(fabric_unit_tests scaleout_generated_protos)
-
 target_link_libraries(
     fabric_unit_tests
     PRIVATE
