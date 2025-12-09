@@ -69,13 +69,8 @@ inline void _llk_unpack_untilize_hw_configure_(
         unpack_src_format, unpack_src_format, unpack_dst_format, unpack_dst_format, face_r_dim, face_r_dim, within_face_16x16_transpose, num_faces, num_faces);
 }
 
-inline void _llk_unpack_untilize_init_(
-    const std::uint32_t unpack_dst_format,
-    const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim                 = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    LLK_ASSERT(num_faces == 4, "num_faces: this parameter is unused");
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);

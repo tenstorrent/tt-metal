@@ -199,7 +199,7 @@ inline void cache_exponential_section_sizes_in_gprs(const uint num_faces = 4, co
     }
 }
 
-inline void set_packer_strides(const uint pack_src_format, [[maybe_unused]] const uint pack_dst_format)
+inline void set_packer_strides(const uint pack_src_format)
 {
     uint x_stride = (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float32)   ? 4
                     : (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float16) ? 2
@@ -520,7 +520,7 @@ inline void reconfig_packer_data_format(
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_src_format);
 
     // Set packer strides
-    set_packer_strides(pack_src_format, pack_dst_format);
+    set_packer_strides(pack_src_format);
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize>
@@ -544,7 +544,7 @@ inline void configure_pack(
         tensix_sync();
     }
 
-    set_packer_strides(pack_src_format, pack_dst_format);
+    set_packer_strides(pack_src_format);
 
     t6_mutex_acquire(mutex::REG_RMW);
 

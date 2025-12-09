@@ -43,7 +43,7 @@ void run_kernel()
 
         for (uint32_t tile = 0; tile < TILE_CNT; tile++)
         {
-            _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), false, formats.unpack_src, formats.unpack_dst);
+            _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_src, formats.unpack_dst);
         }
         PROFILER_SYNC();
     }
@@ -64,10 +64,9 @@ void run_kernel()
         _llk_math_hw_configure_<>(formats.math, formats.math);
 
 #ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(
-            false, false, TILE_NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
 #else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(false, false, TILE_NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(TILE_NUM_FACES, formats.math);
 #endif
         PROFILER_SYNC();
     }
