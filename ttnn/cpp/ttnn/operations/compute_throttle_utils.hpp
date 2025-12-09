@@ -8,11 +8,7 @@
 
 #include <umd/device/types/arch.hpp>
 
-namespace ttnn {
-
-namespace operations {
-
-namespace compute_throttle_utils {
+namespace ttnn::operations::compute_throttle_utils {
 
 enum class ThrottleLevel : uint32_t {
     NO_THROTTLE = 0,
@@ -46,8 +42,4 @@ void throttle_mm_perf(
     std::map<std::string, std::string>& mm_kernel_defines,
     ThrottleLevel throttle_level = ThrottleLevel::NO_THROTTLE);
 
-}  // namespace compute_throttle_utils
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::compute_throttle_utils
