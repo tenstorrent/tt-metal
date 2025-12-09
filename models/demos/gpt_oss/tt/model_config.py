@@ -16,7 +16,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.tt_transformers.tt.common import get_base_model_name
+from models.tt_transformers.tt.common import get_all_padded_prefill_lengths, get_base_model_name, get_padded_prefill_len
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -98,6 +98,33 @@ class ModelArgs:
             self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_warmup_prefill_supported_seq_lens(self, max_seq_len):
+        max_seq_len = get_padded_prefill_len(max_seq_len)
+        to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len)
+        for trace_supported_seq_len in self.trace_prefill_supported_seq_lens:
+            if trace_supported_seq_len not in to_warmup_seq_lens:
+                to_warmup_seq_lens.append(trace_supported_seq_len)
+        to_warmup_seq_lens.sort()
+
+        for seq_len in to_warmup_seq_lens:
+            if seq_len > max_seq_len:
+                to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
+                break
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
+        if self.model_name == "gpt-oss-120b":
+            if 6144 in to_warmup_seq_lens:
+                to_warmup_seq_lens.remove(6144)
+        return to_warmup_seq_lens
 
     @property
     def base_model_name(self):

@@ -17,8 +17,10 @@ from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, c
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
+    get_all_padded_prefill_lengths,
     get_base_model_name,
     get_out_subblock_w,
+    get_padded_prefill_len,
     nearest_multiple,
     num_to_core_range_set,
     rope_scaling_model_factory,
@@ -1207,6 +1209,28 @@ class ModelArgs:
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_warmup_prefill_supported_seq_lens(self, max_seq_len):
+        max_seq_len = get_padded_prefill_len(max_seq_len)
+        to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len)
+        for trace_supported_seq_len in self.trace_prefill_supported_seq_lens:
+            if trace_supported_seq_len not in to_warmup_seq_lens:
+                to_warmup_seq_lens.append(trace_supported_seq_len)
+        to_warmup_seq_lens.sort()
+
+        for seq_len in to_warmup_seq_lens:
+            if seq_len > max_seq_len:
+                to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
+                break
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+        return to_warmup_seq_lens
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {

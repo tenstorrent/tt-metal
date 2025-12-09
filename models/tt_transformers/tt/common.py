@@ -555,19 +555,11 @@ def get_padded_prefill_len(seq_len: int) -> int:
 
 
 def get_all_padded_prefill_lengths(max_len: int = 8192):
-    padded_lengths = set()
+    # Powers of 2 up to max_length (but max 2048)
+    padded_lengths = [v for v in (1 << n for n in range(7, 12)) if v <= max_len]
 
-    padded_lengths.add(128)
-
-    power = 128
-    while power <= max_len:
-        padded_lengths.add(power)
-        power *= 2
-
-    multiple = 2048
-    while multiple <= max_len:
-        padded_lengths.add(multiple)
-        multiple += 2048
+    # Multiples of 2048 up to max_len (skip dup 2048)
+    padded_lengths += [v for v in range(2048, max_len + 1, 2048) if v not in padded_lengths]
 
     return sorted(list(padded_lengths))
 
