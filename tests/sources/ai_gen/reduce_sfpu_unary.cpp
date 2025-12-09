@@ -49,10 +49,10 @@ void run_kernel()
         formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, within_face_16x16_transpose);
 
     // Initialise unpacker state machine
-    _llk_unpack_AB_init_<>(FACE_R_DIM, 4, false, within_face_16x16_transpose, 0);
+    _llk_unpack_AB_init_<>(FACE_R_DIM, 4, false, within_face_16x16_transpose);
 
     // Unpack the two input tiles (A & B) into the destination register file
-    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), within_face_16x16_transpose);
+    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]));
 }
 
 #endif // LLK_TRISC_UNPACK
@@ -89,7 +89,7 @@ void run_kernel()
     const bool fp32_transpose = false; // No fp32 transpose on reduce path
 
     constexpr uint32_t math_fid = 4;
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid>(within_face_16x16_transpose);
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid>();
     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, is_int_fpu_en, fp32_transpose>(0);
 
     //------------------------------------------------------------------

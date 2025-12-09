@@ -23,9 +23,6 @@ using namespace ckernel;
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL>
 inline void matmul_configure_addrmod(
     const bool transpose,
-    [[maybe_unused]] const std::uint32_t ct_dim,
-    [[maybe_unused]] const std::uint32_t rt_dim,
-    [[maybe_unused]] const std::uint32_t kt_dim,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
@@ -305,10 +302,8 @@ inline void matmul_configure_addrmod(
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
 inline void matmul_configure_mop(
-    [[maybe_unused]] bool transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    [[maybe_unused]] const std::uint32_t kt_dim,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
@@ -600,10 +595,8 @@ void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
  */
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL>
 inline void matmul_configure_mop_throttled(
-    [[maybe_unused]] bool transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    [[maybe_unused]] const std::uint32_t kt_dim,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
@@ -696,11 +689,10 @@ inline void _llk_math_matmul_init_(
     const bool partial_face            = false,
     const std::uint32_t transpose      = 0,
     const std::uint32_t ct_dim         = 1,
-    const std::uint32_t rt_dim         = 1,
-    const std::uint32_t kt_dim         = 1)
+    const std::uint32_t rt_dim         = 1)
 {
     matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout, THROTTLE_LEVEL>(
-        transpose, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     if (t_dim > 1)
@@ -723,26 +715,18 @@ inline void _llk_math_matmul_init_(
     if constexpr (THROTTLE_LEVEL > 0)
     {
         matmul_configure_mop_throttled<MATH_FIDELITY_PHASES, FaceLayout, THROTTLE_LEVEL>(
-            transpose > 0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
-        matmul_configure_mop<MATH_FIDELITY_PHASES, FaceLayout>(
-            transpose > 0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<MATH_FIDELITY_PHASES, FaceLayout>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL = 0>
-inline void _llk_math_matmul_(
-    uint dst_index,
-    [[maybe_unused]] const bool transpose       = false,
-    const std::uint32_t ct_dim                  = 1,
-    const std::uint32_t rt_dim                  = 1,
-    [[maybe_unused]] const std::uint32_t kt_dim = 1)
+inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
-    LLK_ASSERT(!transpose, "transpose: this parameter is unused");
-    LLK_ASSERT(kt_dim == 1, "kt_dim: this parameter is unused");
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim

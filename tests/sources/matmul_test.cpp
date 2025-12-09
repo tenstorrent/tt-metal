@@ -37,19 +37,7 @@ void run_kernel()
     for (uint32_t j = 0; j < KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(
-            L1_ADDRESS(buffer_A[0]),
-            L1_ADDRESS(buffer_B[0]),
-            j,
-            j * CT_DIM,
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            false,
-            false,
-            CT_DIM,
-            RT_DIM,
-            KT_DIM);
+            L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), j, j * CT_DIM, TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B, false, false, CT_DIM, RT_DIM, KT_DIM);
     }
 }
 
@@ -63,13 +51,13 @@ void run_kernel()
 
 void run_kernel()
 {
-    _llk_math_matmul_init_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, CT_DIM, RT_DIM, KT_DIM);
+    _llk_math_matmul_init_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, CT_DIM, RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (uint32_t j = 0; j < KT_DIM; j++)
     {
-        _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0, 0, CT_DIM, RT_DIM);
+        _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0, CT_DIM, RT_DIM);
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

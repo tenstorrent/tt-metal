@@ -51,7 +51,7 @@ void run_kernel()
             for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
                 _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                    PERF_ADDRESS(PERF_INPUT_A, block_start + block_tile), false, formats.unpack_src, formats.unpack_dst);
+                    PERF_ADDRESS(PERF_INPUT_A, block_start + block_tile), formats.unpack_src, formats.unpack_dst);
             }
 
             for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
@@ -91,11 +91,9 @@ void run_kernel()
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
 #ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(
-                false, false, TILE_NUM_FACES, formats.math);
+            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
 #else
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-                false, false, TILE_NUM_FACES, formats.math);
+            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(TILE_NUM_FACES, formats.math);
 #endif
             for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {

@@ -44,8 +44,6 @@ void run_kernel()
             j * CT_DIM,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B,
-            FACE_R_DIM,
-            FACE_R_DIM,
             PARTIAL_FACE_A,
             PARTIAL_FACE_B,
             CT_DIM,
@@ -65,13 +63,13 @@ void run_kernel()
 void run_kernel()
 {
     _llk_math_matmul_init_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM);
+        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<dest_sync>();
     for (uint32_t j = 0; j < KT_DIM; j++)
     {
-        _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(DST_INDEX, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM);
+        _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
     }
 
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

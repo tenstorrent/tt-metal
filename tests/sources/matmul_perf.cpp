@@ -70,8 +70,6 @@ void run_kernel()
                         j * CT_DIM,
                         TILE_SIZE_UNPACK_A,
                         TILE_SIZE_UNPACK_B,
-                        FACE_R_DIM,
-                        FACE_R_DIM,
                         /* partial face */ false,
                         /* partial face */ false,
                         CT_DIM,
@@ -105,8 +103,7 @@ void run_kernel()
             /* partial face */ false,
             /* transpose */ false,
             CT_DIM,
-            RT_DIM,
-            KT_DIM);
+            RT_DIM);
 
         PROFILER_SYNC();
     }
@@ -127,10 +124,7 @@ void run_kernel()
                 for (uint32_t j = 0; j < KT_DIM; j++)
                 {
                     _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(
-                        /* dest_index */ 0,
-                        /* transpose */ false,
-                        CT_DIM,
-                        RT_DIM);
+                        /* dest_index */ 0, CT_DIM, RT_DIM);
                 }
             }
         }
@@ -142,10 +136,7 @@ void run_kernel()
                 for (uint32_t j = 0; j < KT_DIM; j++)
                 {
                     _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(
-                        /* dest_index */ 0,
-                        /* transpose */ false,
-                        CT_DIM,
-                        RT_DIM);
+                        /* dest_index */ 0, CT_DIM, RT_DIM);
                 }
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }

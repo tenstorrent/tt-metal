@@ -38,7 +38,7 @@ void run_kernel()
     config_unpacker_x_end<UNP_SEL>(FACE_R_DIM);
     _llk_unpack_AB_mop_config_<BroadcastType::NONE>(false /* transpose_of_faces */, 4 /* num_faces */, false /* narrow_tile */);
 
-    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), false /* transpose_of_faces, unused */);
+    _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]));
 }
 
 #endif

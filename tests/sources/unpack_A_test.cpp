@@ -30,7 +30,7 @@ void run_kernel()
 
     for (int i = 0; i < TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(L1_ADDRESS(buffer_A[i]), false, formats.unpack_src, formats.unpack_dst);
+        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(L1_ADDRESS(buffer_A[i]), formats.unpack_src, formats.unpack_dst);
     }
 }
 
@@ -59,9 +59,9 @@ void run_kernel()
     // Use B2D for all broadcasts except NONE (data in srcB), A2D for NONE (data in srcA)
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
 #ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false, is_int_fpu_en>(0, 0, NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, false, is_int_fpu_en>(NUM_FACES, formats.math);
 #else
-    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en>(0, 0, NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en>(NUM_FACES, formats.math);
 #endif
     _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(formats.math, formats.math);

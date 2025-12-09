@@ -41,7 +41,7 @@ void run_kernel()
     {
         ZONE_SCOPED("INIT")
         _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(formats.unpack_src, formats.unpack_dst, FACE_R_DIM, 0, 4);
-        _llk_unpack_untilize_init_(formats.unpack_dst, TILE_SIZE, FACE_R_DIM, 4);
+        _llk_unpack_untilize_init_(formats.unpack_dst, TILE_SIZE, FACE_R_DIM);
         PROFILER_SYNC();
     }
 
@@ -74,9 +74,9 @@ void run_kernel()
         ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(0, 0, 4, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4, formats.math);
 #else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(0, 0, 4, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
 #endif
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<false, false>(formats.math, formats.math);

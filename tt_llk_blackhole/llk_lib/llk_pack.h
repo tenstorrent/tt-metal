@@ -619,7 +619,7 @@ inline void _llk_pack_init_(
     _llk_pack_configure_addrmod_<untilize, tilize>();
     _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header, tilize>(
         pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
-    set_packer_strides<untilize, tilize>(pack_src_format, pack_dst_format, tile_c_dim);
+    set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
     TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 

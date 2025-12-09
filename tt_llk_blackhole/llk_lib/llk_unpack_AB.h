@@ -102,14 +102,9 @@ inline void _llk_unpack_AB_hw_configure_(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(
-    const std::uint32_t face_r_dim                   = FACE_R_DIM,
-    const std::uint32_t num_faces                    = 4,
-    const bool narrow_tile                           = false,
-    const std::uint32_t transpose                    = 0,
-    [[maybe_unused]] const std::uint32_t acc_to_dest = 0)
+    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool narrow_tile = false, const std::uint32_t transpose = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(acc_to_dest == 0, "acc_to_dest: this parameter is unused");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
     constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
@@ -119,9 +114,8 @@ inline void _llk_unpack_AB_init_(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b, [[maybe_unused]] const bool transpose_of_faces = 0)
+inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
-    LLK_ASSERT(!transpose_of_faces, "transpose_of_faces: this parameter is unused");
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     // Program srcA and srcB base addresses

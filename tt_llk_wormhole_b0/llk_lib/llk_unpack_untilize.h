@@ -66,13 +66,8 @@ inline void _llk_unpack_untilize_hw_configure_(
 }
 
 inline void _llk_unpack_untilize_init_(
-    const std::uint32_t unpack_dst_format,
-    const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim                 = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const bool include_setup_calls                 = false)
+    const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const bool include_setup_calls = false)
 {
-    LLK_ASSERT(num_faces == 4, "num_faces: this parameter is unused");
     if (include_setup_calls)
     {
         // Disable transpose when unused
