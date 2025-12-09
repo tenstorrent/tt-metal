@@ -10,36 +10,60 @@ import ttnn
 def ttnn_mesh_device(request):
     """Create and yield a mesh device for a given mesh shape, cleanup on teardown."""
     if not hasattr(request, "param"):
-        pytest.skip("mesh_device fixture called without parametrization")
+        pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
 
-    mesh_shape = request.param
+    if ttnn.device.is_blackhole():
+        pytest.skip(f"{__file__}: Blackhole device is not supported for this test yet")
+
+    # request.param is either a Sequence of ints or a dict with fabric_config and etc.
+    params = getattr(request, "param", tuple())
+    if isinstance(params, tuple):
+        mesh_shape = params
+        updated_params = dict()
+    else:
+        try:
+            updated_params = params.copy()
+            mesh_shape = updated_params.pop("mesh_shape")
+        except Exception as e:
+            pytest.skip(f"{__file__}: mesh_shape is required: {e}")
+
     # Pre-check: if no devices at all, skip without invoking C++ open
-    try:
-        num_pcie = ttnn.get_num_pcie_devices()
-        if isinstance(num_pcie, int) and num_pcie == 0:
-            pytest.skip("No TT devices detected on this system")
-    except Exception:
-        # If query fails, continue to attempt opening; downstream try/except will skip
-        pass
+    num_pcie = ttnn.get_num_pcie_devices()
+    if isinstance(num_pcie, int) and num_pcie == 0:
+        pytest.skip(f"{__file__}: No TT devices detected on this system")
 
     # Pre-check: skip shapes that cannot fit into the SystemMesh to avoid native exceptions
-    try:
-        sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
-        sys_shape = tuple(sys_desc.shape())
-        req_shape = tuple(mesh_shape)
-        allowed = _allowed_req_shapes_for_system(sys_shape)
-        if req_shape not in allowed:
-            pytest.skip(
-                f"Requested mesh {req_shape} unsupported on system {sys_shape}. " f"Allowed for this system: {allowed}"
-            )
-    except Exception:
-        # If descriptor unavailable, fall through and try to open
+    sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
+    sys_shape = tuple(sys_desc.shape())
+    req_shape = tuple(mesh_shape)
+    allowed = _allowed_req_shapes_for_system(sys_shape)
+    if req_shape not in allowed:
+        pytest.skip(
+            f"{__file__}: Requested mesh {req_shape} unsupported on system {sys_shape}. "
+            f"Allowed for this system: {allowed}"
+        )
+
+    # config fabric config
+    fabric_config = updated_params.pop("fabric_config", None)
+    if req_shape == (1, 1):
+        # single device does not need fabric config
         pass
+    else:
+        # provide default fabric config for multi-device if not specified by request
+        # todo)) ttnn.FabricConfig.FABRIC_1D_RING is the default for Galaxy 6U
+        fabric_config = ttnn.FabricConfig.FABRIC_1D if fabric_config is None else fabric_config
+        # set all other input arguments to default values by top-level conftest.py
+        ttnn.set_fabric_config(
+            fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, ttnn.FabricTensixConfig.DISABLED
+        )
+
+    # config dispatch core to default values by conftest.py
+    updated_params["dispatch_core_config"] = ttnn.DispatchCoreConfig(type=None, axis=None, fabric_tensix_config=None)
 
     try:
-        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape))
-    except Exception:
-        pytest.skip("Mesh device unavailable or unsupported for this configuration")
+        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape), **updated_params)
+    except Exception as e:
+        pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
 
     try:
         yield device
