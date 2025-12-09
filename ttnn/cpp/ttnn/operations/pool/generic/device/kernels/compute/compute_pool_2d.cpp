@@ -270,7 +270,7 @@ void MAIN {
 
                         cb_push_back(out_cb_id, in_ntiles_c);
                         cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
-                        cb_reserve_back(pre_tilize_cb_id, in_ntiles_c * TILE_HEIGHT);
+                        cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
                         if constexpr (is_output_block_format) {
                             pack_reconfig_data_format(pre_tilize_cb_id);
