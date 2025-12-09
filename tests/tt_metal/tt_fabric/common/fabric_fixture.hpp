@@ -391,6 +391,8 @@ void UDMFabricUnicastCommon(
     std::optional<RoutingDirection> override_initial_direction = std::nullopt,
     std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt);
 
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type);
+
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
