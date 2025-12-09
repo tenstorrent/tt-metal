@@ -64,6 +64,36 @@ private:
     uint32_t fifo_curr_size_ = 0;
 };
 
+class D2HSocket {
+public:
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        BufferType buffer_type,
+        uint32_t fifo_size);
+
+    void wait_for_pages(uint32_t num_pages);
+    void pop_pages(uint32_t num_pages);
+    void notify_sender();
+    uint32_t get_page_size() const { return page_size_; }
+    uint32_t get_read_ptr() const { return read_ptr_; }
+    uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
+    uint32_t get_data_buffer_address() const { return data_buffer_->address(); }
+    void set_page_size(uint32_t page_size);
+
+private:
+    std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
+    std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
+    MeshCoreCoord sender_core_ = {};
+    BufferType buffer_type_ = BufferType::DRAM;
+    uint32_t fifo_size_ = 0;
+    uint32_t page_size_ = 0;
+    uint32_t bytes_acked_ = 0;
+    uint32_t bytes_sent_ = 0;
+    uint32_t read_ptr_ = 0;
+    uint32_t fifo_curr_size_ = 0;
+};
+
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.
 // Used to determine which cores the socket config must be written to and the sender to receiver mapping.
 // Cannot reuse senders and receivers in a single socket context. Each socket connection is 1:1.

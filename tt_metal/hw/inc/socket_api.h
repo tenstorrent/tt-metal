@@ -118,6 +118,8 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
 void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
+    volatile tt_l1_ptr sender_socket_md* socket_config =
+        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
     if (socket.write_ptr + num_bytes >= socket.downstream_fifo_curr_size + socket.downstream_fifo_addr) {
         socket.write_ptr = socket.write_ptr + num_bytes - socket.downstream_fifo_curr_size;
         socket.bytes_sent += num_bytes + socket.downstream_fifo_total_size - socket.downstream_fifo_curr_size;
@@ -125,6 +127,7 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
         socket.write_ptr += num_bytes;
         socket.bytes_sent += num_bytes;
     }
+    socket_config->bytes_sent = socket.bytes_sent;
 }
 
 #ifndef COMPILE_FOR_TRISC
@@ -235,7 +238,6 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
     } while (bytes_recv < num_bytes);
-    for (volatile int i = 0; i < 1000000; i++);
 #endif
 }
 

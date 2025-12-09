@@ -28,16 +28,14 @@ void kernel_main() {
         // The user can get the wptr directly from the sender_socket, or
         // we can add wrappers issue the write itself
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
-            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-            noc_async_write(
-                data_addr,
-                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr),
-                page_size);
+            // sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
+            noc_async_write(data_addr, get_noc_addr(sender_socket.write_ptr), page_size);
         }
         data_addr += page_size;
         outstanding_data_size -= page_size;
+        noc_async_write_barrier();
         socket_push_pages(sender_socket, 1);
-        socket_notify_receiver(sender_socket);
+        // socket_notify_receiver(sender_socket);
     }
     socket_barrier(sender_socket);
     // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
