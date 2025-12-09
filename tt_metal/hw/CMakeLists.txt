@@ -62,14 +62,14 @@ include(${SFPI_BASE}/sfpi-version.cmake)
 if(TT_USE_SYSTEM_SFPI)
     # we'll use the system's version
     set(SFPI_BASE "/opt/tenstorrent")
-elseif(NOT "${SFPI_md5}" STREQUAL "")
+elseif(NOT "${SFPI_hash}" STREQUAL "")
     # download a toolchain
     include(FetchContent)
     FetchContent_Declare(
         sfpi
         URL
             "${SFPI_url}/${SFPI_filename}"
-        URL_HASH "MD5=${SFPI_md5}"
+        URL_HASH "${SFPI_HASHTYPE}=${SFPI_hash}"
         SOURCE_DIR
         "${SFPI_BASE}/sfpi"
     )

@@ -21,10 +21,9 @@
 #include <memory>
 #include <optional>
 #include <source_location>
-#include <unordered_map>
 #include <utility>
 
-#include "allocator.hpp"
+#include "impl/allocator/allocator.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -33,34 +32,29 @@
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
 #include "profiler_types.hpp"
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
-#include "tt_metal/common/thread_pool.hpp"
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/distributed/sd_mesh_command_queue.hpp"
+#include "common/thread_pool.hpp"
+#include "device/device_manager.hpp"
+#include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/fabric_types.hpp>
+#include "distributed/fd_mesh_command_queue.hpp"
+#include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "tt_metal/distributed/distributed_coordinate_translator.hpp"
-
-#include "llrt/hal.hpp"
+#include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
 
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/inspector/inspector.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "allocator/l1_banking_allocator.hpp"
+#include "debug/inspector/inspector.hpp"
+#include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "impl/context/metal_context.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
-
-#include <umd/device/types/core_coordinates.hpp>
+#include "context/metal_context.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -145,7 +139,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
     auto local_devices = extract_locals(device_ids);
-    opened_local_devices_ = tt::tt_metal::detail::CreateDevices(
+    opened_local_devices_ = tt_metal::detail::CreateDevices(
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -153,8 +147,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         dispatch_core_config,
         {},
         worker_l1_size,
-        /*init_profiler*/ false,
-        /*use_max_eth_core_count_on_all_devices*/ true,
+        /* init_profiler */ false,
+        /* ignored */ true,
         /* initialize_fabric_and_dispatch_fw */ false);
 
     for (auto device_id : device_ids) {
@@ -174,7 +168,7 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
+        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
 }
 
@@ -210,9 +204,9 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
-void MeshDevice::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+void MeshDevice::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void MeshDevice::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+void MeshDevice::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -290,8 +284,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -339,8 +333,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         result[device_ids[i]] = submeshes[i];
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
 
@@ -418,7 +412,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         shared_from_this());
 
-    const auto& allocator_config = reference_device()->allocator()->get_config();
+    const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh->initialize(
         num_hw_cqs(),
         allocator_config.l1_small_size,
@@ -518,7 +512,7 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDevice::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH MeshDevice::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
 
@@ -978,12 +972,13 @@ bool MeshDevice::initialize(
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
 
-    const auto& allocator = reference_device()->allocator();
+    const auto& allocator = reference_device()->allocator_impl();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
-    num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    num_virtual_eth_cores_ =
+        tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -1124,11 +1119,18 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
+const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
-const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator() const { return this->allocator_impl()->view(); }
+
+const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+}
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
