@@ -111,8 +111,6 @@ void process_and_sort_tiles(
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     cb_wait_front(index_cb_index, Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
-        cb_reserve_back(index_transposed_cb_index, 2);
-
         acquire_dst();
         // local sort into k groups
         cb_wait_front(input_cb_index, 2);
@@ -153,6 +151,10 @@ void process_and_sort_tiles(
         cb_push_back(index_transposed_cb_index, 1);
 
         cb_pop_front(input_cb_index, 2);
+
+        cb_wait_front(index_transposed_cb_index, 2);
+        cb_pop_front(index_transposed_cb_index, 2);
+
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
@@ -468,10 +470,13 @@ void MAIN {
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;
 
+        DPRINT << "Start of kernel" << ENDL();
         blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
+        DPRINT << "End of sigmoid" << ENDL();
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
         blocks::add_bias(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
+        DPRINT << "End of add bias" << ENDL();
 
         // Transpose tiles into dest and then perform topk_local_sort
         bool ascending = false;
@@ -485,7 +490,7 @@ void MAIN {
             switch_dir,
             ascending,
             end_phase);
-
+        DPRINT << "End of process and sort tiles" << ENDL();
         blocks::sum_top_experts_per_group(summed_experts_cb_index, group_scores_cb_index, summed_experts_per_group);
         blocks::topk_group_scores(
             group_scores_cb_index,
@@ -494,7 +499,7 @@ void MAIN {
             switch_dir,
             ascending,
             log_n_groups - 1);
-
+        DPRINT << "End of topk group scores" << ENDL();
         blocks::topk(
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
@@ -506,7 +511,7 @@ void MAIN {
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
-
+        DPRINT << "End of topk" << ENDL();
         blocks::normalize_scores(
             pre_normalized_scores_cb_index,
             reduce_scalar_cb_index,
@@ -514,8 +519,9 @@ void MAIN {
             transpose_cb_index,
             epsilon_cb_index,
             normalized_cb_index);
-
+        DPRINT << "End of normalize scores" << ENDL();
         blocks::scale(normalized_cb_index, scales_cb_index, weights_cb_index);
+        DPRINT << "End of scale" << ENDL();
     }
 }
 }  // namespace NAMESPACE
