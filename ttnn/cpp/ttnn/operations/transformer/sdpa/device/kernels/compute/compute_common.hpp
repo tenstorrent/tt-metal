@@ -476,8 +476,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         pack_tile(0, out_cb);
 
-        release_dst();
         cb_push_back(out_cb, 1);
+        release_dst();
     }
 }
 
