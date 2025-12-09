@@ -1,5 +1,5 @@
-# Duplicate connections - has the same node1<->node2 connection as base
-# This should WARN but succeed when merged with base_intrapod.textproto
+# Duplicate connection - includes same node1-node2 connection as base plus a new one
+# This should succeed with a warning about duplicate
 graph_templates {
   key: "test_pod"
   value {
@@ -22,15 +22,15 @@ graph_templates {
     internal_connections {
       key: "QSFP_DD"
       value {
-        # DUPLICATE: same as in base_intrapod.textproto
+        # DUPLICATE: same as base_intrapod node1 <-> node2
         connections {
-          port_a { path: ["node1"] tray_id: 0 port_id: 0 }
-          port_b { path: ["node2"] tray_id: 0 port_id: 0 }
+          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
+          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
         }
-        # NEW: additional connection
+        # NEW: node2 <-> node3
         connections {
-          port_a { path: ["node2"] tray_id: 0 port_id: 2 }
-          port_b { path: ["node3"] tray_id: 0 port_id: 2 }
+          port_a { path: ["node2"] tray_id: 2 port_id: 1 }
+          port_b { path: ["node3"] tray_id: 2 port_id: 1 }
         }
       }
     }

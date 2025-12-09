@@ -24,13 +24,13 @@ graph_templates {
       value {
         # node3 <-> node4
         connections {
-          port_a { path: ["node3"] tray_id: 0 port_id: 1 }
-          port_b { path: ["node4"] tray_id: 0 port_id: 0 }
+          port_a { path: ["node3"] tray_id: 1 port_id: 2 }
+          port_b { path: ["node4"] tray_id: 1 port_id: 1 }
         }
         # node2 <-> node4
         connections {
-          port_a { path: ["node2"] tray_id: 0 port_id: 1 }
-          port_b { path: ["node4"] tray_id: 0 port_id: 1 }
+          port_a { path: ["node2"] tray_id: 1 port_id: 2 }
+          port_b { path: ["node4"] tray_id: 1 port_id: 2 }
         }
       }
     }

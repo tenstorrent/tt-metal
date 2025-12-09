@@ -1,7 +1,7 @@
-# Descriptor with only 2 hosts instead of 4
-# This should trigger a host count mismatch warning when merged with base_intrapod.textproto
+# Different host count - only 2 hosts instead of 4
+# This should generate a warning about host count mismatch
 graph_templates {
-  key: "small_cluster"
+  key: "test_small_pod"
   value {
     children {
       name: "node1"
@@ -15,8 +15,8 @@ graph_templates {
       key: "QSFP_DD"
       value {
         connections {
-          port_a { path: ["node1"] tray_id: 0 port_id: 0 }
-          port_b { path: ["node2"] tray_id: 0 port_id: 0 }
+          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
+          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
         }
       }
     }
@@ -24,7 +24,7 @@ graph_templates {
 }
 
 root_instance {
-  template_name: "small_cluster"
+  template_name: "test_small_pod"
   child_mappings {
     key: "node1"
     value { host_id: 0 }

@@ -16,8 +16,8 @@ graph_templates {
       value {
         # Cross-pod connection
         connections {
-          port_a { path: ["pod1", "node1"] tray_id: 1 port_id: 0 }
-          port_b { path: ["pod2", "node1"] tray_id: 1 port_id: 0 }
+          port_a { path: ["pod1", "node1"] tray_id: 2 port_id: 1 }
+          port_b { path: ["pod2", "node1"] tray_id: 2 port_id: 1 }
         }
       }
     }

@@ -1,4 +1,4 @@
-# Conflicting connections - node1:port0:port0 connects to node4 instead of node2
+# Conflicting connections - node1:tray1:port1 connects to node4 instead of node2
 # This should FAIL to merge with base_intrapod.textproto
 graph_templates {
   key: "test_pod"
@@ -22,10 +22,10 @@ graph_templates {
     internal_connections {
       key: "QSFP_DD"
       value {
-        # CONFLICT: node1:tray0:port0 connects to node4 here, but to node2 in base
+        # CONFLICT: node1:tray1:port1 connects to node4 here, but to node2 in base
         connections {
-          port_a { path: ["node1"] tray_id: 0 port_id: 0 }
-          port_b { path: ["node4"] tray_id: 0 port_id: 2 }
+          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
+          port_b { path: ["node4"] tray_id: 1 port_id: 3 }
         }
       }
     }
