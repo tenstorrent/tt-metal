@@ -9,6 +9,7 @@ from loguru import logger
 from tracy import signpost
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.common.utility_functions import skip_for_wormhole_b0
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 def compute_reference_reduce_to_root(
@@ -104,6 +105,9 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     root_coord = (1, 0)
     root_device_idx = root_coord[0]
     num_cores = 8
+
+    topology = ttnn.Topology.Linear
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
 
     # Tensor shapes
     l_shape = [8, 128 * num_cores]
@@ -236,7 +240,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         root_coord=ttnn.MeshCoordinate(root_coord),
         scale_fp32=scale_value,
         intermediate_tensor=intermediate,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         input_mux_cores=mux_cores,
     )
     ttnn.synchronize_device(submesh_device)
@@ -252,7 +256,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
             intermediate_tensor=intermediate,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             input_mux_cores=mux_cores,
         )
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
@@ -269,7 +273,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
             intermediate_tensor=intermediate,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             input_mux_cores=mux_cores,
         )
 
