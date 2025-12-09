@@ -76,7 +76,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 RepeatDeviceOperation::create_op_performance_model(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) const {
+    tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input;
     int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
