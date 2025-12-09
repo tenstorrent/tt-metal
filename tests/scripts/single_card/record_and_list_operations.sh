@@ -45,14 +45,19 @@ echo "Running test with Tracy profiler..."
 echo "=========================================="
 
 # Modify pytest command to run under Tracy
+# Key flags:
+#   -r: Generate ops report
+#   -p: Enable device profiler
+#   --dump-device-data-mid-run: Flush device profiler buffer periodically (prevents overflow)
+#   -m: Run the following as a Python module
 if [[ "$TEST_CMD" == pytest* ]]; then
     # For pytest: use -m flag to run pytest as a module
     # Extract pytest args (everything after 'pytest ')
     PYTEST_ARGS="${TEST_CMD#pytest }"
-    TRACY_CMD="python -m tracy -r -m pytest ${PYTEST_ARGS}"
+    TRACY_CMD="python -m tracy -r -p --dump-device-data-mid-run -m pytest ${PYTEST_ARGS}"
 else
     # Wrap non-pytest commands (python scripts)
-    TRACY_CMD="python -m tracy -r -m '${TEST_CMD}'"
+    TRACY_CMD="python -m tracy -r -p --dump-device-data-mid-run -m '${TEST_CMD}'"
 fi
 
 echo "Tracy command: $TRACY_CMD"
