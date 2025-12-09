@@ -41,14 +41,13 @@ void kernel_main() {
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(fabric_ct_idx + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
-    const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(2);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(3);
+    size_t arg_idx = 0;
+    const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t dst_num_hops = 1;
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
-
-    size_t arg_idx = 4;
 
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);

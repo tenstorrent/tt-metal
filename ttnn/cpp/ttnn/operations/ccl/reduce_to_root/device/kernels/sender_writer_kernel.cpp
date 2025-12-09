@@ -39,10 +39,11 @@ void kernel_main() {
 
     uint32_t chunk_size = input_num_tiles;
 
-    const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(2);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(3);
+    size_t arg_idx = 0;
+    const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     const uint8_t dst_num_hops = 1;
 
@@ -50,8 +51,6 @@ void kernel_main() {
 
     const uint32_t new_payload_size_bytes =
         payload_size_bytes + 2 * aligned_page_size_bytes;  // add the extra size for s and m
-
-    size_t arg_idx = 4;
 
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);

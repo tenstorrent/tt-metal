@@ -71,17 +71,16 @@ void kernel_main() {
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-    const uint32_t src_addr_l = get_arg_val<uint32_t>(0);
-    const uint32_t src_addr_s = get_arg_val<uint32_t>(1);
-    const uint32_t src_addr_m = get_arg_val<uint32_t>(2);
-    const auto intermediate_base_addr = get_arg_val<uint32_t>(3);
-    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(4);
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(6);
+    size_t arg_idx = 0;
+    const uint32_t src_addr_l = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t src_addr_s = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t src_addr_m = get_arg_val<uint32_t>(arg_idx++);
+    const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     const uint8_t sender_num_hops = 1;
-
-    size_t arg_idx = 7;
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
