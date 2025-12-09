@@ -381,9 +381,7 @@ void kernel_main() {
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
 
-    // while reader and compute kernels are applying the sigmoid, we can create the topk indices
-    // I see no performance difference generating these internally inside the writer kernel
-    generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
+    // Generate these once - they're reused across all height tiles
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
     generate_reduce_scalar(reduce_scalar_cb_index, packed_one_scalar, n_activated_experts);
     write_single_scalar(epsilon_cb_index, packed_epsilon);
@@ -391,6 +389,8 @@ void kernel_main() {
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t tokens_per_tile = height_tile % seq_len_tiles == 0 ? remainder_tokens_per_tile : tokens_per_tile;
+        // Generate index tiles for each height_tile iteration since they get consumed
+        generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
         generate_summed_experts_tiles(
             summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group, tokens_per_tile);
         generate_winning_group_tiles<

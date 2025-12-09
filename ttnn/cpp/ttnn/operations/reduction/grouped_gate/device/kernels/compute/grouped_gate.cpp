@@ -225,9 +225,7 @@ void topk_group_scores(
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
-    PACK(DPRINT << "Transpose wh init short input cb index" << ENDL();)
     pack_reconfig_data_format(output_cb_index);  // uncommenting this causes a hang
-    PACK(DPRINT << "Reconfig data format output cb index" << ENDL();)
     for (uint32_t i = 0; i < tiles; i++) {
         tile_regs_acquire();
         cb_wait_front(input_cb_index, 1);
@@ -236,16 +234,11 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
 
         tile_regs_wait();
         cb_reserve_back(output_cb_index, 1);
-        PACK(DPRINT << "Reserving back output cb index" << ENDL();)
-
         pack_tile(0, output_cb_index);
         tile_regs_release();
         cb_push_back(output_cb_index, 1);
-        PACK(DPRINT << "End of push back output cb index" << ENDL();)
-
         cb_pop_front(input_cb_index, 1);
     }
-    PACK(DPRINT << "Final tile regs release" << ENDL();)
 }
 
 void topk(
@@ -263,13 +256,16 @@ void topk(
     bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
+    DPRINT << "topk: start" << ENDL();
     topk_tile_init();
     // acquire_dst();
     tile_regs_acquire();
+    DPRINT << "topk: waiting for cb_wait_front" << ENDL();
     cb_wait_front(winning_group_scores_cb_index, tiles);
     cb_wait_front(winning_group_indices_cb_index, tiles);
     // local sort first two tiles:
 
+    DPRINT << "topk: transpose first two tiles" << ENDL();
     // transpose and unpack into dest regs
     reconfig_data_format_srca(winning_group_scores_cb_index);
     transpose_wh_init_short(winning_group_scores_cb_index);
@@ -282,12 +278,15 @@ void topk(
     transpose_wh_tile(winning_group_indices_cb_index, 0, 2);
     transpose_wh_tile(winning_group_indices_cb_index, 1, 3);
     // llk_topk_sort -> inplace
+    DPRINT << "topk: local_sort and merge first two tiles" << ENDL();
     ckernel::topk_local_sort(0, (int)ascending, 4);
     ckernel::topk_merge(0, 0, 32);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
+    DPRINT << "topk: starting insertion loop, tiles=" << tiles << ENDL();
     for (uint32_t j = 2; j < tiles; j++) {
+        DPRINT << "topk: processing tile j=" << j << ENDL();
         reconfig_data_format_srca(winning_group_scores_cb_index);
         transpose_wh_init_short(winning_group_scores_cb_index);
         transpose_wh_tile(winning_group_scores_cb_index, j, 1);
@@ -299,9 +298,11 @@ void topk(
         ckernel::topk_local_sort(0, (int)ascending, 4);
         ckernel::topk_merge(0, 0, 32);
     }
+    DPRINT << "topk: rebuild" << ENDL();
     ckernel::topk_rebuild(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();
 
+    DPRINT << "topk: packing results" << ENDL();
     tile_regs_wait();
     cb_reserve_back(post_sort_transpose_cb_index, 1);
     pack_reconfig_data_format(post_sort_transpose_cb_index);
@@ -314,11 +315,15 @@ void topk(
     tile_regs_release();
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
+    DPRINT << "topk: transpose_and_pack 1" << ENDL();
     transpose_and_pack(post_sort_transpose_cb_index, unnormalized_scores_cb_index, 1);
+    DPRINT << "topk: transpose_and_pack 2" << ENDL();
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
 
+    DPRINT << "topk: cleanup" << ENDL();
     cb_pop_front(winning_group_scores_cb_index, tiles);
     cb_pop_front(winning_group_indices_cb_index, tiles);
+    DPRINT << "topk: done" << ENDL();
 }
 
 void normalize_scores(
@@ -346,13 +351,10 @@ void normalize_scores(
     // 2. Pack sums to intermediate to add epsilon
     tile_regs_wait();
     cb_reserve_back(intermediate_reduce_cb_index, 1);
-    PACK(DPRINT << "Reserving back intermediate reduce cb index" << ENDL();)
     pack_tile(0, intermediate_reduce_cb_index);
     // PACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     tile_regs_release();
-    PACK(DPRINT << "End of tile regs release after intermediate reduce cb index" << ENDL();)
     cb_push_back(intermediate_reduce_cb_index, 1);
-    PACK(DPRINT << "End of push back intermediate reduce cb index" << ENDL();)
     // 3. Add epsilon
     tile_regs_acquire();
     cb_wait_front(epsilon_cb_index, 1);
@@ -479,11 +481,13 @@ void MAIN {
     binary_op_init_common(scores_cb_index, bias_cb_index, add_bias_cb_index);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
+        // DPRINT << "Height tile: " << height_tile << ENDL();
 
+        blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
+        // DPRINT << "End block::sigmoid" << ENDL();
         // Perform add bias on sigmoid input – should I do full or partial init here?
         blocks::add_bias(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
-
+        // DPRINT << "End block::add_bias" << ENDL();
         // Transpose tiles into dest and then perform topk_local_sort
         blocks::process_and_sort_tiles(
             add_bias_cb_index,
@@ -494,8 +498,9 @@ void MAIN {
             false,
             false,
             end_phase);
-
+        // DPRINT << "End block::process_and_sort_tiles" << ENDL();
         blocks::sum_top_experts_per_group(summed_experts_cb_index, group_scores_cb_index, summed_experts_per_group);
+        // DPRINT << "End block::sum_top_experts_per_group" << ENDL();
         blocks::topk_group_scores(
             group_scores_cb_index,
             group_indices_cb_index,
@@ -503,7 +508,7 @@ void MAIN {
             false,
             false,
             log_n_groups - 1);
-
+        // DPRINT << "End block::topk_group_scores" << ENDL();
         blocks::topk(
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
@@ -515,6 +520,7 @@ void MAIN {
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
+        // DPRINT << "End block::topk" << ENDL();
         blocks::normalize_scores(
             pre_normalized_scores_cb_index,
             reduce_scalar_cb_index,
@@ -522,8 +528,9 @@ void MAIN {
             transpose_cb_index,
             epsilon_cb_index,
             normalized_cb_index);
-        DPRINT << "End of normalize scores" << ENDL();
+        // DPRINT << "End block::normalize_scores" << ENDL();
         blocks::scale(normalized_cb_index, scales_cb_index, weights_cb_index);
+        // DPRINT << "End block::scale" << ENDL();
     }
 }
 }  // namespace NAMESPACE
