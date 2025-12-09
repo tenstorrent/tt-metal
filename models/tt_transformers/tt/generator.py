@@ -112,7 +112,7 @@ class Generator:
             return
         self.already_warmed_up_prefill = True
 
-        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens(8192)
+        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
