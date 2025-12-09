@@ -83,7 +83,7 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);
+                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
                 perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);

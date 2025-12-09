@@ -1,18 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// this kernel receives l, m, s tensors from the reader and perform the following computations
-// - inputs: l1, s1, m1 and l2, s2, m2; output: l, s, m
-//----> m = max(m1, m2)
-//- P1 = exp((m1 - m) * scale)
-//- P2 = exp((m2 - m) * scale)
-//----> s = s1 * P1 + s2 * P2
-//----> l = l1 * P1 + l2 * P2
-// writes the tensors l, s, m to the writer buffers
-
-// for last round of device 1 add extra compute:
-// out = l / s
-
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
@@ -131,6 +119,17 @@ constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);
 constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
 
 void MAIN {
+    // this kernel receives l, m, s tensors from the reader and perform the following computations
+    // - inputs: l1, s1, m1 and l2, s2, m2; output: l, s, m
+    //----> m = max(m1, m2)
+    //- P1 = exp((m1 - m) * scale)
+    //- P2 = exp((m2 - m) * scale)
+    //----> s = s1 * P1 + s2 * P2
+    //----> l = l1 * P1 + l2 * P2
+    // writes the tensors l, s, m to the writer buffers
+
+    // for last round of device 1 add extra compute:
+    // out = l / s
     const bool use_half_tile = true;
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;

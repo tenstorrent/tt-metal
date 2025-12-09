@@ -221,26 +221,20 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
-    DPRINT << "START OF MUL INPLACE\n";
+
     uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
-    DPRINT << "after wait in0\n";
     cb_wait_front(in1_cb, rows);
-    DPRINT << "before mul loop\n";
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-            DPRINT << "after mul col j=" << (uint32_t)j << "\n";
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
             pack_tile(0, in0_cb);
             cb_push_back(in0_cb, 1);
-            DPRINT << "after push back\n";
             release_dst();
-            DPRINT << "after release dst\n";
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -262,16 +256,13 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
     cb_wait_front(in1_cb, rows);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
-            DPRINT << "mul col j=" << j << "\n";
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(out_cb, 1);
             pack_tile(0, out_cb);
             cb_push_back(out_cb, 1);
-            DPRINT << "BEFORE release dst\n";
             release_dst();
-            DPRINT << "after release dst\n";
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -310,30 +301,21 @@ void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_t
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
-    DPRINT << "START OF ADD\n";
+
     add_tiles_init(in0_cb, in1_cb);
-    DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
-    DPRINT << "after waiting in0\n";
     cb_wait_front(in1_cb, num_tiles);
-    DPRINT << "after waiting\n";
     cb_reserve_back(out_cb, num_tiles);
-    DPRINT << "after reserving\n";
     for (uint32_t i = 0; i < num_tiles; i++) {
-        DPRINT << "add tile i=" << i << "\n";
         acquire_dst();
         add_tiles(in0_cb, in1_cb, i, i, 0);
-        DPRINT << "after add_tiles\n";
         pack_tile(0, out_cb, i);
-        DPRINT << "after pack_tile\n";
         release_dst();
     }
-    DPRINT << "after add loop\n";
     cb_push_back(out_cb, num_tiles);
 
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
-    DPRINT << "END OF ADD\n";
 }
 
 /**
@@ -343,13 +325,10 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-    DPRINT << "START OF MUL\n";
+
     mul_tiles_init(in0_cb, in1_cb);
-    DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
-    DPRINT << "after wait in0\n";
     cb_wait_front(in1_cb, num_tiles);
-    DPRINT << "before mul loop with num_tiles " << (uint32_t)num_tiles << "\n";
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         acquire_dst();
@@ -358,9 +337,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_reserve_back(in0_cb, 1);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
-        DPRINT << "after push back\n";
         release_dst();
-        DPRINT << "after release dst\n";
     }
 }
 
@@ -410,14 +387,12 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
-    DPRINT << "before waiting and reserving\n";
+
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE, false>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
-
-    DPRINT << "after waiting and reserving\n";
 
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -426,16 +401,11 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        DPRINT << "before MATH\n";
         MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
-        DPRINT << "after MATH\n";
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
-        DPRINT << "after pack tile\n";
         release_dst();
-        DPRINT << "after release dst\n";
     }
-    DPRINT << "after loop\n";
 }
 
 #ifdef TRISC_MATH

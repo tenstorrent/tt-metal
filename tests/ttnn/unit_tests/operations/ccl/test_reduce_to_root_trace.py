@@ -11,7 +11,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def compute_reference_reduce_to_root(
-    l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx=1, num_cores=8
+    l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx=1, num_cores=8, scale_value=1.0
 ):
     """
     Compute the reference output for reduce_to_root operation.
@@ -43,9 +43,12 @@ def compute_reference_reduce_to_root(
         l2_r1, s2_r1, m2_r1 = l_dev[1], s_dev[1], m_dev[1]
 
         m_new_dev1 = torch.maximum(m1_r1, m2_r1)
-        exp_m1_dev1 = torch.exp(m1_r1 - m_new_dev1)[:, :1].expand(-1, 128)
-        exp_m2_dev1 = torch.exp(m2_r1 - m_new_dev1)[:, :1].expand(-1, 128)
-        s_new_dev1 = s1_r1 * torch.exp(m1_r1 - m_new_dev1) + s2_r1 * torch.exp(m2_r1 - m_new_dev1)
+        # P1 = exp((m1 - m) * scale), P2 = exp((m2 - m) * scale)
+        exp_m1_dev1 = torch.exp((m1_r1 - m_new_dev1) * scale_value)[:, :1].expand(-1, 128)
+        exp_m2_dev1 = torch.exp((m2_r1 - m_new_dev1) * scale_value)[:, :1].expand(-1, 128)
+        s_new_dev1 = s1_r1 * torch.exp((m1_r1 - m_new_dev1) * scale_value) + s2_r1 * torch.exp(
+            (m2_r1 - m_new_dev1) * scale_value
+        )
         l_new_dev1 = l1_r1 * exp_m1_dev1 + l2_r1 * exp_m2_dev1
 
         # device 3 -> device 2
@@ -53,9 +56,12 @@ def compute_reference_reduce_to_root(
         l2_r2, s2_r2, m2_r2 = l_dev[2], s_dev[2], m_dev[2]
 
         m_new_dev2 = torch.maximum(m1_r2, m2_r2)
-        exp_m1_dev2 = torch.exp(m1_r2 - m_new_dev2)[:, :1].expand(-1, 128)
-        exp_m2_dev2 = torch.exp(m2_r2 - m_new_dev2)[:, :1].expand(-1, 128)
-        s_new_dev2 = s1_r2 * torch.exp(m1_r2 - m_new_dev2) + s2_r2 * torch.exp(m2_r2 - m_new_dev2)
+        # P1 = exp((m1 - m) * scale), P2 = exp((m2 - m) * scale)
+        exp_m1_dev2 = torch.exp((m1_r2 - m_new_dev2) * scale_value)[:, :1].expand(-1, 128)
+        exp_m2_dev2 = torch.exp((m2_r2 - m_new_dev2) * scale_value)[:, :1].expand(-1, 128)
+        s_new_dev2 = s1_r2 * torch.exp((m1_r2 - m_new_dev2) * scale_value) + s2_r2 * torch.exp(
+            (m2_r2 - m_new_dev2) * scale_value
+        )
         l_new_dev2 = l1_r2 * exp_m1_dev2 + l2_r2 * exp_m2_dev2
 
         # Round 2: device 2 -> device 1 (final)
@@ -63,9 +69,12 @@ def compute_reference_reduce_to_root(
         l2_final, s2_final, m2_final = l_new_dev1, s_new_dev1, m_new_dev1
 
         m_final = torch.maximum(m1_final, m2_final)
-        exp_m1_final = torch.exp(m1_final - m_final)[:, :1].expand(-1, 128)
-        exp_m2_final = torch.exp(m2_final - m_final)[:, :1].expand(-1, 128)
-        s_final = s1_final * torch.exp(m1_final - m_final) + s2_final * torch.exp(m2_final - m_final)
+        # P1 = exp((m1 - m) * scale), P2 = exp((m2 - m) * scale)
+        exp_m1_final = torch.exp((m1_final - m_final) * scale_value)[:, :1].expand(-1, 128)
+        exp_m2_final = torch.exp((m2_final - m_final) * scale_value)[:, :1].expand(-1, 128)
+        s_final = s1_final * torch.exp((m1_final - m_final) * scale_value) + s2_final * torch.exp(
+            (m2_final - m_final) * scale_value
+        )
         l_intermediate = l1_final * exp_m1_final + l2_final * exp_m2_final
         l_final = l_intermediate / s_final[:, :1].expand(-1, 128)
 
@@ -93,7 +102,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     root_coord = (1, 0)
     root_device_idx = root_coord[0]
     num_cores = 8
-    scale_value = float(1)
 
     # Tensor shapes
     l_shape = [8, 128 * num_cores]
@@ -218,9 +226,10 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         mesh_mapper=mesh_mapper,
     )
 
+    scale_value = float(1)
     # Compute reference output
     l_ref, s_ref, m_ref = compute_reference_reduce_to_root(
-        l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx
+        l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx, num_cores, scale_value
     )
 
     profiler = BenchmarkProfiler()
