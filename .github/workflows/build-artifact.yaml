@@ -58,6 +58,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      nanobind:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with nanobind bindings"
       build-umd-tests:
         required: false
         type: boolean
@@ -155,6 +160,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      nanobind:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with nanobind bindings"
       build-umd-tests:
         required: false
         type: boolean
@@ -315,6 +325,9 @@ jobs:
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
             build_command="$build_command --enable-time-trace --disable-unity-builds"
+          fi
+          if [ "${{ inputs.nanobind }}" = "true" ]; then
+            build_command="$build_command --bindings nanobind"
           fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_command="$build_command --build-umd-tests"
