@@ -22,7 +22,6 @@ from models.common.llama_models import (
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
-    get_all_padded_prefill_lengths,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -113,25 +112,7 @@ class Generator:
             return
         self.already_warmed_up_prefill = True
 
-        sequence_lengths_to_warmup = get_all_padded_prefill_lengths(8192)
-        for traced_seq_len in self.model_args[0].trace_prefill_supported_seq_lens:
-            if traced_seq_len not in sequence_lengths_to_warmup:
-                sequence_lengths_to_warmup.append(traced_seq_len)
-        sequence_lengths_to_warmup.sort()
-        for seq_len in sequence_lengths_to_warmup:
-            if seq_len > self.model_args[0].max_seq_len:
-                sequence_lengths_to_warmup = sequence_lengths_to_warmup[: sequence_lengths_to_warmup.index(seq_len)]
-                break
-
-        # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
-        # other models works with this, but gpt-oss does not
-        if "gpt" in self.model_args[0].base_model_name.lower() and 6144 in sequence_lengths_to_warmup:
-            sequence_lengths_to_warmup.remove(6144)
-
-        # TODO: https://github.com/tenstorrent/tt-metal/issues/33991
-        if self.model_args[0].base_model_name == "Llama-3.1-8B":
-            if sequence_lengths_to_warmup[-1] > 1024:
-                sequence_lengths_to_warmup = sequence_lengths_to_warmup[: sequence_lengths_to_warmup.index(1024) + 1]
+        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens(8192)
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
