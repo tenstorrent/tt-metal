@@ -43,7 +43,7 @@ def test_invertedResidual(device, reset_seeds, batch_size, channels, height, wid
 
     mobilenet = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1)
     torch_model = mobilenet.features[feature_i]
-    torch.onnx.export(torch_model, torch_input_tensor, "invertedResidual.onnx", verbose=False, opset_version=14)
+    # torch.onnx.export(torch_model, torch_input_tensor, "invertedResidual.onnx", verbose=False, opset_version=14)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None

@@ -61,8 +61,8 @@ class ttnn_MobileNetV3:
                     cnf,
                     parameters=parameters["features"][index].block,
                     device=device,
-                    input_height=input_height,
-                    input_width=input_width,
+                    # input_height=cnf.input_height,
+                    # input_width=cnf.input_width,
                 )
             )
             index += 1
@@ -76,8 +76,8 @@ class ttnn_MobileNetV3:
                 activation_layer=ttnn.hardswish,
                 parameters=parameters["features"][index],
                 device=device,
-                input_height=input_height,
-                input_width=input_width,
+                input_height=7,
+                input_width=7,
             )
         )
 

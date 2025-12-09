@@ -50,6 +50,7 @@ class MobilenetV3TestInfra:
             mobilenet = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1)
         else:
             mobilenet = models.mobilenet_v3_small(weights=None)
+        # torch.onnx.export(mobilenet, torch_input_tensor, "mobilenetv3.onnx", verbose=True)
 
         torch_model = mobilenet
 
@@ -61,7 +62,12 @@ class MobilenetV3TestInfra:
             self.torch_output_tensor = torch_model(torch_input_tensor)
 
         self.ttnn_model = ttnn_MobileNetV3(
-            inverted_residual_setting=inverted_residual_setting, last_channel=last_channel, parameters=parameters
+            inverted_residual_setting=inverted_residual_setting,
+            last_channel=last_channel,
+            parameters=parameters,
+            device=device,
+            input_height=height,
+            input_width=width,
         )
 
         self.run()
