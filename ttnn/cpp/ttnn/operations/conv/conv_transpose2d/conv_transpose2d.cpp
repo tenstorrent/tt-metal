@@ -360,13 +360,19 @@ public:
         DeviceComputeKernelConfig& compute_config,
         MeshDevice* device,
         bool mirror_kernel);
-    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
-    InputWithPadding get_input_slice_and_padding(IOShape output_slice_start, IOShape output_slice_end);
+    std::tuple<IOShape, IOShape> get_input_slice(
+        const IOShape& output_slice_start, const IOShape& output_slice_end) override;
+    InputWithPadding get_input_slice_and_padding(const IOShape& output_slice_start, const IOShape& output_slice_end);
     uint32_t get_L1_usage(
-        IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) override;
-    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end,
+        const op_slicing::Op2DSliceConfig& slice_config) override;
+    tt::tt_metal::MemoryConfig get_input_memory_config(
+        const IOShape& output_slice_start, const IOShape& output_slice_end) override;
     ttnn::Tensor run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
+        const ttnn::Tensor& sliced_input_tensor,
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end) override;
     std::string name() override;
 };
 
@@ -593,12 +599,14 @@ ConvT2DSliceAttr::ConvT2DSliceAttr(
     mirror_kernel(mirror_kernel) {}
 
 std::tuple<ConvT2DSliceAttr::IOShape, ConvT2DSliceAttr::IOShape> ConvT2DSliceAttr::get_input_slice(
-    IOShape output_slice_start, IOShape output_slice_end) {
+    const IOShape& output_slice_start, const IOShape& output_slice_end) {
     return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
 }
 
 uint32_t ConvT2DSliceAttr::get_L1_usage(
-    IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) {
+    const IOShape& output_slice_start,
+    const IOShape& output_slice_end,
+    const op_slicing::Op2DSliceConfig& slice_config) {
     auto sliced_input_tensor_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
     if (!conv_config.shard_layout.has_value()) {
         conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
@@ -705,7 +713,7 @@ uint32_t ConvT2DSliceAttr::get_L1_usage(
 };
 
 tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
-    IOShape output_slice_start, IOShape output_slice_end) {
+    const IOShape& output_slice_start, const IOShape& output_slice_end) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
     auto [input_start, input_end] = get_input_slice(output_slice_start, output_slice_end);
     uint32_t input_slice_height = std::get<0>(input_end) - std::get<0>(input_start);
@@ -766,7 +774,7 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
 }
 
 ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding(
-    IOShape output_slice_start, IOShape output_slice_end) {
+    const IOShape& output_slice_start, const IOShape& output_slice_end) {
     int output_slice_height_start, output_slice_width_start;
     int output_slice_height_end, output_slice_width_end;
     std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
@@ -885,7 +893,7 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
         this_output_pad};
 }
 ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
-    const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
+    const ttnn::Tensor& sliced_input_tensor, const IOShape& output_slice_start, const IOShape& output_slice_end) {
     int output_slice_height_start, output_slice_width_start;
     int output_slice_height_end, output_slice_width_end;
     std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;

@@ -31,15 +31,20 @@ class OpSliceAttr {
 public:
     virtual ~OpSliceAttr() = default;
     using IOShape = std::tuple<uint32_t, uint32_t>;
-    virtual std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) = 0;
+    virtual std::tuple<IOShape, IOShape> get_input_slice(
+        const IOShape& output_slice_start, const IOShape& output_slice_end) = 0;
 
     virtual uint32_t get_L1_usage(
-        IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) = 0;
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end,
+        const op_slicing::Op2DSliceConfig& slice_config) = 0;
 
     virtual tt::tt_metal::MemoryConfig get_input_memory_config(
-        IOShape output_slice_start, IOShape output_slice_end) = 0;
+        const IOShape& output_slice_start, const IOShape& output_slice_end) = 0;
     virtual ttnn::Tensor run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) = 0;
+        const ttnn::Tensor& sliced_input_tensor,
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end) = 0;
     virtual std::string name() = 0;
 };
 
