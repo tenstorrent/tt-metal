@@ -56,9 +56,9 @@ struct PadDeviceOperation {
         const ttnn::Shape& output_logical_shape,
         const ttnn::Shape& output_padded_shape,
         const ttnn::Shape& input_tensor_start,
-        const float pad_value,
+        float pad_value,
         const tt::tt_metal::MemoryConfig& output_mem_config,
-        const bool use_multicore,
+        bool use_multicore,
         const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 }  // namespace ttnn::operations::data_movement::pad
