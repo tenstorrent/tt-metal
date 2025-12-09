@@ -1774,6 +1774,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
 
+    // Zero-initialize the entire telemetry structure in L1 memory to prevent garbage values
+    // This avoids huge cycle deltas from uninitialized counters on first read
+    // Use memset since we can't use operator= with volatile
+    memset((void*)fabric_telemetry, 0, sizeof(FabricTelemetryT));
+
     // Initialize supported_stats to enable dynamic_info reading
     // Set all available telemetry stats: router state, bandwidth, and heartbeats
     local_fabric_telemetry.static_info.supported_stats = static_cast<DynamicStatistics>(
