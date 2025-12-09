@@ -130,6 +130,7 @@ class Generator:
                 logger.info(f"Warming up prefill for sequence length: {supported_length}")
 
                 page_table_warmup = None
+                # second check is some tests set the kv_cache to [None] instead of None
                 if kv_cache is not None and kv_cache[model_id] is not None:
                     block_size = get_block_size(kv_cache[model_id])
                     num_blocks = num_blocks_in_seq(supported_length, block_size)
