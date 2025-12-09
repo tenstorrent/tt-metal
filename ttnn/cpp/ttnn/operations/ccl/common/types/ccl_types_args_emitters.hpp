@@ -9,18 +9,15 @@
 #include <vector>
 #include <string>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Tensor;
 struct ShardSpec;
 
 class IDevice;
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 using args_list_t = std::vector<uint32_t>;
 
@@ -61,5 +58,4 @@ struct ShardedAddrGenArgBuilder {
     static void log_sharded_tensor_kernel_args(tt::tt_metal::Tensor const& t, std::string const& prefix);
 };
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

@@ -27,9 +27,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
 
@@ -151,6 +149,8 @@ class RunTimeOptions {
     bool record_noc_transfer_data = false;
 
     InspectorSettings inspector_settings;
+
+    bool lightweight_kernel_asserts = false;
 
     // Fabric profiling settings
     struct FabricProfilingSettings {
@@ -352,6 +352,9 @@ public:
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
+
+    bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
+    void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -672,6 +675,4 @@ private:
 // Function declarations for operation timeout and synchronization
 std::chrono::duration<float> get_timeout_duration_for_operations();
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

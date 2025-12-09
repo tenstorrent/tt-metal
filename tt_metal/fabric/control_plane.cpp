@@ -50,6 +50,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
@@ -1020,9 +1021,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     auto host_rank_for_chip =
                         this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
 
-                    auto neighbor_host = this->topology_mapper_->get_hostname_for_fabric_node_id(
-                        FabricNodeId(mesh_id, logical_connected_chip_id));
-
                     TT_ASSERT(
                         host_rank_for_chip.has_value(),
                         "Mesh {} Chip {} does not have a host rank associated with it",
@@ -1442,7 +1440,7 @@ void write_to_worker_or_fabric_tensix_cores(
     std::unordered_set<CoreCoord> dispatch_mux_cores_translated;
     if (tensix_config_enabled) {
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-        const auto& tensix_config = fabric_context.get_tensix_config();
+        const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
         fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
         dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
     }
@@ -1974,7 +1972,7 @@ void ControlPlane::clear_fabric_context() {
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
-    this->fabric_context_->initialize_tensix_config();
+    this->fabric_context_->get_builder_context().initialize_tensix_config();
 }
 
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {
@@ -2192,13 +2190,14 @@ void ControlPlane::populate_fabric_connection_info(
         tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
     // Sender channel 0 is always for local worker in the new design
     const auto sender_channel = 0;
 
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
-    const auto& edm_config =
-        fabric_context.get_fabric_router_config(fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
+    const auto& edm_config = builder_context.get_fabric_router_config(
+        fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
@@ -2207,7 +2206,7 @@ void ControlPlane::populate_fabric_connection_info(
     // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
     if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
         // dispatcher uses different fabric router, which still has the default buffer size.
-        const auto& default_edm_config = fabric_context.get_fabric_router_config();
+        const auto& default_edm_config = builder_context.get_fabric_router_config();
         fill_connection_info_fields(
             dispatcher_connection_info,
             fabric_router_virtual_core,
@@ -2215,7 +2214,7 @@ void ControlPlane::populate_fabric_connection_info(
             sender_channel,
             WORKER_FREE_SLOTS_STREAM_ID);
 
-        const auto& tensix_config = fabric_context.get_tensix_config();
+        const auto& tensix_config = builder_context.get_tensix_config();
         CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
         CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
@@ -2239,7 +2238,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Get mux and dispatcher cores
     std::unordered_set<CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();

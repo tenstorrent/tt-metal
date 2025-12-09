@@ -799,8 +799,8 @@ MatmulProgramConfig create_matmul_program_config(
                 compute_kernel_config,
                 output_dtype);
         }
-        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
-        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t k = a_padded_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t n = b_padded_shape[-1] / ttnn::TILE_SIZE;
         auto shard_shape = input_tensor_a_memory_config.shard_spec().value().shape;
         m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
         n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
@@ -1318,11 +1318,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 }  // namespace bmm_op_utils
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -1485,29 +1481,6 @@ Tensor matmul(
                optional_input_tensors,
                {optional_output_tensor})
         .at(0);
-}
-
-std::vector<Tensor> matmul_batched_weights(
-    const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
-    const std::optional<const Tensor>& bias,
-    const struct Matmul& parameters,
-    const std::optional<Tensor>& optional_output_tensor) {
-    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    if (bias.has_value()) {
-        optional_input_tensors.push_back(bias);
-    } else {
-        optional_input_tensors.push_back(std::nullopt);
-    }
-
-    std::vector<Tensor> input_tensors = input_tensors_b;
-    input_tensors.insert(input_tensors.begin(), input_tensor_a);
-
-    return operation::run(
-        create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
-        input_tensors,
-        optional_input_tensors,
-        {optional_output_tensor});
 }
 
 ttnn::Shape compute_sparse_matmul_output_shape(
@@ -1727,38 +1700,7 @@ void Matmul::validate(
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
-    if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) &&
-        this->global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
-        for (uint32_t i = 1; i < input_tensors.size(); ++i) {
-            TT_FATAL(
-                input_tensor_b.logical_shape() == input_tensors[i].logical_shape(),
-                "for multi-tensor matmul, all weight tensors must have the same logical_shape, {} is not equal to {}",
-                input_tensor_b.logical_shape(),
-                input_tensors[i].logical_shape());
-            TT_FATAL(
-                input_tensor_b.padded_shape() == input_tensors[i].padded_shape(),
-                "for multi-tensor matmul, all weight tensors must have the same padded_shape {} is not equal to {}",
-                input_tensor_b.padded_shape(),
-                input_tensors[i].padded_shape());
-            TT_FATAL(
-                input_tensor_b.tensor_spec() == input_tensors[i].tensor_spec(),
-                "for multi-tensor matmul, all weight tensors must have the same tensor_spec {} is not equal to {}",
-                input_tensor_b.tensor_spec(),
-                input_tensors[i].tensor_spec());
-            TT_FATAL(
-                input_tensor_b.layout() == input_tensors[i].layout(),
-                "for multi-tensor matmul, all weight tensors must have the same layout {} is not equal to {}",
-                input_tensor_b.layout(),
-                input_tensors[i].layout());
-            TT_FATAL(
-                input_tensor_b.dtype() == input_tensors[i].dtype(),
-                "for multi-tensor matmul, all weight tensors must have the same _dtype {} is not equal to {}",
-                input_tensor_b.dtype(),
-                input_tensors[i].dtype());
-        }
-    } else {
-        TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
-    }
+    TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
@@ -1943,10 +1885,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
@@ -2970,8 +2912,4 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
         chosen_program_config);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

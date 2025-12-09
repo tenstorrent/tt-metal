@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
 namespace tt::tt_fabric {
@@ -71,7 +72,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 
     // Get relay-specific info from fabric context
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Store free slots stream ID
     constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
@@ -147,7 +148,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     } else {
         // Query the fabric router config from fabric context
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-        const auto& fabric_router_config = fabric_context.get_fabric_router_config();
+        const auto& fabric_router_config = fabric_context.get_builder_context().get_fabric_router_config();
 
         // Pack full relay connection info
         // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)
@@ -185,7 +186,8 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
  * X and Y have separate uint32s
  */
 uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
-    const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
+    const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>&
+        downstream_edms_connected_by_vc,
     uint32_t vc_idx,
     const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
     if (vc_idx == 1) {

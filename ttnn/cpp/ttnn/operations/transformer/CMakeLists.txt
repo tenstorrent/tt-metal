@@ -36,9 +36,9 @@ target_sources(
         sdpa/device/joint_sdpa_program_factory.cpp
         sdpa/device/ring_joint_sdpa_op.cpp
         sdpa/device/ring_joint_sdpa_program_factory.cpp
-        sdpa/device/ring_distributed_sdpa_op.cpp
+        sdpa/device/ring_distributed_sdpa_device_operation.cpp
         sdpa/device/ring_distributed_sdpa_program_factory.cpp
-        sdpa/device/sdpa_op.cpp
+        sdpa/device/sdpa_device_operation.cpp
         sdpa/device/sdpa_program_factory.cpp
         sdpa/sdpa.cpp
         sdpa_decode/device/sdpa_decode_device_operation.cpp

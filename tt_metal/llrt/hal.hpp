@@ -36,9 +36,7 @@
 
 enum class AddressableCoreType : uint8_t;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
 struct HalProcessorIdentifier {
@@ -50,6 +48,10 @@ struct HalProcessorIdentifier {
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
+
+enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 // A set of processors distinguishing programmable core type and index within that core type.
 // See get_processor_index and get_processor_class_and_type_from_index.
@@ -710,8 +712,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
     }
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {

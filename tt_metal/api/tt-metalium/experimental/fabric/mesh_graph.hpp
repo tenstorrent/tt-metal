@@ -22,12 +22,10 @@
 
 #include <vector>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
 class PhysicalSystemDescriptor;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;
