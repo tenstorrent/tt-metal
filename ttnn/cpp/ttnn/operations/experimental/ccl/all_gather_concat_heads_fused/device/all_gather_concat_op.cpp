@@ -153,9 +153,7 @@ tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::v
         this->use_noc1_only);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor all_gather_concat(
     const Tensor& input_tensor,
@@ -199,8 +197,6 @@ Tensor all_gather_concat(
         .at(0);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn
