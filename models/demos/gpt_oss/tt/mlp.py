@@ -84,7 +84,13 @@ class MLP:
         )
 
     def __call__(self, hidden_states):
-        """Forward pass: route -> experts"""
+        """Forward pass: route -> experts
+        Args:
+            hidden_states: Input tensor [batch, seq_len, hidden_size]
+        Returns:
+            Expert output tensor [batch, seq_len, hidden_size]
+        """
+
         # router_scores, router_indices, router_logits = self.router(hidden_states)
         expert_indices, expert_weights = self.router(hidden_states)
 

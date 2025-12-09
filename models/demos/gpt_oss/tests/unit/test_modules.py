@@ -48,7 +48,13 @@ def run_attention_component(
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+    )
 
     reference_attention = reference_layer.self_attn
 
@@ -61,7 +67,6 @@ def run_attention_component(
             attention_mask=mask,
             use_cache=True,
         )
-            
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
     attention_module = decoder_layer.self_attn
@@ -77,14 +82,17 @@ def run_attention_component(
     breakpoint()
     # passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
     # assert passing, f"Attention test failed. Output: {output}"
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=tuple(mesh_device.shape)),)[:, :1, :]
+    tt_output_torch = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=tuple(mesh_device.shape)),
+    )[:, :1, :]
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=0.96)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"Attention test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"Attention test failed. Output: {output}"
 
 
 def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
@@ -124,7 +132,13 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # Extract TT TopK router from decoder layer
     tt_router = decoder_layer.mlp.router
@@ -216,7 +230,6 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         assert passing, f"Experts test failed. Output: {output}"
 
 
-
 def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer):
     """Test complete MLP (router + experts) - essential MoE functionality"""
 
@@ -228,12 +241,18 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    breakpoint()
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states.reshape(-1, 1, 2880),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # Create TT MLP using TestFactory setup
     tt_mlp = decoder_layer.mlp
     tt_output = tt_mlp(tt_hidden_states)
+    breakpoint()
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
@@ -242,9 +261,9 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=0.88)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"MLP Pipeline test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"MLP Pipeline test failed. Output: {output}"
     # passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.88)
     # assert passing, f"MLP test failed. Output: {output}"
 
@@ -376,14 +395,32 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     cos_meta, sin_meta = gather_cos_sin(position_ids_1d, cos_full, sin_full)
 
     # tt_cos = ttnn.from_torch(cos_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_cos = ttnn.from_torch(cos_meta.reshape(1, 128, 1, 64), device=setup["mesh_device"], mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_cos = ttnn.from_torch(
+        cos_meta.reshape(1, 128, 1, 64),
+        device=setup["mesh_device"],
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+        ),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
     # tt_sin = ttnn.from_torch(sin_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_sin = ttnn.from_torch(sin_meta.reshape(1, 128, 1, 64), device=setup["mesh_device"], mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sin = ttnn.from_torch(
+        sin_meta.reshape(1, 128, 1, 64),
+        device=setup["mesh_device"],
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+        ),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
 
     # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
     if seq_len == 1:
         grid_size = setup["mesh_device"].compute_with_storage_grid_size()
-        batch_grid = ttnn.num_cores_to_corerangeset(batch_size//setup["mesh_device"].shape[0], grid_size, row_wise=True)
+        batch_grid = ttnn.num_cores_to_corerangeset(
+            batch_size // setup["mesh_device"].shape[0], grid_size, row_wise=True
+        )
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
@@ -403,14 +440,30 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # tt_position_idx = ttnn.from_torch(
     #     position_ids, device=setup["mesh_device"], layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
     # )
-    tt_position_idx = ttnn.from_torch(position_ids, device=setup["mesh_device"], mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    tt_position_idx = ttnn.from_torch(
+        position_ids.squeeze(),
+        device=setup["mesh_device"],
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            dims=(0, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+        ),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+    )
 
     # Create TTNN tensors for component tests
     # tt_hidden_states = ttnn.from_torch(
     #     hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     # )
     hidden_states = torch.reshape(hidden_states, (1, 1, 128, 2880))
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=setup["mesh_device"], mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states,
+        device=setup["mesh_device"],
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+        ),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # Parse test_modules (supports comma-separated values)
     modules_to_test = set(test_modules.split(","))
@@ -461,11 +514,23 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
 
         # Compare outputs
         pcc_threshold = 0.924 if seq_len == 1 else 0.88
-        passing, output = run_component_comparison(
-            tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, 0), mesh_shape=tuple(mesh_device.shape)),
+        )[:1, :, :1, :]
+        breakpoint()
+        passing, output = compare_tensors(
+            tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
         )
-        logger.info(f"Decoder layer test: {passing} with output: {output}")
-        assert passing, f"Decoder layer test failed. Output: {output}"
+        if passing:
+            logger.info(f"MLP Pipeline test passed. Output: {output}")
+        else:
+            assert passing, f"MLP Pipeline test failed. Output: {output}"
+        # passing, output = run_component_comparison(
+        #     tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
+        # )
+        # logger.info(f"Decoder layer test: {passing} with output: {output}")
+        # assert passing, f"Decoder layer test failed. Output: {output}"
 
     tested_modules = [m for m in modules_to_test if m != "router" or seq_len == 1]
     logger.info(f"✓ Tests completed successfully: {', '.join(tested_modules)}")
