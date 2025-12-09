@@ -88,7 +88,10 @@ class MobileNetV3PerformanceRunnerInfra:
         )
 
         self.ttnn_model = ttnn_MobileNetV3(
-            inverted_residual_setting=inverted_residual_setting, last_channel=last_channel, parameters=self.parameters
+            inverted_residual_setting=inverted_residual_setting,
+            last_channel=last_channel,
+            parameters=self.parameters,
+            device=self.device,
         )
 
         self.torch_output = self.torch_model(self.torch_input_tensor)
