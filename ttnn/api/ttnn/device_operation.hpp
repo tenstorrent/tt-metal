@@ -16,7 +16,6 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
-#include "tools/inspector/inspector.hpp"
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
@@ -245,8 +244,8 @@ void handle_mesh_adapter_cache_hit(
 
 // Helper for logging operation info
 template <DeviceOperationConcept mesh_device_operation_t>
-void log_operation_info(
-    uint32_t workflow_id,
+void set_mesh_workload_metadata(
+    tt::tt_metal::distributed::MeshWorkload& workload,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     const typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value) {
@@ -269,10 +268,9 @@ void log_operation_info(
         },
         tensor_args);
 
-    ttnn::inspector::log_operation_info(
-        workflow_id, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
+    workload.set_metadata(operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
 #else
-    ttnn::inspector::log_operation_info(workflow_id, operation_name, "");
+    workload.set_metadata(operation_name, "");
 #endif
 }
 
@@ -313,8 +311,8 @@ void create_and_cache_mesh_workload(
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
-            log_operation_info<mesh_device_operation_t>(
-                cached_workload.workload.get_id(), operation_attributes, tensor_args, tensor_return_value);
+            set_mesh_workload_metadata<mesh_device_operation_t>(
+                cached_workload.workload, operation_attributes, tensor_args, tensor_return_value);
 
             if (program_cache.is_enabled()) {
                 program_cache.insert(

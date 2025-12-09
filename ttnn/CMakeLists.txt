@@ -463,7 +463,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
-            api/tools/inspector/inspector.hpp
             api/tools/profiler/op_profiler.hpp
             api/ttnn/async_runtime.hpp
             api/ttnn/cluster.hpp
@@ -538,7 +537,6 @@ target_sources(
         FILES ${ttnn_kernels}
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
-        cpp/ttnn/inspector/inspector.cpp
         cpp/ttnn/operations/compute_throttle_utils.cpp
         cpp/ttnn/operations/trace.cpp
         cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp

@@ -344,6 +344,47 @@ void Inspector::mesh_workload_set_program_binary_status(
     }
 }
 
+void Inspector::mesh_workload_set_metadata(
+    const distributed::MeshWorkloadImpl* mesh_workload,
+    const std::string_view name,
+    const std::string_view parameters) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
+        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        mesh_workload_data.name = std::string(name);
+        mesh_workload_data.parameters = std::string(parameters);
+        data->logger.log_mesh_workload_set_metadata(mesh_workload_data, name, parameters);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload set metadata: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_set_runtime_id(
+    const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+
+        std::lock_guard<std::mutex> lock(data->runtime_ids_mutex);
+        data->runtime_ids.push_back({mesh_workload->get_id(), runtime_id});
+
+        // Keep only the last MAX_RUNTIME_ID_ENTRIES
+        if (data->runtime_ids.size() > inspector::Data::MAX_RUNTIME_ID_ENTRIES) {
+            data->runtime_ids.pop_front();
+        }
+
+        data->logger.log_mesh_workload_runtime_id(mesh_workload->get_id(), runtime_id);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log workload runtime ID: {}", e.what());
+    }
+}
+
 // Set dispatch core info
 void Inspector::set_dispatch_core_info(
     const tt_cxy_pair& virtual_core,

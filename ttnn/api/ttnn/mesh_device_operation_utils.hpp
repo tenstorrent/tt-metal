@@ -13,7 +13,6 @@
 #include <tt_stl/overloaded.hpp>
 
 #include "ttnn/core.hpp"
-#include "tools/inspector/inspector.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -144,10 +143,10 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
 // Sets runtime ID for all programs in `workload`.
 inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
     auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+    workload.set_runtime_id(op_id);
     for (auto& [_, program] : workload.get_programs()) {
         program.set_runtime_id(op_id);
     }
-    ttnn::inspector::log_runtime_id(workload.get_id(), op_id);
 }
 
 // Tracks all programs in `workload` and returns true if any program was hooked.
