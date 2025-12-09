@@ -366,33 +366,33 @@ void normalize_scores(
     tile_regs_wait();
     cb_reserve_back(transpose_cb_index, 1);
     pack_tile(0, transpose_cb_index);
-    // PACK(print_tile(transpose_cb_index, 0, true, 0, 2, 0, 2));
+    // PACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
     cb_push_back(transpose_cb_index, 1);
 
     // 6. Broadcast multiply
     tile_regs_acquire();
     cb_wait_front(transpose_cb_index, 1);
-
+    UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
+    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
-    cb_reserve_back(normalized_scores_cb_index, 1);
     mul_tiles_bcast<BroadcastType::COL>(
         unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile(0, normalized_scores_cb_index);
-    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 2, 0, 2));
-    cb_push_back(normalized_scores_cb_index, 1);
-    tile_regs_release();
-
     cb_pop_front(transpose_cb_index, 1);
     cb_pop_front(unnormalized_scores_cb_index, 1);
+
+    tile_regs_wait();
+    cb_reserve_back(normalized_scores_cb_index, 1);
+    pack_reconfig_data_format(normalized_scores_cb_index);
+    pack_tile(0, normalized_scores_cb_index);
+    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+    cb_push_back(normalized_scores_cb_index, 1);
+    tile_regs_release();
 }
 
 void scale(const uint32_t normalized_scores_cb_index, const uint32_t scales_cb_index, const uint32_t weights_cb_index) {
     cb_wait_front(normalized_scores_cb_index, 1);
     cb_wait_front(scales_cb_index, 1);
-
     mul_tiles_bcast_scalar_init_short(normalized_scores_cb_index, scales_cb_index);
 
     tile_regs_acquire();

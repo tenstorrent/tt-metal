@@ -348,6 +348,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
          static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.route_scale))) << 16},
         {"epsilon_cb_index", epsilon_cb_index},
         {"scales_cb_index", scales_cb_index},
+        {"seq_len_tiles", tt::div_up(seq_len, tile_height)},
         {"remainder_tokens_per_tile", remainder_tokens_per_tile},
     };
 

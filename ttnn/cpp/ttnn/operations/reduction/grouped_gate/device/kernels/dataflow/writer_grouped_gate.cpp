@@ -367,6 +367,7 @@ void kernel_main() {
     constexpr uint32_t packed_epsilon = get_named_compile_time_arg_val("packed_epsilon");
     constexpr uint32_t epsilon_cb_index = get_named_compile_time_arg_val("epsilon_cb_index");
     constexpr uint32_t scales_cb_index = get_named_compile_time_arg_val("scales_cb_index");
+    constexpr uint32_t seq_len_tiles = get_named_compile_time_arg_val("seq_len_tiles");
     constexpr uint32_t remainder_tokens_per_tile = get_named_compile_time_arg_val("remainder_tokens_per_tile");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
@@ -380,8 +381,6 @@ void kernel_main() {
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
 
-    constexpr uint32_t tokens_per_tile = 32;  // hardcoded for now, but this is std::min(tokens, tile_width)
-
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
@@ -391,7 +390,7 @@ void kernel_main() {
     write_single_scalar(scales_cb_index, packed_route_scale);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        uint32_t tokens_per_tile = height_tile == tokens - 1 ? remainder_tokens_per_tile : tokens_per_tile;
+        uint32_t tokens_per_tile = height_tile % seq_len_tiles == 0 ? remainder_tokens_per_tile : tokens_per_tile;
         generate_summed_experts_tiles(
             summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group, tokens_per_tile);
         generate_winning_group_tiles<
