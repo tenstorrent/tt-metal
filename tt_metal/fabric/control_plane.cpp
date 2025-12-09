@@ -2934,14 +2934,24 @@ bool ControlPlane::is_local_host_on_switch_mesh() const {
     const auto& mesh_graph = this->get_mesh_graph();
 
     std::optional<MeshId> local_switch_mesh_id = std::nullopt;
+    std::vector<MeshId> local_compute_mesh_ids;
     for (const auto& mesh_id : local_mesh_ids) {
         if (mesh_graph.is_switch_mesh(mesh_id)) {
             if (local_switch_mesh_id.has_value()) {
                 TT_THROW("Local host is on multiple switch meshes: {} and {}", *local_switch_mesh_id, *mesh_id);
             }
             local_switch_mesh_id = mesh_id;
+        } else {
+            // This is a compute mesh
+            local_compute_mesh_ids.push_back(mesh_id);
         }
     }
+
+    // Guard against host being bound to both switch and compute meshes
+    TT_FATAL(
+        !(local_switch_mesh_id.has_value() && !local_compute_mesh_ids.empty()),
+        "Local host cannot be bound to both a switch mesh and a compute mesh.");
+
     return local_switch_mesh_id.has_value();
 }
 

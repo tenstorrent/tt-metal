@@ -64,6 +64,8 @@ private:
 
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
     std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
+    // Track if we set the fabric config so we can clean it up properly in teardown
+    bool fabric_config_was_set_by_manager_ = false;
 };
 
 }  // namespace tt::tt_fabric

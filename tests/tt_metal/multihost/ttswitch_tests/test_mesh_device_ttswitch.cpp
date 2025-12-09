@@ -12,15 +12,15 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
-#include "ttnn/device.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
+#include "hostdevcommon/common_values.hpp"
 
-namespace ttnn {
-namespace test {
+namespace tt::tt_metal {
 
-class MeshDeviceTTSwitchFixture : public TTNNFixtureBase {
+class MeshDeviceTTSwitchFixture : public ::testing::Test {
 protected:
+    int trace_region_size_ = DEFAULT_TRACE_REGION_SIZE;
+    int l1_small_size_ = DEFAULT_L1_SMALL_SIZE;
+
     void SetUp() override {
         // Check if we're running in a multi-process environment
         const char* mesh_id_str = std::getenv("TT_MESH_ID");
@@ -69,8 +69,8 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
     // maps logical coordinates to physical device IDs based on the mesh_id.
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
     {
-        mesh_device = ttnn::distributed::open_mesh_device(
-            mesh_shape,
+        mesh_device = tt::tt_metal::distributed::MeshDevice::create(
+            tt::tt_metal::distributed::MeshDeviceConfig(mesh_shape),
             l1_small_size_,
             trace_region_size_,
             1,  // num_command_queues
@@ -87,7 +87,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
     }
 
     // Close mesh device
-    ttnn::distributed::close_mesh_device(mesh_device);
+    mesh_device->close();
     mesh_device.reset();
 
     // Verify device is closed (should not crash on reset)
@@ -116,21 +116,22 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 
     EXPECT_EQ(device_ids_0.size(), 4) << "Mesh 0 should have 4 devices";
 
-    // When you provide physical_device_ids explicitly, open_mesh_device will use those
+    // When you provide physical_device_ids explicitly, MeshDevice::create will use those
     // specific devices. The fabric node IDs will be determined from the physical device IDs,
     // which will map to the mesh_id that those devices belong to.
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
     {
-        // Open mesh device with explicit physical device IDs
+        // Create mesh device with explicit physical device IDs
         // This bypasses SystemMesh and directly uses the provided device IDs
-        mesh_device = ttnn::distributed::open_mesh_device(
-            tt::tt_metal::distributed::MeshShape(2, 2),
+        mesh_device = tt::tt_metal::distributed::MeshDevice::create(
+            tt::tt_metal::distributed::MeshDeviceConfig(
+                tt::tt_metal::distributed::MeshShape(2, 2),
+                std::nullopt,   // offset
+                device_ids_0),  // explicit physical_device_ids
             l1_small_size_,
             trace_region_size_,
             1,  // num_command_queues
-            tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER},
-            std::nullopt,   // offset
-            device_ids_0);  // explicit physical_device_ids
+            tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
 
         ASSERT_NE(mesh_device, nullptr) << "Failed to open mesh device with explicit device IDs";
         EXPECT_EQ(mesh_device->shape(), tt::tt_metal::distributed::MeshShape(2, 2)) << "Mesh device shape mismatch";
@@ -142,7 +143,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
     }
 
     // Close mesh device
-    ttnn::distributed::close_mesh_device(mesh_device);
+    mesh_device->close();
     mesh_device.reset();
 
     // Note: You CANNOT open devices from mesh_id 1 on a host configured for mesh_id 0
@@ -223,5 +224,4 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
     unit_meshes.clear();
 }
 
-}  // namespace test
-}  // namespace ttnn
+}  // namespace tt::tt_metal
