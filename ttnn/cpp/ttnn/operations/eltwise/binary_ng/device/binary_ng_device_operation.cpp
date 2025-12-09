@@ -116,10 +116,14 @@ CoreRangeSet get_worker_grid(
     }
 
     // now c is not specified, gets its shard spec from a or b
-    TensorSpec c = input_tensor_b ? input_tensor_a.is_sharded()    ? input_tensor_a.tensor_spec()
-                                    : input_tensor_b->is_sharded() ? input_tensor_b->tensor_spec()
-                                                                   : input_tensor_a.tensor_spec()
-                                  : input_tensor_a.tensor_spec();
+    TensorSpec c = input_tensor_a.tensor_spec();
+    if (input_tensor_b && input_tensor_b->is_sharded()) {
+        if (!input_tensor_a.is_sharded()) {
+            c = input_tensor_b->tensor_spec();
+        } else if (input_tensor_b->shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+            c = input_tensor_b->tensor_spec();
+        }
+    }
 
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
@@ -516,10 +520,22 @@ BinaryNgDeviceOperation::invoke(
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     bool is_where_op = (binary_op_type == BinaryOpType::WHERE_TTS || binary_op_type == BinaryOpType::WHERE_TST);
-    MemoryConfig mem_config = memory_config.value_or(
-        output_tensor.has_value()                     ? output_tensor->memory_config()
-        : input_tensor_a.memory_config().is_sharded() ? input_tensor_a.memory_config()
-                                                      : input_tensor_b.memory_config());
+
+    MemoryConfig mem_config = input_tensor_a.memory_config();
+    if (!memory_config.has_value() && !output_tensor.has_value()) {
+        if (input_tensor_b.memory_config().is_sharded()) {
+            if (!input_tensor_a.memory_config().is_sharded()) {
+                mem_config = input_tensor_b.memory_config();
+            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+                mem_config = input_tensor_b.memory_config();
+            }
+        }
+    } else if (memory_config.has_value()) {
+        mem_config = *memory_config;
+    } else {
+        mem_config = output_tensor->memory_config();
+    }
+
     return {
         operation_attributes_t{
             binary_op_type,
@@ -561,6 +577,7 @@ BinaryNgDeviceOperation::invoke(
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     MemoryConfig mem_config = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
+
     return {
         operation_attributes_t{
             binary_op_type,
