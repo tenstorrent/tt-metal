@@ -103,8 +103,12 @@ std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation);
 
+uint32_t get_num_cores_nhw(
+    const CoreRangeSet& cores, TensorMemoryLayout shard_layout, ShardOrientation shard_orientation);
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
+uint32_t get_num_cores_channels(
+    const CoreRangeSet& cores, TensorMemoryLayout shard_layout, ShardOrientation shard_orientation);
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
