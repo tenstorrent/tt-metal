@@ -356,7 +356,7 @@ jobs:
           submodules: recursive
           path: docker-job
       - name: ⬇️ Setup Metal
-        uses: ./docker-job/.github/§
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
