@@ -552,7 +552,7 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape),
         )
         if self.bitmask is not None:
-            copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=[self.bitmask])
+            copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=self.bitmask)
         else:
             self.bitmask = copy_host_to_device(host_tensors=[bitmask_tt], mesh_device=self.mesh_device)
 
