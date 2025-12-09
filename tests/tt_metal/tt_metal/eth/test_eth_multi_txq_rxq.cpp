@@ -13,7 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"

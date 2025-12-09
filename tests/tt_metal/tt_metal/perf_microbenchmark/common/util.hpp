@@ -8,7 +8,7 @@
 
 #include <vector>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"

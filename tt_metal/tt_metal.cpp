@@ -32,7 +32,7 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"

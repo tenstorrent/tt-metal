@@ -14,7 +14,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"

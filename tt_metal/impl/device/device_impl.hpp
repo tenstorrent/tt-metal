@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>

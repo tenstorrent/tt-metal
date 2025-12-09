@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <unistd.h>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/distributed.hpp>

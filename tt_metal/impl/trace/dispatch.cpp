@@ -4,8 +4,8 @@
 
 #include <algorithm>
 
+#include <tt-metalium/details/device.hpp>
 #include <tt_stl/assert.hpp>
-#include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "llrt/hal.hpp"

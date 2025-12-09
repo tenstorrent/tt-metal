@@ -14,7 +14,7 @@
 #include <memory>
 
 #include "command_queue.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "hal_types.hpp"

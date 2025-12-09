@@ -5,7 +5,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <utility>
 
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "mesh_device.hpp"
 #include "mesh_trace.hpp"
 #include "mesh_workload_impl.hpp"

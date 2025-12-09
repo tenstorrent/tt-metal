@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/tt_metal.hpp>

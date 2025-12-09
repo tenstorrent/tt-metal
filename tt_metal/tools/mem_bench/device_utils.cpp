@@ -12,7 +12,7 @@
 #include "context.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "device_utils.hpp"
 #include "kernel_types.hpp"
 

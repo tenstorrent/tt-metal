@@ -14,7 +14,7 @@
 #include <cstdlib>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>

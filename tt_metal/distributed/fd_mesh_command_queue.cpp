@@ -22,7 +22,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"

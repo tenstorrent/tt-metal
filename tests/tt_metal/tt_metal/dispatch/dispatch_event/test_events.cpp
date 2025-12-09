@@ -19,7 +19,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "gtest/gtest.h"

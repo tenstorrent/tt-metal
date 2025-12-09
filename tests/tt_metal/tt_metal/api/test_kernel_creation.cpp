@@ -15,7 +15,7 @@
 #include "base_types.hpp"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>

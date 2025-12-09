@@ -33,7 +33,7 @@
 #include "circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"

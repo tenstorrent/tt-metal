@@ -21,7 +21,7 @@
 #include "command_queue_common.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"

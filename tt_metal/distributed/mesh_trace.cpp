@@ -22,7 +22,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"

@@ -11,7 +11,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/details/device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"

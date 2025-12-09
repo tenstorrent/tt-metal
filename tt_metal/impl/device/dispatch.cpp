@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/details/device.hpp>
 #include "dispatch.hpp"
 #include <cstdint>
 #include "dispatch/device_command.hpp"

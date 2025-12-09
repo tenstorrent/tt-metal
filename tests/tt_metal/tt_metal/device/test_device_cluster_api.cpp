@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/core_coordinates.hpp>

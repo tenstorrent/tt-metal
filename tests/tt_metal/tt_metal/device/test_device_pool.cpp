@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/details/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
