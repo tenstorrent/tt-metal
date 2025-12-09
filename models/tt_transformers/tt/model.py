@@ -179,6 +179,13 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
+        print(
+            f"prepare_inputs_prefill called with tokens:\n{tokens} shape: {tokens.shape}\n\
+start_pos: {start_pos}\n\
+page_table: {page_table}\n\
+chunk_page_table: {chunk_page_table}\n\
+trace_enabled: {trace_enabled}"
+        )
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
         device = None if trace_enabled else self.mesh_device
@@ -200,23 +207,55 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+        mat_len = self.rope_setup.cos_matrix.shape[2]
+        required_end = start_pos + S
+
+        # Determine how much padding is needed
+        if required_end > mat_len:
+            pad_len = required_end - mat_len
+        else:
+            pad_len = 0
 
         # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
-        start_pos = 0 if trace_enabled else start_pos
-        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+        slice_start = 0 if trace_enabled else start_pos
+        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
+
+        cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
+        sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+
+        if pad_len > 0:
+            # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
-            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            cos_slice,
+            sin_slice,
         ]
 
         if hasattr(self, "rope_local_setup"):
+            local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
+            local_required_end = start_pos + S
+            if local_required_end > local_mat_len:
+                local_pad_len = local_required_end - local_mat_len
+            else:
+                local_pad_len = 0
+
+            local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
+            local_cos_slice = self.rope_local_setup.cos_matrix[:, :, slice_start:local_slice_end, :]
+            local_sin_slice = self.rope_local_setup.sin_matrix[:, :, slice_start:local_slice_end, :]
+            if local_pad_len > 0:
+                # pad at end of 3rd dim (dim=2) by local_pad_len
+                local_padding = [(0, 0)] * 4
+                local_padding[2] = (0, local_pad_len)
+                local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
+                local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
+
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
+                local_cos_slice,
+                local_sin_slice,
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -392,6 +431,15 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        print(
+            f"=== ttnn_prefill_forward called with ===\n\
+user_id: {user_id}\n\
+page_table: {page_table}\n\
+chunk_page_table: {chunk_page_table}\n\
+chunk_start_idx: {chunk_start_idx}\n\
+get_last_token: {get_last_token}"
+        )
+        print(f"First 4 items of x: {x[0, 0, :4, :4]}")
         return self.forward(
             x,
             current_pos=None,
