@@ -324,7 +324,6 @@ void create_worker_kernel(
 int main(int argc, char** argv) {
     const std::string default_log_file_path =
         std::string(std::getenv("TT_METAL_HOME")) + "/generated/fabric_mux_bandwidth_temp.txt";
-    const std::string default_test_name = "default_mux_ubench";
     const size_t default_num_full_size_channels = 8;
     const size_t default_num_header_only_channels = 0;
     const size_t default_num_buffers_full_size_channel = 8;
@@ -338,7 +337,6 @@ int main(int argc, char** argv) {
     TestParams test_params;
 
     std::string log_file_path = test_args::get_command_option(input_args, "--log_file", default_log_file_path);
-    std::string test_name = test_args::get_command_option(input_args, "--test_name", default_test_name);
     test_params.num_full_size_channels =
         test_args::get_command_option_uint32(input_args, "--num_full_size_channels", default_num_full_size_channels);
     test_params.num_header_only_channels = test_args::get_command_option_uint32(

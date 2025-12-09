@@ -284,7 +284,6 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
 
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
-    std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =

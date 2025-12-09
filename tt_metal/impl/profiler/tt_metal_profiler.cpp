@@ -466,7 +466,7 @@ void setSyncInfo(
                 childSyncInfo.second *= syncInfo.first;
                 childSyncInfo.second += syncInfo.second;
                 childSyncInfo.first *= syncInfo.first;
-                setSyncInfo(child_device.first, childSyncInfo, root_sync_info, deviceDeviceSyncInfo, parentInfo);
+                setSyncInfo(child_device.first, childSyncInfo, root_sync_info, deviceDeviceSyncInfo, parentInfoNew);
             }
         }
         detail::setShift(device_id, syncInfo.second, syncInfo.first, root_sync_info);
