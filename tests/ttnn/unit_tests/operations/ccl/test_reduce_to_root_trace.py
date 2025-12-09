@@ -303,8 +303,8 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     out_m_root = out_m_torch[root_device_idx]
 
     # Tolerances for bfloat16 with exponentials
-    rtol = 0.02
-    atol = 0.1
+    rtol = 0.01
+    atol = 0.06
 
     # Check L tensor
     l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
