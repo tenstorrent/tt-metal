@@ -206,7 +206,7 @@ public:
         Tensor& weight_tensor,
         OptionalRefTensor bias_tensor,
         Conv2dConfig& conv_config,
-        DeviceComputeKernelConfig& compute_config,
+        const DeviceComputeKernelConfig& compute_config,
         MeshDevice* device);
     std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>> get_input_slice_and_padding(
         IOShape output_slice_start, IOShape output_slice_end);

@@ -14,18 +14,18 @@
 namespace ttnn::operations::op_slicing {
 
 static uint32_t compute_L1_usage_for_slice_config(
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const Shape& input_shape,
+    const Shape& output_shape,
+    tt::tt_metal::Layout output_layout,
     OpSliceAttr* op_slice_attr,
     const Op2DSliceConfig& dram_slice_config) {
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
-    auto [batch_size, output_height, output_width, output_channels] = output_tensor.logical_shape().to_array_4D();
-    auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
+    auto [batch_size, output_height, output_width, output_channels] = output_shape.to_array_4D();
+    auto [in_batch_, input_height, input_width, input_channels] = input_shape.to_array_4D();
 
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
-    auto output_layout = output_tensor.layout();
 
     uint32_t slice_rounding_value = 1;
 
@@ -143,8 +143,8 @@ static Op2DSliceConfig::SliceType best_guess_slice_type(
 
 Op2DSliceConfig determine_slice_config(
     OpSliceAttr* op_slice_attr,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
     const std::optional<Op2DSliceConfig> slice_config_,
     const tt::tt_metal::Layout output_layout,
     MeshDevice* device) {
@@ -155,7 +155,6 @@ Op2DSliceConfig determine_slice_config(
     auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
     Op2DSliceConfig return_slice_config;
 
-    auto output_shape = output_tensor.logical_shape();
     uint32_t output_height = output_shape[1];
     uint32_t output_width = output_shape[2];
     uint32_t current_num_slices = 1;
@@ -165,15 +164,14 @@ Op2DSliceConfig determine_slice_config(
 
     if (auto_slice_type) {
         // Start with width slicing as it is more memory efficient.
-        return_slice_config.slice_type =
-            best_guess_slice_type(input_tensor.logical_shape()[1], input_tensor.logical_shape()[2], output_layout);
+        return_slice_config.slice_type = best_guess_slice_type(input_shape[1], input_shape[2], output_layout);
     } else {
         return_slice_config.slice_type = slice_config_.value().slice_type;
     }
     while (current_num_slices <= ((output_sliced_dim + 1) / 2)) {
         return_slice_config.num_slices = current_num_slices;
-        uint32_t l1_usage =
-            compute_L1_usage_for_slice_config(input_tensor, output_tensor, op_slice_attr, return_slice_config);
+        uint32_t l1_usage = compute_L1_usage_for_slice_config(
+            input_shape, output_shape, output_layout, op_slice_attr, return_slice_config);
         log_debug(
             tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
         if (L1_stats.total_free_bytes >= l1_usage) {
@@ -200,8 +198,8 @@ Op2DSliceConfig determine_slice_config(
             "slicing");
         return determine_slice_config(
             op_slice_attr,
-            input_tensor,
-            output_tensor,
+            input_shape,
+            output_shape,
             Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
             output_layout,
             device);
@@ -227,8 +225,8 @@ void run_sliced_op(
     } else {
         dram_slice_config = determine_slice_config(
             op_slice_attr,
-            input_tensor,
-            output_tensor,
+            input_tensor.logical_shape(),
+            output_tensor.logical_shape(),
             dram_slice_config_,
             output_tensor.layout(),
             input_tensor.device());
