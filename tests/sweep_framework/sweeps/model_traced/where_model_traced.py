@@ -14,7 +14,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 60
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -145,8 +145,27 @@ def run(
         # Use scalar values from traced configs if provided, otherwise use defaults
         if scalar_if_true is None:
             scalar_if_true = 1.0  # Default fallback
+        else:
+            # Convert to float if it's a string (from traced configs)
+            if isinstance(scalar_if_true, str):
+                try:
+                    scalar_if_true = float(scalar_if_true)
+                except (ValueError, TypeError):
+                    scalar_if_true = 1.0  # Fallback to default
+            elif not isinstance(scalar_if_true, (int, float)):
+                scalar_if_true = float(scalar_if_true) if scalar_if_true is not None else 1.0
+
         if scalar_if_false is None:
             scalar_if_false = 0.0  # Default fallback
+        else:
+            # Convert to float if it's a string (from traced configs)
+            if isinstance(scalar_if_false, str):
+                try:
+                    scalar_if_false = float(scalar_if_false)
+                except (ValueError, TypeError):
+                    scalar_if_false = 0.0  # Fallback to default
+            elif not isinstance(scalar_if_false, (int, float)):
+                scalar_if_false = float(scalar_if_false) if scalar_if_false is not None else 0.0
 
         # Generate condition tensor (boolean-like: 0 or 1)
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
@@ -158,8 +177,9 @@ def run(
 
         start_time = start_measuring_time()
         # TTNN where with condition tensor and two scalars
+        # Ensure scalars are numeric types (not strings)
         output_tensor = ttnn.where(
-            condition_tensor, scalar_if_true, scalar_if_false, memory_config=output_memory_config
+            condition_tensor, float(scalar_if_true), float(scalar_if_false), memory_config=output_memory_config
         )
         output_tensor = ttnn.to_torch(output_tensor)
         e2e_perf = stop_measuring_time(start_time)

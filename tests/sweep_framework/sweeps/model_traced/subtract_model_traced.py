@@ -52,6 +52,9 @@ def run(
     input_b_memory_config,
     output_memory_config,
     storage_type="StorageType::DEVICE",
+    input_c_dtype=None,  # Ignored (loader may provide this but operation doesn't use it)
+    input_c_layout=None,  # Ignored
+    input_c_memory_config=None,  # Ignored
     *,
     device,
 ) -> list:
