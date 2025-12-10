@@ -102,6 +102,9 @@ def test_refiner_unet(
     model_location_generator,
     reset_seeds,
 ):
+    print(
+        f"Running refiner unet model with input_shape={input_shape}, timestep_shape={timestep_shape}, encoder_shape={encoder_shape}, temb_shape={temb_shape}, time_ids_shape={time_ids_shape}, iterations={iterations}, is_ci_env={is_ci_env}, is_ci_v2_env={is_ci_v2_env}, model_location_generator={model_location_generator}, reset_seeds={reset_seeds}"
+    )
     run_refiner_unet_model(
         device,
         input_shape,

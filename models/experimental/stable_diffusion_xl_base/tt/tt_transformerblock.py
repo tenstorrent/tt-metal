@@ -53,8 +53,13 @@ class TtBasicTransformerBlock(LightweightModule):
             else None
         )
 
-        norm2_weights = state_dict[f"{module_path}.norm2.weight"]
-        norm2_bias = state_dict[f"{module_path}.norm2.bias"]
+        import torch
+
+        norm2_weights = state_dict[f"{module_path}.norm2.weight"].to(torch.bfloat16)
+        norm2_bias = state_dict[f"{module_path}.norm2.bias"].to(torch.bfloat16)
+
+        print(f"Norm2 weights: {norm2_weights.shape}, norm2 bias: {norm2_bias.shape}, dtype: {norm2_weights.dtype}")
+
         self.tt_norm2_weights = ttnn.from_torch(norm2_weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         self.tt_norm2_bias = (
             ttnn.from_torch(norm2_bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)

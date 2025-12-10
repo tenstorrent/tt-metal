@@ -30,6 +30,7 @@ class TtTransformer2DModel(LightweightModule):
 
         self.transformer_blocks = []
         for i in range(self.num_layers):
+            print(f"Creating transformer layer {i}...")
             self.transformer_blocks.append(
                 TtBasicTransformerBlock(
                     device,

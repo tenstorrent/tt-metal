@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+import os
+import time
 from loguru import logger
 import torch
 import pytest
@@ -86,6 +88,7 @@ def run_refiner_unet_model(
     model_location = model_location_generator(
         "stable-diffusion-xl-refiner-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
+    print(f"Model location: {model_location}")
     unet = UNet2DConditionModel.from_pretrained(
         model_name if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
@@ -93,12 +96,16 @@ def run_refiner_unet_model(
         local_files_only=is_ci_env or is_ci_v2_env,
         subfolder="unet" if not is_ci_v2_env else None,
     )
+    print(f"Unet model loaded from {model_location}")
+
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_unet = unet
 
     model_config = RefinerModelOptimisations()
+
+    print(f"Model config set up, creating TTNN unet...")
     tt_unet = TtUNet2DConditionModel(
         device,
         state_dict,
@@ -106,6 +113,9 @@ def run_refiner_unet_model(
         model_config=model_config,
         debug_mode=debug_mode,
     )
+
+    print(f"TTNN unet created")
+    print(f"Generating random tensors...")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -117,13 +127,37 @@ def run_refiner_unet_model(
         "time_ids": torch_time_ids,
     }
 
-    torch_output_tensor = torch_unet(
-        torch_input_tensor,
-        timestep=torch_timestep_tensor,
-        encoder_hidden_states=torch_encoder_tensor,
-        added_cond_kwargs=added_cond_kwargs,
-    ).sample
+    # Cache file path based on input shape
+    cache_dir = os.path.dirname(os.path.abspath(__file__))
+    cache_filename = f"torch_unet_output_{'x'.join(map(str, input_shape))}.pt"
+    cache_path = os.path.join(cache_dir, cache_filename)
 
+    t_start = time.perf_counter()
+
+    if os.path.exists(cache_path):
+        print(f"Loading cached torch output from {cache_path}")
+        t_start = time.perf_counter()
+        torch_output_tensor = torch.load(cache_path)
+        t_end = time.perf_counter()
+        print(f"[TIMING] Torch output load from cache: {t_end - t_start:.3f}s")
+    else:
+        print("Running torch unet forward pass...")
+        t_start = time.perf_counter()
+        torch_output_tensor = torch_unet(
+            torch_input_tensor,
+            timestep=torch_timestep_tensor,
+            encoder_hidden_states=torch_encoder_tensor,
+            added_cond_kwargs=added_cond_kwargs,
+        ).sample
+        t_end = time.perf_counter()
+        print(f"[TIMING] Torch forward pass: {t_end - t_start:.3f}s")
+        print(f"Saving torch output to {cache_path}")
+        torch.save(torch_output_tensor, cache_path)
+
+    t_end = time.perf_counter()
+    print(f"Torch unet output shape: {torch_output_tensor.shape}, elapsed time: {t_end - t_start:.3f}s")
+
+    t_start = time.perf_counter()
     (
         ttnn_input_tensor,
         [B, C, H, W],
@@ -133,6 +167,10 @@ def run_refiner_unet_model(
     ) = prepare_ttnn_tensors(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
+    t_end = time.perf_counter()
+    print(f"[TIMING] TTNN tensor preparation: {t_end - t_start:.3f}s")
+
+    t_start = time.perf_counter()
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
@@ -141,10 +179,15 @@ def run_refiner_unet_model(
         time_ids=ttnn_added_cond_kwargs["time_ids"],
         text_embeds=ttnn_added_cond_kwargs["text_embeds"],
     )
+    t_end = time.perf_counter()
+    print(f"[TIMING] TTNN forward pass: {t_end - t_start:.3f}s")
 
+    t_start = time.perf_counter()
     output_tensor = ttnn.to_torch(ttnn_output_tensor.cpu())
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+    t_end = time.perf_counter()
+    print(f"[TIMING] TTNN to torch conversion: {t_end - t_start:.3f}s")
 
     ttnn.deallocate(ttnn_input_tensor)
     ttnn.deallocate(ttnn_output_tensor)
@@ -155,7 +198,8 @@ def run_refiner_unet_model(
 
     ttnn.ReadDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    output_tensor_bf16 = output_tensor.to(torch.bfloat16)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor_bf16, 0.996)
     logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):

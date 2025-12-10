@@ -27,6 +27,7 @@ class TtUNetMidBlock2DCrossAttn(LightweightModule):
         self.resnets = []
 
         for i in range(num_layers_attn):
+            print(f"Creating attention layer {i}...")
             self.attentions.append(
                 TtTransformer2DModel(
                     device,
