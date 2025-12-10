@@ -74,7 +74,6 @@ void MAIN {
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
             transpose_wh_tile(cb_inp, 0, dst0);
-            // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
             welford_update<W>(dst0, start_N, *p_reciprocals);
             start_N += 32;
             cb_pop_front(cb_inp, 1);
@@ -87,8 +86,6 @@ void MAIN {
         // tt-llk/issues/549
         // BUG: using transpose_dest here causes a bug. where the kernel hangs
         //  transpose_wh_dest_init_short();
-        //  transpose_wh_dest(dst1);
-        //  transpose_wh_dest(dst2);
         cb_reserve_back(cb_x2, 2);
         tile_regs_commit();
         tile_regs_wait();

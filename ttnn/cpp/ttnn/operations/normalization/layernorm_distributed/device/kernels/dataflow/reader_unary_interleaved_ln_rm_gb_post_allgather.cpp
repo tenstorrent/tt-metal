@@ -17,7 +17,6 @@ void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr);
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
     const uint32_t NCHt = get_arg_val<uint32_t>(1);         // Number of NCH tiles
-    // const uint32_t Wt = get_arg_val<uint32_t>(2);           // Width in tiles
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
     const uint32_t stats_tile_offset =
         get_arg_val<uint32_t>(4);  // Tile offset for stats input; status input is two tiles wide and contains E(x) and
