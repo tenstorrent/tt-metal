@@ -358,7 +358,7 @@ ttnn::Tensor composite_all_gather(
         input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
         input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
 
     // Do the gather itself
@@ -447,7 +447,7 @@ ttnn::Tensor composite_all_to_all(
     }
 
     // Step 1: make every device have a copy of every tensor
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
         input_tensor,
         /* cluster_axis */ std::nullopt,
         subdevice_id,

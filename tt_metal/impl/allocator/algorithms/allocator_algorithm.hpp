@@ -13,11 +13,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace allocator {
+namespace tt::tt_metal::allocator {
 
 class Algorithm {
 public:
@@ -86,8 +82,4 @@ protected:
     std::optional<DeviceAddr> lowest_occupied_address_;
 };
 
-}  // namespace allocator
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal::allocator

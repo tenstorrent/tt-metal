@@ -12,13 +12,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/gather.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace cnn {
-namespace convert_to_hwc {
-namespace detail {
-namespace test {
+namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test {
 
 class GatherTransferTest : public ::testing::Test {
 protected:
@@ -1027,10 +1021,4 @@ TEST_F(GatherTransferTest, BlockBoundaryCorrectness) {
     }
 }
 
-}  // namespace test
-}  // namespace detail
-}  // namespace convert_to_hwc
-}  // namespace cnn
-}  // namespace experimental
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test
