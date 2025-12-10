@@ -13,7 +13,6 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "debug/dprint.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 namespace NAMESPACE {
@@ -84,7 +83,6 @@ void MAIN {
             add_binary_tile(block_idx, block_size + block_idx, block_idx);
         }
         tile_regs_commit();
-        // pack_and_push_block(cb_m_t, block_size);
         pack_and_push_two_blocks(cb_m_t, cb_exp_avg_out_idx, block_size);
 
         // variance_t calculation
@@ -123,7 +121,6 @@ void MAIN {
             add_binary_tile(block_idx, block_size + block_idx, block_idx);
         }
         tile_regs_commit();
-        // pack_and_push_block(cb_v_t, block_size);
         pack_and_push_two_blocks(cb_v_t, cb_exp_avg_sq_out_idx, block_size);
 
         // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
@@ -209,7 +206,6 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
-        // is weight decay != 1?
         // 0x3F800000 is hexadecimal encoding of 1 in fp32
         if (decay_factor != 0x3F800000) {
             binop_with_scalar_tile_init();
