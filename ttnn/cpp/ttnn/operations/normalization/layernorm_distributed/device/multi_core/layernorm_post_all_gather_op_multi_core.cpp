@@ -181,7 +181,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     uint32_t cb_length = Wt;
 
     const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     if (cb_length * in_single_tile_size > available_L1 * 0.95) {
         cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
     }
