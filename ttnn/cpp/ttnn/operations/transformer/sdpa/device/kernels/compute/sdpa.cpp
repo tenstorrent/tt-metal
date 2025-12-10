@@ -136,6 +136,7 @@ void MAIN {
                     chunked_q_chunk_offset,
                     0,
                     0,
+                    k_num_chunks,
                     q_chunk_tiles,
                     k_chunk_tiles,
                     qk_chunk_tiles,
