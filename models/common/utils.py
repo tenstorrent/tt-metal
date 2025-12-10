@@ -226,9 +226,8 @@ class LogProbsCalculator:
         log-prob(x) = logits(x) - global_max - log(global_exp_sum)
         """
         out = ttnn.subtract(sampled_logits_tensor, self.global_max)
-        out = ttnn.subtract(out, ttnn.log(self.global_exp_sum))
-
-        return out
+        # Subtract to self.output_tensor
+        ttnn.subtract(out, ttnn.log(self.global_exp_sum), output_tensor=self.output_tensor)
 
     def calculate_log_probs(
         self,
@@ -254,7 +253,7 @@ class LogProbsCalculator:
         # Prepare relevant logits for each user on each chip
         relevant_logits = self._prepare_relevant_logits(logits_tensor, indices_tensor)
 
-        # Calculate log-probs for each user on each chip
-        log_probs = self._calculate_log_probs(relevant_logits)
+        # Calculate log-probs for each user on each chip and stores in self.output_tensor
+        self._calculate_log_probs(relevant_logits)
 
-        return log_probs
+        return self.output_tensor
