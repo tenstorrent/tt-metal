@@ -38,8 +38,12 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         return peak_l1
 
     except Exception as e:
-        # If memory capture fails, return None but don't fail the test
-        logger.warning(f"Failed to capture peak memory: {e}")
+        orig_exc = e
+        try:
+            ttnn.graph.end_graph_capture()
+        except Exception as cleanup_exc:
+            logger.warning(f"Failed to end graph capture: {cleanup_exc}")
+        logger.warning(f"Failed to capture peak memory: {orig_exc}")
         return None
 
 
