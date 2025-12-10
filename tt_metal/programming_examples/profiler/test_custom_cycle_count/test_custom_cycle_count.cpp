@@ -11,7 +11,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

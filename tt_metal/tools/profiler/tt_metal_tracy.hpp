@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt_metal/impl/profiler/profiler_state.hpp>
 #include <tt_metal/impl/profiler/profiler_state_manager.hpp>

@@ -9,7 +9,7 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include <tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>

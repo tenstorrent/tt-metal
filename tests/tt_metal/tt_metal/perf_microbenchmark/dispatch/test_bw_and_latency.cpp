@@ -12,7 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <cstdint>
 #include <exception>
 #include <iomanip>
