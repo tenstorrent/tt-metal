@@ -117,15 +117,13 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         },
         operation_attributes.program_config);
 
-    const auto& shape = a.padded_shape();
+    const auto& shape = a.logical_shape();
+    std::cout << "shape: " << shape << std::endl;
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
     uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -140,7 +138,21 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
+    // Data span in tiles, rounded up to tile boundaries
+    uint32_t Wt = tt::div_up(W, TILE_WIDTH);
+    uint32_t Ht = tt::div_up(H, TILE_HEIGHT);
+
+    // Block size that maximizes dest usage depending on
+    // whether fp32 accumulation is enabled
+    uint32_t block_size =
+        fp32_dest_acc_en ? std::min(static_cast<uint32_t>(4), Wt) : std::min(static_cast<uint32_t>(8), Wt);
+
+    // Round the width span up to the block boundary
+    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;
+    // Wt = WtB;
+    std::cout << "Wt: " << Wt << std::endl;
+    std::cout << "WtB: " << WtB << std::endl;
+    std::cout << "block_size: " << block_size << std::endl;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -182,16 +194,16 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    // uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    // uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
-    // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
-    }
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
-    }
+    // // For bert, tensor is packed as RM with width 32
+    // if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+    //     num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+    // }
+    // if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+    //     num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+    // }
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
@@ -210,10 +222,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
-    // TODO(AP): can also add support for block_size=7 -> 63, 28
-    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
@@ -278,26 +286,27 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         }
     }
 
-    TT_FATAL(in0_t % block_size == 0, "Buffer size in0_t ({}) must be divisible by block_size ({})", in0_t, block_size);
-    TT_FATAL(in1_t % block_size == 0, "Buffer size in1_t ({}) must be divisible by block_size ({})", in1_t, block_size);
-    TT_FATAL(
-        out0_t % block_size == 0, "Buffer size out0_t ({}) must be divisible by block_size ({})", out0_t, block_size);
-    TT_FATAL(im0_t % block_size == 0, "Buffer size im0_t ({}) must be divisible by block_size ({})", im0_t, block_size);
-    TT_FATAL(im3_t % block_size == 0, "Buffer size im3_t ({}) must be divisible by block_size ({})", im3_t, block_size);
-    TT_FATAL(in5_t % block_size == 0, "Buffer size in5_t ({}) must be divisible by block_size ({})", in5_t, block_size);
-    TT_FATAL(in6_t % block_size == 0, "Buffer size in6_t ({}) must be divisible by block_size ({})", in6_t, block_size);
-    TT_FATAL(im6_t % block_size == 0, "Buffer size im6_t ({}) must be divisible by block_size ({})", im6_t, block_size);
-    TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
-    TT_FATAL(
-        num_gamma_tiles % block_size == 0,
-        "Number of gamma tiles ({}) must be divisible by block_size ({})",
-        num_gamma_tiles,
-        block_size);
-    TT_FATAL(
-        num_beta_tiles % block_size == 0,
-        "Number of beta tiles ({}) must be divisible by block_size ({})",
-        num_beta_tiles,
-        block_size);
+    // TT_FATAL(in0_t % block_size == 0, "Buffer size in0_t ({}) must be divisible by block_size ({})", in0_t,
+    // block_size); TT_FATAL(in1_t % block_size == 0, "Buffer size in1_t ({}) must be divisible by block_size ({})",
+    // in1_t, block_size); TT_FATAL(
+    //     out0_t % block_size == 0, "Buffer size out0_t ({}) must be divisible by block_size ({})", out0_t,
+    //     block_size);
+    // TT_FATAL(im0_t % block_size == 0, "Buffer size im0_t ({}) must be divisible by block_size ({})", im0_t,
+    // block_size); TT_FATAL(im3_t % block_size == 0, "Buffer size im3_t ({}) must be divisible by block_size ({})",
+    // im3_t, block_size); TT_FATAL(in5_t % block_size == 0, "Buffer size in5_t ({}) must be divisible by block_size
+    // ({})", in5_t, block_size); TT_FATAL(in6_t % block_size == 0, "Buffer size in6_t ({}) must be divisible by
+    // block_size ({})", in6_t, block_size); TT_FATAL(im6_t % block_size == 0, "Buffer size im6_t ({}) must be divisible
+    // by block_size ({})", im6_t, block_size); TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by
+    // block_size ({})", Wt, block_size); TT_FATAL(
+    //     num_gamma_tiles % block_size == 0,
+    //     "Number of gamma tiles ({}) must be divisible by block_size ({})",
+    //     num_gamma_tiles,
+    //     block_size);
+    // TT_FATAL(
+    //     num_beta_tiles % block_size == 0,
+    //     "Number of beta tiles ({}) must be divisible by block_size ({})",
+    //     num_beta_tiles,
+    //     block_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -393,6 +402,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
         compute_args.push_back(winv.u);
+        compute_args.push_back(W);
     }
 
     // The large-tensor non-Welford reduce kernel needs

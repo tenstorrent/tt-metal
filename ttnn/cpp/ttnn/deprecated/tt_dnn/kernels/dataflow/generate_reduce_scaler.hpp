@@ -73,3 +73,41 @@ FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t
     }
     cb_push_back(cb_id, 1);
 }
+
+// Tile is assumed to have 16-bit elements
+// Scaler is assumed to be a 16-bit value double packed into a u32
+FORCE_INLINE void generate_partial_reduce_scaler(const uint32_t cb_id, const uint32_t scaler, const uint32_t num_cols) {
+    cb_reserve_back(cb_id, 1);
+
+    const uint16_t scalar_uint16 = scaler >> 16;
+
+    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t write_addr = get_write_ptr(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+
+    // Fill tile with zeros
+    // TODO: src addr does not need to be rewritten. Update/add api for this
+    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
+        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        write_addr += MEM_ZEROS_SIZE;
+    }
+    noc_async_read_barrier();
+
+    volatile tt_l1_ptr uint16_t* ptr_uint16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
+
+    uint32_t col = 0;
+    if (scaler != 0) {
+        for (int k = 0; k < 4; ++k) {
+            uint32_t idx = k << 8;
+            for (int j = 0; j < 16; ++j) {
+                if (col++ < num_cols) {
+                    ptr_uint16[idx + j] = scalar_uint16;
+                }
+            }
+        }
+    }
+
+    cb_push_back(cb_id, 1);
+}
