@@ -6,9 +6,7 @@
 
 #include "sfpi.h"
 // NOTE: The following header is from the external 'tt-llk' dependency.
-// The implementation of '_calculate_square_' is provided by 'tt-llk' and not defined locally.
-// This represents an architectural change from an inline/local implementation to delegation to an external dependency.
-// Ensure that 'tt-llk' is available and up to date when building or modifying this code.
+// The implementation of '_calculate_square_' is provided by 'tt-llk' and not defined in tt-metal 
 #include "sfpu/ckernel_sfpu_square.h"
 
 namespace ckernel::sfpu {
