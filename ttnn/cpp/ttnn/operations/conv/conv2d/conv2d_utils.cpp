@@ -938,7 +938,11 @@ core_count_and_size calculate_L1_usage_for_conv_op(
     const ttnn::Shape weights_shape(
         {1, 1, in_channels_aligned * kernel_size[0] * kernel_size[1], output_channels_padded});
 
-    const ParallelConfig input_parallel_config = determine_parallel_config(
+    const ParallelConfig input_parallel_config = _halo_input_memory_config.has_value() ? ParallelConfig{
+            .grid = _halo_input_memory_config->shard_spec().value().grid,
+            .shard_scheme = _halo_input_memory_config->memory_layout(),
+            .shard_orientation = _halo_input_memory_config->shard_spec().value().orientation}
+    : determine_parallel_config(
         conv_config.shard_layout.value(),
         batch_size,
         in_channels,
