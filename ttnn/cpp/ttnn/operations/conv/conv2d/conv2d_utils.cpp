@@ -30,8 +30,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::conv {
+namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
@@ -265,6 +264,21 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
                                     (padding[2] + padding[3])) /
                                    stride[1]) +
                                   1;
+    return {output_height, output_width};
+}
+
+std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation) {
+    uint32_t output_height = ((input_image_size[0] - 1) * stride[0]) - (padding[0] + padding[1]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+
+    uint32_t output_width = ((input_image_size[1] - 1) * stride[1]) - (padding[2] + padding[3]) +
+                            (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
     return {output_height, output_width};
 }
 
@@ -1734,5 +1748,4 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
     }
 }
 
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv
