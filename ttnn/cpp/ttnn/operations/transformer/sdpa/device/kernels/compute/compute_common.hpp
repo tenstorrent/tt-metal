@@ -689,12 +689,7 @@ enum SDPAType {
 };
 
 /**
- * For SDPA and windowed SDPA use q_start = 0, q_end = q_chunks_per_core.
- * For windowed SDPA use !BALANCED_Q_PARALLEL, !is_chunked, !is_causal.
  *
- * For SDPA and windowed SDPA use iter_k_chunk_start = 0.
- * For joint SDPA use iter_k_chunk_start = 0 and iter_k_chunk_end = k_num_chunks.
- * For joint SDPA set ring_id == N_mask_ring_id and ring_id == L_mask_ring_id.
  */
 template <
     SDPAType sdpa_type,
