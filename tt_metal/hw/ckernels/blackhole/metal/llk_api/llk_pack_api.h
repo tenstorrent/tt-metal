@@ -116,43 +116,6 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
     llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize, tilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
-inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
-
-    _llk_pack_reduce_hw_configure_<type, dim, is_fp32_dest_acc_en, untilize>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        partial_face,
-        narrow_tile,
-        pack_params->relu_config.val);
-}
-
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    bool untilize = false,
-    ReluType relu_type = ReluType::NO_RELU,
-    std::uint32_t relu_threshold = 0>
-inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output) {
-    llk_pack_params_t llk_pack_params = {
-        .pack_output = pack_output,
-        .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
-    llk_pack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, untilize>(&llk_pack_params);
-}
-
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
