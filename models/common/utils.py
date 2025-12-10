@@ -154,8 +154,15 @@ class LogProbsCalculator:
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1, keepdim=True)
 
         # reshape global_max and global_exp_sum to support same output shape as sampling output -> (1, 1, 1, 32)
+        # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
+        self.global_max = ttnn.to_layout(self.global_max, ttnn.ROW_MAJOR_LAYOUT)
         self.global_max = ttnn.reshape(self.global_max, (1, 1, 1, 32))
+        self.global_max = ttnn.to_layout(self.global_max, ttnn.TILE_LAYOUT)
+
+        # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
+        self.global_exp_sum = ttnn.to_layout(self.global_exp_sum, ttnn.ROW_MAJOR_LAYOUT)
         self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32))
+        self.global_exp_sum = ttnn.to_layout(self.global_exp_sum, ttnn.TILE_LAYOUT)
 
     def _prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
         """
@@ -180,12 +187,19 @@ class LogProbsCalculator:
         )
 
         # Convert remainder_tensor to int32
-        remainder_tensor = ttnn.reshape(ttnn.typecast(remainder_tensor, ttnn.uint32), (1, 1, 32, 1))
+        remainder_tensor = ttnn.typecast(remainder_tensor, ttnn.uint32)
+        # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
+        remainder_tensor = ttnn.to_layout(remainder_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        remainder_tensor = ttnn.reshape(remainder_tensor, (1, 1, 32, 1))
+        remainder_tensor = ttnn.to_layout(remainder_tensor, ttnn.TILE_LAYOUT)
 
         # Get logits for each user on each chip based on local index
         selected_logits_tensor = ttnn.gather(logits_tensor, dim=3, index=remainder_tensor)
 
+        # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
+        selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.ROW_MAJOR_LAYOUT)
         selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, 32))
+        selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT)
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
         ttnn.eq_(chip_ids_tensor, self.mask)
 
