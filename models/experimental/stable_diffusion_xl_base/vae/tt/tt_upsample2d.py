@@ -8,7 +8,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
 )
-from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config
 
 
 class TtUpsample2D(LightweightModule):
@@ -45,7 +44,7 @@ class TtUpsample2D(LightweightModule):
             bias,
             self.conv_config.weights_dtype,
         )
-        self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
+        self.conv_slice_config = None
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):

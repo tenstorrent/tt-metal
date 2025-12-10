@@ -7,7 +7,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import (
-    get_DRAM_conv_config,
     get_DRAM_GN_config,
     get_DRAM_GN_shape,
 )
@@ -91,7 +90,7 @@ class TtDecoder(LightweightModule):
             conv_in_bias,
             self.conv_in_config.weights_dtype,
         )
-        self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
+        self.conv_in_slice_config = ttnn.Conv2dL1FullSliceConfig  # one slice
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
@@ -104,7 +103,7 @@ class TtDecoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
+        self.conv_out_slice_config = None  # auto slicing generates 8 slices
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
