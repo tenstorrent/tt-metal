@@ -63,7 +63,7 @@ def run_broadcast_impl(
     logger.info(f"input_shard_grid: {input_shard_grid}")
 
     ### For sharded all broadcast only
-    if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
+    if not (bool(input_shard_shape) == bool(input_shard_grid) == bool(tensor_mem_layout)):
         pytest.fail(
             "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
         )
@@ -139,11 +139,6 @@ def run_broadcast_impl(
                 mesh_mapper_config,
             ),
         )
-
-        # Convert back to host to see what's on each device - use ConcatMeshToTensor
-        mesh_tensor_readback = ttnn.to_torch(
-            input_tensor_mesh, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-        )
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
@@ -175,7 +170,6 @@ def run_broadcast_impl(
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done op")
 
-    passed = True
     # compare tensors
     for iter_idx in range(len(tt_out_tensor_list)):
         output_tensor_torch = ttnn.to_torch(
@@ -198,7 +192,6 @@ def run_broadcast_impl(
                 eq, output = comp_pcc(received, sender_tensor)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-                passed = False
                 assert eq, f"{i} FAILED: {output}"
 
     assert (
@@ -206,8 +199,6 @@ def run_broadcast_impl(
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-    if not passed:
-        assert eq, f"{i} FAILED: {output}"
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -261,7 +252,6 @@ def test_broadcast_batch1(
 ):
     validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, 0)
     mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    mesh_shape = tuple(mesh_device.shape)
     sender_coord_tuple = (sender_idx, 0)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
 
