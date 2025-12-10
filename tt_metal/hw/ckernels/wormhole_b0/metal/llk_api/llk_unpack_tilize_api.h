@@ -123,13 +123,12 @@ inline void llk_unpack_tilizeA_B_hw_configure(
 
     const uint32_t face_r_dim = get_operand_face_r_dim(unpA_operand_id);  // face r dim in unpA and unpB are the same
 
-    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpack_dst_format[unpB_operand_id],
         face_r_dim,
-        within_face_16x16_transpose,
         num_faces);
 }
 

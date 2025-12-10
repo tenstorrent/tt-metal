@@ -263,7 +263,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, false>(face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(face_r_dim, narrow_tile);
 }
 
 inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_pack_debug_dump_(data, byte_size); }
