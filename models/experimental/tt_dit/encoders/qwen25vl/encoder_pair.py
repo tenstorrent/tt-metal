@@ -36,13 +36,20 @@ class Qwen25VlTokenizerEncoderPair:
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
 
-        self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint, subfolder=tokenizer_subfolder)
+        if tokenizer_subfolder is not None:
+            self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint, subfolder=tokenizer_subfolder)
+        else:
+            self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint)
         self._encoder = self._load_encoder(checkpoint, encoder_subfolder, use_torch=use_torch)
 
     def _load_encoder(
         self, checkpoint: str, subfolder: str | None, *, use_torch: bool
     ) -> Qwen2_5_VLForConditionalGeneration | Qwen25VlTextEncoder:
-        torch_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(checkpoint, subfolder=subfolder)
+        # Only pass subfolder if it's not None
+        if subfolder is not None:
+            torch_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(checkpoint, subfolder=subfolder)
+        else:
+            torch_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(checkpoint)
 
         if use_torch:
             return torch_model
