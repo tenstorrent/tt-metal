@@ -63,6 +63,8 @@ public:
             SizeT size_;
         };
 
+        Block(SizeT start, SizeT end, SizeT block_size) : start_(start), end_(end), block_size_(block_size) {}
+
         SizeT size() const { return end_ - start_; }
         bool is_full() const { return size() == block_size_; }
         bool is_partial() const { return size() < block_size_; }
