@@ -36,9 +36,7 @@
 
 enum class AddressableCoreType : uint8_t;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
 struct HalProcessorIdentifier {
@@ -714,8 +712,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
     }
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {

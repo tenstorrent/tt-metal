@@ -19,8 +19,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
@@ -392,6 +391,8 @@ void UDMFabricUnicastCommon(
     std::optional<RoutingDirection> override_initial_direction = std::nullopt,
     std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt);
 
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type);
+
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
@@ -416,5 +417,4 @@ void RunEDMConnectionStressTest(
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

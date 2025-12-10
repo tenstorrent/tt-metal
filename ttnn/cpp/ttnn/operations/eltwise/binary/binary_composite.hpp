@@ -15,9 +15,7 @@
 
 namespace ttnn {
 
-namespace operations {
-
-namespace binary {
+namespace operations::binary {
 
 /**
  * @brief Performs element-wise power operation on the input with the exponent.
@@ -485,8 +483,7 @@ struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
     // but creates a distinct type for registration
 };
 
-}  // namespace binary
-}  // namespace operations
+}  // namespace operations::binary
 
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();

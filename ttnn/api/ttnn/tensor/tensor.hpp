@@ -38,9 +38,7 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace distributed {
 class MeshDevice;
@@ -344,9 +342,7 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype);
 
 }  // namespace ops
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace ttnn {
 
