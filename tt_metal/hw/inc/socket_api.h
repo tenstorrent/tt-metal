@@ -141,6 +141,21 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     }
 }
 
+void pcie_socket_notify_receiver(const SocketSenderInterface& socket) {
+    uint32_t local_bytes_sent_addr = socket.config_addr;
+    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket.config_addr);
+    // 8 word of MD + 4 Words of Ack
+    uint32_t pcie_xy_enc = socket_config_words[12];
+    uint32_t bytes_sent_addr_hi = socket_config_words[14];
+    uint32_t bytes_sent_addr_lo = socket_config_words[3];
+
+    uint64_t bytes_sent_pcie_addr =
+        (static_cast<uint64_t>(bytes_sent_addr_hi) << 32) | (static_cast<uint64_t>(bytes_sent_addr_lo));
+    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        NOC_0, local_bytes_sent_addr, pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
+}
+
 void fabric_socket_notify_receiver(
     const SocketSenderInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -280,6 +295,20 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
     noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+}
+
+void pcie_socket_notify_sender(const SocketReceiverInterface& socket) {
+    uint32_t local_bytes_acked_addr = socket.config_addr + offsetof(receiver_socket_md, bytes_acked);
+    tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(socket.config_addr);
+
+    uint32_t pcie_xy_enc = socket_config->upstream_noc_y;
+    uint32_t pcie_addr_hi = socket_config->upstream_noc_x;
+    uint32_t pcie_addr_lo = socket_config->upstream_bytes_acked_addr;
+
+    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+    uint64_t pcie_addr = (static_cast<uint64_t>(pcie_addr_hi) << 32) | static_cast<uint64_t>(pcie_addr_lo);
+    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        NOC_0, local_bytes_acked_addr, pcie_xy_enc, pcie_addr, 4, 1);
 }
 
 void fabric_socket_notify_sender(

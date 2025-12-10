@@ -8,6 +8,8 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include <utility>
 
 namespace tt::tt_metal::distributed {
@@ -50,6 +52,10 @@ public:
     uint32_t get_write_ptr() const { return write_ptr_; }
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
     void set_page_size(uint32_t page_size);
+    void barrier();
+    std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> get_bytes_acked_buffer() const {
+        return bytes_acked_buffer_;
+    }
 
 private:
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
@@ -62,6 +68,8 @@ private:
     std::unordered_map<MeshCoreCoord, uint32_t> bytes_acked_ = {};
     uint32_t write_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
+    std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
+    std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_acked_buffer_ = nullptr;
 };
 
 class D2HSocket {
@@ -76,14 +84,18 @@ public:
     void pop_pages(uint32_t num_pages);
     void notify_sender();
     uint32_t get_page_size() const { return page_size_; }
-    uint32_t get_read_ptr() const { return read_ptr_; }
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
-    uint32_t get_data_buffer_address() const { return data_buffer_->address(); }
+    uint32_t* get_read_ptr() const { return data_buffer_->data() + (read_ptr_ / sizeof(uint32_t)); }
     void set_page_size(uint32_t page_size);
+    void barrier();
 
 private:
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
-    std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
+    std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> data_pinned_memory_ = nullptr;
+    std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> bytes_sent_pinned_memory_ = nullptr;
+    std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> data_buffer_ = nullptr;
+    std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_sent_buffer_ = nullptr;
+
     MeshCoreCoord sender_core_ = {};
     BufferType buffer_type_ = BufferType::DRAM;
     uint32_t fifo_size_ = 0;

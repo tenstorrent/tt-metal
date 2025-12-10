@@ -335,6 +335,8 @@ void test_h2d_socket(
         input_socket.push_pages(1);
         input_socket.notify_receiver();
     }
+    input_socket.barrier();
+
     std::vector<uint32_t> recv_data_readback = {};
     ReadShard(mesh_device->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
     EXPECT_EQ(src_vec, recv_data_readback);
@@ -391,21 +393,23 @@ void test_d2h_socket(
     std::cout << "Device: " << mesh_device->get_device(MeshCoordinate(0, 0))->id() << std::endl;
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
-    auto send_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
+    // auto send_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-    const auto& cluster = MetalContext::instance().get_cluster();
-    auto send_device_id = mesh_device->get_device(MeshCoordinate(0, 0))->id();
+    // const auto& cluster = MetalContext::instance().get_cluster();
+    // auto send_device_id = mesh_device->get_device(MeshCoordinate(0, 0))->id();
 
     for (uint32_t i = 0; i < num_reads; i++) {
         output_socket.wait_for_pages(1);
-        cluster.read_core(
-            dst_vec.data() + i * page_size_words,
-            page_size,
-            tt_cxy_pair(send_device_id, send_core),
-            output_socket.get_read_ptr());
+        std::memcpy(dst_vec.data() + i * page_size_words, output_socket.get_read_ptr(), page_size);
+        // cluster.read_core(
+        //     dst_vec.data() + i * page_size_words,
+        //     page_size,
+        //     tt_cxy_pair(send_device_id, send_core),
+        //     output_socket.get_read_ptr());
         output_socket.pop_pages(1);
         output_socket.notify_sender();
     }
+    output_socket.barrier();
     EXPECT_EQ(src_vec, dst_vec);
 }
 

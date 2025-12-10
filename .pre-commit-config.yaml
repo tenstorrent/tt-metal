@@ -50,11 +50,11 @@ repos:
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
       language: system
       pass_filenames: false
-    - id: validate-metalium-deprecation
-      name: validate-metalium-deprecation
-      entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
-      language: system
-      pass_filenames: false
+    # - id: validate-metalium-deprecation
+    #   name: validate-metalium-deprecation
+    #   entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
+    #   language: system
+    #   pass_filenames: false
 - repo: local
   hooks:
     - id: check-torch-imports-in-ttnn

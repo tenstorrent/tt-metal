@@ -43,6 +43,7 @@ void kernel_main() {
         outstanding_data_size -= page_size;
         noc_async_write_barrier();
         socket_pop_pages(receiver_socket, 1);
+        pcie_socket_notify_sender(receiver_socket);
         // socket_notify_sender(receiver_socket);
     }
     update_socket_config(receiver_socket);

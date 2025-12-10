@@ -206,7 +206,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .worker_log_to_virtual_routing_y = cluster.get_worker_logical_to_virtual_y(device_id),
          .l1_bank_remap = std::move(l1_bank_remap),
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .l1_alignment = 32,  // hal.get_alignment(HalMemType::L1),
+         .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
     TT_FATAL(
         config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,

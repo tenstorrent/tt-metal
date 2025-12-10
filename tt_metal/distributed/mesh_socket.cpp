@@ -149,8 +149,28 @@ H2DSocket::H2DSocket(
     const std::vector<MeshCoreCoord>& recv_cores,
     BufferType buffer_type,
     uint32_t fifo_size) :
-    recv_cores_(recv_cores), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(0) {
+    recv_cores_(recv_cores), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(0), pinned_memory_(nullptr) {
     // Allocate memory for the config buffer
+    MeshCoordinateRangeSet recv_device_range_set;
+    for (const auto& recv_core : recv_cores_) {
+        recv_device_range_set.merge(MeshCoordinateRange(recv_core.device_coord));
+    }
+    bytes_acked_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
+
+    tt::tt_metal::HostBuffer host_buffer_view(
+        tt::stl::Span<uint32_t>(bytes_acked_buffer_->data(), bytes_acked_buffer_->size()),
+        tt::tt_metal::MemoryPin(bytes_acked_buffer_));
+
+    pinned_memory_ =
+        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, recv_device_range_set, host_buffer_view, true);
+    const auto& host_noc_addr =
+        pinned_memory_->get_noc_addr(mesh_device->get_device(recv_cores_[0].device_coord)->id());
+    TT_FATAL(host_noc_addr.has_value(), "Failed to get NOC address for pinned memory.");
+
+    uint32_t host_addr_lo = static_cast<uint32_t>(host_noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t host_addr_hi = static_cast<uint32_t>(host_noc_addr.value().addr >> 32);
+    uint32_t pcie_xy_enc = host_noc_addr.value().pcie_xy_enc;
+
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
@@ -221,9 +241,9 @@ H2DSocket::H2DSocket(
             md.fifo_total_size = fifo_size_;
             md.upstream_mesh_id = 0;
             md.upstream_chip_id = 0;
-            md.upstream_noc_y = 0;
-            md.upstream_noc_x = 0;
-            md.upstream_bytes_acked_addr = 0;
+            md.upstream_noc_y = pcie_xy_enc;
+            md.upstream_noc_x = host_addr_hi;
+            md.upstream_bytes_acked_addr = host_addr_lo;
             md.is_sender = 0;
         }
         distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer_, config_data, device_coord, true);
@@ -232,24 +252,14 @@ H2DSocket::H2DSocket(
 
 void H2DSocket::reserve_pages(uint32_t num_pages) {
     TT_FATAL(page_size_ > 0, "Page size must be set before reserving pages.");
-    const auto& cluster = MetalContext::instance().get_cluster();
+    // const auto& cluster = MetalContext::instance().get_cluster();
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_size_, "Cannot reserve more pages than the socket FIFO size.");
 
-    uint32_t bytes_acked_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_acked);
-    const auto& mesh_device = config_buffer_->device();
-
     for (const auto& recv_core : recv_cores_) {
         uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_[recv_core]);
-        auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
-        auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
         while (bytes_free < num_bytes) {
-            uint32_t bytes_acked_value = 0;
-            cluster.read_core(
-                &bytes_acked_value,
-                sizeof(bytes_acked_value),
-                tt_cxy_pair(recv_device_id, recv_virtual_core),
-                bytes_acked_addr);
+            volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
             bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
             bytes_acked_[recv_core] = bytes_acked_value;
         }
@@ -303,6 +313,13 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     fifo_curr_size_ = fifo_page_aligned_size;
 }
 
+void H2DSocket::barrier() {
+    volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
+    while (bytes_sent_ - bytes_acked_value != 0) {
+        bytes_acked_value = bytes_acked_buffer_->at(0);
+    }
+}
+
 struct SocketSenderSize_ {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t md_size_bytes = tt::align(sizeof(sender_socket_md), l1_alignment);
@@ -315,11 +332,51 @@ D2HSocket::D2HSocket(
     const MeshCoreCoord& sender_core,
     BufferType buffer_type,
     uint32_t fifo_size) :
-    sender_core_(sender_core), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(0) {
+    data_pinned_memory_(nullptr),
+    bytes_sent_pinned_memory_(nullptr),
+    sender_core_(sender_core),
+    buffer_type_(buffer_type),
+    fifo_size_(fifo_size),
+    page_size_(0) {
     const SocketSenderSize_ sender_size;
     uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
+    MeshCoordinateRangeSet sender_devce_range_set;
+    sender_devce_range_set.merge(MeshCoordinateRange(sender_core.device_coord));
     auto sender_core_range_set = CoreRangeSet(CoreRange(sender_core.core_coord));
+
+    data_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(fifo_size_ / sizeof(uint32_t), 0);
+    bytes_sent_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
+
+    tt::tt_metal::HostBuffer data_buffer_view(
+        tt::stl::Span<uint32_t>(data_buffer_->data(), data_buffer_->size()), tt::tt_metal::MemoryPin(data_buffer_));
+    tt::tt_metal::HostBuffer bytes_sent_buffer_view(
+        tt::stl::Span<uint32_t>(bytes_sent_buffer_->data(), bytes_sent_buffer_->size()),
+        tt::tt_metal::MemoryPin(bytes_sent_buffer_));
+
+    data_pinned_memory_ =
+        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, sender_devce_range_set, data_buffer_view, true);
+
+    bytes_sent_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device, sender_devce_range_set, bytes_sent_buffer_view, true);
+
+    const auto& bytes_sent_noc_addr =
+        bytes_sent_pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
+    const auto& data_noc_addr =
+        data_pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
+
+    uint32_t data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
+    uint32_t bytes_sent_pcie_xy_enc = bytes_sent_noc_addr.value().pcie_xy_enc;
+    TT_FATAL(
+        data_pcie_xy_enc == bytes_sent_pcie_xy_enc,
+        "Data and bytes_sent pinned memory must be mapped to the same PCIe core.");
+
+    uint32_t data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
+    uint32_t bytes_sent_addr_lo = static_cast<uint32_t>(bytes_sent_noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t bytes_sent_addr_hi = static_cast<uint32_t>(bytes_sent_noc_addr.value().addr >> 32);
+    read_ptr_ = 0;
+
     auto num_cores = sender_core_range_set.size();
     auto total_config_buffer_size = num_cores * config_buffer_size;
 
@@ -339,35 +396,19 @@ D2HSocket::D2HSocket(
     };
     config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
 
-    auto sub_device_id = SubDeviceId{0};
-    auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-    auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-    auto total_data_buffer_size = num_data_cores * fifo_size_;
-
-    DeviceLocalBufferConfig data_buffer_specs = {
-        .page_size = fifo_size_,
-        .buffer_type = buffer_type_,
-        .sharding_args = BufferShardingArgs(
-            ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
-            TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = std::nullopt,
-        .sub_device_id = std::nullopt,
-    };
-    MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
-        .size = total_data_buffer_size,
-    };
-
-    data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-    read_ptr_ = data_buffer_->address();
-
     std::vector<uint32_t> config_data(config_buffer_->size() / sizeof(uint32_t), 0);
     config_data[0] = 0;
     config_data[1] = 1;
-    config_data[2] = data_buffer_->address();
-    config_data[3] = 0;
-    config_data[4] = data_buffer_->address();
+    config_data[2] = data_addr_lo;        // Lower 32 bits represent the write ptr
+    config_data[3] = bytes_sent_addr_lo;  // Lower 32 bits represent the bytes_sent addr
+    config_data[4] = data_addr_lo;
     config_data[5] = fifo_size_;
     config_data[6] = 1;
+
+    uint32_t host_addr_offset = (sender_size.md_size_bytes + sender_size.ack_size_bytes) / sizeof(uint32_t);
+    config_data[host_addr_offset] = data_pcie_xy_enc;
+    config_data[host_addr_offset + 1] = data_addr_hi;
+    config_data[host_addr_offset + 2] = bytes_sent_addr_hi;
 
     distributed::WriteShard(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
@@ -378,27 +419,20 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     TT_FATAL(page_size % pcie_alignment == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
 
-    uint32_t fifo_start_addr = data_buffer_->address();
-    uint32_t next_fifo_rd_ptr = fifo_start_addr + align(read_ptr_ - fifo_start_addr, page_size);
-    uint32_t fifo_page_aligned_size = fifo_size_ - fifo_size_ % page_size;
-    uint32_t fifo_page_aligned_limit = fifo_start_addr + fifo_page_aligned_size;
+    uint32_t next_fifo_rd_ptr = align(read_ptr_, page_size);
+    uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
-    if (next_fifo_rd_ptr >= fifo_page_aligned_limit) {
-        uint32_t bytes_adjustment = fifo_start_addr + fifo_size_ - next_fifo_rd_ptr;
+    if (next_fifo_rd_ptr >= fifo_page_aligned_size) {
+        uint32_t bytes_adjustment = fifo_size_ - next_fifo_rd_ptr;
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
-        const auto& mesh_device = config_buffer_->device();
-        auto& cluster = MetalContext::instance().get_cluster();
-        auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        auto sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
-        uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(sender_socket_md, bytes_sent);
 
         while (bytes_recv < bytes_adjustment) {
-            cluster.read_core(
-                &bytes_sent_, sizeof(bytes_sent_), tt_cxy_pair(sender_device_id, sender_virtual_core), bytes_sent_addr);
-            bytes_recv = bytes_sent_ - bytes_acked_;
+            volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
+            bytes_recv = bytes_sent_value - bytes_acked_;
+            bytes_sent_ = bytes_sent_value;
         }
         bytes_acked_ += bytes_adjustment;
-        next_fifo_rd_ptr = fifo_start_addr;
+        next_fifo_rd_ptr = 0;
     }
     read_ptr_ = next_fifo_rd_ptr;
     page_size_ = page_size;
@@ -410,20 +444,15 @@ void D2HSocket::wait_for_pages(uint32_t num_pages) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot wait for more pages than the socket FIFO size.");
 
-    if (read_ptr_ + num_bytes >= fifo_curr_size_ + data_buffer_->address()) {
+    if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
-    uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
-    uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(sender_socket_md, bytes_sent);
-    const auto& mesh_device = config_buffer_->device();
-    auto& cluster = MetalContext::instance().get_cluster();
-    auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-    auto sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
 
+    uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
-        cluster.read_core(
-            &bytes_sent_, sizeof(bytes_sent_), tt_cxy_pair(sender_device_id, sender_virtual_core), bytes_sent_addr);
-        bytes_recv = bytes_sent_ - bytes_acked_;
+        volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
+        bytes_recv = bytes_sent_value - bytes_acked_;
+        bytes_sent_ = bytes_sent_value;
     }
 }
 
@@ -432,7 +461,7 @@ void D2HSocket::pop_pages(uint32_t num_pages) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot pop more pages than the socket FIFO size.");
 
-    if (read_ptr_ + num_bytes >= fifo_curr_size_ + data_buffer_->address()) {
+    if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         read_ptr_ = read_ptr_ + num_bytes - fifo_curr_size_;
         bytes_acked_ += num_bytes + fifo_size_ - fifo_curr_size_;
     } else {
@@ -455,6 +484,13 @@ void D2HSocket::notify_sender() {
         false,
         {},
         false);
+}
+
+void D2HSocket::barrier() {
+    volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
+    while (bytes_acked_ - bytes_sent_value != 0) {
+        bytes_sent_value = bytes_sent_buffer_->at(0);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed
