@@ -129,13 +129,13 @@ std::tuple<AllReduceAsyncDeviceOperation::operation_attributes_t, AllReduceAsync
 AllReduceAsyncDeviceOperation::invoke(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<DataType> dtype,
+    std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<size_t> num_preferred_links,
+    std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
