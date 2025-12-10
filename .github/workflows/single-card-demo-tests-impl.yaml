@@ -304,7 +304,6 @@ jobs:
           from pathlib import Path
           from collections import defaultdict
           
-          all_ops = defaultdict(set)  # op_name -> set of models
           model_ops = {}  # model -> set of ops
           
           for csv_path in Path("all_tracy_reports").rglob("ops_perf_results_*.csv"):
@@ -320,7 +319,6 @@ jobs:
                   for op in ops_data:
                       op_name = op.get("OP CODE", op.get("op_code", "unknown"))
                       ops_in_model.add(op_name)
-                      all_ops[op_name].add(model_name)
                   
                   model_ops[model_name] = sorted(ops_in_model)
                   print(f"{model_name}: {len(ops_in_model)} unique operations")
@@ -329,15 +327,6 @@ jobs:
           
           # Write aggregated report
           with open("aggregated_ops/aggregated_operations.txt", "w") as f:
-              f.write("Aggregated Operations Report\n")
-              f.write(f"Total unique operations: {len(all_ops)}\n")
-              f.write(f"Models processed: {len(model_ops)}\n\n")
-              
-              f.write("Unique Operations\n")
-              f.write("=" * 60 + "\n")
-              for op_name in sorted(all_ops.keys()):
-                  f.write(f"{op_name}\n")
-              
               f.write("\n" + "=" * 60 + "\n")
               f.write("Operations by Model\n")
               f.write("=" * 60 + "\n")
@@ -349,11 +338,9 @@ jobs:
           # Write JSON
           with open("aggregated_ops/aggregated_operations.json", "w") as f:
               json.dump({
-                  "all_operations": sorted(all_ops.keys()),
                   "by_model": model_ops
               }, f, indent=2)
           
-          print(f"\nAggregated {len(all_ops)} unique operations from {len(model_ops)} models")
           EOF
           
           cat aggregated_ops/aggregated_operations.txt
