@@ -33,8 +33,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
         false, false /*transpose within 16x16 face*/, icb)));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 
@@ -82,8 +81,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     }
 
     if (unpacker_dst_format_change || bcast_type_change) {
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, new_bcast_type>(
-            false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, new_bcast_type>(new_icb)));
     }
 #endif
 
