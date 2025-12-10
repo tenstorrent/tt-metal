@@ -1042,71 +1042,187 @@ jobs:
             done
           fi
 
-          # Helper function to check if two file lists have any overlap
-          files_have_overlap() {
-            local files1="$1"
-            local files2="$2"
-            if [ -z "$files1" ] || [ -z "$files2" ]; then
-              return 1
-            fi
-            # Convert comma-separated lists to arrays and check for any common file
-            IFS=',' read -ra FILES1_ARRAY <<< "$files1"
-            IFS=',' read -ra FILES2_ARRAY <<< "$files2"
-            for file1 in "${FILES1_ARRAY[@]}"; do
-              for file2 in "${FILES2_ARRAY[@]}"; do
-                if [ "$file1" = "$file2" ]; then
-                  return 0  # Found overlap
+          # Helper function to check if a file is owned by other groups (co-ownership)
+          file_has_coowners() {
+            local file="$1"
+            local current_key="$2"
+            local owner_count=0
+            for other_key in "${GROUP_KEYS[@]}"; do
+              if [ "$other_key" != "$current_key" ]; then
+                local other_files="${GROUP_FILES[$other_key]}"
+                if echo ",$other_files," | grep -q ",$file,"; then
+                  owner_count=$((owner_count + 1))
                 fi
-              done
+              fi
             done
-            return 1  # No overlap
+            [ $owner_count -gt 0 ] && return 0 || return 1
           }
+
+          # Split groups into exclusive and shared ownership
+          SPLIT_GROUP_KEYS=()
+          declare -A SPLIT_GROUP_TYPE SPLIT_GROUP_NAME SPLIT_GROUP_FILES SPLIT_GROUP_MEMBERS_INFO SPLIT_GROUP_MEMBERS_LIST SPLIT_GROUP_FILES_HTML SPLIT_GROUP_IS_SHARED
 
           for key in "${GROUP_KEYS[@]}"; do
             files="${GROUP_FILES[$key]}"
-            members="${GROUP_MEMBERS_LIST[$key]}"
-            combined_members="$members"
-            has_other_groups=false
-            for other_key in "${GROUP_KEYS[@]}"; do
-              if [ "$other_key" != "$key" ] && files_have_overlap "$files" "${GROUP_FILES[$other_key]}"; then
-                other_members="${GROUP_MEMBERS_LIST[$other_key]}"
-                [ -n "$other_members" ] && combined_members="$combined_members,$other_members" && has_other_groups=true
+            exclusive_files=""
+            shared_files=""
+
+            # Categorize each file
+            IFS=',' read -ra FILES_ARRAY <<< "$files"
+            for file in "${FILES_ARRAY[@]}"; do
+              [ -z "$file" ] && continue
+              if file_has_coowners "$file" "$key"; then
+                [ -n "$shared_files" ] && shared_files="$shared_files,"
+                shared_files="$shared_files$file"
+              else
+                [ -n "$exclusive_files" ] && exclusive_files="$exclusive_files,"
+                exclusive_files="$exclusive_files$file"
               fi
             done
-            direct_approved="" shared_approved=""
-            if [ -n "$combined_members" ]; then
-              IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
-              for member in "${COMBINED_ARRAY[@]}"; do
-                [ -z "$member" ] && continue
-                if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
-                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                  [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
-                  if [ "$has_other_groups" = true ] && ! echo "$members" | grep -q "$member"; then
-                    shared_approved="$shared_approved$USER_NAME, "
-                  else
-                    direct_approved="$direct_approved$USER_NAME, "
-                  fi
+
+            # Create entries based on what we found
+            if [ -n "$exclusive_files" ]; then
+              new_key="${key}_exclusive"
+              SPLIT_GROUP_KEYS+=("$new_key")
+              SPLIT_GROUP_TYPE["$new_key"]="${GROUP_TYPE[$key]}"
+              SPLIT_GROUP_NAME["$new_key"]="${GROUP_NAME[$key]}"
+              SPLIT_GROUP_FILES["$new_key"]="$exclusive_files"
+              SPLIT_GROUP_MEMBERS_INFO["$new_key"]="${GROUP_MEMBERS_INFO[$key]}"
+              SPLIT_GROUP_MEMBERS_LIST["$new_key"]="${GROUP_MEMBERS_LIST[$key]}"
+              SPLIT_GROUP_IS_SHARED["$new_key"]="false"
+
+              # Build file list HTML for exclusive files
+              file_count=$(echo "$exclusive_files" | tr ',' '\n' | wc -l)
+              file_list_html="\n  <details><summary>&#128193; Files owned by this ${GROUP_TYPE[$key]} ($file_count files)</summary>\n\n"
+              IFS=',' read -ra EX_FILES_ARRAY <<< "$exclusive_files"
+              for file in "${EX_FILES_ARRAY[@]}"; do
+                if [ -n "$file" ]; then
+                  escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
+                  file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                  file_list_html="$file_list_html  - [<code>$escaped_file</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash)\n"
                 fi
               done
+              file_list_html="$file_list_html\n  </details>"
+              SPLIT_GROUP_FILES_HTML["$new_key"]="$file_list_html"
             fi
-            direct_approved=$(echo "$direct_approved" | sed 's/, $//')
-            shared_approved=$(echo "$shared_approved" | sed 's/, $//')
-            approved_names=""
-            [ -n "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$direct_approved, $shared_approved (shared)"
-            [ -n "$direct_approved" ] && [ -z "$shared_approved" ] && approved_names="$direct_approved"
-            [ -z "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$shared_approved (shared)"
-            [ -n "$approved_names" ] && GROUP_IS_APPROVED["$key"]="true" && GROUP_APPROVED_BY["$key"]="$approved_names" || GROUP_IS_APPROVED["$key"]="false"
+
+            if [ -n "$shared_files" ]; then
+              new_key="${key}_shared"
+              SPLIT_GROUP_KEYS+=("$new_key")
+              SPLIT_GROUP_TYPE["$new_key"]="${GROUP_TYPE[$key]}"
+              SPLIT_GROUP_NAME["$new_key"]="${GROUP_NAME[$key]}"
+              SPLIT_GROUP_FILES["$new_key"]="$shared_files"
+              SPLIT_GROUP_MEMBERS_INFO["$new_key"]="${GROUP_MEMBERS_INFO[$key]}"
+              SPLIT_GROUP_MEMBERS_LIST["$new_key"]="${GROUP_MEMBERS_LIST[$key]}"
+              SPLIT_GROUP_IS_SHARED["$new_key"]="true"
+
+              # Build file list HTML for shared files
+              file_count=$(echo "$shared_files" | tr ',' '\n' | wc -l)
+              file_list_html="\n  <details><summary>&#128193; Files owned by this ${GROUP_TYPE[$key]} ($file_count files)</summary>\n\n"
+              IFS=',' read -ra SH_FILES_ARRAY <<< "$shared_files"
+              for file in "${SH_FILES_ARRAY[@]}"; do
+                if [ -n "$file" ]; then
+                  escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
+                  file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                  file_list_html="$file_list_html  - [<code>$escaped_file</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash)\n"
+                fi
+              done
+              file_list_html="$file_list_html\n  </details>"
+              SPLIT_GROUP_FILES_HTML["$new_key"]="$file_list_html"
+            fi
+          done
+
+          # Now process approvals for split groups
+          declare -A SPLIT_GROUP_IS_APPROVED SPLIT_GROUP_APPROVED_BY
+
+          for key in "${SPLIT_GROUP_KEYS[@]}"; do
+            files="${SPLIT_GROUP_FILES[$key]}"
+            members="${SPLIT_GROUP_MEMBERS_LIST[$key]}"
+            is_shared="${SPLIT_GROUP_IS_SHARED[$key]}"
+
+            if [ "$is_shared" = "true" ]; then
+              # For shared files, collect all co-owner members
+              combined_members="$members"
+              for file in $(echo "$files" | tr ',' '\n'); do
+                [ -z "$file" ] && continue
+                # Find all groups that own this file
+                for other_key in "${SPLIT_GROUP_KEYS[@]}"; do
+                  if [ "$other_key" != "$key" ]; then
+                    other_files="${SPLIT_GROUP_FILES[$other_key]}"
+                    if echo ",$other_files," | grep -q ",$file,"; then
+                      other_members="${SPLIT_GROUP_MEMBERS_LIST[$other_key]}"
+                      [ -n "$other_members" ] && combined_members="$combined_members,$other_members"
+                    fi
+                  fi
+                done
+              done
+
+              # Check for approvals from any co-owner
+              shared_approved=""
+              if [ -n "$combined_members" ]; then
+                IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
+                seen_members=""
+                for member in "${COMBINED_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
+                  # Skip if already seen (avoid duplicates)
+                  if echo ",$seen_members," | grep -q ",$member,"; then
+                    continue
+                  fi
+                  seen_members="$seen_members,$member"
+
+                  if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                    # Only show as shared if the approver is NOT from this group
+                    if ! echo ",$members," | grep -q ",$member,"; then
+                      USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                      USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                      [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
+                      shared_approved="$shared_approved$USER_NAME, "
+                    fi
+                  fi
+                done
+              fi
+
+              shared_approved=$(echo "$shared_approved" | sed 's/, $//')
+              if [ -n "$shared_approved" ]; then
+                SPLIT_GROUP_IS_APPROVED["$key"]="true"
+                SPLIT_GROUP_APPROVED_BY["$key"]="$shared_approved (shared)"
+              else
+                SPLIT_GROUP_IS_APPROVED["$key"]="false"
+              fi
+            else
+              # For exclusive files, only count approvals from this group's members
+              direct_approved=""
+              if [ -n "$members" ]; then
+                IFS=',' read -ra MEMBERS_ARRAY <<< "$members"
+                for member in "${MEMBERS_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
+                  if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                    USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                    USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                    [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
+                    direct_approved="$direct_approved$USER_NAME, "
+                  fi
+                done
+              fi
+
+              direct_approved=$(echo "$direct_approved" | sed 's/, $//')
+              if [ -n "$direct_approved" ]; then
+                SPLIT_GROUP_IS_APPROVED["$key"]="true"
+                SPLIT_GROUP_APPROVED_BY["$key"]="$direct_approved"
+              else
+                SPLIT_GROUP_IS_APPROVED["$key"]="false"
+              fi
+            fi
           done
 
           PENDING_GROUPS="" APPROVED_GROUPS="" PENDING_COUNT=0 APPROVED_COUNT=0
-          for key in "${GROUP_KEYS[@]}"; do
-            group_type="${GROUP_TYPE[$key]}"
-            group_name="${GROUP_NAME[$key]}"
-            members_info="${GROUP_MEMBERS_INFO[$key]}"
-            file_list_html="${GROUP_FILES_HTML[$key]}"
-            is_approved="${GROUP_IS_APPROVED[$key]}"
-            approved_by="${GROUP_APPROVED_BY[$key]}"
+          for key in "${SPLIT_GROUP_KEYS[@]}"; do
+            group_type="${SPLIT_GROUP_TYPE[$key]}"
+            group_name="${SPLIT_GROUP_NAME[$key]}"
+            members_info="${SPLIT_GROUP_MEMBERS_INFO[$key]}"
+            file_list_html="${SPLIT_GROUP_FILES_HTML[$key]}"
+            is_approved="${SPLIT_GROUP_IS_APPROVED[$key]}"
+            approved_by="${SPLIT_GROUP_APPROVED_BY[$key]}"
             [ "$group_type" = "team" ] && type_label="Team" || type_label="Group"
             if [ "$is_approved" = "true" ]; then
               [ -n "$APPROVED_GROUPS" ] && APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n"
