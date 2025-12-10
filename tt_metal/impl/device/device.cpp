@@ -656,6 +656,11 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     if (!using_fast_dispatch_) {
         return *(CommandQueue*)(IDevice*)this;
     }
+    // For mock devices, command_queues_ may be empty - return a dummy reference
+    // Mock devices don't actually dispatch to hardware
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return *(CommandQueue*)(IDevice*)this;
+    }
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
@@ -702,6 +707,10 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_dat
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    // Mock devices don't have command queues initialized, return a stub dispatch core
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return CoreCoord{0, 0};  // Stub core for mock devices
+    }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 

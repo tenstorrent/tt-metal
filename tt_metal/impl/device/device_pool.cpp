@@ -393,17 +393,27 @@ void DevicePool::initialize_active_devices() const {
     // Activate fabric (must be before FD)
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        log_info(tt::LogMetal, "Initializing Fabric");
-        tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
+        // Mock devices don't have real fabric hardware, skip fabric initialization
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+            log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
+        } else {
+            log_info(tt::LogMetal, "Initializing Fabric");
+            tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
-        // Initialize fabric on mmio device
-        init_fabric(active_devices);
-        log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
+            // Initialize fabric on mmio device
+            init_fabric(active_devices);
+            log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
+        }
     }
 
     // Activate FD kernels
     // Remaining steps are for setting up FD
     if (!using_fast_dispatch_) {
+        return;
+    }
+
+    // Mock devices don't have real command queues or sysmem managers, skip FD kernel setup
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -769,6 +779,11 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
 }
 
 void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close) {
+    // Mock devices don't have sysmem_manager, skip FD teardown
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);

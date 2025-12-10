@@ -108,6 +108,11 @@ void write_to_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
 
+    // Mock devices don't have real hardware to write to, skip actual dispatch
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
