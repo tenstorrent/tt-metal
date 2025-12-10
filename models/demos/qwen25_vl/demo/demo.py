@@ -272,7 +272,7 @@ def test_demo(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    if os.environ.get("MESH_DEVICE") == "N150" and "Qwen2.5-VL-7B" in model_args.base_model_name:
+    if mesh_device.get_num_devices() == 1 and "Qwen2.5-VL-7B" in os.environ.get("HF_MODEL", ""):
         pytest.skip("Qwen2.5-VL-7B does not support running on N150")
 
     logger.info(f"mesh_device: {mesh_device}")
