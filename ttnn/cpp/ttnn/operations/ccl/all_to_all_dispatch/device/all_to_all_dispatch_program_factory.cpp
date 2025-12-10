@@ -6,7 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
+//#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -162,12 +162,13 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     const bool input_tiled = (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE);
 
-    const auto& input_tensor = (input_tiled) ? std::get<2>(tensor_return_value).value() : tensor_args.input_tensor;
+    const auto& input_tensor =
+        (input_tiled) ? tensor_return_value.optional_untilized_intermediate.value() : tensor_args.input_tensor;
 
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
-    const auto& output_tensor = std::get<0>(tensor_return_value);
-    const auto& metadata_tensor = std::get<1>(tensor_return_value);
+    const auto& output_tensor = tensor_return_value.output_tokens;
+    const auto& metadata_tensor = tensor_return_value.output_metadata;
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -328,7 +329,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     // launch fused untilize if input is tiled
     std::optional<data_movement::untilize::FuseableUntilizeCallback> untilize_callback;
     if (input_tiled) {
-        const auto& untilize_output_tensor = std::get<2>(tensor_return_value);
+        const auto& untilize_output_tensor = tensor_return_value.optional_untilized_intermediate;
         TT_FATAL(untilize_output_tensor.has_value(), "Expected untilize intermediate buffer");
         untilize_callback = detail::launch_fused_untilize(
             program,
@@ -538,9 +539,9 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
 
         const auto& maybe_untilize_semaphore = shared_variables.untilize_sync_semaphore;
 
-        const auto& output_tensor = std::get<0>(tensor_return_value);
-        const auto& metadata_tensor = std::get<1>(tensor_return_value);
-        const auto& untilized_tensor = std::get<2>(tensor_return_value);
+        const auto& output_tensor = tensor_return_value.output_tokens;
+        const auto& metadata_tensor = tensor_return_value.output_metadata;
+        const auto& untilized_tensor = tensor_return_value.optional_untilized_intermediate;
 
         const bool input_tiled = (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE);
         const auto& input_tensor = (input_tiled) ? untilized_tensor.value() : tensor_args.input_tensor;

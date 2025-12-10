@@ -58,9 +58,17 @@ struct AllToAllDispatchDeviceOperation {
         const std::optional<std::array<Tensor, 3>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::TensorSpec>>;
+    struct tensor_return_value_t {
+        Tensor output_tokens;
+        Tensor output_metadata;
+        std::optional<Tensor> optional_untilized_intermediate;
+    };
 
-    using tensor_return_value_t = std::tuple<Tensor, Tensor, std::optional<Tensor>>;
+    struct spec_return_value_t{
+        ttnn::TensorSpec output_tokens_spec;
+        ttnn::TensorSpec metadata_spec;
+        std::optional<ttnn::TensorSpec> untilized_input_tensor;
+    };
 
     struct AllToAllDispatchSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -89,7 +97,7 @@ struct AllToAllDispatchDeviceOperation {
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const GlobalSemaphore& init_semaphore,
             const GlobalSemaphore& cross_device_semaphore,
-            const std::optional<GlobalSemaphore>& untilize_sync_semaphore);
+            const std::optional<GlobalSemaphore> & untilize_sync_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,

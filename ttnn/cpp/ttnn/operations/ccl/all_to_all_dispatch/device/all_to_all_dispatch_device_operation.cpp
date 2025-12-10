@@ -155,17 +155,22 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
         auto preallocated_output_spec = output_tensors.at(0).tensor_spec();
         auto preallocated_metadata_spec = output_tensors.at(1).tensor_spec();
         std::optional<TensorSpec> preallocated_untilized_intermediate_spec{output_tensors.at(2).tensor_spec()};
-        return std::make_tuple(
-            preallocated_output_spec, preallocated_metadata_spec, preallocated_untilized_intermediate_spec);
+        return {
+            .output_tokens_spec = preallocated_output_spec,
+            .metadata_spec = preallocated_metadata_spec,
+            .untilized_input_tensor = preallocated_untilized_intermediate_spec};
     }
-    return std::make_tuple(output_tokens_spec, metadata_spec, untilized_input_tensor);
+    return {
+        .output_tokens_spec = output_tokens_spec,
+        .metadata_spec = metadata_spec,
+        .untilized_input_tensor = untilized_input_tensor};
 }
 
 AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensors.has_value()) {
         const auto& optional_tensors = tensor_args.optional_output_tensors.value();
-        return std::make_tuple(optional_tensors[0], optional_tensors[1], std::make_optional(optional_tensors[2]));
+        return {optional_tensors[0], optional_tensors[1], std::make_optional(optional_tensors[2])};
     }
     const auto [output_spec, metadata_spec, untilize_intermediate_spec] =
         compute_output_specs(operation_attributes, tensor_args);
@@ -179,7 +184,10 @@ AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOpe
             create_device_tensor(untilize_intermediate_spec.value(), tensor_args.input_tensor.device());
     }
 
-    return {output_tensor, metadata_tensor, intermediate_untilize_tensor};
+    return {
+        .output_tokens = output_tensor,
+        .output_metadata = metadata_tensor,
+        .optional_untilized_intermediate = intermediate_untilize_tensor};
 }
 
 std::tuple<AllToAllDispatchDeviceOperation::operation_attributes_t, AllToAllDispatchDeviceOperation::tensor_args_t>
