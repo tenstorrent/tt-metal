@@ -272,6 +272,9 @@ def test_demo(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    if os.environ.get("MESH_DEVICE") == "N150" and "Qwen2.5-VL-7B" in model_args.base_model_name:
+        pytest.skip("Qwen2.5-VL-7B does not support running on N150")
+
     logger.info(f"mesh_device: {mesh_device}")
     use_tt_vision = True
     enable_trace = True  # Use tracing for better perf
