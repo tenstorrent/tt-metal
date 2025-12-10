@@ -5,7 +5,6 @@
 import math
 import os
 from pathlib import Path
-from typing import Tuple
 
 import torch
 from loguru import logger
@@ -16,7 +15,6 @@ from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, c
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
-    encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
@@ -24,21 +22,16 @@ from models.tt_transformers.tt.common import (
     rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import (
-    DecodersPrecision,
-    HfAttentionWrapper,
-    HfModelWrapper,
-    determine_device_name,
-    num_to_coregrid,
-    num_to_corerange,
-)
+from models.tt_transformers.tt.model_config import DecodersPrecision, HfAttentionWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.tt_transformers.tt.model_config import determine_device_name, num_to_coregrid, num_to_corerange
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 
-class ModelArgs:
+class ModelArgs(TTModelArgs):
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -949,145 +942,6 @@ class ModelArgs:
         # No supported sequence lengths found, return empty list
         return []
 
-    def can_enable_trace(self, prefill_seq_len):
-        """
-        This function is used to determine if trace should be enabled for the prefill.
-        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
-        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
-        """
-
-        allowed_seq_lens = self.trace_prefill_supported_seq_lens
-
-        return (
-            prefill_seq_len in allowed_seq_lens
-            and prefill_seq_len <= self.max_prefill_chunk_size
-            and prefill_seq_len <= self.max_seq_len
-        )
-
-    def get_xqkv_prefill_mem_cfg(self, seq_len):
-        return ttnn.create_sharded_memory_config(
-            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
-            ttnn.CoreGrid(y=8, x=8),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-    def is_distributed_norm(self, mode):
-        if not self.is_multichip:
-            return False
-        if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
-            return True
-        elif self.dim > 4096 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
-            return True
-        return False
-
-    def ccl_topology(self):
-        # Use ring on a T3K or 6U galaxy submesh
-        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-            ttnn.cluster.ClusterType.T3K,
-            ttnn.cluster.ClusterType.GALAXY,
-        ]:
-            return ttnn.Topology.Ring
-        elif self.num_devices > 1:  # All other multi chip devices
-            return ttnn.Topology.Linear
-        return None
-
-    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
-        """
-        Prepare inputs for decode mode.
-        x: (batch, seq, dim)
-        """
-        dims = (None, None) if force_replicated else (None, -1)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-
-        if len(x.shape) == 3:
-            batch = x.shape[0]
-            seq_len = x.shape[1]
-            assert x.shape[2] == self.dim
-        elif len(x.shape) == 4:
-            seq_len = x.shape[0]
-            assert x.shape[1] == 1
-            batch = x.shape[2]
-            assert x.shape[3] == self.dim
-
-        assert seq_len == 1, "Only supporting decode mode"
-
-        # Support input on device
-        if torch.is_tensor(x):  # Input on host -> Use torch
-            x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, dim]
-            # Pad small batches to 32
-            if batch < 32:
-                zeros = torch.zeros(1, seq_len, 32, self.dim)
-                zeros[:, :, :batch, :] = x
-                x = zeros
-        elif len(x.shape) == 3:  # Input on device -> Use ttnn
-            x = ttnn.reshape(x, (batch, seq_len, 1, self.dim))  # [batch, seqlen, dim] -> [batch, seqlen, 1, dim]
-            x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, dim]
-        elif len(x.shape) == 4:
-            pass  # already in [seq_len, 1, batch, dim]
-
-        if torch.is_tensor(x):
-            x = ttnn.from_torch(
-                x,
-                device=self.mesh_device if not on_host else None,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                memory_config=input_mem_cfg if not on_host else None,
-            )
-        else:  # Convert the row major layout from embedding back to tile layout
-            x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        return x
-
-    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
-        """
-        Prepare inputs for prefill mode.
-        x: (batch, seq, hidden_dim)
-        B: batch (1)
-        S: sequence len
-        H: dim
-        """
-
-        x_1BSH = x_bsh.unsqueeze(0)
-        dims = (None, None) if force_replicated else (None, -1)
-
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-
-        # input goes to DRAM
-        xs_1BSH = ttnn.from_torch(
-            x_1BSH,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        return xs_1BSH
-
-    def _get_text_prefix(self):
-        return ""
-
-    def _get_hidden_activation_type(self, config):
-        activation_map = {
-            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
-            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
-            "relu": ttnn.UnaryOpType.RELU,
-            "silu": ttnn.UnaryOpType.SILU,
-            "swish": ttnn.UnaryOpType.SILU,
-        }
-
-        hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
-        if not hidden_activation:
-            # Default to SILU if no activation is specified
-            return ttnn.UnaryOpType.SILU
-
-        hidden_activation = hidden_activation.lower()
-        if hidden_activation not in activation_map:
-            raise NotImplementedError(f"Unsupported activation '{hidden_activation}'")
-
-        return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
-
     def _set_model_specific_params(self):
         # Gemma3 specific params
         if self.is_gemma:
@@ -1300,28 +1154,6 @@ class ModelArgs:
         else:
             self._set_params_from_dict(self.hf_config)
 
-    def __repr__(self):
-        return f"""ModelArgs(
-    dim={self.dim},
-    n_layers={self.n_layers},
-    n_heads={self.n_heads},
-    n_kv_heads={self.n_kv_heads},
-    vocab_size={self.vocab_size},
-    multiple_of={self.multiple_of},
-    ffn_dim_multiplier={self.ffn_dim_multiplier},
-    norm_eps={self.norm_eps},
-    rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling.factor},
-    max_batch_size={self.max_batch_size},
-    max_seq_len={self.max_seq_len},
-    vision_chunk_size={self.vision_chunk_size},
-    vision_max_num_chunks={self.vision_max_num_chunks},
-    vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
-)"""
-
-    def is_llama_vision(self):
-        return False
-
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         if self.is_gemma:
             if is_vision:
@@ -1349,21 +1181,6 @@ class ModelArgs:
         module_map = vision_module_map if is_vision else module_map
 
         return text_prefix + layer_prefix + module_map[module_name]
-
-    def weight_cache_path(self, dtype):
-        # Keep the weight cache separate for generative and instruct weights
-        if self.instruct:
-            return (
-                self.model_cache_path
-                / {ttnn.bfloat16: "tensor_cache_instruct_bf16", ttnn.bfloat8_b: "tensor_cache_instruct_bfp8"}[dtype]
-            )
-        else:
-            return (
-                self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
-            )
-
-    def get_model_config(self):
-        return self.model_config
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
@@ -1414,373 +1231,6 @@ class ModelArgs:
                 state_dict.pop(k)
 
         return state_dict
-
-    def create_dram_sharded_mem_config(self, k, n):
-        """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
-        assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
-        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
-        shard_spec = ttnn.ShardSpec(
-            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
-        )
-        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-    def matmul_config(
-        self,
-        m: int,
-        k: int,
-        n: int,
-        grid_size: Tuple[int, int],
-        in0_block_w: int = None,
-        fuse_batch: bool = False,
-        fused_activation=None,
-        per_core_M=None,
-        per_core_N=None,
-    ):
-        if per_core_M is None:
-            per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
-        if per_core_N is None:
-            per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
-
-        out_subblock_h = 1
-        out_subblock_w = (
-            get_out_subblock_w(per_core_N, out_subblock_h) if not self.is_galaxy else 1
-        )  # TODO: Needed for TG hang workaround
-
-        if in0_block_w is None:
-            assert (
-                k % (self.tile_size * grid_size[1]) == 0
-            ), f"Input width must be divisible by tile size times grid size"
-            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
-
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            in0_block_w=in0_block_w,
-            out_subblock_h=out_subblock_h,
-            out_subblock_w=out_subblock_w,
-            per_core_M=per_core_M,
-            per_core_N=per_core_N,
-            transpose_mcast=False,
-            fused_activation=fused_activation,
-            fuse_batch=fuse_batch,
-        )
-
-    def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
-        rows, cols = self.find_grid(k // self.tile_size)
-        return ttnn.CoreGrid(x=cols, y=rows)
-
-    def find_grid(self, N):
-        """
-        Find the number of rows and columns for a grid of cores such that
-        the total number of tiles N can be evenly divided among the cores.
-        Each core will have the same integer number of tiles.
-        The grid size is limited to a maximum of 2 rows and 8 columns.
-
-        Parameters:
-            N (int): Total number of tiles to be distributed.
-
-        Returns:
-            tuple: A tuple (rows, cols) representing the grid dimensions.
-
-        Raises:
-            AssertionError: If it's not possible to find such a grid configuration.
-        """
-        max_rows = 8
-        max_cols = 8
-        max_cores = max_rows * max_cols
-
-        # Find all possible numbers of cores that divide N and are less than or equal to max_cores
-        target = 32
-        possible_cores = [k for k in range(1, max_cores + 1) if N % k == 0]
-        possible_cores.sort(key=lambda x: abs(x - target))  # Sort by closest to target
-
-        for cores in possible_cores:
-            # Try to find a grid configuration with the current number of cores
-            for rows in range(1, max_rows + 1):
-                if cores % rows == 0:
-                    cols = cores // rows
-                    if cols <= max_cols:
-                        return rows, cols
-
-        # If no configuration is found, assert an error
-        raise AssertionError(
-            f"Cannot find a grid configuration for {N} tiles that evenly divides into {max_cores} cores of max size {max_rows}x{max_cols}."
-        )
-
-    def find_prefill_grid(self, row_tiles, col_tiles):
-        """Find a grid such that the number of row tiles evenly divides into the number
-        of rows and the number of column tiles evenly divides into the number of columns
-        """
-        max_rows = 8
-        max_cols = 8
-        # TODO Improve configuration for BH (higher core grid than WH)
-
-        # Find number of cols that evenly divides into the number of columns
-        cols = None
-        rows = None
-
-        for i in range(max_cols, 0, -1):
-            if col_tiles % i == 0:
-                cols = i
-                break
-
-        for i in range(max_rows, 0, -1):
-            if row_tiles % i == 0:
-                rows = i
-                break
-
-        assert cols is not None, f"Cannot find a number of columns that evenly divides into {col_tiles}, not even 1(!)."
-        assert rows is not None, f"Cannot find a number of rows that evenly divides into {row_tiles}, not even 1(!)."
-        return rows, cols
-
-    def dram_shard_core_grid_for_k_and_n(self, k: int, n: int) -> Tuple[int, int]:
-        rows, cols = self.find_grid_k_n(k // self.tile_size, n // self.tile_size)
-        return ttnn.CoreGrid(x=cols, y=rows)
-
-    def find_grid_k_n(self, K, N):
-        """
-        Find the number of rows and columns for a grid of cores such that
-        the total number of tiles N can be evenly divided among the cores.
-        Each core will have the same integer number of tiles.
-
-        Parameters:
-            N (int): Total number of tiles to be distributed.
-
-        Returns:
-            tuple: A tuple (rows, cols) representing the grid dimensions.
-
-        Raises:
-            AssertionError: If it's not possible to find such a grid configuration.
-        """
-        max_rows = 8
-        max_cols = 8  # Maximum number of rows or columns
-        max_cores = max_rows * max_cols  # Maximum number of cores
-
-        # Find all possible numbers of cores that divide N and are less than or equal to max_cores
-        possible_cores = [c for c in range(1, max_cores + 1) if K % c == 0 and N % c == 0]
-        possible_cores.sort(reverse=True)  # Start checking from the largest number of cores
-
-        for cores in possible_cores:
-            # Try to find a grid configuration with the current number of cores
-            for rows in range(1, max_rows + 1):
-                if cores % rows == 0:
-                    cols = cores // rows
-                    if cols <= max_cols:
-                        return rows, cols
-
-        # If no configuration is found, assert an error
-        raise AssertionError(
-            f"Cannot find a grid configuration such that both {K} and {N} tiles evenly divide into cores of max size {max_rows}x{max_cols}."
-        )
-
-    def find_largest_divisor(self, n, max_divisor=8):
-        for i in range(max_divisor, 0, -1):
-            if n % i == 0:
-                return i
-        return 1  # Fallback to 1 if no divisor found
-
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
-        # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
-        if num_cores is None:
-            # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
-            num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
-            assert (
-                k % (self.tile_size * num_cores) == 0
-            ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
-            # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
-        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
-            per_core_M=math.ceil(m / self.tile_size),
-            per_core_N=math.ceil(n / (self.tile_size * num_cores)),
-            fused_activation=None,
-        )
-
-    def matmul_1d_config(
-        self,
-        m,
-        k,
-        n,
-        grid=ttnn.CoreGrid(x=8, y=8),
-        act=None,
-        is_fp32_accumulate=False,
-        overwrite_per_core_k=None,
-        overwrite_subblock_w=None,
-        overwrite_subblock_h=None,
-    ):
-        tile_width = 32
-        tile_height = 32
-
-        if (
-            n // tile_width // grid.num_cores < 1
-        ):  # use less number of cores in case we have more N num tiles than cores
-            # assert (n // tile_width) % grid.x == 0
-            grid_y = n // tile_width // grid.x
-            grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
-
-        per_core_m = m // tile_height
-        per_core_k = self.find_largest_divisor(k // (self.tile_size * grid.num_cores))
-        per_core_n = math.ceil(n / tile_width / grid.num_cores)
-
-        if is_fp32_accumulate:
-            max_subblock_w_h = 4
-        else:
-            max_subblock_w_h = 8
-
-        # find the largest value between 1 and 8 that is a factor of per_core_n
-        # e.g. if per_core_n is 14, then out_subblock_w = 7
-        out_subblock_w = max([i for i in range(1, max_subblock_w_h + 1) if per_core_n % i == 0])
-
-        # find the largest value that is a factor of per_core_m such that
-        # out_subblock_w * out_subblock_h <= 8
-        out_subblock_h = max(
-            [
-                i
-                for i in range(1, max_subblock_w_h + 1)
-                if per_core_m % i == 0 and i * out_subblock_w <= max_subblock_w_h
-            ]
-        )
-
-        if overwrite_per_core_k is not None:
-            per_core_k = overwrite_per_core_k
-
-        if overwrite_subblock_w is not None:
-            out_subblock_w = overwrite_subblock_w
-
-        if overwrite_subblock_h is not None:
-            out_subblock_h = overwrite_subblock_h
-
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
-            in0_block_w=per_core_k,
-            out_subblock_h=out_subblock_h,
-            out_subblock_w=out_subblock_w,
-            per_core_M=per_core_m,
-            per_core_N=per_core_n,
-            fuse_batch=True,
-            fused_activation=act,
-            mcast_in0=True,
-        )
-
-    def matmul_1d_config_from_tensor_shapes(
-        self,
-        in0_shape,
-        in1_shape,
-        grid=ttnn.CoreGrid(x=8, y=8),
-        act=None,
-        is_fp32_accumulate=False,
-        overwrite_subblock_w=None,
-        overwrite_subblock_h=None,
-    ):
-        m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
-        return self.matmul_1d_config(
-            m,
-            k,
-            n,
-            grid,
-            act,
-            is_fp32_accumulate,
-            overwrite_subblock_w=overwrite_subblock_w,
-            overwrite_subblock_h=overwrite_subblock_h,
-        )
-
-    def create_sharded_norm_config(self, grid):
-        """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
-
-        Args:
-            grid (ttnn.CoreGrid): Grid specification for the norm operation
-        """
-        block_w = self.dim // grid.num_cores // self.tile_size
-        # Find largest value <= 4 that evenly divides block_w
-        subblock_w = 4
-        while subblock_w > 0:
-            if block_w % subblock_w == 0:
-                break
-            subblock_w -= 1
-        return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[grid.x, grid.y],
-            subblock_w=subblock_w,
-            block_h=self.tile_padded_batch_rows // self.tile_size,
-            block_w=block_w,
-            inplace=False,
-        )
-
-    def create_tokenizer(self):
-        from transformers import AutoTokenizer
-
-        logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
-        logger.info(f"Model name: {self.model_name}")
-        logger.info(f"Base model name: {self.base_model_name}")
-
-        try:
-            # Try to load tokenizer from the original model path
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
-            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
-        except Exception as e:
-            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
-            logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
-            raise e
-
-        # Add meta-compatible stop token list to the HF tokenizer
-        if not "stop_tokens" in tokenizer.__dict__:
-            tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
-        return tokenizer
-
-    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
-        if instruct:
-            try:
-                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
-            except ValueError as e:
-                logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
-                logger.warning(f"Falling back to base model encoding with no chat template")
-
-        return self.tokenizer.encode(prompt_text, add_special_tokens=False)
-
-    def reference_lm_head(self):
-        model = self.reference_transformer(wrap=False)
-        layer = model.lm_head
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_transformer(self, wrap=True, load_checkpoint=False):
-        from transformers import AutoConfig, AutoModel
-
-        # HF is much faster at loading from a checkpoint than generating from config
-        # so use that by preference unless we don't have a checkpoint
-        if self.dummy_weights and not load_checkpoint:
-            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-            config.num_layers = self.n_layers
-            config.num_hidden_layers = self.n_layers
-
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = AutoModel.from_pretrained(
-                    self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = AutoModel.from_config(config)
-            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
-        else:
-            if self.cache_hf_flag and self.cached_hf_model is None:
-                model = AutoModel.from_pretrained(self.CKPT_DIR)
-                self.cached_hf_model = model
-            elif self.cache_hf_flag and self.cached_hf_model is not None:
-                model = self.cached_hf_model
-            else:
-                # No caching - load fresh each time
-                model = AutoModel.from_pretrained(self.CKPT_DIR)
-            # HACK: Assume that we want the language model layers only
-            if hasattr(model, "language_model"):
-                model.model = model.language_model
-                # We keep language_model because transformers don't let us change or delete it
-            model.model.layers = model.model.layers[: self.n_layers]
-        if wrap:
-            wrapper = HfModelWrapper(model, self.head_dim)
-            return wrapper
-        else:
-            return model
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
@@ -1905,24 +1355,6 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.encoder
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_mlp(self):
-        model = self.reference_transformer(wrap=False)
-        layer = model.model.layers[0].mlp
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_embedding(self, reference_model=None):
-        if reference_model is None:
-            model = self.reference_transformer(wrap=False)
-            layer = model.model.embed_tokens
-        else:
-            layer = reference_model.model.model.embed_tokens
-
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_decoder(self, i=0):
