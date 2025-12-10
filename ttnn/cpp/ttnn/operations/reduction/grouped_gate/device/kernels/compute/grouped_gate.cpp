@@ -56,16 +56,15 @@ namespace blocks {
 void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t width_tiles) {
     // Perform sigmoid on scores
     // Reconfigure pack/unpack for bfloat16 after topk operations used UInt16
-    reconfig_data_format_srca(scores_cb_index);
-    pack_reconfig_data_format(sigmoid_input_cb_index);
     DPRINT << "Sigmoid" << ENDL();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(scores_cb_index, 1);
         if (width_tile == 0) {
-            UNPACK(DPRINT << "Scores cb rd ptr: " << get_local_cb_interface(scores_cb_index).fifo_rd_ptr << ENDL();)
+            UNPACK(DPRINT << "Scores cb rd ptr: " << get_local_cb_interface(scores_cb_index).fifo_rd_ptr - 1 << ENDL();)
             UNPACK(print_tile(scores_cb_index, 0, true, 0, 1, 0, 32));
         }
         tile_regs_acquire();
+        reconfig_data_format_srca(scores_cb_index);
         // copy tile from scores cb to destination register 0
         copy_tile_to_dst_init_short(scores_cb_index);
         copy_tile(scores_cb_index, 0, 0);
@@ -77,6 +76,7 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
 
         cb_reserve_back(sigmoid_input_cb_index, 1);
         tile_regs_wait();
+        pack_reconfig_data_format(sigmoid_input_cb_index);
         pack_tile(0, sigmoid_input_cb_index);
         PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1, 0, 32));
         tile_regs_release();
