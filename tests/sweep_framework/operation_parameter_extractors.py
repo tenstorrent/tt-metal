@@ -1775,6 +1775,41 @@ OperationParameterExtractors.register_extractor(
 )
 
 
+# Add gt extractor method to the class
+def _extract_gt_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for gt (greater than) operation
+
+    Extracts from JSON:
+    - arg1: scalar value for comparison (e.g., 0)
+    """
+    try:
+        params = {}
+        for arg in config:
+            if not isinstance(arg, dict):
+                continue
+            # Extract scalar value (arg1)
+            if "arg1" in arg:
+                scalar_value = arg["arg1"]
+                if scalar_value != "nullopt" and scalar_value is not None:
+                    # Convert to numeric if possible
+                    if isinstance(scalar_value, (int, float)):
+                        params["scalar"] = float(scalar_value)
+                    elif isinstance(scalar_value, str):
+                        try:
+                            params["scalar"] = float(scalar_value)
+                        except ValueError:
+                            # If not numeric, keep as is
+                            params["scalar"] = scalar_value
+
+        return params if params else None
+    except Exception as e:
+        import traceback
+
+        print(f"Error extracting gt parameters: {e}")
+        traceback.print_exc()
+        return None
+
+
 # Add typecast extractor method to the class
 def _extract_typecast_parameters(config: List) -> Optional[Dict]:
     """Extract parameters for typecast operation
@@ -1806,8 +1841,69 @@ def _extract_typecast_parameters(config: List) -> Optional[Dict]:
         return None
 
 
-# Add method to class
+# Add where extractor method to the class
+def _extract_where_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for where operation
+
+    Extracts from JSON:
+    - arg1: scalar_if_true value (e.g., 1.0)
+    - arg2: scalar_if_false value (e.g., 0.0)
+    """
+    try:
+        params = {}
+        for arg in config:
+            if not isinstance(arg, dict):
+                continue
+            # Extract scalar_if_true (arg1)
+            if "arg1" in arg:
+                scalar_value = arg["arg1"]
+                if scalar_value != "nullopt" and scalar_value is not None:
+                    # Convert to numeric if possible
+                    if isinstance(scalar_value, (int, float)):
+                        params["scalar_if_true"] = float(scalar_value)
+                    elif isinstance(scalar_value, str):
+                        try:
+                            params["scalar_if_true"] = float(scalar_value)
+                        except ValueError:
+                            # If not numeric, keep as is
+                            params["scalar_if_true"] = scalar_value
+            # Extract scalar_if_false (arg2)
+            if "arg2" in arg:
+                scalar_value = arg["arg2"]
+                if scalar_value != "nullopt" and scalar_value is not None:
+                    # Convert to numeric if possible
+                    if isinstance(scalar_value, (int, float)):
+                        params["scalar_if_false"] = float(scalar_value)
+                    elif isinstance(scalar_value, str):
+                        try:
+                            params["scalar_if_false"] = float(scalar_value)
+                        except ValueError:
+                            # If not numeric, keep as is
+                            params["scalar_if_false"] = scalar_value
+
+        return params if params else None
+    except Exception as e:
+        import traceback
+
+        print(f"Error extracting where parameters: {e}")
+        traceback.print_exc()
+        return None
+
+
+# Add methods to class
+OperationParameterExtractors._extract_gt_parameters = staticmethod(_extract_gt_parameters)
 OperationParameterExtractors._extract_typecast_parameters = staticmethod(_extract_typecast_parameters)
+OperationParameterExtractors._extract_where_parameters = staticmethod(_extract_where_parameters)
+
+# Register gt extractor
+OperationParameterExtractors.register_extractor(
+    "gt",
+    extract_func=OperationParameterExtractors._extract_gt_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::gt",
+    extract_func=OperationParameterExtractors._extract_gt_parameters,
+)
 
 # Register typecast extractor
 OperationParameterExtractors.register_extractor(
@@ -1817,6 +1913,16 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "ttnn::typecast",
     extract_func=OperationParameterExtractors._extract_typecast_parameters,
+)
+
+# Register where extractor
+OperationParameterExtractors.register_extractor(
+    "where",
+    extract_func=OperationParameterExtractors._extract_where_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::where",
+    extract_func=OperationParameterExtractors._extract_where_parameters,
 )
 
 
