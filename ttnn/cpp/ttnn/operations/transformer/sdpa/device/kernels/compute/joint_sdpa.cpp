@@ -105,7 +105,7 @@ void MAIN {
                 out_num_blocks,
                 local_q_start,
                 local_q_end,
-                q_num_chunks,
+                0,
                 local_q_start,
                 0,
                 0,
