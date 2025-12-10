@@ -40,10 +40,9 @@ inline void llk_unpack_untilize_mop_config() { _llk_unpack_untilize_mop_config_(
 inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = 1;
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
     _llk_unpack_untilize_init_(
-        unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim, num_faces, true);
+        unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim, true);
 }
 
 inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
