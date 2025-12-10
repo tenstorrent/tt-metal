@@ -24,7 +24,7 @@ struct Rotate {
      *   center: Optional rotation center point (cx, cy). Default: tensor center
      *   fill: Fill value for areas outside the rotated tensor. Default: 0.0
      *   expand: Must be false. Only same-size rotation is supported
-     *   interpolation_mode: Interpolation method - "bilinear" or "nearest". Default: "bilinear"
+     *   interpolation_mode: Interpolation method - "bilinear" or "nearest". Default: "nearest"
      *   memory_config: Memory configuration for the output tensor
      *
      * Returns:
@@ -36,7 +36,7 @@ struct Rotate {
         const std::optional<std::tuple<float, float>>& center = std::nullopt,
         float fill = 0.0f,
         bool expand = false,
-        const std::string& interpolation_mode = "bilinear",
+        const std::string& interpolation_mode = "nearest",
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 

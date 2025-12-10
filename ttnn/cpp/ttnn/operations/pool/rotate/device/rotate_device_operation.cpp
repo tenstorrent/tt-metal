@@ -14,11 +14,7 @@ using namespace tt::tt_metal;
 
 RotateDeviceOperation::program_factory_t RotateDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (operation_attributes.interpolation_mode == "nearest") {
-        return NearestProgramFactory{};
-    } else {
-        return BilinearProgramFactory{};  // Default for "bilinear"
-    }
+    return NearestProgramFactory{};
 }
 
 void RotateDeviceOperation::validate_inputs(
@@ -67,8 +63,8 @@ void RotateDeviceOperation::validate_inputs(
 
     // Interpolation mode validation
     TT_FATAL(
-        operation_attributes.interpolation_mode == "bilinear" || operation_attributes.interpolation_mode == "nearest",
-        "interpolation_mode must be 'bilinear' or 'nearest', got '{}'",
+        operation_attributes.interpolation_mode == "nearest",
+        "interpolation_mode supported is 'nearest', got '{}'",
         operation_attributes.interpolation_mode);
 }
 
