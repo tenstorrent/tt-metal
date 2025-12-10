@@ -10,8 +10,7 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
 
-namespace ttnn::operations::transformer::sdpa {
-namespace joint_sdpa::program {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa::program {
 
 struct JointSDPASharedVariables {
     uint32_t num_cores = 0;
@@ -37,5 +36,4 @@ struct JointSDPAProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace joint_sdpa::program
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa::program

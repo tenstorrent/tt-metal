@@ -13,8 +13,7 @@
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
 
-namespace ttnn::operations::transformer::sdpa {
-namespace joint_sdpa {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa {
 
 struct JointSDPADeviceOperation {
     using operation_attributes_t = joint_sdpa::operation_attributes_t;
@@ -42,8 +41,7 @@ struct JointSDPADeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
-}  // namespace joint_sdpa
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa
 
 namespace ttnn::prim {
 

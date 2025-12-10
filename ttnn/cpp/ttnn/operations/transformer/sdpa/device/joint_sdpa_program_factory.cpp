@@ -18,8 +18,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa {
-namespace joint_sdpa::program {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa::program {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
@@ -661,5 +660,4 @@ void JointSDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace joint_sdpa::program
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa::program

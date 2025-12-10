@@ -10,8 +10,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn::operations::transformer::sdpa {
-namespace joint_sdpa {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa {
 
 struct operation_attributes_t {
     std::string joint_strategy;
@@ -44,5 +43,4 @@ struct spec_return_value_t {
     TensorSpec joint_output;
 };
 
-}  // namespace joint_sdpa
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa

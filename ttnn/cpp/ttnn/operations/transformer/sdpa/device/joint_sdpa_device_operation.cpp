@@ -13,8 +13,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa {
-namespace joint_sdpa {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa {
 
 JointSDPADeviceOperation::program_factory_t JointSDPADeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -218,5 +217,4 @@ JointSDPADeviceOperation::invoke(
             .joint_v = joint_tensor_v}};
 }
 
-}  // namespace joint_sdpa
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa
