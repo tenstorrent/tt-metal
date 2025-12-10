@@ -73,10 +73,10 @@ def test_device_perf_pdl_20_cores(
             "",
         ),
     ],
-    ids=["test_panoptic_deeplab_all_cores", "test_deeplab_v3_plus_all_cores"],
+    ids=["test_panoptic_deeplab_130_cores", "test_deeplab_v3_plus_130_cores"],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_device_perf_pdl_all_cores(
+def test_device_perf_pdl_130_cores(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
     run_model_device_perf_test(
