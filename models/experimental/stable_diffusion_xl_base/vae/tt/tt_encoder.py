@@ -88,7 +88,7 @@ class TtEncoder(LightweightModule):
             conv_in_bias,
             self.conv_in_config.weights_dtype,
         )
-        self.conv_in_slice_config = None
+        self.conv_in_slice_config = None  # auto slicing generates 6 slices; perf improvement expected
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="encoder.conv_out")
         self.conv_out_config = model_config.get_conv_config(conv_path="encoder.conv_out")
@@ -101,7 +101,9 @@ class TtEncoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = get_DRAM_conv_config("encoder", 2)
+        self.conv_out_slice_config = get_DRAM_conv_config(
+            "encoder", 2
+        )  # auto slicing here causes CB to outgrow L1; should be checked
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):

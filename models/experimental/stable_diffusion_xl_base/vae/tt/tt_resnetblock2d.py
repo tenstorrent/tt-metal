@@ -12,7 +12,6 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import (
-    get_DRAM_conv_config,
     get_DRAM_GN_config,
     get_DRAM_GN_shape,
 )
@@ -122,7 +121,7 @@ class TtResnetBlock2D(LightweightModule):
             conv_bias_1,
             self.conv1_config.weights_dtype,
         )
-        self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
+        self.conv1_slice_config = None
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
         self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
@@ -136,7 +135,7 @@ class TtResnetBlock2D(LightweightModule):
             conv_bias_2,
             self.conv2_config.weights_dtype,
         )
-        self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
+        self.conv2_slice_config = None
 
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
