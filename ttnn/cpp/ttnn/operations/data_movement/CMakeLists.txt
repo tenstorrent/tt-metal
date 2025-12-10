@@ -52,6 +52,8 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            copy/device/copy_program_factory.hpp
+            copy/device/copy_device_operation_types.hpp
             fill_pad/fill_pad.hpp
             fill_pad/device/fill_pad_device_operation.hpp
             fill_rm/fill_rm.hpp
