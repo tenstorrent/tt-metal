@@ -10,6 +10,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <unordered_map>
+#include <iostream>
 
 namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program {
 
@@ -51,6 +52,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     bool untilize_out
 
 ) {
+    std::cout << "start of create_at" << std::endl;
     tt::tt_metal::Program program{};
 
     ////////////// Params for fused op signalers //////////////
@@ -179,6 +181,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                                                                      // override_runtime_arguments_callback in
                                                                      // all_gather_async old program factories
 
+    std::cout << "end of create_at" << std::endl;
     return cached_program_t(
         {std::move(program),
          shared_variables_t{
@@ -195,6 +198,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    std::cout << "start of create_mesh_workload" << std::endl;
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -254,6 +258,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
         shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
     }
 
+    std::cout << "end of create_mesh_workload" << std::endl;
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
@@ -262,6 +267,7 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    std::cout << "start of override_runtime_arguments" << std::endl;
     // Fuse the override runtime arguments callbacks
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -290,6 +296,7 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                 );
         }
     }
+    std::cout << "end of override_runtime_arguments" << std::endl;
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program
