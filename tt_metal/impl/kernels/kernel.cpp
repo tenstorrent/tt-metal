@@ -15,6 +15,7 @@
 #include <set>
 #include <string_view>
 #include <type_traits>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -221,9 +222,7 @@ std::string_view DataMovementKernel::get_compiler_opt_level() const {
 
 std::string_view DataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-std::string_view ComputeKernel::get_compiler_opt_level() const {
-    return enchantum::to_string(this->config_.opt_level);
-}
+std::string_view ComputeKernel::get_compiler_opt_level() const { return enchantum::to_string(this->config_.opt_level); }
 
 std::string_view ComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
@@ -510,7 +509,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
 detail::KernelMeta Kernel::meta(IDevice* device) const {
-    detail::KernelMeta result {
+    detail::KernelMeta result{
         .name = this->kernel_full_name_,
         .source = this->kernel_src_.source_,
         .processor_class = get_kernel_processor_class(),
@@ -646,9 +645,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
                 // text_addr and some of span's addr point to IRAM base address.
                 // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
                 // The kernel can run with IRAM base address once it started.
-                binary_mem.set_text_addr(
-                    tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
-                        (uint64_t)binary_mem.get_text_addr()));
+                binary_mem.set_text_addr(tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
+                    (uint64_t)binary_mem.get_text_addr()));
                 std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
                     addr = tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(addr);
                 };
@@ -749,5 +747,85 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     }
     return os;
 }
+
+namespace experimental {
+
+uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    return enchantum::to_underlying(this->config_.processors[index]);
+}
+
+void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    jit_build_genfiles_kernel_include(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+    const uint32_t tensix_core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    std::vector<JitBuildState> build_states;
+    for (const DataMovementProcessor& processor : this->config_.processors) {
+        const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(processor);
+        build_states.push_back(BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id));
+    }
+    jit_build_subset(build_states, this);
+}
+
+void QuasarDataMovementKernel::read_binaries(IDevice* device) {
+    TT_ASSERT(this->binaries_exist_on_disk(device));
+    std::vector<const ll_api::memory*> binaries;
+    const uint32_t tensix_core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
+    for (const DataMovementProcessor& processor : this->config_.processors) {
+        const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(processor);
+        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, compute_class_idx, riscv_id);
+        auto load_type = MetalContext::instance()
+                             .hal()
+                             .get_jit_build_config(tensix_core_type, compute_class_idx, riscv_id)
+                             .memory_load;
+        const ll_api::memory& binary_mem =
+            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        binaries.push_back(&binary_mem);
+    }
+    this->set_binaries(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
+}
+
+bool QuasarDataMovementKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+    if (!is_on_logical_core(logical_core)) {
+        TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
+    }
+    const ChipId device_id = device->id();
+    const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
+    const std::vector<const ll_api::memory*>& binaries =
+        this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+    for (int i = 0; i < this->expected_num_binaries(); i++) {
+        llrt::write_binary_to_address(
+            *binaries[i],
+            device_id,
+            worker_core,
+            base_address +
+                offsets[static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processors[i])]);
+    }
+
+    return true;
+}
+
+std::string_view QuasarDataMovementKernel::get_compiler_opt_level() const {
+    return enchantum::to_string(this->config_.opt_level);
+}
+
+std::string_view QuasarDataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string QuasarDataMovementKernel::config_hash() const {
+    // TODO: make sure that processors are sorted
+    return fmt::format("{}", fmt::join(this->config_.processors, "_"));
+}
+
+uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->config_.processors.size(); }
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal
