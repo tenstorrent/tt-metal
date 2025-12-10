@@ -247,7 +247,10 @@ class SamplingGenerator:
             tt_out = self._execute_trace(key)
 
         if penalties_on and tt_out is not None:
-            self.tt_penalties.update_output_tokens(tt_out)
+            if isinstance(tt_out, tuple):
+                self.tt_penalties.update_output_tokens(tt_out[0])
+            else:
+                self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
 
     def reset_seed(self, seed):
