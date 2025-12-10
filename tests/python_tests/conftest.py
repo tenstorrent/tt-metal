@@ -39,7 +39,6 @@ def check_hardware_headers():
         "cfg_defines.h",
         "dev_mem_map.h",
         "tensix.h",
-        "tensix_dev_map.h",
         "tensix_types.h",
     ]
     required_headers_quasar = [
