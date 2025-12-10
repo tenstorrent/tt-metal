@@ -39,6 +39,54 @@ export class HierarchicalTelemetryStore {
         // Unit label maps: code -> display label and code -> full label
         this._unitDisplayLabelByCode = new Map();
         this._unitFullLabelByCode = new Map();
+
+        // Activity tracking: tracks last update time for fabric activity detection
+        // Each entry is: { lastChangeTime: Date }
+        this._activityByPath = new Map();
+        this._activityTimeoutMs = 3000; // Consider active if changed within last 3 seconds
+    }
+
+    // Helper to mark a path as recently active (changed value)
+    _markActive(path) {
+        this._activityByPath.set(path, { lastChangeTime: new Date() });
+
+        // Propagate activity upward through the hierarchy
+        const parts = path.split("/");
+        for (let i = parts.length - 1; i > 0; i--) {
+            const parentPath = parts.slice(0, i).join("/");
+            this._activityByPath.set(parentPath, { lastChangeTime: new Date() });
+        }
+    }
+
+    // Helper to check if a path or any of its descendants are recently active
+    // Returns true if the path or any descendant changed within activityTimeoutMs
+    isActive(path) {
+        const now = new Date();
+
+        // Check if this path itself is active
+        const activity = this._activityByPath.get(path);
+        if (activity && (now - activity.lastChangeTime) < this._activityTimeoutMs) {
+            return true;
+        }
+
+        // Check if any descendants are active (for non-leaf nodes)
+        const childNames = this.getChildNames(path);
+        for (const childName of childNames) {
+            const childPath = path ? `${path}/${childName}` : childName;
+            if (this.isActive(childPath)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Helper to check if a metric path represents a fabric activity metric
+    _isFabricActivityMetric(path) {
+        return path.includes('/fabric/txWords') ||
+               path.includes('/fabric/rxWords') ||
+               path.includes('/txPeakBandwidth') ||
+               path.includes('/rxPeakBandwidth');
     }
 
     // Returns the aggregate "health" value and most recent timestamp of a path by looking at immediate
@@ -160,6 +208,11 @@ export class HierarchicalTelemetryStore {
         this._dataByPath.set(path, newData);
         console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
 
+        // Mark as active if this is a fabric metric and the value actually changed
+        if (changed && oldData && this._isFabricActivityMetric(path) && value !== oldData.value) {
+            this._markActive(path);
+        }
+
         // No change? We are done.
         if (!changed && !forceUpdate) {
             return;
@@ -201,6 +254,11 @@ export class HierarchicalTelemetryStore {
         };
         this._dataByPath.set(path, newData);
         console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
+
+        // Mark as active if this is a fabric metric and the value actually changed
+        if (changed && oldData && this._isFabricActivityMetric(path) && value !== oldData.value) {
+            this._markActive(path);
+        }
 
         // No change? We are done.
         if (!changed && !forceUpdate) {

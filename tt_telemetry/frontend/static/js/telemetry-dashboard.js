@@ -176,13 +176,15 @@ export class TelemetryDashboard extends LitElement {
             const metricPath = [...this.currentPath, metricName].join("/");
             const hasChildren = this._telemetryStore.getChildNames(metricPath).length > 0;
             const metricData = this._telemetryStore.getData(metricPath);
+            const isActive = this._telemetryStore.isActive(metricPath);
             metrics.push({
                 name: metricName,
                 value: metricData ? metricData.value : null,
                 timestamp: metricData ? metricData.timestamp : null,
                 unitDisplayLabel: metricData ? metricData.unitDisplayLabel : null,
                 unitFullLabel: metricData ? metricData.unitFullLabel : null,
-                isLeaf: !hasChildren  // True if this is a final node with no children
+                isLeaf: !hasChildren,  // True if this is a final node with no children
+                isActive: isActive  // True if recently changed (fabric activity)
             });
         }
 
