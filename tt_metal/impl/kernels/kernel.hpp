@@ -14,6 +14,7 @@
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
+#include "api/tt-metalium/experimental/host_api.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
@@ -69,7 +70,8 @@ struct KernelSource {
 
 class Kernel : public JitBuildSettings {
 public:
-    using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+    using Config =
+        std::variant<DataMovementConfig, EthernetConfig, ComputeConfig, experimental::QuasarDataMovementConfig>;
 
     ~Kernel() override = default;
 
@@ -320,5 +322,45 @@ private:
 
     std::string config_hash() const override;
 };
+
+namespace experimental {
+class QuasarDataMovementKernel : public Kernel {
+public:
+    QuasarDataMovementKernel(
+        const KernelSource& kernel_src, const CoreRangeSet& cr_set, const QuasarDataMovementConfig& config) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {}
+
+    ~QuasarDataMovementKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const QuasarDataMovementConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+}  // namespace experimental
 
 }  // namespace tt::tt_metal

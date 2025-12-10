@@ -11,6 +11,7 @@
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
+#include <experimental/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -1523,9 +1524,23 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
 
-KernelHandle CreateKernel(Program& program, const std::string& file_name, const DataMovementConfig& config) {
-    return CreateDataMovementKernel(
-        program, KernelSource(file_name, KernelSource::FILE_PATH), CoreRangeSet({{0, 0}, {0, 0}}), config);
+KernelHandle CreateQuasarDataMovementKernel(
+    Program& program,
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_ranges,
+    const experimental::QuasarDataMovementConfig& config) {
+    std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const experimental::QuasarDataMovementConfig& config) {
+    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return CreateQuasarDataMovementKernel(
+        program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
 }
 
 }  // namespace experimental
