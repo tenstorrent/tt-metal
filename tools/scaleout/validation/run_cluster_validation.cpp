@@ -50,6 +50,7 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -99,7 +100,10 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<uint32_t>()->default_value("64"))(
         "sweep-traffic-configs",
         "Sweep pre-generated traffic configurations across detected links (stress testing)",
-        cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
+        cxxopts::value<bool>()->default_value("false"))(
+        "min-connections",
+        "Minimum connections per ASIC pair required for relaxed validation mode",
+        cxxopts::value<uint32_t>())("h,help", "Print usage information");
 
     return options;
 }
@@ -224,6 +228,16 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.validate_connectivity =
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
+        // Parse min-connections
+        if (result.count("min-connections")) {
+            uint32_t min_conn_value = result["min-connections"].as<uint32_t>();
+            TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
+            input_args.min_connections = min_conn_value;
+            log_output_rank0(
+                "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
+                std::to_string(input_args.min_connections.value()));
+        }
+
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Error parsing arguments: " << e.what() << std::endl;
         std::cerr << options.help() << std::endl;
@@ -292,8 +306,8 @@ AsicTopology run_connectivity_validation(
         input_args.deployment_descriptor_path,
         input_args.fsd_path,
         physical_system_descriptor.get_all_hostnames());
-    auto missing_topology =
-        validate_connectivity(fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor);
+    auto missing_topology = validate_connectivity(
+        fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
 
     return missing_topology;
 }

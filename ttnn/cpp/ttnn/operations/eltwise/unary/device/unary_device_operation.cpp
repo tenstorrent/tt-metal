@@ -141,7 +141,12 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return TensorSpec(output_shape, TensorLayout::fromPaddedShape(
+        args.output_dtype,
+        PageConfig(output_layout),
+        args.output_memory_config,
+        output_shape,
+        tensor_args.input.padded_shape()));
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(

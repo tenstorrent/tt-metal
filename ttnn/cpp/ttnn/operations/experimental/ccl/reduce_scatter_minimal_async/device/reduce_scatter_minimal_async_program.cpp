@@ -72,26 +72,34 @@ uint32_t default_workers(
     log_trace(tt::LogOp, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);
     // Heuristic values are based on the sweep test:
     // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
+    // For linear, 4+MB is where 8 workers start scaling. 0.5-4MB is where 4 workers start scaling. 0-0.5MB is where
+    // 2 workers start scaling.
+    // For ring, 50+MB is where 8 workers start scaling. 1-50MB is where 4 workers start scaling. 0-1MB is where 2
+    // workers start scaling.
+    // At a single packet size (4KB) we should just have one worker with the optimal packet size and save on mux
+    // overheads
+    constexpr double RING_HIGH_DATA_THRESHOLD = 50.0 * 1024 * 1024;
+    constexpr double RING_LOW_DATA_THRESHOLD = 1.0 * 1024 * 1024;
+    constexpr double LINEAR_HIGH_DATA_THRESHOLD = 4000000.0;
+    constexpr double LINEAR_LOW_DATA_THRESHOLD = 500000.0;
+    constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
     if (topology == ttnn::ccl::Topology::Ring) {
-        // For ring, 50+MB is where 8 workers start scaling. 1-50MB is where 4 workers start scaling. 0-1MB is where 2
-        // workers start scaling.
-        constexpr double RING_HIGH_DATA_THRESHOLD_MB = 50.0;
-        constexpr double RING_LOW_DATA_THRESHOLD_MB = 1.0;
-        if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD_MB) {
+        constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
+        if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD) {
             candidate_worker_counts = {8, 4, 2, 1};
-        } else if (data_moved_per_link_bytes < RING_LOW_DATA_THRESHOLD_MB) {
+        } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
+            candidate_worker_counts = {1};
+        } else if (data_moved_per_link_bytes < RING_LOW_DATA_THRESHOLD) {
             candidate_worker_counts = {2, 1};
         } else {
             candidate_worker_counts = {4, 2, 1};
         }
     } else if (topology == ttnn::ccl::Topology::Linear) {
-        // For linear, 4+MB is where 8 workers start scaling. 0.5-4MB is where 4 workers start scaling. 0-0.5MB is where
-        // 2 workers start scaling.
-        constexpr double LINEAR_HIGH_DATA_THRESHOLD_MB = 4.0;
-        constexpr double LINEAR_LOW_DATA_THRESHOLD_MB = 0.5;
-        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD_MB) {
+        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD) {
             candidate_worker_counts = {8, 4, 2, 1};
-        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD_MB) {
+        } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
+            candidate_worker_counts = {1};
+        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD) {
             candidate_worker_counts = {2, 1};
         } else {
             candidate_worker_counts = {4, 2, 1};
