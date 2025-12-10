@@ -197,7 +197,6 @@ FORCE_INLINE void generate_summed_experts_tiles(
 
     // for each group, copy the top experts_per_group rows to the summed_experts_cb_index
     cb_reserve_back(summed_experts_cb_index, summed_experts_per_group);
-    DPRINT << "Writer summed_experts: dest=" << get_write_ptr(summed_experts_cb_index) << ENDL();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         // get one width tile
         cb_wait_front(topk_input_cb_index, 1);
@@ -267,10 +266,6 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     uint64_t indices_base_noc_addr = get_noc_addr(get_read_ptr(topk_index_creation_cb_index));
     uint32_t scores_dest_base_addr = get_write_ptr(winning_group_scores_cb_index);
     uint32_t indices_dest_base_addr = get_write_ptr(winning_group_indices_cb_index);
-
-    // Debug: print CB addresses to check for overlap
-    DPRINT << "Writer winning_group: scores_dest=" << scores_dest_base_addr
-           << " indices_dest=" << indices_dest_base_addr << ENDL();
 
     // Indices pointer (in L1)
     volatile tt_l1_ptr uint16_t* sorted_indices_ptr =
@@ -398,9 +393,6 @@ void kernel_main() {
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
-    // Debug: print first generated index tile
-    DPRINT << "Generated index tiles" << ENDL();
-    print_tile(topk_index_creation_cb_index, 0, true, 0, 1, 0, 8);
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
     generate_reduce_scalar(reduce_scalar_cb_index, packed_one_scalar, n_activated_experts);
     write_single_scalar(epsilon_cb_index, packed_epsilon);
@@ -422,7 +414,6 @@ void kernel_main() {
             num_group_tiles>(tokens_per_tile);
 
         cb_wait_front(indices_cb_index, 1);
-        print_tile(indices_cb_index, 0, true, 0, 1, 0, 8);
         noc_async_write_page(height_tile, indices_accessor, get_read_ptr(indices_cb_index));
         cb_wait_front(weights_cb_index, 1);
         noc_async_write_page(height_tile, weights_accessor, get_read_ptr(weights_cb_index));

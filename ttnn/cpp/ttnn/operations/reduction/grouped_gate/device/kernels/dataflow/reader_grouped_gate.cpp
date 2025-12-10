@@ -54,31 +54,13 @@ void kernel_main() {
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;
-        DPRINT << "Height tile: " << height_tile << ENDL();
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
             uint32_t page = base_page + width_tile;
-            DPRINT << "Page: " << page << ENDL();
             cb_reserve_back(scores_cb_index, 1);
             cb_reserve_back(bias_cb_index, 1);
-            if (width_tile == 0) {
-                DPRINT << "Scores cb wr ptr: " << get_write_ptr(scores_cb_index) << ENDL();
-            }
-            // Debug: print NOC address for first two pages to check if they're different
-            if (page < 2) {
-                uint64_t noc_addr = scores_accessor.get_noc_addr(page);
-                DPRINT << "Page " << page << " NOC addr: " << (uint32_t)(noc_addr >> 32) << " "
-                       << (uint32_t)(noc_addr & 0xFFFFFFFF) << ENDL();
-            }
             noc_async_read_page(page, scores_accessor, get_write_ptr(scores_cb_index));
             noc_async_read_page(page, bias_accessor, get_write_ptr(bias_cb_index));
             noc_async_read_barrier();
-            // Print scores input for debugging
-            if (width_tile == 0) {
-                DPRINT << "Reader: wr_ptr=" << get_write_ptr(scores_cb_index)
-                       << " bias_wr_ptr=" << get_write_ptr(bias_cb_index) << ENDL();
-                print_tile(scores_cb_index, 0, true, 0, 1, 0, 32);
-                print_tile(bias_cb_index, 0, true, 0, 1, 0, 32);
-            }
             cb_push_back(scores_cb_index, 1);
             cb_push_back(bias_cb_index, 1);
         }

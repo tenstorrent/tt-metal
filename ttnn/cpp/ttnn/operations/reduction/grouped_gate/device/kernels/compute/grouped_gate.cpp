@@ -59,12 +59,6 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
     DPRINT << "Sigmoid" << ENDL();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(scores_cb_index, 1);
-        if (width_tile == 0) {
-            // Print read pointers and scores input
-            UNPACK(DPRINT << "Compute: rd_ptr=" << (get_local_cb_interface(scores_cb_index).fifo_rd_ptr << 4)
-                          << ENDL();)
-            UNPACK(print_tile(scores_cb_index, 0, true, 0, 1, 0, 32));
-        }
         tile_regs_acquire();
         reconfig_data_format_srca(scores_cb_index);
         // copy tile from scores cb to destination register 0
@@ -80,7 +74,6 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
         tile_regs_wait();
         pack_reconfig_data_format(sigmoid_input_cb_index);
         pack_tile(0, sigmoid_input_cb_index);
-        PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1, 0, 32));
         tile_regs_release();
         cb_push_back(sigmoid_input_cb_index, 1);
     }
@@ -91,14 +84,8 @@ void add_bias(
     // Perform add bias on sigmoid input – should I do full or partial init here?
     add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
     cb_wait_front(sigmoid_input_cb_index, width_tiles);
-    PACK(DPRINT << "Add bias" << ENDL();)
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(bias_cb_index, 1);
-        if (width_tile == 0) {
-            UNPACK(DPRINT << "Bias cb rd ptr: " << get_local_cb_interface(bias_cb_index).fifo_rd_ptr << ENDL();)
-            UNPACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1, 0, 32));
-            UNPACK(print_tile(bias_cb_index, 0, true, 0, 1, 0, 32));
-        }
         tile_regs_acquire();
         add_tiles(sigmoid_input_cb_index, bias_cb_index, width_tile, 0, 0);
         tile_regs_commit();
@@ -107,9 +94,6 @@ void add_bias(
         cb_reserve_back(add_bias_cb_index, 1);
         tile_regs_wait();
         pack_tile(0, add_bias_cb_index);
-        if (width_tile == 0) {
-            PACK(print_tile(add_bias_cb_index, 0, true, 0, 8, 0, 1));
-        }
         tile_regs_release();
         cb_push_back(add_bias_cb_index, 1);
     }
@@ -133,10 +117,6 @@ void process_and_sort_tiles(
         acquire_dst();
         // transpose and unpack into dest regs
         reconfig_data_format_srca(input_cb_index);
-        if (wt == 0) {
-            UNPACK(DPRINT << "Input cb rd ptr: " << get_local_cb_interface(input_cb_index).fifo_rd_ptr << ENDL();)
-            UNPACK(print_tile(input_cb_index, 0, true, 0, 1, 0, 32));
-        }
         transpose_wh_init_short(input_cb_index);
         transpose_wh_tile(input_cb_index, wt, 0);
         transpose_wh_tile(input_cb_index, wt + 1, 1);
@@ -164,16 +144,10 @@ void process_and_sort_tiles(
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_reserve_back(index_transposed_cb_index, 1);
         pack_tile(2, index_transposed_cb_index);
-        if (wt == 0) {
-            PACK(print_tile(index_transposed_cb_index, 0, true, 0, 8, 0, 1));
-        }
         cb_push_back(index_transposed_cb_index, 1);
 
         cb_reserve_back(index_transposed_cb_index, 1);
         pack_tile(3, index_transposed_cb_index);
-        if (wt == 0) {
-            PACK(print_tile(index_transposed_cb_index, 0, true, 0, 8, 0, 1));
-        }
         cb_push_back(index_transposed_cb_index, 1);
 
         cb_wait_front(index_transposed_cb_index, 2);
@@ -326,13 +300,11 @@ void topk(
     cb_reserve_back(post_sort_transpose_cb_index, 1);
     pack_reconfig_data_format(post_sort_transpose_cb_index);
     pack_tile(0, post_sort_transpose_cb_index);
-    PACK(print_tile(post_sort_transpose_cb_index, 0, true, 0, 8, 0, 1));
     cb_push_back(post_sort_transpose_cb_index, 1);
 
     cb_reserve_back(intermediate_local_sort_indices_cb_index, 1);
     pack_reconfig_data_format(intermediate_local_sort_indices_cb_index);
     pack_tile(2, intermediate_local_sort_indices_cb_index);
-    PACK(print_tile(intermediate_local_sort_indices_cb_index, 0, true, 0, 8, 0, 1));
     tile_regs_release();
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
@@ -357,9 +329,7 @@ void normalize_scores(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
 
     cb_wait_front(unnormalized_scores_cb_index, 1);
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     cb_wait_front(reduce_scalar_cb_index, 1);
-    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 32, 0, 32));
 
     // 1. Sum row (experts) to get row vector of sums [1, 32]
     tile_regs_acquire();
@@ -371,7 +341,6 @@ void normalize_scores(
     tile_regs_wait();
     cb_reserve_back(intermediate_reduce_cb_index, 1);
     pack_tile(0, intermediate_reduce_cb_index);
-    // PACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     tile_regs_release();
     cb_push_back(intermediate_reduce_cb_index, 1);
     // 3. Add epsilon
@@ -402,8 +371,6 @@ void normalize_scores(
     // 6. Broadcast multiply
     tile_regs_acquire();
     cb_wait_front(transpose_cb_index, 1);
-    // UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
     mul_tiles_bcast<BroadcastType::COL>(
         unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
