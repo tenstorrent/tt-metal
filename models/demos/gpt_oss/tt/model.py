@@ -177,7 +177,7 @@ class Model:
 
         return instance
 
-    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1):
+    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True):
         """
         Shared forward pass through decoder layers and final projection.
 
@@ -204,6 +204,7 @@ class Model:
                 position_idx=current_pos,
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
+                is_decode=is_decode,
             )
         logits = hidden_states
 
@@ -246,7 +247,7 @@ class Model:
         """
         # Embed tokens
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        breakpoint()
+        input_embeds = ttnn.unsqueeze(input_embeds, 0)
 
         # Ensure proper shape for decoder layers
         # if len(input_embeds.shape) == 4:
@@ -264,6 +265,7 @@ class Model:
             current_pos=current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
+            is_decode=True,
         )
 
     def ttnn_prefill_forward(
@@ -304,6 +306,7 @@ class Model:
             page_table=page_table,
             kv_cache=kv_cache,
             get_last_token=get_last_token,
+            is_decode=False,
         )
 
         return logits

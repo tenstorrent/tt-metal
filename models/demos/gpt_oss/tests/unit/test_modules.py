@@ -5,6 +5,7 @@ import pytest
 import torch
 from loguru import logger
 
+from torch._prims import _copy_strided_meta
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
@@ -41,6 +42,7 @@ def run_attention_component(
     reference_layer,
     decoder_layer,
     is_decode,
+    is_row_sharded,
 ):
     """Test attention component - extracted from decoder layer"""
 
@@ -50,12 +52,7 @@ def run_attention_component(
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    if is_decode and hidden_states.shape[0] > 32:
-        mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
-        is_row_sharded = True
-    else:
-        mesh_mapper = None
-        is_row_sharded = False
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device) if is_row_sharded else None
 
     tt_hidden_states = ttnn.from_torch(
         hidden_states.reshape(1, 1, -1, hidden_states.shape[-1]),
@@ -100,7 +97,7 @@ def run_attention_component(
         tt_output_torch = tt_output_torch[:, 0, :]
     else:
         # inputs were replicated along the rows so we want to slice the replicated columns to get single output
-        tt_output_torch = tt_output_torch[0, :seq_len, :]
+        tt_output_torch = tt_output_torch[0, :seq_len*batch_size, :]
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=0.96)
@@ -153,7 +150,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
         assert passing, f"Experts test failed. Output: {output}"
 
 
-def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode):
+def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode, is_row_sharded):
     """Test TopK router component - extracted from decoder layer"""
 
     # Create input
@@ -175,7 +172,8 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device) if is_decode and hidden_states.shape[0] > 32 else None
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device) if is_row_sharded else None
+
     tt_hidden_states = ttnn.from_torch(
         hidden_states.reshape(-1, 1, 2880),
         device=mesh_device,
@@ -221,7 +219,7 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
     #     assert passing, f"TopK router test failed. Output: {output}"
 
 
-def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode):
+def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, is_row_sharded):
     """Test experts component - extracted from decoder layer"""
 
     # Create input
@@ -252,12 +250,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
 
     # Convert to TTNN tensors
-    if is_decode and hidden_states.shape[0] > 32:
-        mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
-        is_row_sharded = True
-    else:
-        mesh_mapper = None
-        is_row_sharded = False
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device) if is_row_sharded else None
     tt_hidden_states = ttnn.from_torch(
         hidden_states.unsqueeze(1),
         device=mesh_device,
@@ -294,7 +287,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         tt_output = tt_output[0]
     else:
         # inputs were replicated along the rows so we want to slice the replicated columns to get single output
-        tt_output = tt_output[0, ..., :seq_len, :]
+        tt_output = tt_output[0, ..., :seq_len*batch_size, :]
     # Compare outputs
     # passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
@@ -304,7 +297,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         assert passing, f"Experts test failed. Output: {output}"
 
 
-def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode):
+def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode, is_row_sharded):
     """Test complete MLP (router + experts) - essential MoE functionality"""
 
     # Create input
@@ -316,12 +309,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    if is_decode and batch_size > 32:
-        mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
-        is_row_sharded = True
-    else:
-        mesh_mapper = None
-        is_row_sharded = False
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device) if is_row_sharded else None
     tt_hidden_states = ttnn.from_torch(
         hidden_states.reshape(-1, 1, 2880),
         device=mesh_device,
@@ -343,7 +331,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
         tt_output_torch = tt_output_torch[0]
     else:
         # inputs were replicated along the rows so we want to slice the replicated columns to get single output
-        tt_output_torch = tt_output_torch[0, ..., :seq_len, :]
+        tt_output_torch = tt_output_torch[0, ..., :seq_len*batch_size, :]
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=0.88)
@@ -358,6 +346,8 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
+        (1, 1),  # decode
+        (32, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
         # (1, 4096),  # prefill 4k
@@ -398,6 +388,14 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # Set attention implementation for transformers compatibility
     config._attn_implementation = "eager"
 
+    if batch_size > 32:
+        is_row_sharded = True
+        assert batch_size % setup["mesh_device"].shape[0] == 0, "Batch size must be evenly divisible by mesh device shape"
+        local_batch_size = batch_size // setup["mesh_device"].shape[0]
+    else:
+        is_row_sharded = False
+        local_batch_size = batch_size
+
     # Create reference model
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
 
@@ -434,14 +432,14 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         dtype=setup["dtype"],
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
-        max_local_batch_size=batch_size // setup["mesh_device"].shape[0] if (is_decode and batch_size > 32) else batch_size,
+        max_local_batch_size=local_batch_size,
     )
 
     # Create input
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
 
     # Create position IDs first
-    position_ids = torch.concat([torch.arange(seq_len, dtype=torch.long).unsqueeze(0) for _ in range(batch_size)])
+    position_ids = torch.concat([torch.arange(seq_len, dtype=torch.long) for _ in range(batch_size)])
 
     # Create attention mask like the working attention test
     mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
@@ -456,7 +454,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     max_seq_len = seq_len
 
     # For reference: use precompute_freqs_cis and index by positions (like tt-transformers)
-    position_ids_1d = position_ids.squeeze()
+    # position_ids_1d = position_ids.squeeze()
     freqs_cis_full = precompute_freqs_cis(
         dim=config.head_dim,
         end=max_seq_len * 2,
@@ -475,44 +473,26 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
     rope_embeddings_ref = GptOssRotaryEmbedding(config)
-    cos_hf_ref, sin_hf_ref = rope_embeddings_ref(hidden_states, position_ids)
+    cos_hf_ref, sin_hf_ref = rope_embeddings_ref(hidden_states, position_ids.unsqueeze(1 if is_decode else 0))
     position_embeddings_ref = (cos_hf_ref, sin_hf_ref)
     with torch.no_grad():
         reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings_ref)
 
     # Create TTNN RoPE embeddings in Meta format using gather_cos_sin
-    cos_meta, sin_meta = gather_cos_sin(position_ids_1d, cos_full, sin_full)
+    cos_meta, sin_meta = gather_cos_sin(position_ids, cos_full, sin_full)
+    cos_meta = cos_meta.reshape(1, batch_size, seq_len, config.head_dim)
+    sin_meta = sin_meta.reshape(1, batch_size, seq_len, config.head_dim)
 
-    if batch_size > setup["mesh_device"].shape[0]:
-        tt_cos = ttnn.from_torch(
-            cos_meta.reshape(1, batch_size, seq_len, config.head_dim),
-            device=setup["mesh_device"],
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-        tt_sin = ttnn.from_torch(
-            sin_meta.reshape(1, batch_size, seq_len, config.head_dim),
-            device=setup["mesh_device"],
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-    else:
-        tt_cos = ttnn.from_torch(cos_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]) if is_row_sharded else None
+    tt_cos = ttnn.from_torch(cos_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sin = ttnn.from_torch(sin_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
     if seq_len == 1:
         grid_size = setup["mesh_device"].compute_with_storage_grid_size()
         batch_grid = ttnn.num_cores_to_corerangeset(
-            batch_size // setup["mesh_device"].shape[0], grid_size, row_wise=True
+            local_batch_size, grid_size, row_wise=True
         )
-
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
             core_grid=batch_grid,
@@ -531,7 +511,11 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # tt_position_idx = ttnn.from_torch(
     #     position_ids, device=setup["mesh_device"], layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
     # )
-    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]) if is_decode and batch_size > 32 else None
+    mesh_mapper = (
+        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"])
+        if is_row_sharded
+        else None
+    )
     tt_position_idx = ttnn.from_torch(
         position_ids.squeeze(),
         device=setup["mesh_device"],
@@ -553,13 +537,17 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     if should_test("router"):
         if seq_len == 1:
             logger.info("Testing TopK Router...")
-            run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode)
+            run_topk_router_component(
+                setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode, is_row_sharded=is_row_sharded
+            )
         elif "router" in modules_to_test:
             pytest.skip("Router test only runs in decode mode (seq_len=1)")
 
     if should_test("experts"):
         logger.info("Testing Experts...")
-        run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer, is_decode=is_decode)
+        run_experts_component(
+            setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer, is_decode=is_decode, is_row_sharded=is_row_sharded   
+        )
 
     if should_test("attention"):
         logger.info("Testing Attention...")
@@ -573,15 +561,20 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
             reference_layer,
             decoder_layer,
             is_decode=is_decode,
+            is_row_sharded=is_row_sharded,
         )
 
     if should_test("rms_norm"):
         logger.info("Testing RMS Norm...")
-        run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode)
+        run_rms_norm_component(
+            setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode, is_row_sharded=is_row_sharded
+        )
 
     if should_test("mlp"):
         logger.info("Testing Full MLP Pipeline...")
-        run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode)
+        run_full_mlp_pipeline(
+            setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode, is_row_sharded=is_row_sharded
+        )
 
     if should_test("decoder"):
         logger.info("Testing Full Decoder Layer...")
@@ -590,21 +583,23 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         #     hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
         # )
         # hidden_states = torch.reshape(hidden_states, (1, 1, batch_size*seq_len, -1))
-        if is_decode and batch_size > 32:
-            mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"])
-            is_row_sharded = True
+        if is_row_sharded:
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+            )
         else:
             mesh_mapper = None
-            is_row_sharded = False
         tt_hidden_states = ttnn.from_torch(
-            hidden_states.reshape(1, 1, batch_size*seq_len, -1),
+            hidden_states.reshape(1, 1, batch_size * seq_len, -1),
             device=setup["mesh_device"],
             mesh_mapper=mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
         )
         # Test full decoder layer integration
-        tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode)
+        tt_output = decoder_layer(
+            tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode
+        )
 
         # Compare outputs
         pcc_threshold = 0.924 if seq_len == 1 else 0.88
@@ -615,7 +610,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         if is_row_sharded:
             tt_output_torch = tt_output_torch[0]
         else:
-            tt_output_torch = tt_output_torch[0, ..., :seq_len, :]
+            tt_output_torch = tt_output_torch[0, ..., :seq_len*batch_size, :]
         passing, output = compare_tensors(
             tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
         )

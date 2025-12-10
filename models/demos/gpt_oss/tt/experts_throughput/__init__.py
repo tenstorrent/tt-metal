@@ -200,7 +200,7 @@ class ThroughputExperts:
         Returns:
             Expert output tensor [batch/seq, 1, 1, hidden_size]
         """
-        is_decode=True
+        is_decode = True
         if is_decode:
             return self.forward_decode(
                 hidden_states,
