@@ -198,7 +198,6 @@ foreach(ARCH IN LISTS ARCHS)
                         ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                         ${HW_INCLUDE}/dev_mem_map.h
-                        ${HW_INCLUDE}/tensix_dev_map.h
                     COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}${IRAM_COMMENT}"
                     VERBATIM
                 )
@@ -229,7 +228,6 @@ foreach(ARCH IN LISTS ARCHS)
                     ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                     ${HW_INCLUDE}/dev_mem_map.h
-                    ${HW_INCLUDE}/tensix_dev_map.h
                 COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
                 VERBATIM
             )
@@ -538,7 +536,6 @@ target_sources(
             inc/tt-1xx/blackhole/stream_io_map.h
             inc/tt-1xx/blackhole/tdma_xmov.h
             inc/tt-1xx/blackhole/tensix.h
-            inc/tt-1xx/blackhole/tensix_dev_map.h
             inc/tt-1xx/blackhole/tensix_types.h
             inc/circular_buffer.h
             inc/circular_buffer_init.h
@@ -585,7 +582,6 @@ target_sources(
             inc/tt-2xx/quasar/stream_io_map.h
             inc/tt-2xx/quasar/tdma_xmov.h
             inc/tt-2xx/quasar/tensix.h
-            inc/tt-2xx/quasar/tensix_dev_map.h
             inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
@@ -610,7 +606,6 @@ target_sources(
             inc/tt-1xx/wormhole/stream_io_map.h
             inc/tt-1xx/wormhole/tdma_xmov.h
             inc/tt-1xx/wormhole/tensix.h
-            inc/tt-1xx/wormhole/tensix_dev_map.h
             inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
             inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
             inc/dataflow_api_addrgen.h
