@@ -40,7 +40,7 @@ class MobileNetV3PerformantRunner:
             input_path=input_path,
         )
 
-        # Inputs to Panoptic deeplab need to be in ttnn.DRAM_MEMORY_CONFIG for supporting DRAM sliced Conv2d
+        # Inputs to MobileNetV3 need to be in ttnn.DRAM_MEMORY_CONFIG for supporting DRAM sliced Conv2d
         (
             self.tt_inputs_host,
             self.input_mem_config,

@@ -61,8 +61,6 @@ class ttnn_MobileNetV3:
                     cnf,
                     parameters=parameters["features"][index].block,
                     device=device,
-                    # input_height=cnf.input_height,
-                    # input_width=cnf.input_width,
                 )
             )
             index += 1

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,6 @@ from models.experimental.mobileNetV3.tests.pcc.common import inverted_residual_s
         (1, 96, 7, 7, 11),
     ],
 )
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1024}], indirect=True)
 def test_invertedResidual(device, reset_seeds, batch_size, channels, height, width, feature_i):
     torch_input_tensor = torch.randn(batch_size, channels, height, width)
@@ -43,7 +42,6 @@ def test_invertedResidual(device, reset_seeds, batch_size, channels, height, wid
 
     mobilenet = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1)
     torch_model = mobilenet.features[feature_i]
-    # torch.onnx.export(torch_model, torch_input_tensor, "invertedResidual.onnx", verbose=False, opset_version=14)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
@@ -55,8 +53,6 @@ def test_invertedResidual(device, reset_seeds, batch_size, channels, height, wid
         inverted_residual_setting[feature_i - 1],
         parameters=parameters,
         device=device,
-        # input_height=height,
-        # input_width=width,
     )
 
     ttnn_output_tensor = ttnn_model(device, ttnn_input_tensor)

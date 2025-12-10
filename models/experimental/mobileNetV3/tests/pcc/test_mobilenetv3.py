@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -50,7 +51,6 @@ class MobilenetV3TestInfra:
             mobilenet = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1)
         else:
             mobilenet = models.mobilenet_v3_small(weights=None)
-        # torch.onnx.export(mobilenet, torch_input_tensor, "mobilenetv3.onnx", verbose=True)
 
         torch_model = mobilenet
 
@@ -104,7 +104,7 @@ class MobilenetV3TestInfra:
             # Save / show
             self.img.save("models/experimental/mobileNetV3/resources/image_with_label.jpg")
 
-        pcc_threshold = 0.97
+        pcc_threshold = 0.99
         passed, msg = check_with_pcc(self.torch_output_tensor, tt_output_tensor_torch, pcc=pcc_threshold)
         assert passed, logger.error(f"MobileNetV3 PCC check failed: {msg}")
 
