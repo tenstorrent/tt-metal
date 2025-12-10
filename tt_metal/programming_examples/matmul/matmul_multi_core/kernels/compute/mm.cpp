@@ -59,7 +59,7 @@ void MAIN {
 
             // Perform the matrix multiplication for the current tile.
             // NOTE: This function also accumulates the result into the destination tile.
-            matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+            matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
             // Mark the input tiles as used by popping them from the front of the circular buffers.
             cb_pop_front(cb_in0, 1);
