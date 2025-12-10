@@ -56,15 +56,10 @@ void LayerNormPostAllGather::validate(
         "Stats and input dim2 must match, got stats: {} vs input: {}",
         stats.padded_shape()[2],
         a.padded_shape()[2]);
-    // TODO: How to check if number of tile columns is correct? Would have to know # of devices and is_rmsnorm
 
     if (gamma.has_value()) {
         const auto& gamma_tensor = gamma.value();
 
-        // TT_FATAL(
-        //     gamma_tensor.layout() == Layout::ROW_MAJOR,
-        //     "Gamma tensor must have ROW_MAJOR layout (only packed RM supported), got: {}",
-        //     gamma_tensor.layout());
         if (gamma_tensor.layout() == Layout::TILE) {
             TT_FATAL(
                 a.padded_shape()[-1] == gamma.value().padded_shape()[-1],

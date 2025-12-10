@@ -108,7 +108,6 @@ void MAIN {
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(3) / 2;
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
-    // TODO Add this
     constexpr uint32_t cb_length = get_compile_time_arg_val(7);
     constexpr uint32_t onetile = 1;
 
