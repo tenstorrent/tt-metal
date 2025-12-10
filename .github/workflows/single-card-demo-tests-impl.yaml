@@ -297,125 +297,65 @@ jobs:
           # Create output directory
           mkdir -p aggregated_ops
           
-          # Find all ops_perf_results CSV files
-          echo "Found Tracy reports:"
-          find all_tracy_reports -name "ops_perf_results_*.csv" | head -50
-          
           # Aggregate using Python
           python3 << 'EOF'
           import csv
-          import os
           import json
           from pathlib import Path
           from collections import defaultdict
           
-          all_ops = defaultdict(lambda: {"count": 0, "total_duration_ns": 0, "models": set()})
-          model_ops = {}
+          all_ops = defaultdict(set)  # op_name -> set of models
+          model_ops = {}  # model -> set of ops
           
-          # Find all ops_perf_results CSV files
           for csv_path in Path("all_tracy_reports").rglob("ops_perf_results_*.csv"):
-              # Extract model name from artifact folder structure
               parts = str(csv_path).split("/")
               model_name = parts[1] if len(parts) > 1 else csv_path.parent.name
-              print(f"\nProcessing: {csv_path} (model: {model_name})")
               
               try:
                   with open(csv_path, 'r') as f:
                       reader = csv.DictReader(f)
                       ops_data = list(reader)
                   
-                  # Aggregate by operation type
-                  op_counts = defaultdict(lambda: {"count": 0, "total_duration_ns": 0})
-                  
+                  ops_in_model = set()
                   for op in ops_data:
-                      op_type = op.get("OP TYPE", op.get("op_type", "unknown"))
-                      
-                      # Get duration
-                      duration = 0
-                      for col in ["DEVICE FW DURATION [ns]", "device_fw_duration", "KERNEL DURATION [ns]"]:
-                          if col in op and op[col]:
-                              try:
-                                  duration = float(op[col])
-                                  break
-                              except:
-                                  pass
-                      
-                      op_counts[op_type]["count"] += 1
-                      op_counts[op_type]["total_duration_ns"] += duration
-                      
-                      all_ops[op_type]["count"] += 1
-                      all_ops[op_type]["total_duration_ns"] += duration
-                      all_ops[op_type]["models"].add(model_name)
+                      op_name = op.get("OP CODE", op.get("op_code", "unknown"))
+                      ops_in_model.add(op_name)
+                      all_ops[op_name].add(model_name)
                   
-                  model_ops[model_name] = [
-                      {"name": k, "count": v["count"], "duration_ns": v["total_duration_ns"]}
-                      for k, v in op_counts.items()
-                  ]
-                  
-                  print(f"  Found {len(op_counts)} unique operations from {len(ops_data)} total ops")
+                  model_ops[model_name] = sorted(ops_in_model)
+                  print(f"{model_name}: {len(ops_in_model)} unique operations")
               except Exception as e:
-                  print(f"  Error: {e}")
+                  print(f"{model_name}: Error - {e}")
           
           # Write aggregated report
           with open("aggregated_ops/aggregated_operations.txt", "w") as f:
-              f.write("=" * 100 + "\n")
-              f.write("AGGREGATED TTNN OPERATIONS REPORT (via Tracy Profiler)\n")
-              f.write("=" * 100 + "\n\n")
-              
+              f.write("Aggregated Operations Report\n")
               f.write(f"Total unique operations: {len(all_ops)}\n")
               f.write(f"Models processed: {len(model_ops)}\n\n")
               
-              f.write("=" * 100 + "\n")
-              f.write("ALL OPERATIONS (sorted by frequency)\n")
-              f.write("=" * 100 + "\n")
-              f.write(f"{'Operation':<50} {'Count':<10} {'Total Duration (ms)':<20} {'Models'}\n")
-              f.write("-" * 100 + "\n")
+              f.write("Unique Operations\n")
+              f.write("=" * 60 + "\n")
+              for op_name in sorted(all_ops.keys()):
+                  f.write(f"{op_name}\n")
               
-              for name, data in sorted(all_ops.items(), key=lambda x: x[1]["count"], reverse=True):
-                  models_str = ", ".join(sorted(data["models"]))
-                  dur_ms = data["total_duration_ns"] / 1_000_000
-                  f.write(f"{name:<50} {data['count']:<10} {dur_ms:<20.4f} {models_str}\n")
-              
-              f.write("\n" + "=" * 100 + "\n")
-              f.write("OPERATIONS BY MODEL\n")
-              f.write("=" * 100 + "\n")
-              
+              f.write("\n" + "=" * 60 + "\n")
+              f.write("Operations by Model\n")
+              f.write("=" * 60 + "\n")
               for model, ops in sorted(model_ops.items()):
-                  f.write(f"\n--- {model} ({len(ops)} unique ops) ---\n")
-                  for op in sorted(ops, key=lambda x: x["count"], reverse=True)[:20]:
-                      dur_ms = op["duration_ns"] / 1_000_000
-                      f.write(f"  {op['name']}: {op['count']}x ({dur_ms:.2f}ms)\n")
+                  f.write(f"\n{model}:\n")
+                  for op in ops:
+                      f.write(f"  {op}\n")
           
-          # Write JSON for programmatic access
-          json_data = {
-              "all_operations": {
-                  k: {
-                      "count": v["count"],
-                      "total_duration_ns": v["total_duration_ns"],
-                      "total_duration_ms": v["total_duration_ns"] / 1_000_000,
-                      "models": list(v["models"])
-                  }
-                  for k, v in all_ops.items()
-              },
-              "by_model": model_ops
-          }
+          # Write JSON
           with open("aggregated_ops/aggregated_operations.json", "w") as f:
-              json.dump(json_data, f, indent=2)
+              json.dump({
+                  "all_operations": sorted(all_ops.keys()),
+                  "by_model": model_ops
+              }, f, indent=2)
           
-          print("\n" + "=" * 50)
-          print(f"Aggregated {len(all_ops)} unique operations from {len(model_ops)} models")
-          print("=" * 50)
-          
-          # Print summary
-          print("\nTop 20 operations by frequency:")
-          for i, (name, data) in enumerate(sorted(all_ops.items(), key=lambda x: x[1]["count"], reverse=True)[:20]):
-              print(f"  {i+1}. {name}: {data['count']}x")
+          print(f"\nAggregated {len(all_ops)} unique operations from {len(model_ops)} models")
           EOF
           
-          echo ""
-          echo "=========================================="
-          echo "Aggregation Complete"
-          echo "=========================================="
           cat aggregated_ops/aggregated_operations.txt
 
       - name: Upload aggregated operations report
