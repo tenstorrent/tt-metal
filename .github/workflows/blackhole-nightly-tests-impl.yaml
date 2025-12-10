@@ -32,21 +32,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            {
-              model: whisper,
-              owner_id: U05RWH3QUPM, #Salar Hosseini
-              runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"],
-              cmd: pytest tests/nightly/single_card/whisper
-            },
-            {
-              model: llama3.1-8b,
-              owner_id: U03PUAKE719, # Miguel Tairum
-              runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"],
-              cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1
-            },
+            { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
+            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -106,7 +96,7 @@ jobs:
         test-group: [
             { model: panoptic-deeplab, owner_id: U09LK84G4TF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
           ]
-    name: Nightly 20 cores ${{ matrix.test-group.model }}
+    name: Nightly P150 130 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
