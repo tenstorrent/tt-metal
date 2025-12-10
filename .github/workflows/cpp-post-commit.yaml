@@ -1,5 +1,5 @@
 name: "[internal] C++ tests impl"
-
+# This workflow file does not run in APC (CCL runs in merge-gate and the others run in Nightly L2)
 on:
   workflow_call:
     inputs:
