@@ -4,41 +4,43 @@
 
 #pragma once
 
+#include <cstdint>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
+
+#include "ttnn/run_operation.hpp"
+
 #include <optional>
+#include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_types {
 
 struct operation_attributes_t {
-    IDevice* target_device;
-    std::optional<IDevice*> forward_device;
-    std::optional<IDevice*> backward_device;
+    std::vector<IDevice*> devices;
     uint32_t dim;
     uint32_t num_links;
     uint32_t ring_size;
-    uint32_t ring_index;
-    ccl::Topology topology;
-    const std::vector<GlobalSemaphore>& semaphore;
+    MemoryConfig output_mem_config;
+    ttnn::ccl::Topology topology;
+    const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler;
-    CoreCoord core_grid_offset;
+    std::optional<uint32_t> cluster_axis;
 };
 
 struct tensor_args_t {
     const std::vector<Tensor>& input_tensor;
 };
 
-using tensor_return_value_t = std::vector<Tensor>&;
+using tensor_return_value_t = std::vector<Tensor>;
 
 using spec_return_value_t = std::vector<TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_types

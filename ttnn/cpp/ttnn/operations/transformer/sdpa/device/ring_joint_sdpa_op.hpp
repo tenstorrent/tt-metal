@@ -9,8 +9,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
+// TODO: Remove this!
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.hpp"
 
 namespace ttnn::operations::transformer {
 

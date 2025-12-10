@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::operations::experimental::ccl {
 
 RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
 RingAttentionAllGatherAsyncDeviceOperation::select_program_factory(
@@ -143,34 +143,29 @@ std::tuple<
     RingAttentionAllGatherAsyncDeviceOperation::tensor_args_t>
 RingAttentionAllGatherAsyncDeviceOperation::invoke(
     const std::vector<Tensor>& input_tensors,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler,
-    CoreCoord core_grid_offset) {
+    std::vector<Tensor>& persistent_output_buffer,
+    const int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     return {
         operation_attributes_t{
-            .target_device = target_device,
-            .forward_device = forward_device,
-            .backward_device = backward_device,
-            .dim = dim,
-            .num_links = num_links,
-            .ring_size = ring_size,
-            .ring_index = ring_index,
-            .topology = topology,
-            .semaphore = semaphore,
-            .sub_device_id = sub_device_id,
-            .fused_op_signaler = fused_op_signaler,
-            .core_grid_offset = core_grid_offset,
+            mesh_device.get_devices(),
+            dim,
+            num_links,
+            ring_size,
+            memory_config.value_or(input_tensors[0].memory_config()),
+            topology,
+            multi_device_global_semaphore,
+            sub_device_id,
+            cluster_axis,
         },
         tensor_args_t{.input_tensor = input_tensors}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl

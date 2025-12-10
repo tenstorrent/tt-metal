@@ -8,7 +8,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::operations::experimental::ccl {
 
 RingAttentionAllGatherAsyncExperimentalDeviceOperation::program_factory_t
 RingAttentionAllGatherAsyncExperimentalDeviceOperation::select_program_factory(
@@ -51,11 +51,11 @@ RingAttentionAllGatherAsyncExperimentalDeviceOperation::invoke(
     std::vector<Tensor>& persistent_output_buffer,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t num_links,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const std::optional<MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -78,21 +78,18 @@ RingAttentionAllGatherAsyncExperimentalDeviceOperation::invoke(
         optional_output_tensors.push_back(persistent_output_buffer[i]);
     }
 
-    operation_attributes_t operation_attributes{
-
-    };
-
-    tensor_args_t tensor_args{.input_tensor = input_tensors};
-
-    return ttnn::prim::ring_attention_all_gather_async(
-        input_tensors gather_dim,
-        num_links,
-        num_devices,
-        memory_config.value_or(input_tensors[0].memory_config()),
-        topology,
+    return RingAttentionAllGatherAsyncDeviceOperation::invoke(
+        input_tensors,
+        persistent_output_buffer,
+        gather_dim,
         multi_device_global_semaphore,
-        sub_device_id,
-        cluster_axis);
+        num_links,
+        num_devices,  // This is the ring size
+        cluster_axis,
+        mesh_device,
+        memory_config,
+        topology,
+        sub_device_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl

@@ -4,15 +4,22 @@
 
 #pragma once
 
+#include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ring_attention_all_gather_async_device_operation.hpp"
+#include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include "ttnn/global_semaphore.hpp"
 #include <optional>
 #include <tuple>
+#include <variant>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::operations::experimental::ccl {
+using ttnn::ccl::EriscDatamoverBuilder;
 
 struct RingAttentionAllGatherAsyncExperimentalDeviceOperation {
     using operation_attributes_t = RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t;
@@ -44,18 +51,18 @@ struct RingAttentionAllGatherAsyncExperimentalDeviceOperation {
         std::vector<Tensor>& persistent_output_buffer,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-        uint32_t num_links,
         uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const std::optional<MemoryConfig>& memory_config,
         ttnn::ccl::Topology topology,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+        uint32_t num_links = 1,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
 constexpr auto ring_attention_all_gather_async_experimental = ttnn::register_operation<
-    "ttnn::prim::experimental::ring_attention_all_gather_async",
+    "ttnn::prim::ring_attention_all_gather_async_experimental",
     ttnn::operations::experimental::ccl::RingAttentionAllGatherAsyncExperimentalDeviceOperation>();
 }  // namespace ttnn::prim

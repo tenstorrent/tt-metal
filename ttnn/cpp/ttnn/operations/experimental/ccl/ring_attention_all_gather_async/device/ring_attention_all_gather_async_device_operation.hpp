@@ -17,16 +17,18 @@
 #include <variant>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::operations::experimental::ccl {
+
+using ttnn::ccl::EriscDatamoverBuilder;
 
 struct RingAttentionAllGatherAsyncDeviceOperation {
-    using operation_attributes_t = ring_attention_all_gather_async::operation_attributes_t;
+    using operation_attributes_t = ring_attention_all_gather_async_types::operation_attributes_t;
 
-    using tensor_args_t = ring_attention_all_gather_async::tensor_args_t;
+    using tensor_args_t = ring_attention_all_gather_async_types::tensor_args_t;
 
-    using spec_return_value_t = ring_attention_all_gather_async::spec_return_value_t;
+    using spec_return_value_t = ring_attention_all_gather_async_types::spec_return_value_t;
 
-    using tensor_return_value_t = ring_attention_all_gather_async::tensor_return_value_t;
+    using tensor_return_value_t = ring_attention_all_gather_async_types::tensor_return_value_t;
 
     using program_factory_t = std::variant<program::RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory>;
 
@@ -46,21 +48,19 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const std::vector<Tensor>& input_tensors,
-        IDevice* target_device,
-        std::optional<IDevice*> forward_device,
-        std::optional<IDevice*> backward_device,
-        uint32_t dim,
-        uint32_t num_links,
-        uint32_t ring_size,
-        uint32_t ring_index,
-        ccl::Topology topology,
-        const std::vector<GlobalSemaphore>& semaphore,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-        std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler = std::nullopt,
-        CoreCoord core_grid_offset = CoreCoord(0, 0));
+        std::vector<Tensor>& persistent_output_buffer,
+        const int32_t dim,
+        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const uint32_t num_links,
+        const uint32_t ring_size,
+        const uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        const std::optional<MemoryConfig>& memory_config,
+        const ttnn::ccl::Topology topology,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
 constexpr auto ring_attention_all_gather_async = ttnn::register_operation<

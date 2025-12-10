@@ -108,6 +108,11 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
+        ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.cpp
+        ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_program.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_experimental_device_operation.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

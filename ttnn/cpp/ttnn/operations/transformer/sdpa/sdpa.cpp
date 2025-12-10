@@ -9,9 +9,10 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_op.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_op.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.hpp"
 #include "ttnn/device.hpp"
 #include <utility>
+
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
