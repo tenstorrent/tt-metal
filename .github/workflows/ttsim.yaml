@@ -102,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
@@ -201,7 +201,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
@@ -351,7 +351,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
@@ -442,7 +442,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          mv /tmp/ttsim/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
