@@ -106,81 +106,15 @@ public:
     void init(
         std::shared_ptr<TestFixture> fixture,
         const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies,
-        bool use_dynamic_policies = true) {
-        fixture_ = std::move(fixture);
-        allocation_policies_ = policies;
-        use_dynamic_policies_ = use_dynamic_policies;  // Store for prepare_for_test()
+        bool use_dynamic_policies = true);
 
-        // Initialize memory maps for all available devices
-        initialize_memory_maps();
-
-        // Create dynamic policy manager if needed
-        if (use_dynamic_policies_) {
-            policy_manager_ =
-                std::make_unique<tt::tt_fabric::fabric_tests::DynamicPolicyManager>(*this->fixture_, *this->fixture_);
-        }
-
-        // Create allocator with memory maps
-        // Note: Memory maps will be updated in prepare_for_test() if using dynamic policies
-        this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
-            *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
-
-        // Initialize bandwidth managers (telemetry/code profiler are lazy)
-        bandwidth_profiler_ =
-            std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);  // fixture implements interfaces
-        bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
-        latency_test_manager_ = std::make_unique<LatencyTestManager>(*fixture_, sender_memory_map_);
-    }
-
-    void prepare_for_test(const TestConfig& config) {
-        // Skip reconstruction entirely for explicit YAML policies
-        if (!use_dynamic_policies_) {
-            return;  // Early return - allocator and maps already correct, reset() will clean up state
-        }
-
-        // Ask policy manager if a new policy is needed
-        // Returns nullopt if cached policy should be reused, otherwise returns new policy
-        auto new_policy = policy_manager_->get_new_policy_for_test(config);
-
-        if (new_policy.has_value()) {
-            // New policy computed - need to reconstruct allocator and memory maps
-            update_memory_maps(new_policy.value());
-
-            allocator_.reset();
-            allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
-                *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
-        }
-
-        // Validate packet size (uses either new policy or cached policy)
-        const auto& policy_to_validate =
-            new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
-        validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
-    }
+    void prepare_for_test(const TestConfig& config);
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
 
-    void setup_devices() {
-        const auto& available_coords = this->fixture_->get_host_local_device_coordinates();
-        for (const auto& coord : available_coords) {
-            // Create TestDevice with access to memory maps
-            test_devices_.emplace(
-                coord, TestDevice(coord, this->fixture_, this->fixture_, &sender_memory_map_, &receiver_memory_map_));
-        }
-    }
+    void setup_devices();
 
-    void reset_devices() {
-        test_devices_.clear();
-        device_global_sync_cores_.clear();
-        device_local_sync_cores_.clear();
-        this->allocator_->reset();
-
-        // Destroy managers that hold references to eth_readback before clearing it
-        code_profiler_.reset();
-        telemetry_manager_.reset();
-        eth_readback_.reset();
-
-        reset_local_variables();
-    }
+    void reset_devices();
 
     void process_traffic_config(TestConfig& config) {
         // Latency test mode: manually populate senders_ and receivers_ maps
@@ -458,52 +392,16 @@ public:
         }
     }
 
-    void profile_results(const TestConfig& config) {
-        TT_FATAL(bandwidth_profiler_ && bandwidth_results_manager_, "Bandwidth managers not initialized");
-
-        bandwidth_profiler_->profile_results(config, test_devices_, sender_memory_map_);
-
-        // Inject telemetry before retrieving result
-        if (telemetry_enabled_) {
-            auto& telemetry = get_telemetry_manager();
-            bandwidth_profiler_->set_telemetry_bandwidth(
-                telemetry.get_measured_bw_min(), telemetry.get_measured_bw_avg(), telemetry.get_measured_bw_max());
-        }
-
-        const auto& latest_results = bandwidth_profiler_->get_latest_results();
-        for (const auto& result : latest_results) {
-            bandwidth_results_manager_->add_result(config, result);
-        }
-        bandwidth_results_manager_->add_summary(config, bandwidth_profiler_->get_latest_summary());
-
-        // Append last result (matches previous behavior)
-        if (!latest_results.empty()) {
-            bandwidth_results_manager_->append_to_csv(config, latest_results.back());
-        }
-    }
+    void profile_results(const TestConfig& config);
 
     void collect_latency_results();
     void report_latency_results(const TestConfig& config);
 
     void generate_latency_summary();
 
-    void generate_bandwidth_summary() {
-        TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
-        bandwidth_results_manager_->load_golden_csv();
-        bandwidth_results_manager_->generate_summary();
-        bandwidth_results_manager_->validate_against_golden();
-        // Track failures from bandwidth manager
-        if (bandwidth_results_manager_->has_failures()) {
-            const auto failed = bandwidth_results_manager_->get_failed_tests();
-            all_failed_bandwidth_tests_.insert(all_failed_bandwidth_tests_.end(), failed.begin(), failed.end());
-            has_test_failures_ = true;
-        }
-    }
+    void generate_bandwidth_summary();
 
-    void initialize_bandwidth_results_csv_file() {
-        TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
-        bandwidth_results_manager_->initialize_bandwidth_csv_file(this->telemetry_enabled_);
-    }
+    void initialize_bandwidth_results_csv_file();
 
     void initialize_latency_results_csv_file();
 
