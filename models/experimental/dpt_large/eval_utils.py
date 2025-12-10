@@ -10,17 +10,9 @@ from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 from PIL import Image
+from models.common.utility_functions import comp_pcc
 
 LOG = logging.getLogger(__name__)
-
-
-def compute_pcc(pred: np.ndarray, ref: np.ndarray) -> float:
-    pred_flat = pred.reshape(-1)
-    ref_flat = ref.reshape(-1)
-    pred_flat = pred_flat - pred_flat.mean()
-    ref_flat = ref_flat - ref_flat.mean()
-    denom = np.sqrt((pred_flat**2).sum() * (ref_flat**2).sum()) + 1e-8
-    return float((pred_flat * ref_flat).sum() / denom)
 
 
 def compute_mae(pred: np.ndarray, ref: np.ndarray) -> float:
@@ -45,7 +37,8 @@ def evaluate_tt_vs_cpu(
     for img in images:
         cpu_depth = cpu_pipeline.run_depth_cpu(img, normalize=normalize)
         tt_depth = tt_pipeline.forward(img, normalize=normalize)
-        pcc = compute_pcc(cpu_depth, tt_depth)
+        # Use shared PCC utility from tt-metal
+        passing, pcc = comp_pcc(cpu_depth, tt_depth, 0.99)
         pccs.append(pcc)
         LOG.info("PCC for %s: %.4f", img, pcc)
     mean_pcc = float(np.mean(pccs)) if pccs else 0.0
