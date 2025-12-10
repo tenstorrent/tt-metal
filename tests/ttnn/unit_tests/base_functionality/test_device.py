@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import subprocess
 
 import ttnn
 import torch
@@ -61,3 +62,44 @@ def test_worker_l1_fail(device, layout, dtype):
             device,
             memory_config=memory_config,
         )
+
+
+def test_release_ownership():
+    """Test that release_ownership allows re-initialization of the MetalContext."""
+    # Open and close a device
+    device = ttnn.open_device(device_id=0)
+    ttnn.close_device(device)
+
+    # Release ownership of the MetalContext
+    ttnn.release_ownership()
+
+    # Verify context can be re-created by opening a device again
+    device = ttnn.open_device(device_id=0)
+    ttnn.close_device(device)
+
+
+def test_release_ownership_with_subprocess():
+    """Test that after release_ownership, a subprocess can initialize the device."""
+    # Open and close a device in the parent process
+    device = ttnn.open_device(device_id=0)
+    ttnn.close_device(device)
+
+    # Release ownership of the MetalContext
+    ttnn.release_ownership()
+
+    # Spawn a subprocess that opens and closes a device
+    subprocess_code = """
+import ttnn
+device = ttnn.open_device(device_id=0)
+ttnn.close_device(device)
+"""
+    result = subprocess.run(
+        ["python3", "-c", subprocess_code],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"Subprocess failed: {result.stderr}"
+
+    # Verify the parent process can still open a device after subprocess completes
+    device = ttnn.open_device(device_id=0)
+    ttnn.close_device(device)
