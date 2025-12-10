@@ -50,7 +50,7 @@ download_headers() {
     mkdir -p "$header_dir"
 
     local base_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/tt-1xx/${chip_arch}"
-    local headers=("cfg_defines.h" "dev_mem_map.h" "tensix.h" "tensix_dev_map.h" "tensix_types.h")
+    local headers=("cfg_defines.h" "dev_mem_map.h" "tensix.h" "tensix_types.h")
 
     local specific_url=""
     if [[ "$chip_arch" == "wormhole" ]]; then
