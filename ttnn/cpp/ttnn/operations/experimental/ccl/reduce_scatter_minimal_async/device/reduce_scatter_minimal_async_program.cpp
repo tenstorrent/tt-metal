@@ -716,6 +716,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
+    num_workers_per_direction = 1;
+    printf("num_workers_per_direction=%d", num_workers_per_direction);
+    printf("core_grid_offset=%zu,%zu\n", core_grid_offset.x, core_grid_offset.y);
+
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
@@ -731,7 +735,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         topology, sender_device_coord, forward_coord, backward_coord, ring_size - 1, ring_size - 1, mesh_device);
 
     const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, CoreCoord(0, 6));
+    // core_grid_offset);
 
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;

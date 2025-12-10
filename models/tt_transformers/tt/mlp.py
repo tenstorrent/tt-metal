@@ -242,42 +242,100 @@ class MLP(LightweightModule):
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=li_ff2_compute_kernel_cfg,
-            dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-            program_config=pc_2,
-            memory_config=memory_config,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-        )
-        ttnn.deallocate(w2_in)
-        # if mode == "decode" and not TG:
-        #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
-        w2_out_reduced = tt_all_reduce(
-            w2_out,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=0 if (TG and self.dim < 8192) else 3,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
-            sharded=(mode == "decode"),
-            memory_config=(
-                (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
-                if mode == "decode"
-                else ttnn.DRAM_MEMORY_CONFIG
-            ),
-            dtype=self.args.ccl_dtype,
-            use_composite=True if self.dim == 8192 else False,
-            topology=self.args.ccl_topology(),
-        )
+        if True:
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+                program_config=pc_2,
+                memory_config=memory_config,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            )
+            ttnn.deallocate(w2_in)
+            # if mode == "decode" and not TG:
+            #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+            w2_out_reduced = tt_all_reduce(
+                w2_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=0 if (TG and self.dim < 8192) else 3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                sharded=(mode == "decode"),
+                memory_config=(
+                    (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                    if mode == "decode"
+                    else ttnn.DRAM_MEMORY_CONFIG
+                ),
+                dtype=self.args.ccl_dtype,
+                use_composite=True if self.dim == 8192 else False,
+                topology=self.args.ccl_topology(),
+            )
+        else:
+            rs_input_shape = [i for i in w2_in.shape][:-1] + [self.w2.shape[-1]]
+            rs_num_batches = rs_input_shape[0]
+            single_batch_input_shape = rs_input_shape[:]
+            single_batch_input_shape[2] //= rs_num_batches
+            num_devices = ttnn.get_num_devices()
+            persistent_intermediate_buffer = ttnn.from_torch(
+                torch.zeros(single_batch_input_shape),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=(
+                    (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                    if mode == "decode"
+                    else ttnn.DRAM_MEMORY_CONFIG
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(
+                    self.mesh_device,
+                ),
+            )
+            rs_output_shape = rs_input_shape[:]
+            rs_output_shape[3] //= num_devices
+            persistent_output_buffer = ttnn.from_torch(
+                torch.zeros(rs_output_shape),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=(
+                    (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                    if mode == "decode"
+                    else ttnn.DRAM_MEMORY_CONFIG
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            print("Starting matmul_reduce_scatter_async for w2", w2_in.shape, self.w2.shape)
+            w2_out, w2_out_reduced = ttnn.experimental.matmul_reduce_scatter_async(
+                w2_in,
+                self.w2,
+                persistent_intermediate_buffer=persistent_intermediate_buffer,
+                persistent_output_buffer=persistent_output_buffer,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                dim=0 if (TG and self.dim < 8192) else 3,
+                reduce_scatter_core_grid_offset=(0, 6),
+                memory_config_rs=(
+                    (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                    if mode == "decode"
+                    else ttnn.DRAM_MEMORY_CONFIG
+                ),
+                topology=self.args.ccl_topology(),
+                memory_config_mm=memory_config,
+                program_config=pc_2,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                num_links=1,
+            )
+            ttnn.deallocate(w2_in)
+            print("Finished matmul_reduce_scatter_async for w2", w2_in.shape, self.w2.shape)
 
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
+        print("Running op after matmul_reduce_scatter_async for w2", w2_in.shape, self.w2.shape)
         if mode == "decode":
             w2_out_reduced = ttnn.to_memory_config(
                 w2_out_reduced,

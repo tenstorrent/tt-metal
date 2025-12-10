@@ -868,29 +868,50 @@ class Attention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            attn_output_11SH = ttnn.experimental.all_gather_async(
+        if True:
+            if self.use_fused_all_gather_matmul:  # is true for Ring topology
+                attn_output_11SH = ttnn.experimental.all_gather_async(
+                    attn_output_11SH,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=self.ccl_topology,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
+
+            output_11SH = ttnn.linear(
                 attn_output_11SH,
+                self.wo,
+                compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+                dtype=self.activation_dtype or ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+            )
+        else:
+            tt_all_gather_out_tensor, output_11SH = ttnn.experimental.all_gather_matmul_async(
+                attn_output_11SH,
+                self.wo,
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                all_gather_core_grid_offset=(0, 6),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                num_links=1,
+                memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+                compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo,
-            compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
-        )
+            ttnn.deallocate(tt_all_gather_out_tensor)
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])

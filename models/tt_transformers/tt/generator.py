@@ -266,6 +266,7 @@ class Generator:
         if batch_size == 32 and len(set(prefill_seq_lens)) == 1 and prefill_seq_lens[0] * batch_size < 128 * 1024:
             use_batched_prefill = True
             assert self.data_parallel == 1, "Batched prefill is only supported for data_parallel=1 currently"
+        use_batched_prefill = False
 
         all_users = [0] if use_batched_prefill else empty_slots
 
