@@ -5,12 +5,29 @@
 #   abseil-*, altera-*, android-*, darwin-*, fuchsia-*, google-objc-*,
 #   linuxkernel-*, llvm-*, llvmlibc-*, openmp-*, zircon-*
 #
-# Alias-only groups (underlying checks remain enabled under primary names):
-#   cert-*   -> bugprone-*, misc-*, performance-*
-#   hicpp-*  -> bugprone-*, modernize-*, readability-*, cppcoreguidelines-*
-#
 # Run separately:
 #   clang-analyzer-*  (dedicated scan with report)
+#
+# === Evaluated ===
+#
+# bugprone-branch-clone:
+#   Attempted, no fixit, lots of violations.
+#
+# bugprone-sizeof-expression:
+#   Attempted, no fixit, developers rejected stating lack of value.
+#
+# bugprone-unchecked-optional-access:
+#   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
+#
+# concurrency-mt-unsafe:
+#   Attempted, no fixit, may not be realistic to fix as it flags std::getenv();
+#
+# cppcoreguidelines-init-variables:
+#   Attempted, has fixit, results in massive diff. Somewhat desireable for ND avoidance.
+#
+# performance-avoid-endl:
+#   Attempted, but developers rejected auto-fixits due to concerns about
+#   potential flush dependency.
 #
 Checks: >
   *,
@@ -122,11 +139,48 @@ Checks: >
   -altera-*,
   -android-*,
   -boost-*,
-  -cert-*,
+  -cert-arr39-c,
+  -cert-dcl16-c,
+  -cert-dcl21-cpp,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -cert-dcl58-cpp,
+  -cert-env33-c,
+  -cert-err33-c,
+  -cert-err34-c,
+  -cert-err58-cpp,
+  -cert-flp30-c,
+  -cert-int09-c,
+  -cert-msc30-c,
+  -cert-msc32-c,
+  -cert-msc50-cpp,
+  -cert-msc51-cpp,
+  -cert-oop11-cpp,
+  -cert-oop54-cpp,
   -clang-analyzer-*,
   -darwin-*,
   -fuchsia-*,
-  -hicpp-*,
+  -hicpp-avoid-c-arrays,
+  -hicpp-avoid-goto,
+  -hicpp-braces-around-statements,
+  -hicpp-deprecated-headers,
+  -hicpp-exception-baseclass,
+  -hicpp-explicit-conversions,
+  -hicpp-function-size,
+  -hicpp-invalid-access-moved,
+  -hicpp-move-const-arg,
+  -hicpp-multiway-paths-covered,
+  -hicpp-named-parameter,
+  -hicpp-no-array-decay,
+  -hicpp-no-malloc,
+  -hicpp-noexcept-move,
+  -hicpp-signed-bitwise,
+  -hicpp-special-member-functions,
+  -hicpp-uppercase-literal-suffix,
+  -hicpp-use-auto,
+  -hicpp-use-emplace,
+  -hicpp-use-nullptr,
+  -hicpp-vararg,
   -linuxkernel-*,
   -llvm-*,
   -llvmlibc-*,
