@@ -116,10 +116,10 @@ def test_grouped_gate(device):
         scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
     )
     logger.info(f"golden_scores: {golden_scores}")
-    logger.info(f"golden_top_k_experts_indices: {golden_top_k_experts_indices}")
-    logger.info(
-        f"golden top k expert indices group number: {golden_top_k_experts_indices // (total_experts // n_groups)}"
-    )
+    # logger.info(f"golden_top_k_experts_indices: {golden_top_k_experts_indices}")
+    # logger.info(
+    #     f"golden top k expert indices group number: {golden_top_k_experts_indices // (total_experts // n_groups)}"
+    # )
 
     ttnn_scores = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -137,6 +137,6 @@ def test_grouped_gate(device):
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
 
-    # logger.info(f"ttnn_scores: {ttnn_scores}")
+    logger.info(f"ttnn_scores: {ttnn_scores}")
     logger.info(f"golden_top_k_experts_indices: {golden_top_k_experts_indices}")
     logger.info(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices}")

@@ -60,7 +60,9 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(scores_cb_index, 1);
         if (width_tile == 0) {
-            UNPACK(DPRINT << "Scores cb rd ptr: " << get_local_cb_interface(scores_cb_index).fifo_rd_ptr - 1 << ENDL();)
+            // Print read pointers and scores input
+            UNPACK(DPRINT << "Compute: rd_ptr=" << (get_local_cb_interface(scores_cb_index).fifo_rd_ptr << 4)
+                          << ENDL();)
             UNPACK(print_tile(scores_cb_index, 0, true, 0, 1, 0, 32));
         }
         tile_regs_acquire();
@@ -348,7 +350,9 @@ void normalize_scores(
     const uint32_t transpose_cb_index,
     const uint32_t epsilon_cb_index,
     const uint32_t normalized_scores_cb_index) {
-    compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
+    // compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
+    reconfig_data_format(unnormalized_scores_cb_index, reduce_scalar_cb_index);
+    pack_reconfig_data_format(normalized_scores_cb_index);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
 
@@ -374,6 +378,10 @@ void normalize_scores(
     tile_regs_acquire();
     cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(intermediate_reduce_cb_index, 1);
+
+    reconfig_data_format(intermediate_reduce_cb_index, epsilon_cb_index);
+    pack_reconfig_data_format(transpose_cb_index);
+
     add_bcast_scalar_init_short(intermediate_reduce_cb_index, epsilon_cb_index);
     add_tiles_bcast<BroadcastType::SCALAR>(intermediate_reduce_cb_index, epsilon_cb_index, 0, 0, 0);
 
@@ -389,6 +397,7 @@ void normalize_scores(
     cb_reserve_back(transpose_cb_index, 1);
     pack_tile(0, transpose_cb_index);
     cb_push_back(transpose_cb_index, 1);
+    tile_regs_release();
 
     // 6. Broadcast multiply
     tile_regs_acquire();

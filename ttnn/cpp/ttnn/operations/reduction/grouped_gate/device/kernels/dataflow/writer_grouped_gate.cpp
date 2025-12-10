@@ -41,6 +41,10 @@ FORCE_INLINE void generate_index_tile(
 
     // Create the top two faces by writing 1 face line, then using noc to write the rest of the face
     cb_reserve_back(topk_index_creation_cb_index, 1);
+    // Debug: print write address for first tile only
+    if (start_expert_index == 0) {
+        DPRINT << "generate_index_tile: write_addr=" << index_write_addr << ENDL();
+    }
     for (uint32_t width_face = 0; width_face < 2; width_face++) {
         uint32_t current_index = start_expert_index + width_face * face_line;
         uint32_t index_write_face_offset = index_write_addr + width_face * face_size_bytes;
@@ -85,6 +89,8 @@ FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t group_indices_cb_index, uint32_t width_tiles, uint32_t n_groups) {
     cb_reserve_back(group_indices_cb_index, 1);  // max of 32 groups
     uint32_t base_write_addr = get_write_ptr(group_indices_cb_index);
+    DPRINT << "generate_group_indices: base_addr=" << base_write_addr << " face2_dest=" << (base_write_addr + 512)
+           << ENDL();
     constexpr uint32_t face_line = 16;
     constexpr uint32_t face_line_bytes = 32;
     constexpr uint32_t num_tile_elements = 1024;
@@ -145,6 +151,8 @@ FORCE_INLINE void generate_reduce_scalar(
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t face_line_bytes = 32;
     uint32_t write_addr = get_write_ptr(reduce_scalar_cb_index);
+    DPRINT << "generate_reduce_scalar: write_addr=" << write_addr << " zeros_dest=" << (write_addr + face_size_bytes)
+           << ENDL();
     tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
     // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
     uint16_t scalar = packed_scalar >> 16;
@@ -189,6 +197,7 @@ FORCE_INLINE void generate_summed_experts_tiles(
 
     // for each group, copy the top experts_per_group rows to the summed_experts_cb_index
     cb_reserve_back(summed_experts_cb_index, summed_experts_per_group);
+    DPRINT << "Writer summed_experts: dest=" << get_write_ptr(summed_experts_cb_index) << ENDL();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         // get one width tile
         cb_wait_front(topk_input_cb_index, 1);
@@ -258,6 +267,10 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     uint64_t indices_base_noc_addr = get_noc_addr(get_read_ptr(topk_index_creation_cb_index));
     uint32_t scores_dest_base_addr = get_write_ptr(winning_group_scores_cb_index);
     uint32_t indices_dest_base_addr = get_write_ptr(winning_group_indices_cb_index);
+
+    // Debug: print CB addresses to check for overlap
+    DPRINT << "Writer winning_group: scores_dest=" << scores_dest_base_addr
+           << " indices_dest=" << indices_dest_base_addr << ENDL();
 
     // Indices pointer (in L1)
     volatile tt_l1_ptr uint16_t* sorted_indices_ptr =
