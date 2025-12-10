@@ -35,14 +35,15 @@ void kernel_main() {
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
     uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
-    // NEW: Multicast-related runtime args for W1
-    uint32_t w1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_num_dests = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
-    uint32_t w1_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
+    // Shared multicast runtime args (same topology and semaphores for W1/W2/W3)
+    // W1, W3, W2 execute sequentially so they can safely reuse the same semaphores
+    uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_num_dests = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
+    uint32_t mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
 
@@ -58,11 +59,11 @@ void kernel_main() {
 
     const uint32_t end_row = start_row + num_rows_to_process;
 
-    // Semaphore pointers for synchronization
-    volatile tt_l1_ptr uint32_t* w1_mcast_sender_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w1_mcast_sender_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* w1_mcast_receiver_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w1_mcast_receiver_semaphore_addr);
+    // Shared semaphore pointers for synchronization (reused by W1/W2/W3)
+    volatile tt_l1_ptr uint32_t* mcast_sender_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_sender_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
 
 #define ROW_OF_M_FITS_IN_L1 1
 
@@ -106,63 +107,25 @@ void kernel_main() {
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
                 // First, read all W1 data for this k_block (compute processes W1 first)
-                if (w1_mcast_num_dests > 0) {
+                if (mcast_num_dests > 0) {
                     // Multicast path: loop over each row, read, multicast
-                    // DPRINT << "Sender multicast mode: p_block_size=" << p_block_size
-                    //        << ", w1_mcast_num_dests=" << w1_mcast_num_dests << "\n";
                     for (uint32_t p = 0; p < p_block_size; ++p) {
                         uint32_t w1_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
-
-                        // DPRINT << "Sender iteration p=" << p << ", waiting for " << w1_mcast_num_dests
-                        //        << " receivers\n";
-                        // 1. Wait for all receivers to be ready (they increment sender semaphore)
-                        noc_semaphore_wait(w1_mcast_sender_sem_ptr, w1_mcast_num_dests);
-                        // DPRINT << "Sender: all receivers ready, resetting semaphore\n";
-                        noc_semaphore_set(w1_mcast_sender_sem_ptr, 0);  // Reset for next iteration
-
-                        // 2. Read W1[p, k_block] from DRAM into cb_w1 (but don't push yet!)
-                        read_tiles_by_row<false>(
-                            cb_w1_idx, w1_address_generator, w1_tile_start, k_block_size, tile_bytes, block_size);
-                        uint32_t w1_l1_write_addr = get_write_ptr(cb_w1_idx);  // Save write address for multicast
-                        noc_async_read_barrier();
-                        // NOTE: Don't push to CB yet! Must multicast first to prevent compute from popping
-
-                        // 3. Multicast W1 tiles to all receiver cores' CB at same L1 offset
-                        // Note: CB is allocated at same L1 address on all cores
-                        uint64_t w1_multicast_noc_addr = get_noc_multicast_addr(
-                            w1_mcast_dest_noc_start_x,
-                            w1_mcast_dest_noc_start_y,
-                            w1_mcast_dest_noc_end_x,
-                            w1_mcast_dest_noc_end_y,
-                            w1_l1_write_addr);
-                        // DPRINT << "Sender: multicasting W1 data\n";
-                        noc_async_write_multicast(
-                            w1_l1_write_addr, w1_multicast_noc_addr, k_block_size * tile_bytes, w1_mcast_num_dests);
-
-                        // 4. Wait for data multicast to complete BEFORE signaling
-                        // DPRINT << "Sender: waiting for data multicast barrier\n";
-                        noc_async_write_barrier();
-                        // DPRINT << "Sender: data multicast complete\n";
-
-                        // 5. NOW signal to receivers that data is ready
-                        // DPRINT << "Sender: signaling receivers data ready\n";
-                        noc_semaphore_set(w1_mcast_receiver_sem_ptr, 1);
-                        uint64_t w1_receiver_sem_noc_addr = get_noc_multicast_addr(
-                            w1_mcast_dest_noc_start_x,
-                            w1_mcast_dest_noc_start_y,
-                            w1_mcast_dest_noc_end_x,
-                            w1_mcast_dest_noc_end_y,
-                            w1_mcast_receiver_semaphore_addr);
-                        noc_semaphore_set_multicast(
-                            w1_mcast_receiver_semaphore_addr, w1_receiver_sem_noc_addr, w1_mcast_num_dests);
-
-                        // 6. Wait for semaphore signal to complete
-                        // DPRINT << "Sender: waiting for semaphore multicast barrier\n";
-                        noc_async_write_barrier();
-                        // DPRINT << "Sender: multicast complete for iteration p=" << p << "\n";
-
-                        // 7. NOW push to CB after multicast completes - safe for compute to consume
-                        cb_push_back(cb_w1_idx, block_size);
+                        mcast_sender_read_and_send(
+                            cb_w1_idx,
+                            w1_address_generator,
+                            w1_tile_start,
+                            k_block_size,
+                            tile_bytes,
+                            block_size,
+                            mcast_sender_sem_ptr,
+                            mcast_receiver_sem_ptr,
+                            mcast_receiver_semaphore_addr,
+                            mcast_dest_noc_start_x,
+                            mcast_dest_noc_start_y,
+                            mcast_dest_noc_end_x,
+                            mcast_dest_noc_end_y,
+                            mcast_num_dests);
                     }
                 } else {
                     // Single-core path: read all p_block_size rows at once (same as original reader)
@@ -174,15 +137,35 @@ void kernel_main() {
                     }
                     // DPRINT << "Finished reading W1 tiles for single-core path\n";
                 }
-                // }  // Then, read all W3 data for this k_block (compute processes W3 second)
-                // NOTE: W3 is NOT multicast in Phase 1 - each core still reads independently
-                // DPRINT << "Reading W3 tiles\n";
-                for (uint32_t p = 0; p < p_block_size; ++p) {
-                    uint32_t w3_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
-                    read_tiles_by_row(
-                        cb_w3_idx, w3_address_generator, w3_tile_start, k_block_size, tile_bytes, block_size);
+                // Then, read all W3 data for this k_block (compute processes W3 second)
+                if (mcast_num_dests > 0) {
+                    // Multicast path for W3: loop over each row, read, multicast
+                    for (uint32_t p = 0; p < p_block_size; ++p) {
+                        uint32_t w3_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
+                        mcast_sender_read_and_send(
+                            cb_w3_idx,
+                            w3_address_generator,
+                            w3_tile_start,
+                            k_block_size,
+                            tile_bytes,
+                            block_size,
+                            mcast_sender_sem_ptr,
+                            mcast_receiver_sem_ptr,
+                            mcast_receiver_semaphore_addr,
+                            mcast_dest_noc_start_x,
+                            mcast_dest_noc_start_y,
+                            mcast_dest_noc_end_x,
+                            mcast_dest_noc_end_y,
+                            mcast_num_dests);
+                    }
+                } else {
+                    // Single-core path: read all W3 normally
+                    for (uint32_t p = 0; p < p_block_size; ++p) {
+                        uint32_t w3_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
+                        read_tiles_by_row(
+                            cb_w3_idx, w3_address_generator, w3_tile_start, k_block_size, tile_bytes, block_size);
+                    }
                 }
-                // DPRINT << "Finished reading W3 tiles\n";
             }
         }
 
@@ -190,21 +173,57 @@ void kernel_main() {
         // ---- Phase B: Compute M[r, :] once ----
         // No reading required to compute M[r, :]
 
-        // DPRINT << "Starting Phase C for row " << r << "\n";
         // ---- Phase C: Use M[r, :] for all c_blocks ----
-        // NOTE: W2 is NOT multicast in Phase 1 - each core still reads independently
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-                for (uint32_t c = 0; c < c_block_size; ++c) {
-                    const uint32_t c_global = c_block_start + c;
-                    uint32_t w2_tile_start = k_block_start * Wt + c_global;
-                    // DPRINT << "Reading W2 tiles\n";
-                    read_tiles_by_col(
-                        cb_w2_idx, w2_address_generator, w2_tile_start, k_block_size, tile_bytes, Wt, block_size);
-                    // DPRINT << "Finished reading W2 tiles\n";
+
+                if (mcast_num_dests > 0) {
+                    // Multicast path for W2: loop over each column in c_block
+                    for (uint32_t c = 0; c < c_block_size; ++c) {
+                        const uint32_t c_global = c_block_start + c;
+                        uint32_t w2_tile_start = k_block_start * Wt + c_global;
+
+                        // Wait for receivers
+                        mcast_sender_wait_for_receivers(mcast_sender_sem_ptr, mcast_num_dests);
+
+                        // Read W2 column from DRAM (by column, not row)
+                        read_tiles_by_col<false>(
+                            cb_w2_idx, w2_address_generator, w2_tile_start, k_block_size, tile_bytes, Wt, block_size);
+                        uint32_t w2_l1_write_addr = get_write_ptr(cb_w2_idx);
+                        noc_async_read_barrier();
+
+                        // Multicast data
+                        mcast_sender_send_data(
+                            w2_l1_write_addr,
+                            mcast_dest_noc_start_x,
+                            mcast_dest_noc_start_y,
+                            mcast_dest_noc_end_x,
+                            mcast_dest_noc_end_y,
+                            k_block_size * tile_bytes,
+                            mcast_num_dests);
+
+                        // Signal receivers
+                        mcast_sender_signal_receivers(
+                            mcast_receiver_sem_ptr,
+                            mcast_receiver_semaphore_addr,
+                            mcast_dest_noc_start_x,
+                            mcast_dest_noc_start_y,
+                            mcast_dest_noc_end_x,
+                            mcast_dest_noc_end_y,
+                            mcast_num_dests);  // Push to CB
+                        cb_push_back(cb_w2_idx, block_size);
+                    }
+                } else {
+                    // Single-core path: read all W2 normally
+                    for (uint32_t c = 0; c < c_block_size; ++c) {
+                        const uint32_t c_global = c_block_start + c;
+                        uint32_t w2_tile_start = k_block_start * Wt + c_global;
+                        read_tiles_by_col(
+                            cb_w2_idx, w2_address_generator, w2_tile_start, k_block_size, tile_bytes, Wt, block_size);
+                    }
                 }
             }
         }
