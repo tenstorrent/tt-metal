@@ -47,7 +47,7 @@ void MAIN {
     constexpr auto cb_fusion = tt::CBIndex::c_22;       // stream gamma/beta
     constexpr auto cb_reciprocals = tt::CBIndex::c_25;  // Pre-computed reciprocals for Welford's algorithm
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-
+    DPRINT << "Welford" << ENDL();
     //  Either in or in + b if doing fused pre-add
     constexpr auto cb_x = []() -> auto {
         if constexpr (fuse_pre_add) {
@@ -64,6 +64,20 @@ void MAIN {
 
     // The number of valid rows in the last tile in width dimension
     constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
+
+    // Compute syncs with the reader based on block size,
+    // but Welford can't compute past the last tile with
+    // data in it. So we invoke this to keep them in sync
+    constexpr uint32_t W_nearest_tile_up = (W + tile_width - 1) / tile_width;
+    auto sync_extra_tiles = [cb_x]() {
+        constexpr uint32_t extra_tiles = Wt - W_nearest_tile_up;
+        DPRINT << "Wt: " << Wt << ", W_nearest_tile_up: " << W_nearest_tile_up << ", extra_tiles: " << extra_tiles
+               << ENDL();
+        if constexpr (extra_tiles > 0) {
+            cb_wait_front(cb_x, extra_tiles);
+            // cb_pop_front(cb_x, extra_tiles);
+        }
+    };
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
@@ -113,7 +127,7 @@ void MAIN {
         tile_regs_acquire();
         welford_init();
         // Process all but the last tile
-        for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
+        for (uint32_t wt = 0; wt < (W_nearest_tile_up - 1); ++wt) {
             cb_wait_front(cb_x, wt + 1);
             // Welford's needs transposed input tile
             transpose_wh_tile(cb_x, wt, input_dst);
@@ -122,9 +136,11 @@ void MAIN {
         }
 
         // Process the last tile
-        cb_wait_front(cb_x, Wt);
-        transpose_wh_tile(cb_x, Wt - 1, input_dst);
+        cb_wait_front(cb_x, W_nearest_tile_up);
+        transpose_wh_tile(cb_x, W_nearest_tile_up - 1, input_dst);
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
+
+        sync_extra_tiles();
 
         // Store the mean and variance to the destination registers
         welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);

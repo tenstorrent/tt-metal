@@ -14,10 +14,14 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "dprint_pages.h"
+#include "dprint_tensix.h"
 #include <type_traits>
 #include <array>
 
 namespace policies = norm::kernel_util::compute::policies;
+namespace generic = norm::kernel_util::generic;
 
 namespace norm::kernel_util::compute::numeric {
 
@@ -61,15 +65,47 @@ inline void accumulate_compute_loop(
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
-        for (uint32_t t = 0; t < num_tiles; t += block_size) {
-            const uint32_t num_previous_tiles = pop_input ? 0 : t;
-            cb_wait_front(cb, num_previous_tiles + block_size);
-            for (uint32_t j = 0; j < block_size; j++) {
+        // uint32_t tiles_remaining = num_tiles;
+        // uint32_t num_previous_tiles = 0;
+        // while (tiles_remaining > 0) {
+        //     //const auto num_previous_tiles = pop_input ? 0 : t;
+        //     const auto curr_block_size = std::min(block_size, tiles_remaining);
+        //     cb_wait_front(cb, num_previous_tiles + curr_block_size);
+        //     for (uint32_t j = 0; j < curr_block_size; j++) {
+        //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+        //             cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
+        //     }
+        //     if constexpr (pop_input) {
+        //         cb_pop_front(cb, curr_block_size);
+        //     } else {
+        //         num_previous_tiles += curr_block_size;
+        //     }
+        //     tiles_remaining -= curr_block_size;
+        // }
+        // for (uint32_t t = 0; t < num_tiles; t += std::min(block_size, num_tiles - num_previous_tiles)) {
+        //     //const auto num_previous_tiles = pop_input ? 0 : t;
+        //     const auto curr_block_size = t - num_previous_tiles;
+        //     cb_wait_front(cb, num_previous_tiles + block_size);
+        //     for (uint32_t j = 0; j < curr_block_size; j++) {
+        //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+        //             cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
+        //     }
+        //     if constexpr (pop_input) {
+        //         cb_pop_front(cb, curr_block_size);
+        //     } else {
+        //         num_previous_tiles += curr_block_size;
+        //     }
+        // }
+        for (auto block : generic::blocks(num_tiles, block_size)) {
+            // const auto num_previous_tiles = pop_input ? 0 : t;
+            const auto num_previous_tiles = pop_input ? 0 : block.start();
+            cb_wait_front(cb, num_previous_tiles + block.size());
+            for (auto j : block.local()) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
-                cb_pop_front(cb, block_size);
+                cb_pop_front(cb, block.size());
             }
         }
     };
@@ -129,6 +165,7 @@ template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
+    policies::ReserveBackPolicy reserve_back_policy = policies::ReserveBackPolicy::RESERVE,
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
 inline void row_wise_accumulate_with_epilogue(
@@ -141,6 +178,7 @@ inline void row_wise_accumulate_with_epilogue(
     AdditionalCBs... additional_cbs) {
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
+    constexpr bool reserve_back = reserve_back_policy == policies::ReserveBackPolicy::RESERVE;
 
     reconfig_data_format(cb_in, cb_scalar);
     tile_regs_acquire();
@@ -153,7 +191,9 @@ inline void row_wise_accumulate_with_epilogue(
     tile_regs_commit();
     tile_regs_wait();
 
-    cb_reserve_back(cb_out, 1);
+    if constexpr (reserve_back) {
+        cb_reserve_back(cb_out, 1);
+    }
     pack_reconfig_data_format(cb_out);
     pack_tile(detail::dst0, cb_out);
     tile_regs_release();
@@ -183,11 +223,13 @@ inline void row_wise_accumulate_with_epilogue(
 template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
-    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
+    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
+    policies::ReserveBackPolicy reserve_back_policy = policies::ReserveBackPolicy::RESERVE>
 inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy, reserve_back_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
+            // dprint_tensix_dest_reg<true>(detail::dst0);
             detail::scale_dest(detail::dst0, one_over_N);
         });
 }
@@ -212,7 +254,8 @@ inline void row_wise_mean(
 template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
-    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
+    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
+    policies::ReserveBackPolicy reserve_back_policy = policies::ReserveBackPolicy::RESERVE>
 inline void row_wise_mean_with_pre_add(
     uint32_t cb_in0,
     uint32_t cb_in1,
@@ -221,7 +264,7 @@ inline void row_wise_mean_with_pre_add(
     uint32_t one_over_N,
     uint32_t num_tiles,
     uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy, reserve_back_policy>(
         cb_in0,
         cb_scalar,
         cb_out,

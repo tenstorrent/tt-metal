@@ -402,3 +402,52 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
         assert_output_accuracy(torch_output, tt_output_torch)
     elif dtype == ttnn.bfloat8_b:
         assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
+
+
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_layer_norm_with_padding(device, use_welford, dtype):
+    """
+    Test layer norm on a tensor that is padded with zeros
+    in the width dimension.
+    Compare against analytic layer norm calculation: (x - mean) / sqrt(var + eps)
+    Only tests Welford layernorm, since legacy reduce doesn't give the correct
+    result for partially-filled tiles.
+    """
+    # TODO Test height padding
+
+    torch.manual_seed(191919)
+
+    h, w = 32, 12 * 32 + 1
+    non_zero_columns = 14
+    torch_input_tensor = torch.zeros((h, w), dtype=dtype)
+    torch_input_tensor[:, :non_zero_columns] = torch.ones((h, non_zero_columns), dtype=dtype)
+
+    # Convert to TTNN tensor
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.Layout.TILE,
+        device=device,
+    )
+
+    # Run sharded layer norm
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_ttnn = ttnn.layer_norm(
+        tt_input_tensor,
+        program_config=program_config,
+    )
+    output_ttnn = ttnn.to_torch(output_ttnn)
+
+    golden = ttnn.get_golden_function(ttnn.layer_norm)
+    golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
+
+    print(f"output_ttnn: {output_ttnn}")
+    print(f"golden_output: {golden_output}")
+
+    # Assert that the output is close to the golden output
+    # rtol = 1e-2  # 1%, ~1-2 ULP
+    # atol = 0     # Output doesn't have small values so we don't need this
+    assert_output_accuracy(golden_output, output_ttnn)
+    # passed, message = assert_allclose(golden_output, output_ttnn, rtol=rtol, atol=atol)
+    # print(f"Message: {message}")
+    # assert passed, message

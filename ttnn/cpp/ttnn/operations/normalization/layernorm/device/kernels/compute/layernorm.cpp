@@ -10,13 +10,45 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "dprint_tensix.h"
+#include "dprint_pages.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
+
+namespace detail {
+/**
+ * @brief C++17 compatible bit_cast replacement using union
+ * @tparam To The type to cast to
+ * @tparam From The type to cast from
+ * @param from The value to cast from
+ * @return The casted value
+ */
+template <typename To, typename From>
+inline To bit_cast(const From& from) noexcept {
+    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
+    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
+
+    union {
+        From f;
+        To t;
+    } u;
+
+    u.f = from;
+    return u.t;
+}
+}  // namespace detail
 
 namespace NAMESPACE {
 void MAIN {
@@ -33,6 +65,7 @@ void MAIN {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t one_over_W = get_compile_time_arg_val(7);
+    constexpr uint32_t W = get_compile_time_arg_val(8);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -70,10 +103,24 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
+#ifdef RMSNORM
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
+#else
+    binary_op_init_common(cb_x, cb_scaler, cb_ex);
 #endif
+#endif
+    // Compute syncs with the reader based on block size,
+    // but Welford can't compute past the last tile with
+    // data in it. So we invoke this to keep them in sync
+    constexpr uint32_t W_nearest_tile_up = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    auto sync_extra_tiles = [cb_x]() {
+        constexpr uint32_t extra_tiles = Wt - W_nearest_tile_up;
+        if constexpr (extra_tiles > 0) {
+            cb_wait_front(cb_x, extra_tiles);
+            // cb_pop_front(cb_x, extra_tiles);
+        }
+    };
 
-    cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
@@ -81,6 +128,7 @@ void MAIN {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
+        constexpr int dst1 = 1;
 
 /*
  * X + Y
@@ -118,7 +166,15 @@ void MAIN {
 
 #ifndef RMSNORM
         // E[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, one_over_W, Wt, blk);
+        DPRINT << "W_nearest_tile_up: " << W_nearest_tile_up << ENDL();
+        DPRINT << "W: " << W << ENDL();
+        DPRINT << "Wt: " << Wt << ENDL();
+        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, one_over_W, W_nearest_tile_up, blk);
+        sync_extra_tiles();
+        DPRINT << "one_over_W: " << detail::bit_cast<float>(one_over_W) << ENDL();
+        DPRINT << "Wt: " << Wt << ENDL();
+        DPRINT << "blk: " << blk << ENDL();
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex, 0, true));
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
@@ -133,7 +189,7 @@ void MAIN {
             cb_push_back(cb_xmm, blk);
             REL();
         }
-        cb_pop_front(cb_ex, 1);
+        // cb_pop_front(cb_ex, 1);
         cb_pop_front(cb_x, Wt);
 
 #ifndef FUSE_PRE_ADD
@@ -162,10 +218,81 @@ void MAIN {
 #endif
 
         // Var[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
-            cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
+        // cb_reserve_back(cb_ex2, 2);
+        numeric::row_wise_mean<
+            FLOAT32_REDUCTION,
+            policies::PopInputPolicy::POP,
+            policies::WaitAtEndPolicy::WAIT,
+            policies::ReserveBackPolicy::RESERVE>(cb_xmm2, cb_scaler, cb_ex2, one_over_W, W_nearest_tile_up, blk);
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 0, true));
+
+        // If the last block is partially-filled, we overaccumulated
+        // the variance by:
+        //
+        // over_accumulation = (W_nearest_tile_up * TILE_WIDTH - W) * E[x]^2 / W
+        //
+        // So we need to subtract this from the variance
+        constexpr auto extra_cols = W_nearest_tile_up * tt::constants::TILE_WIDTH - W;
+        DPRINT << "extra_cols: " << extra_cols << ENDL();
+        if constexpr (extra_cols > 0) {
+            // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 0, true));
+            UNPACK(tt::compute::common::print_full_tile(cb_ex2, 0, true));
+
+            cb_reserve_back(cb_ex2, 1);
+            reconfig_data_format_srca(cb_ex2);
+            tile_regs_acquire();
+            // Copy variance tile to dst0
+            copy_tile_init(cb_ex2);
+            copy_tile(cb_ex2, 0, dst0);
+
+            cb_pop_front(cb_ex2, 1);
+
+            // dprint_tensix_dest_reg<true>(dst0);
+
+            // Copy E[x] tile to dst1
+            copy_tile_init(cb_ex);
+            copy_tile(cb_ex, 0, dst1);
+
+            // dprint_tensix_dest_reg<true>(dst1);
+
+            // dprint_tensix_dest_reg<true>(dst0);
+            // dprint_tensix_dest_reg<true>(dst1);
+
+            // Square dst1
+            square_tile_init();
+            square_tile(dst1);
+
+            // Multiply by (#extra cols / W)
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst1, detail::bit_cast<uint32_t>(static_cast<float>(extra_cols) / W));
+
+            // Subtract dst1 from dst0
+            sub_binary_tile_init();
+            sub_binary_tile(dst0, dst1, dst0);
+
+            // dprint_tensix_dest_reg<true>(dst0);
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            // Pack dst0 into cb_ex2
+            pack_tile(dst0, cb_ex2);
+
+            tile_regs_release();
+
+            cb_push_back(cb_ex2, 1);
+
+            // Pop the incorrect tile
+            // cb_pop_front(cb_ex2, 1);
+        }
+        cb_pop_front(cb_ex, 1);
 
         // Var[x] + eps
+        cb_wait_front(cb_ex2, 1);
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 0, true));
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 1, true));
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 1, true));
+        // UNPACK(tt::compute::common::print_full_tile(cb_ex2, 0, true));
         reconfig_data_format(cb_ex2, cb_eps);
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);

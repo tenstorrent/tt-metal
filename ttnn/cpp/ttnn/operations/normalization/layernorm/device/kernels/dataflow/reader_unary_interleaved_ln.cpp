@@ -19,6 +19,19 @@ void read_row_to_cb(
     noc_async_read_barrier();
     cb_push_back(cb_id, blk);
 }
+
+inline uint16_t float_to_bfloat16(float f) {
+    uint32_t float_bits;
+    std::memcpy(&float_bits, &f, sizeof(float));
+    return static_cast<uint16_t>(float_bits >> 16);
+}
+
+uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
+    // first -> lower 16
+    // second -> upper 16
+    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
+}
+
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
@@ -61,6 +74,8 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
+        // generate_partial_reduce_scaler(cb_in_2, pack_two_bfloat16_into_uint32(std::make_pair(float_to_bfloat16(1),
+        // float_to_bfloat16(1))), 1);
     }
 
     constexpr uint32_t eps_cb_id = 3;
@@ -70,8 +85,17 @@ void kernel_main() {
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     auto read_in0_and_in1 = [&]() {
+        uint32_t tiles_remaining = Wt;
+        uint32_t block_offset = 0;
+        while (tiles_remaining > 0) {
+            // const auto num_previous_tiles = pop_input ? 0 : t;
+            const auto curr_block_size = std::min(blk, tiles_remaining);
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block_offset + tile_offset, curr_block_size);
+            tiles_remaining -= curr_block_size;
+            block_offset += curr_block_size;
+        }
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            // read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
             read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);

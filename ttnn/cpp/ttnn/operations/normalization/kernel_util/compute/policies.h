@@ -23,4 +23,10 @@ enum class WaitAtEndPolicy { WAIT, NO_WAIT };
  */
 enum class PopInputPolicy { POP, NO_POP };
 
+/**
+ * @brief Control whether to reserve space for output
+ * tile of an operation or just push it
+ */
+enum class ReserveBackPolicy { RESERVE, NO_RESERVE };
+
 }  // namespace norm::kernel_util::compute::policies
