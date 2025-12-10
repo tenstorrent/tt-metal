@@ -471,17 +471,15 @@ uint32_t write_partial_tiles_to_memory(
     constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
-
-    const uint32_t num_head_tiles = PNHt;
     const uint32_t num_hidden_tiles = out_chunk_tiles / PNHt;
 
     uint32_t l1_base_addr = get_read_ptr(cb_out);
 
     for (uint32_t hidden_tile = 0; hidden_tile < num_hidden_tiles; ++hidden_tile) {
         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
-            uint32_t starting_row = cur_head * num_heads_to_write + head;  // 0..63
-            uint32_t tile_row = starting_row % TILE_HW;                    // 0..31
-            uint32_t head_tile = starting_row / TILE_HW;                   // 0 or 1
+            uint32_t starting_row = cur_head * num_heads_to_write + head;
+            uint32_t tile_row = starting_row % TILE_HW;
+            uint32_t head_tile = starting_row / TILE_HW;
 
             uint32_t in_tile_offset = (tile_row < FACE_HW) ? tile_row * FACE_LINE_BYTES
                                                            : (tile_row + FACE_HW) * FACE_LINE_BYTES;  // skip face
