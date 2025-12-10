@@ -24,13 +24,13 @@ inline void calculate_hardtanh(uint param0, uint param1) {
         // x = max(x, min_val) using LREG2
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1 /* smaller value to LREG0 */);
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);  // store max
 
         // x = min(x, max_val) using LREG3
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1 /* smaller value to LREG0 */);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);  // store min
 
         sfpi::dst_reg++;
