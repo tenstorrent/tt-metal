@@ -125,6 +125,8 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
         compute_kernel_config=compute_config,
     )
 
+    print(torch_input.numel())
+
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)
     output_torch = output_torch[:, :width]

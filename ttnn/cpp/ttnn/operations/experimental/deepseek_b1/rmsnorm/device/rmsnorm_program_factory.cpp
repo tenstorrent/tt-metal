@@ -8,6 +8,16 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#define DEB(x) x
+
+void print_map(std::unordered_map<std::string, uint32_t>& m, const std::string& header) {
+    std::cout << header << std::endl;
+    for (const auto& pair : m) {
+        std::cout << pair.first << ": " << pair.second << std::endl;
+    }
+    std::cout << std::endl;
+}
+
 using namespace tt::constants;
 
 namespace ttnn::operations::experimental::deepseek_b1::rmsnorm {
@@ -20,6 +30,13 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
     const Tensor& gamma = tensor_args.gamma_tensor;
     Tensor& output_tensor = tensor_return_value;
 
+    /*
+    DEB(std::cout << "Input " << std::endl;)
+    DEB(std::cout << input;)
+    DEB(std::cout << "Gamma " << std::endl;)
+    DEB(std::cout << gamma;)
+    */
+
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Get shard specs - all tensors should be sharded on the same cores
@@ -29,6 +46,8 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
     tt::tt_metal::IDevice* device = input.device();
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
+    DEB(std::cout << "Data forma " << data_format << std::endl;)
+
     bool tiny_tile = (input.logical_shape()[1] / tt::constants::TILE_WIDTH) % tt::constants::TILE_HEIGHT != 0;
     uint32_t tile_height = tiny_tile ? tt::constants::TILE_HEIGHT / 2 : tt::constants::TILE_HEIGHT;
     tt::tt_metal::Tile tile({tile_height, tt::constants::TILE_WIDTH});
@@ -37,6 +56,9 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
     uint32_t single_tile_size = tiny_tile ? tt::tile_size(data_format) / 2 : tt::tile_size(data_format);
     uint32_t shard_size_bytes = input.buffer()->aligned_size() / cores.num_cores();
     uint32_t num_tiles = shard_size_bytes / single_tile_size;
+
+    DEB(std::cout << "Single tile size " << single_tile_size << " shard_size_bytes " << shard_size_bytes
+                  << " num_tiles " << num_tiles << std::endl;)
 
     // Create circular buffers (all globally allocated, backed by L1 shards)
     uint32_t cb_idx = 0;
@@ -95,6 +117,8 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
         {"tiny_tile", tiny_tile ? 1u : 0u},
     };
 
+    DEB(print_map(reader_named_compile_args, "reader_named_compile_args");)
+
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         reader_kernel_path,
@@ -124,6 +148,8 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
         {"rms_scalar_index", 1},   // Second tile in scalars_cb
     };
 
+    DEB(print_map(compute_named_compile_args, "compute_named_compile_args");)
+
     tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -143,6 +169,8 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
         {"num_tiles", num_tiles},
     };
 
+    DEB(print_map(writer_named_compile_args, "writer_named_compile_args");)
+
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         writer_kernel_path,
@@ -161,6 +189,10 @@ RmsnormDeviceOperation::RmsnormProgramFactory::cached_program_t RmsnormDeviceOpe
     float inv_sqrt_num_elements = 1.0f / std::sqrt(static_cast<float>(operation_attributes.numel));
     bfloat16 bfloat_scalar = bfloat16::truncate(inv_sqrt_num_elements);
     uint32_t packed_scalar = pack_two_bfloat16_into_uint32({bfloat_scalar, bfloat_scalar});
+
+    DEB(std::cout << "numel " << operation_attributes.numel << std::endl;)
+    DEB(std::cout << "epsilon " << operation_attributes.epsilon << " scalar " << inv_sqrt_num_elements << std::endl;)
+    DEB(std::cout << "bfloat_epsilon " << bfloat_epsilon << " bfloat_scalar " << bfloat_scalar << std::endl;)
 
     for (const auto& core_range : cores.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -211,6 +243,10 @@ void RmsnormDeviceOperation::RmsnormProgramFactory::override_runtime_arguments(
     float inv_sqrt_num_elements = 1.0f / std::sqrt(static_cast<float>(operation_attributes.numel));
     bfloat16 bfloat_scalar = bfloat16::truncate(inv_sqrt_num_elements);
     uint32_t packed_scalar = pack_two_bfloat16_into_uint32({bfloat_scalar, bfloat_scalar});
+
+    DEB(std::cout << "numel " << operation_attributes.numel << std::endl;)
+    DEB(std::cout << "epsilon " << operation_attributes.epsilon << " scalar " << inv_sqrt_num_elements << std::endl;)
+    DEB(std::cout << "bfloat_epsilon " << bfloat_epsilon << " bfloat_scalar " << bfloat_scalar << std::endl;)
 
     for (const auto& core_range : cores.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
