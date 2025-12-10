@@ -68,10 +68,12 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
     uint32_t n_activated_expert_tiles = tt::div_up(operation_attributes.n_activated_experts, 32);
+    // Scores are streamed one tile at a time (double-buffered with 2 tiles)
+    // Bias needs width_tiles capacity because add_bias doesn't consume bias until ALL sigmoid tiles are ready,
+    // but reader pushes scores+bias together - if bias CB is too small, reader blocks causing deadlock
+    tt::tt_metal::create_cb(scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
     tt::tt_metal::create_cb(
-        scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        bias_cb_index, program, all_cores, bias.buffer()->page_size(), 2 * width_tiles, bias_data_format);
+        bias_cb_index, program, all_cores, bias.buffer()->page_size(), width_tiles, bias_data_format);
     tt::tt_metal::create_cb(
         weights_cb_index,
         program,
@@ -88,21 +90,26 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         indices_data_format);
 
     // sigmoid input + add bias block CBs
+    // Note: sigmoid_input needs width_tiles capacity since add_bias waits for all tiles at once
+    // and writer also needs all tiles. Don't double-buffer - it causes L1 memory pressure.
     auto sigmoid_input_cb_index = tt::CBIndex::c_4;
     auto add_bias_cb_index = tt::CBIndex::c_5;
     tt::tt_metal::create_cb(
-        sigmoid_input_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
+        sigmoid_input_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        add_bias_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
+        add_bias_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
 
     // topk intermediate CBs
+    // topk_input_cb is consumed one tile at a time by writer's generate_summed_experts_tiles
+    // topk_index_cb is used transiently and popped immediately in process_and_sort_tiles
+    // topk_index_creation_cb needs all width_tiles for generate_winning_group_tiles
     auto topk_input_cb_index = tt::CBIndex::c_6;
     auto topk_index_cb_index = tt::CBIndex::c_7;
     auto topk_index_creation_cb_index = tt::CBIndex::c_8;
     tt::tt_metal::create_cb(
-        topk_input_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        topk_input_cb_index, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
     tt::tt_metal::create_cb(
-        topk_index_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, tt::DataFormat::UInt16);
+        topk_index_cb_index, program, all_cores, scores.buffer()->page_size(), 2, tt::DataFormat::UInt16);
     tt::tt_metal::create_cb(
         topk_index_creation_cb_index,
         program,

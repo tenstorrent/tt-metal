@@ -320,11 +320,12 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     }
 
     noc_async_read_barrier();
-    cb_push_back(winning_group_scores_cb_index, topk_groups);
-    cb_push_back(winning_group_indices_cb_index, topk_groups);
 
     cb_pop_front(sigmoid_input_cb_index, width_tiles);
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
+
+    cb_push_back(winning_group_scores_cb_index, topk_groups);
+    cb_push_back(winning_group_indices_cb_index, topk_groups);
 }
 
 void write_single_scalar(const uint32_t scales_cb_index, const uint32_t packed_route_scale) {

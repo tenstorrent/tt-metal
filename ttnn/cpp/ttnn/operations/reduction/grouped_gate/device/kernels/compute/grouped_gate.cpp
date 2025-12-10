@@ -55,24 +55,26 @@ void print_tile(
 namespace blocks {
 void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t width_tiles) {
     // Perform sigmoid on scores
-
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(scores_cb_index, width_tile + 1);
-
+        DPRINT << "Width tile: " << width_tile << ENDL();
+        cb_wait_front(scores_cb_index, 1);
         tile_regs_acquire();
         // copy tile from scores cb to destination register 0
         copy_tile_to_dst_init_short(scores_cb_index);
-        copy_tile(scores_cb_index, width_tile, 0);
-
+        copy_tile(scores_cb_index, 0, 0);
+        // perform sigmoid on tile
         sigmoid_tile_init();
         sigmoid_tile(0);
         tile_regs_commit();
+        cb_pop_front(scores_cb_index, 1);
+        DPRINT << "Sigmoid done" << ENDL();
 
         cb_reserve_back(sigmoid_input_cb_index, 1);
         tile_regs_wait();
         pack_tile(0, sigmoid_input_cb_index);
         tile_regs_release();
         cb_push_back(sigmoid_input_cb_index, 1);
+        DPRINT << "Sigmoid input cb pushed" << ENDL();
     }
 }
 
@@ -83,18 +85,16 @@ void add_bias(
     cb_wait_front(sigmoid_input_cb_index, width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(bias_cb_index, 1);
-
         tile_regs_acquire();
         add_tiles(sigmoid_input_cb_index, bias_cb_index, width_tile, 0, 0);
         tile_regs_commit();
+        cb_pop_front(bias_cb_index, 1);
 
         cb_reserve_back(add_bias_cb_index, 1);
         tile_regs_wait();
-        pack_tile(0, add_bias_cb_index, 0);
+        pack_tile(0, add_bias_cb_index);
         tile_regs_release();
         cb_push_back(add_bias_cb_index, 1);
-
-        cb_pop_front(bias_cb_index, 1);
     }
 }
 
@@ -110,16 +110,14 @@ void process_and_sort_tiles(
     topk_tile_init();
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     cb_wait_front(index_cb_index, Wt);
+    cb_wait_front(input_cb_index, Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         acquire_dst();
-        // local sort into k groups
-        cb_wait_front(input_cb_index, 2);
-
         // transpose and unpack into dest regs
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
-        transpose_wh_tile(input_cb_index, 0, 0);
-        transpose_wh_tile(input_cb_index, 1, 1);
+        transpose_wh_tile(input_cb_index, wt, 0);
+        transpose_wh_tile(input_cb_index, wt + 1, 1);
 
         // transpose and unpack into dest regs
         reconfig_data_format_srca(index_cb_index);
@@ -150,14 +148,13 @@ void process_and_sort_tiles(
         pack_tile(3, index_transposed_cb_index);
         cb_push_back(index_transposed_cb_index, 1);
 
-        cb_pop_front(input_cb_index, 2);
-
         cb_wait_front(index_transposed_cb_index, 2);
         cb_pop_front(index_transposed_cb_index, 2);
 
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
+    cb_pop_front(input_cb_index, Wt);
 }
 
 void sum_top_experts_per_group(
@@ -461,11 +458,13 @@ void MAIN {
     binary_op_init_common(scores_cb_index, bias_cb_index, add_bias_cb_index);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
+        DPRINT << "Height tile: " << height_tile << ENDL();
         blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
+        DPRINT << "Sigmoid done" << ENDL();
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
         blocks::add_bias(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
-
+        DPRINT << "Add bias done" << ENDL();
         // Transpose tiles into dest and then perform topk_local_sort
         blocks::process_and_sort_tiles(
             add_bias_cb_index,
@@ -476,8 +475,9 @@ void MAIN {
             false,
             false,
             end_phase);
-
+        DPRINT << "Process and sort tiles done" << ENDL();
         blocks::sum_top_experts_per_group(summed_experts_cb_index, group_scores_cb_index, summed_experts_per_group);
+        DPRINT << "Sum top experts per group done" << ENDL();
         blocks::topk_group_scores(
             group_scores_cb_index,
             group_indices_cb_index,
@@ -485,7 +485,7 @@ void MAIN {
             false,
             false,
             log_n_groups - 1);
-
+        DPRINT << "Topk group scores done" << ENDL();
         blocks::topk(
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
@@ -497,6 +497,7 @@ void MAIN {
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
+        DPRINT << "Topk done" << ENDL();
         blocks::normalize_scores(
             pre_normalized_scores_cb_index,
             reduce_scalar_cb_index,

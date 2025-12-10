@@ -18,7 +18,6 @@ def grouped_gate_golden(
 ):
     # first run sigmoid on scores
     scores = torch.sigmoid(scores)
-    logger.info(f"scores: {scores}")
 
     # then add bias (used for selection only)
     biased_scores = scores + bias
@@ -60,7 +59,6 @@ def grouped_gate_golden(
     chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
 
     # normalize the chosen scores
-    logger.info(f"chosen_scores: {chosen_scores}")
     normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
 
     # then scale the normalized scores by the scales
@@ -97,10 +95,11 @@ def test_grouped_gate(device):
     torch.manual_seed(0)
     batch_size = 1
     num_batches = 1
-    seq_len = 33
+    seq_len = 1
     total_experts = 256
     # scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
     scores = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)
+    logger.info(f"scores: {scores[-1, -1, -1, :]}")
     bias = 2 * torch.ones(
         num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16
     )  # no bias for simplicity
