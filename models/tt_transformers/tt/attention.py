@@ -684,14 +684,22 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        xqkv_fused = ttnn.linear(
-            x_11SH,
-            self.wqkv,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
-        )
+        if self.model_config.get("USE_MINIMAL_MATMUL_PREFILL"):
+            xqkv_fused = ttnn.experimental.minimal_matmul(
+                x_11SH,
+                self.wqkv,
+                compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+                config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+            )
+        else:
+            xqkv_fused = ttnn.linear(
+                x_11SH,
+                self.wqkv,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+                program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+            )
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:
@@ -883,15 +891,22 @@ class Attention(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
-
-            output_11SH = ttnn.linear(
-                attn_output_11SH,
-                self.wo,
-                compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-                dtype=self.activation_dtype or ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
-            )
+            if self.model_config.get("USE_MINIMAL_MATMUL_PREFILL"):
+                output_11SH = ttnn.experimental.minimal_matmul(
+                    attn_output_11SH,
+                    self.wo,
+                    compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+                    config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+                )
+            else:
+                output_11SH = ttnn.linear(
+                    attn_output_11SH,
+                    self.wo,
+                    compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+                    dtype=self.activation_dtype or ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+                )
         else:
             tt_all_gather_out_tensor, output_11SH = ttnn.experimental.all_gather_matmul_async(
                 attn_output_11SH,
