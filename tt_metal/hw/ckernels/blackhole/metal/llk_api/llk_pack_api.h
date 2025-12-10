@@ -165,7 +165,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false, tilize>(
         pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
 
-    set_packer_strides<untilize, tilize>(pack_src_format[output_id], pack_dst_format[output_id], tile_c_dim);
+    set_packer_strides<untilize, tilize>(pack_src_format[output_id], tile_c_dim);
 
     // Program packer to pack out 16 datums per row
     TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
