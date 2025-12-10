@@ -10,6 +10,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
+#include "llk_unpack_common_api.h"
 #endif
 // defines the default throttle level for matmul kernels (default 0)
 #ifndef MM_THROTTLE
@@ -87,7 +88,8 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0) {
-    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    // Note: in0_cb_id and in1_cb_id are swapped here because of the way matmul works:
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
@@ -207,7 +209,8 @@ ALWI void mm_block_init(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    // Note: in0_cb_id and in1_cb_id are swapped here because of the way matmul works:
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
