@@ -178,3 +178,117 @@ class RMSNorm(LightweightModule):
         tt_stats.deallocate(True)
 
         return tt_out
+
+
+class SimpleRMSNorm(LightweightModule):
+    """
+    Simplified RMSNorm for ALLaM models that directly calls ttnn.rms_norm.
+
+    This is a lightweight version that doesn't handle complex distributed
+    sharding, suitable for ALLaM's simpler norm requirements.
+    """
+
+    def __init__(
+        self,
+        device,
+        dim,
+        eps: float = 1e-05,
+        state_dict=None,
+        state_dict_prefix="",
+        weight_cache_path=None,
+        weight_dtype=ttnn.bfloat16,
+        weight_key="norm",
+        add_unit_offset=False,
+        sharded_output_config=None,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.add_unit_offset = add_unit_offset
+        self.sharded_output_config = sharded_output_config
+
+        weight_name = f"{state_dict_prefix}.{weight_key}.weight" if state_dict_prefix else f"{weight_key}.weight"
+        self.weight = state_dict[weight_name] if state_dict else None
+
+        if self.weight is not None:
+            self.weight = ttnn.from_torch(
+                self.weight,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=weight_cache_path / f"{weight_name}" if weight_cache_path else None,
+            )
+
+    def forward(self, x):
+        """
+        Apply RMS normalization directly using ttnn.rms_norm.
+        """
+        return ttnn.rms_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )
+
+
+class SimpleRMSNorm(LightweightModule):
+    """
+    Simplified RMSNorm for ALLaM models that directly calls ttnn.rms_norm.
+
+    This is a lightweight version that doesn't handle complex distributed
+    sharding, suitable for ALLaM's simpler norm requirements.
+    """
+
+    def __init__(
+        self,
+        device,
+        dim,
+        eps: float = 1e-05,
+        state_dict=None,
+        state_dict_prefix="",
+        weight_cache_path=None,
+        weight_dtype=ttnn.bfloat16,
+        weight_key="norm",
+        add_unit_offset=False,
+        sharded_output_config=None,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.add_unit_offset = add_unit_offset
+        self.sharded_output_config = sharded_output_config
+
+        weight_name = f"{state_dict_prefix}.{weight_key}.weight" if state_dict_prefix else f"{weight_key}.weight"
+        self.weight = state_dict[weight_name] if state_dict else None
+
+        if self.weight is not None:
+            self.weight = ttnn.from_torch(
+                self.weight,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=weight_cache_path / f"{weight_name}" if weight_cache_path else None,
+            )
+
+    def forward(self, x):
+        """
+        Apply RMS normalization directly using ttnn.rms_norm.
+        """
+        return ttnn.rms_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )

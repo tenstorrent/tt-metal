@@ -80,7 +80,13 @@ NdShardSpec = ttnn._ttnn.tensor.NdShardSpec
 CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
-corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores
+# corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores  # Temporarily commented out for testing
+
+
+def corerange_to_cores(*args, **kwargs):
+    """Dummy function to allow imports - corerange_to_cores functionality removed in this commit"""
+    raise NotImplementedError("corerange_to_cores is not available in this commit")
+
 
 QueueId = ttnn._ttnn.types.QueueId
 
