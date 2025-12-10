@@ -28,9 +28,23 @@ from models.demos.deepseek_v3.utils.test_utils import (
     "mode, seq_len",
     [
         ("decode", 32),
+        # Powers of 2 up to 32K for prefill
+        ("prefill", 1),
+        ("prefill", 2),
+        ("prefill", 4),
+        ("prefill", 8),
+        ("prefill", 16),
+        ("prefill", 32),
+        ("prefill", 64),
         ("prefill", 128),
+        ("prefill", 256),
         ("prefill", 512),
+        ("prefill", 1024),
         ("prefill", 2048),
+        ("prefill", 4096),
+        ("prefill", 8192),
+        ("prefill", 16384),
+        ("prefill", 32768),
     ],
 )
 @pytest.mark.parametrize(

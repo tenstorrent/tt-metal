@@ -123,8 +123,23 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     "mode,seq_len",
     [
         ("decode", 32),
+        # Powers of 2 up to 32K for prefill
+        ("prefill", 1),
+        ("prefill", 2),
+        ("prefill", 4),
+        ("prefill", 8),
+        ("prefill", 16),
+        ("prefill", 32),
+        ("prefill", 64),
+        ("prefill", 128),
+        ("prefill", 256),
         ("prefill", 512),
-        ("prefill", 2048),  # Test chunking
+        ("prefill", 1024),
+        ("prefill", 2048),
+        ("prefill", 4096),
+        ("prefill", 8192),
+        ("prefill", 16384),
+        ("prefill", 32768),
     ],
 )
 def test_forward_pass(
