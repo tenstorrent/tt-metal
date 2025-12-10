@@ -8,11 +8,14 @@ This module provides AbstractModuleBase, a Python abstract base class that defin
 the interface for future Python modules that implement functionality similar to
 ttml's C++ ModuleBase class. This ensures consistency between Python and C++ module
 implementations.
+
+The interface is designed to be PyTorch-like, with automatic parameter and module
+tracking via attribute assignment, eliminating the need for manual registration.
 """
 
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from .._ttml.modules import RunMode
 
@@ -21,6 +24,7 @@ from .exceptions import (
     NameNotFoundError,
     UninitializedModuleError,
 )
+from .parameter import Buffer, Parameter
 
 
 class AbstractModuleBase(ABC):
@@ -29,25 +33,34 @@ class AbstractModuleBase(ABC):
     This class defines the common interface for Python modules that need to
     integrate with or mirror the behavior of ttml's C++ ModuleBase. It provides:
 
+    - PyTorch-like automatic parameter and module tracking
     - Name management for module identification
     - Run mode management (TRAIN/EVAL) with propagation to submodules
     - Parameter registration and retrieval with hierarchical naming
     - Support for nested modules and weight tying
     - Abstract forward pass methods that must be implemented by subclasses
 
-    The interface is designed to match the C++ ModuleBase as closely as possible
-    while following Python conventions (e.g., using OrderedDict instead of std::map).
+    The interface is designed to be PyTorch-like while maintaining compatibility
+    with the C++ ModuleBase. Parameters and modules are automatically registered
+    when assigned as attributes, eliminating the need for manual registration.
 
-    Example:
+    Example (PyTorch-like automatic registration):
         >>> class MyModule(AbstractModuleBase):
         ...     def __init__(self):
         ...         super().__init__()
-        ...         self._create_name("my_module")
-        ...         # Register tensors and submodules...
+        ...         self.weight = create_tensor(...)  # Auto-registered
+        ...         self.submodule = SubModule()     # Auto-registered
         ...
         ...     def __call__(self, tensor):
         ...         # Implement forward pass
         ...         return tensor
+
+    Example (Manual registration - still supported):
+        >>> class MyModule(AbstractModuleBase):
+        ...     def __init__(self):
+        ...         super().__init__()
+        ...         weight = create_tensor(...)
+        ...         self._register_tensor(weight, "weight")
     """
 
     def __init__(self) -> None:
@@ -55,11 +68,98 @@ class AbstractModuleBase(ABC):
 
         Sets up internal state for name, run mode, and parameter tracking.
         """
-        self._name: Optional[str] = None
-        self._run_mode: RunMode = RunMode.TRAIN
+        # Set these directly to avoid triggering __setattr__ during initialization
+        object.__setattr__(self, "_name", None)
+        object.__setattr__(self, "_run_mode", RunMode.TRAIN)
         # Use OrderedDict to match C++ std::map behavior (ordered iteration for serialization)
-        self._named_tensors: OrderedDict[str, Any] = OrderedDict()
-        self._named_modules: OrderedDict[str, "AbstractModuleBase"] = OrderedDict()
+        object.__setattr__(self, "_named_tensors", OrderedDict())
+        object.__setattr__(self, "_named_modules", OrderedDict())
+        object.__setattr__(self, "_named_buffers", OrderedDict())
+
+    def _is_tensor(self, value: Any) -> bool:
+        """Check if a value is a tensor-like object.
+
+        This method uses duck typing to detect tensors by checking for
+        common tensor attributes like 'shape' and 'dtype'.
+
+        Args:
+            value: The value to check.
+
+        Returns:
+            True if the value appears to be a tensor, False otherwise.
+        """
+        # Check for common tensor attributes
+        if hasattr(value, "shape") and hasattr(value, "dtype"):
+            return True
+        # Could add more specific type checks here if needed
+        return False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Set an attribute, automatically registering modules and parameters.
+
+        This method automatically detects and registers:
+        - AbstractModuleBase instances as submodules
+        - Parameter instances as parameters
+        - Buffer instances as buffers
+        - Tensor-like objects as parameters (if not wrapped)
+
+        Args:
+            name: The attribute name.
+            value: The value to assign.
+        """
+        # Skip during initialization (before _named_tensors is set)
+        if "_named_tensors" not in self.__dict__:
+            object.__setattr__(self, name, value)
+            return
+
+        # Skip private attributes
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+
+        # Remove from old registrations if reassigning
+        self._named_tensors.pop(name, None)
+        self._named_modules.pop(name, None)
+        self._named_buffers.pop(name, None)
+
+        # Auto-register modules
+        if isinstance(value, AbstractModuleBase):
+            self._named_modules[name] = value
+            object.__setattr__(self, name, value)
+            return
+
+        # Auto-register parameters
+        if isinstance(value, Parameter):
+            self._named_tensors[name] = value.tensor
+            object.__setattr__(self, name, value)
+            return
+
+        # Auto-register buffers
+        if isinstance(value, Buffer):
+            self._named_buffers[name] = value.tensor
+            object.__setattr__(self, name, value)
+            return
+
+        # Auto-register tensor-like objects as parameters
+        if self._is_tensor(value):
+            self._named_tensors[name] = value
+            object.__setattr__(self, name, value)
+            return
+
+        # Regular attribute
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        """Delete an attribute and remove it from registrations.
+
+        Args:
+            name: The attribute name to delete.
+        """
+        # Remove from registrations
+        self._named_tensors.pop(name, None)
+        self._named_modules.pop(name, None)
+        self._named_buffers.pop(name, None)
+        object.__delattr__(self, name)
 
     def get_name(self) -> str:
         """Get the module's name.
@@ -130,21 +230,30 @@ class AbstractModuleBase(ABC):
         """
         return self._run_mode
 
-    def parameters(self) -> Dict[str, Any]:
-        """Get all parameters from this module and all submodules.
+    def parameters_dict(
+        self, separator: str = "/", use_dot: bool = False
+    ) -> Dict[str, Any]:
+        """Get all parameters from this module and all submodules as a dictionary.
 
         Returns a flat dictionary mapping parameter names to tensors. The names
-        use hierarchical naming with "/" as a separator (e.g., "module/submodule/weight").
-        This matches the C++ ModuleBase behavior.
+        use hierarchical naming with the specified separator.
 
         Weight tying is handled by tracking tensor identity (using id()) to avoid
         duplicates, similar to how C++ uses tensor addresses.
 
+        This method maintains backward compatibility with the C++ ModuleBase interface.
+        For PyTorch-like iteration, use `parameters()` or `named_parameters()`.
+
+        Args:
+            separator: Separator to use for hierarchical names (default: "/" for C++ compatibility).
+            use_dot: If True, use "." as separator (PyTorch convention). Overrides separator.
+
         Returns:
             A dictionary mapping hierarchical parameter names to tensors.
         """
+        sep = "." if use_dot else separator
         params: Dict[str, Any] = {}
-        name_prefix = self.get_name() + "/" if self._name else ""
+        name_prefix = self.get_name() + sep if self._name else ""
 
         # Track tensor identities to handle weight tying (avoid duplicates)
         tensors_in_params: set[int] = set()
@@ -169,11 +278,259 @@ class AbstractModuleBase(ABC):
                 module_name_with_prefix = current_prefix + module_name
                 if module_name_with_prefix not in modules_in_queue:
                     modules_to_process.append(
-                        (next_module_ptr, module_name_with_prefix + "/")
+                        (next_module_ptr, module_name_with_prefix + sep)
                     )
                     modules_in_queue.add(module_name_with_prefix)
 
         return params
+
+    # Alias for backward compatibility with C++ interface
+    def parameters(self, separator: str = "/", use_dot: bool = False) -> Dict[str, Any]:
+        """Get all parameters as a dictionary (backward compatibility).
+
+        This method is an alias for `parameters_dict()` to maintain compatibility
+        with the C++ ModuleBase interface. For PyTorch-like iteration, use the
+        iterator version or `named_parameters()`.
+
+        Args:
+            separator: Separator to use for hierarchical names (default: "/").
+            use_dot: If True, use "." as separator. Overrides separator.
+
+        Returns:
+            A dictionary mapping hierarchical parameter names to tensors.
+        """
+        return self.parameters_dict(separator=separator, use_dot=use_dot)
+
+    def named_parameters(
+        self, prefix: str = "", recurse: bool = True
+    ) -> Iterator[Tuple[str, Any]]:
+        """Yield (name, parameter) pairs from this module and submodules.
+
+        Args:
+            prefix: Prefix to prepend to all parameter names.
+            recurse: If True, recursively yield parameters from submodules.
+
+        Yields:
+            (name, parameter) tuples where name uses "." as separator.
+        """
+        for name, tensor in self._named_tensors.items():
+            full_name = f"{prefix}.{name}" if prefix else name
+            yield (full_name, tensor)
+
+        if recurse:
+            for child_name, child in self._named_modules.items():
+                child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+                yield from child.named_parameters(prefix=child_prefix, recurse=True)
+
+    def named_modules(
+        self, prefix: str = "", recurse: bool = True
+    ) -> Iterator[Tuple[str, "AbstractModuleBase"]]:
+        """Yield (name, module) pairs from this module and submodules.
+
+        Args:
+            prefix: Prefix to prepend to all module names.
+            recurse: If True, recursively yield modules from submodules.
+
+        Yields:
+            (name, module) tuples where name uses "." as separator.
+        """
+        if prefix:
+            yield (prefix, self)
+        else:
+            yield ("", self)
+
+        if recurse:
+            for child_name, child in self._named_modules.items():
+                child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+                yield from child.named_modules(prefix=child_prefix, recurse=True)
+
+    def named_children(self) -> Iterator[Tuple[str, "AbstractModuleBase"]]:
+        """Yield (name, module) pairs for direct children only.
+
+        Yields:
+            (name, module) tuples for direct submodules only.
+        """
+        yield from self._named_modules.items()
+
+    def named_buffers(
+        self, prefix: str = "", recurse: bool = True
+    ) -> Iterator[Tuple[str, Any]]:
+        """Yield (name, buffer) pairs from this module and submodules.
+
+        Args:
+            prefix: Prefix to prepend to all buffer names.
+            recurse: If True, recursively yield buffers from submodules.
+
+        Yields:
+            (name, buffer) tuples where name uses "." as separator.
+        """
+        for name, buffer in self._named_buffers.items():
+            full_name = f"{prefix}.{name}" if prefix else name
+            yield (full_name, buffer)
+
+        if recurse:
+            for child_name, child in self._named_modules.items():
+                child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+                yield from child.named_buffers(prefix=child_prefix, recurse=True)
+
+    def modules(self, recurse: bool = True) -> Iterator["AbstractModuleBase"]:
+        """Yield modules from this module and submodules.
+
+        Args:
+            recurse: If True, recursively yield modules from submodules.
+
+        Yields:
+            Module instances.
+        """
+        for _, module in self.named_modules(recurse=recurse):
+            yield module
+
+    def children(self) -> Iterator["AbstractModuleBase"]:
+        """Yield direct child modules only.
+
+        Yields:
+            Direct submodule instances.
+        """
+        for _, child in self.named_children():
+            yield child
+
+    def buffers(self, recurse: bool = True) -> Iterator[Any]:
+        """Yield buffers from this module and submodules.
+
+        Args:
+            recurse: If True, recursively yield buffers from submodules.
+
+        Yields:
+            Buffer tensors.
+        """
+        for _, buffer in self.named_buffers(recurse=recurse):
+            yield buffer
+
+    def state_dict(self, prefix: str = "", keep_vars: bool = False) -> Dict[str, Any]:
+        """Return a dictionary containing the module's state.
+
+        Args:
+            prefix: Prefix to prepend to all parameter names.
+            keep_vars: If False, return plain tensors. If True, return Parameter/Buffer objects.
+
+        Returns:
+            A dictionary mapping parameter names to their values.
+        """
+        state_dict: Dict[str, Any] = {}
+
+        # Add parameters
+        for name, param in self.named_parameters(prefix=prefix, recurse=True):
+            if keep_vars:
+                # Wrap in Parameter if it was originally a Parameter
+                state_dict[name] = Parameter(param)
+            else:
+                state_dict[name] = param
+
+        # Add buffers
+        for name, buffer in self.named_buffers(prefix=prefix, recurse=True):
+            if keep_vars:
+                state_dict[name] = Buffer(buffer)
+            else:
+                state_dict[name] = buffer
+
+        return state_dict
+
+    def load_state_dict(
+        self, state_dict: Dict[str, Any], strict: bool = True
+    ) -> Tuple[list[str], list[str]]:
+        """Load parameters and buffers from a state dictionary.
+
+        Args:
+            state_dict: Dictionary mapping parameter names to values.
+            strict: If True, raise an error if keys are missing or unexpected.
+
+        Returns:
+            Tuple of (missing_keys, unexpected_keys).
+
+        Raises:
+            RuntimeError: If strict=True and there are missing or unexpected keys.
+        """
+        missing_keys: list[str] = []
+        unexpected_keys: list[str] = []
+
+        # Build a map of all named parameters and buffers
+        all_params = dict(self.named_parameters(recurse=True))
+        all_buffers = dict(self.named_buffers(recurse=True))
+
+        # Track which keys we've used
+        used_keys: set[str] = set()
+
+        # Load parameters
+        for name, value in state_dict.items():
+            if name in all_params:
+                # Extract tensor from Parameter wrapper if needed
+                if isinstance(value, Parameter):
+                    tensor_value = value.tensor
+                elif isinstance(value, Buffer):
+                    tensor_value = value.tensor
+                else:
+                    tensor_value = value
+
+                # Find the module and attribute name
+                parts = name.split(".")
+                if len(parts) == 1:
+                    # Direct parameter
+                    self._named_tensors[parts[0]] = tensor_value
+                else:
+                    # Nested parameter - find the module
+                    module = self
+                    for part in parts[:-1]:
+                        if part not in module._named_modules:
+                            missing_keys.append(name)
+                            break
+                        module = module._named_modules[part]
+                    else:
+                        attr_name = parts[-1]
+                        module._named_tensors[attr_name] = tensor_value
+
+                used_keys.add(name)
+            elif name in all_buffers:
+                # Similar logic for buffers
+                if isinstance(value, Buffer):
+                    tensor_value = value.tensor
+                elif isinstance(value, Parameter):
+                    tensor_value = value.tensor
+                else:
+                    tensor_value = value
+
+                parts = name.split(".")
+                if len(parts) == 1:
+                    self._named_buffers[parts[0]] = tensor_value
+                else:
+                    module = self
+                    for part in parts[:-1]:
+                        if part not in module._named_modules:
+                            missing_keys.append(name)
+                            break
+                        module = module._named_modules[part]
+                    else:
+                        attr_name = parts[-1]
+                        module._named_buffers[attr_name] = tensor_value
+
+                used_keys.add(name)
+            else:
+                unexpected_keys.append(name)
+
+        # Check for missing keys
+        for name in all_params:
+            if name not in used_keys:
+                missing_keys.append(name)
+        for name in all_buffers:
+            if name not in used_keys:
+                missing_keys.append(name)
+
+        if strict:
+            if missing_keys:
+                raise RuntimeError(f"Missing keys in state_dict: {missing_keys}")
+            if unexpected_keys:
+                raise RuntimeError(f"Unexpected keys in state_dict: {unexpected_keys}")
+
+        return (missing_keys, unexpected_keys)
 
     def _register_tensor(self, tensor: Any, name: str) -> None:
         """Register a tensor with a name.

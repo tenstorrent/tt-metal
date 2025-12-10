@@ -18,9 +18,12 @@ from .exceptions import (
     NameNotFoundError,
     UninitializedModuleError,
 )
+from .parameter import Buffer, Parameter
 
 __all__ = [
     "AbstractModuleBase",
+    "Parameter",
+    "Buffer",
     "ModuleError",
     "DuplicateNameError",
     "NameNotFoundError",
