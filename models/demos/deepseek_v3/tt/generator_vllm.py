@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
@@ -40,8 +41,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
-        model_path = os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference")
-        cache_dir = os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3")
+        model_path = os.environ.get("DEEPSEEK_V3_HF_MODEL")
+        cache_dir = os.environ.get("DEEPSEEK_V3_CACHE")
+        if not model_path:
+            raise ValueError(
+                "DEEPSEEK_V3_HF_MODEL is not set. Set the environment variable or initialize via the demo "
+                "entrypoint with an explicit --model-path."
+            )
+        if not cache_dir:
+            raise ValueError(
+                "DEEPSEEK_V3_CACHE is not set. Set the environment variable or initialize via the demo "
+                "entrypoint with an explicit --cache-dir."
+            )
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
@@ -60,6 +71,9 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
+        kwargs.pop("enable_trace", None)
+        logger.warning(f"Prefill tracing not supported for DeepseekGenerator")
+
         tokens = kwargs["tokens"]
         lengths = kwargs["prompt_lens"]
         tokens = _pad_tokens(tokens, self.tokenizer.pad_token_id, block_size=self.mesh_device.shape[1])

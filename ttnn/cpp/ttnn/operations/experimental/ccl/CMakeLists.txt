@@ -78,8 +78,8 @@ target_sources(
         all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp
         all_reduce_async/all_reduce_async.cpp
         all_gather_concat_heads_fused/all_gather_concat.cpp
-        all_gather_concat_heads_fused/device/all_gather_concat_op.cpp
-        all_gather_concat_heads_fused/device/all_gather_concat_program.cpp
+        all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
+        all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp
         all_gather_matmul_async/all_gather_matmul_async.cpp
         all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
         all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
@@ -93,14 +93,14 @@ target_sources(
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
-        send_recv_async/send_async/device/send_async_op.cpp
-        send_recv_async/send_async/device/send_async_program.cpp
+        send_recv_async/send_async/device/send_async_op_device_operation.cpp
+        send_recv_async/send_async/device/send_async_op_program_factory.cpp
         send_recv_async/recv_async/recv_async.cpp
-        send_recv_async/recv_async/device/recv_async_op.cpp
-        send_recv_async/recv_async/device/recv_async_program.cpp
+        send_recv_async/recv_async/device/recv_async_op_device_operation.cpp
+        send_recv_async/recv_async/device/recv_async_op_program_factory.cpp
         neighbor_pad_async/neighbor_pad_async.cpp
-        neighbor_pad_async/device/neighbor_pad_async_op.cpp
-        neighbor_pad_async/device/neighbor_pad_async_program.cpp
+        neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
+        neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
         slice_reshard_async/slice_reshard_async.cpp
         slice_reshard_async/device/slice_reshard_async_op.cpp
         slice_reshard_async/device/slice_reshard_async_program.cpp

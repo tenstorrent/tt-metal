@@ -16,25 +16,20 @@
 #include <array>
 // clang-format on
 
-constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
-constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
-constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);
-constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);
-constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
-// header only buffer slot size is the same as the edm packet header size
+// ========== Scalar configuration values from MuxConfig::get_compile_time_args ==========
+constexpr size_t NUM_TOTAL_CHANNELS = get_compile_time_arg_val(0);
+constexpr size_t status_address = get_compile_time_arg_val(1);
+constexpr size_t termination_signal_address = get_compile_time_arg_val(2);
+constexpr size_t local_fabric_router_status_address = get_compile_time_arg_val(3);
+constexpr size_t fabric_router_status_address = get_compile_time_arg_val(4);
+constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(5);
+constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(6);
+constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(7);
+constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(8));
+constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(9) == 1;
+constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = get_compile_time_arg_val(10);
+constexpr uint32_t NUM_CHANNEL_TYPES = get_compile_time_arg_val(11);
 
-constexpr size_t status_address = get_compile_time_arg_val(5);
-constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
-constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
-constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
-constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(9);
-constexpr size_t channels_base_l1_address = get_compile_time_arg_val(10);
-constexpr size_t local_fabric_router_status_address = get_compile_time_arg_val(11);
-constexpr size_t fabric_router_status_address = get_compile_time_arg_val(12);
-
-constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(13);
-constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
-constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
 static_assert(NUM_EDM_BUFFERS < 256, "NUM_EDM_BUFFERS too big, maybe CT args are misconfigured");
 static_assert(
     NUM_FULL_SIZE_CHANNELS_ITERS < 256, "NUM_FULL_SIZE_CHANNELS_ITERS too big, maybe CT args are misconfigured");
@@ -42,24 +37,76 @@ static_assert(
     NUM_ITERS_BETWEEN_TEARDOWN_CHECKS < 256,
     "NUM_ITERS_BETWEEN_TEARDOWN_CHECKS too big, maybe CT args are misconfigured");
 
-constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
-constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
-constexpr size_t num_upstream_routers = get_compile_time_arg_val(18);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(19);
+// ========== Per-channel-type arrays (7 arrays × NUM_CHANNEL_TYPES entries) ==========
+// Legacy MUX mode has 2 channel types: WORKER_CHANNEL and ROUTER_CHANNEL
+constexpr uint32_t NUM_CHANNELS_ARRAY_START_IDX = 12;
+constexpr uint32_t NUM_BUFFERS_ARRAY_START_IDX = NUM_CHANNELS_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t BUFFER_SIZE_ARRAY_START_IDX = NUM_BUFFERS_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX = BUFFER_SIZE_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX =
+    FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+
+// ========== Extract per-channel-type configuration ==========
+// In Legacy MUX mode, we have 2 channel types:
+// [0] = WORKER_CHANNEL
+// [1] = ROUTER_CHANNEL
+constexpr std::array<uint32_t, NUM_CHANNEL_TYPES> num_channels_per_type =
+    fill_array_with_next_n_args<uint32_t, NUM_CHANNELS_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<uint32_t, NUM_CHANNEL_TYPES> num_buffers_per_type =
+    fill_array_with_next_n_args<uint32_t, NUM_BUFFERS_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> buffer_size_per_type =
+    fill_array_with_next_n_args<size_t, BUFFER_SIZE_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_info_base_addrs =
+    fill_array_with_next_n_args<size_t, CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_handshake_base_addrs =
+    fill_array_with_next_n_args<size_t, CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> flow_control_base_addrs =
+    fill_array_with_next_n_args<size_t, FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> channel_buffer_base_addrs =
+    fill_array_with_next_n_args<size_t, CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+
+// ========== Downstream mux connection arrays (11 arrays from MuxConfig) ==========
+// Note: Legacy MUX mode has NUM_DOWNSTREAM_MUX_CONNECTIONS = 0, so these arrays are empty
+constexpr uint32_t DOWNSTREAM_MUX_ARRAYS_START_IDX = CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 
 // A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
 // This attribute is necessary to support bubble flow control.
-constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(20) != 0;
+constexpr uint32_t BUBBLE_FLOW_CONTROL_START_IDX = DOWNSTREAM_MUX_ARRAYS_START_IDX + (NUM_DOWNSTREAM_MUX_CONNECTIONS * 11);
+constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(BUBBLE_FLOW_CONTROL_START_IDX) != 0;
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
-constexpr size_t FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_FULL_SIZE_CHANNELS;
-constexpr size_t HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_HEADER_ONLY_CHANNELS;
 
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 21;
+// ========== Builder-added args (from MuxBuilder::get_compile_time_args) ==========
+// Upstream routers and sync address follow after downstream mux arrays
+constexpr size_t NUM_UPSTREAM_ROUTERS_IDX = BUBBLE_FLOW_CONTROL_START_IDX + 1;
+constexpr size_t num_upstream_routers = get_compile_time_arg_val(NUM_UPSTREAM_ROUTERS_IDX);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(NUM_UPSTREAM_ROUTERS_IDX + 1);
+
+constexpr size_t CHANNEL_STREAM_IDS_START_IDX = NUM_UPSTREAM_ROUTERS_IDX + 2;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
+// ========== Channel type indices (must match ChannelTypes enum order in host) ==========
+// In Legacy MUX mode:
+constexpr uint32_t WORKER_CHANNEL_TYPE_IDX = 0;  // WORKER_CHANNEL
+constexpr uint32_t ROUTER_CHANNEL_TYPE_IDX = 1;  // ROUTER_CHANNEL
+
+// Extract per-type configuration
+constexpr uint32_t NUM_WORKER_CHANNELS = num_channels_per_type[WORKER_CHANNEL_TYPE_IDX];
+constexpr uint32_t NUM_ROUTER_CHANNELS = num_channels_per_type[ROUTER_CHANNEL_TYPE_IDX];
+
+constexpr uint32_t NUM_BUFFERS_WORKER = num_buffers_per_type[WORKER_CHANNEL_TYPE_IDX];
+constexpr uint32_t NUM_BUFFERS_ROUTER = num_buffers_per_type[ROUTER_CHANNEL_TYPE_IDX];
+
+constexpr size_t BUFFER_SIZE_WORKER = buffer_size_per_type[WORKER_CHANNEL_TYPE_IDX];
+constexpr size_t BUFFER_SIZE_ROUTER = buffer_size_per_type[ROUTER_CHANNEL_TYPE_IDX];
+
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -71,7 +118,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.cache_producer_noc_addr();
+    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -151,7 +198,7 @@ void forward_data(
     }
 
     if (!is_persistent_channel) {
-        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
             worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
     }
 }
@@ -181,78 +228,87 @@ void kernel_main() {
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
 
-    std::array<bool, FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE> full_size_channel_injection_status = {};
-    std::array<bool, HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE> header_only_channel_injection_status = {};
-    if constexpr (enable_bubble_flow_control) {
-        for (size_t i = 0; i < FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE; i++) {
-            full_size_channel_injection_status[i] = get_arg_val<uint32_t>(rt_args_idx++);
-        }
-        for (size_t i = 0; i < HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE; i++) {
-            header_only_channel_injection_status[i] = get_arg_val<uint32_t>(rt_args_idx++);
-        }
-    }
-
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
-        full_size_channels;
-    std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
-        NUM_FULL_SIZE_CHANNELS>
-        full_size_channel_worker_interfaces;
-    std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
+    // ========== Create channel arrays grouped by type ==========
+    // Worker channels (WORKER_CHANNEL)
+    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS> worker_channels;
+    std::array<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS>
+        worker_channel_interfaces;
+    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_connection_established;
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
-        header_only_channels;
-    std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
-        NUM_HEADER_ONLY_CHANNELS>
-        header_only_channel_worker_interfaces;
-    std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
+    // Router channels (ROUTER_CHANNEL)
+    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_ROUTER>, NUM_ROUTER_CHANNELS> router_channels;
+    std::array<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_ROUTER>, NUM_ROUTER_CHANNELS>
+        router_channel_interfaces;
+    std::array<bool, NUM_ROUTER_CHANNELS> router_channel_connection_established;
 
-    // Stream IDs
-    constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
-    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
-        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
+    // ========== Parse stream IDs and persistent flags (grouped by type) ==========
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_stream_ids =
+        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_WORKER_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_ROUTER_CHANNELS> router_stream_ids = fill_array_with_next_n_args<
+        uint32_t,
+        CHANNEL_STREAM_IDS_START_IDX + NUM_WORKER_CHANNELS,
+        NUM_ROUTER_CHANNELS>();
 
-    // Persistent channel flags
     constexpr size_t IS_PERSISTENT_CHANNELS_START_IDX = CHANNEL_STREAM_IDS_START_IDX + NUM_TOTAL_CHANNELS;
-    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
-        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_is_persistent =
+        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_WORKER_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_ROUTER_CHANNELS> router_is_persistent = fill_array_with_next_n_args<
+        uint32_t,
+        IS_PERSISTENT_CHANNELS_START_IDX + NUM_WORKER_CHANNELS,
+        NUM_ROUTER_CHANNELS>();
 
-    size_t channel_base_address = channels_base_l1_address;
-    size_t connection_info_address = connection_info_base_address;
-    size_t connection_handshake_address = connection_handshake_base_address;
-    size_t sender_flow_control_address = sender_flow_control_base_address;
+    // ========== Injection status arrays (for bubble flow control in MUX mode) ==========
+    constexpr size_t INJECTION_STATUS_START_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_channel_injection_status =
+        fill_array_with_next_n_args<uint32_t, INJECTION_STATUS_START_IDX, NUM_WORKER_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_ROUTER_CHANNELS> router_channel_injection_status =
+        fill_array_with_next_n_args<uint32_t, INJECTION_STATUS_START_IDX + NUM_WORKER_CHANNELS, NUM_ROUTER_CHANNELS>();
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
-            &full_size_channels[i],
-            &full_size_channel_worker_interfaces[i],
-            full_size_channel_connection_established[i],
+    // Direction (last compile-time argument, after injection status arrays)
+    constexpr size_t direction = get_compile_time_arg_val(INJECTION_STATUS_START_IDX + NUM_TOTAL_CHANNELS);
+
+    // ========== Setup worker channels (WORKER_CHANNEL) ==========
+    size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_connection_info_address = connection_info_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_connection_handshake_address = connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+
+    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+        setup_channel<NUM_BUFFERS_WORKER>(
+            &worker_channels[i],
+            &worker_channel_interfaces[i],
+            worker_channel_connection_established[i],
             i,
-            BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
-            channel_base_address,
-            connection_info_address,
-            connection_handshake_address,
-            sender_flow_control_address,
-            StreamId{channel_stream_ids[i]},
-            is_persistent_channels[i]);
+            BUFFER_SIZE_WORKER,
+            worker_channel_base_address,
+            worker_connection_info_address,
+            worker_connection_handshake_address,
+            worker_flow_control_address,
+            StreamId{worker_stream_ids[i]},
+            worker_is_persistent[i] == 1);
     }
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-            &header_only_channels[i],
-            &header_only_channel_worker_interfaces[i],
-            header_only_channel_connection_established[i],
+    // ========== Setup router channels (ROUTER_CHANNEL) ==========
+    size_t router_channel_base_address = channel_buffer_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
+    size_t router_connection_info_address = connection_info_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
+    size_t router_connection_handshake_address = connection_handshake_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
+    size_t router_flow_control_address = flow_control_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
+
+    for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
+        setup_channel<NUM_BUFFERS_ROUTER>(
+            &router_channels[i],
+            &router_channel_interfaces[i],
+            router_channel_connection_established[i],
             i,
-            sizeof(PACKET_HEADER_TYPE),
-            channel_base_address,
-            connection_info_address,
-            connection_handshake_address,
-            sender_flow_control_address,
-            StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]},
-            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
+            BUFFER_SIZE_ROUTER,
+            router_channel_base_address,
+            router_connection_info_address,
+            router_connection_handshake_address,
+            router_flow_control_address,
+            StreamId{router_stream_ids[i]},
+            router_is_persistent[i] == 1);
     }
 
     volatile auto termination_signal_ptr =
@@ -278,16 +334,16 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        if (is_persistent_channels[i]) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_FULL_SIZE_CHANNEL>(full_size_channel_worker_interfaces[i]);
+    // Wait for persistent channels to be ready
+    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+        if (worker_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i]);
         }
     }
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        if (is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-                header_only_channel_worker_interfaces[i]);
+    for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
+        if (router_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i]);
         }
     }
 
@@ -296,46 +352,30 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            bool all_channels_drained = true;
-            for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
-            }
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                all_channels_drained &=
-                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
-            }
-
-            if (all_channels_drained) {
-                break;
-            }
-        }
-
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
-                for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
-                        full_size_channels[channel_id],
-                        full_size_channel_worker_interfaces[channel_id],
-                        fabric_connection,
-                        full_size_channel_connection_established[channel_id],
-                        StreamId{channel_stream_ids[channel_id]},
-                        is_persistent_channels[channel_id],
-                        full_size_channel_injection_status[channel_id]);
-                }
+            // Process worker channels (WORKER_CHANNEL)
+            for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
+                forward_data<NUM_BUFFERS_WORKER>(
+                    worker_channels[channel_id],
+                    worker_channel_interfaces[channel_id],
+                    fabric_connection,
+                    worker_channel_connection_established[channel_id],
+                    StreamId{worker_stream_ids[channel_id]},
+                    worker_is_persistent[channel_id] == 1,
+                    worker_channel_injection_status[channel_id]);
             }
 
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-                    header_only_channels[channel_id],
-                    header_only_channel_worker_interfaces[channel_id],
+            // Process router channels (ROUTER_CHANNEL)
+            for (uint32_t channel_id = 0; channel_id < NUM_ROUTER_CHANNELS; channel_id++) {
+                forward_data<NUM_BUFFERS_ROUTER>(
+                    router_channels[channel_id],
+                    router_channel_interfaces[channel_id],
                     fabric_connection,
-                    header_only_channel_connection_established[channel_id],
-                    StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
-                    header_only_channel_injection_status[channel_id]);
+                    router_channel_connection_established[channel_id],
+                    StreamId{router_stream_ids[channel_id]},
+                    router_is_persistent[channel_id] == 1,
+                    router_channel_injection_status[channel_id]);
             }
         }
 #if defined(COMPILE_FOR_IDLE_ERISC)

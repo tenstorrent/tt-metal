@@ -38,10 +38,7 @@
 #define MEM_ETH_SIZE (512 * 1024)
 
 #define MEM_DRAM_SIZE (4177920 * 1024U)
-
-#define MEM_DM_LOCAL_SIZE (8 * 1024)  // memory size for DM's stack, globals (used by local mem on 1xx)
 #define MEM_LOCAL_BASE 0xFFB00000
-#define MEM_TRISC_LOCAL_SIZE (4 * 1024)
 
 // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
@@ -51,13 +48,23 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_DM_FIRMWARE_SIZE (6 * 1024 + 1024)
+#define MEM_DM_FIRMWARE_SIZE (1024 * 12)
+#define MEM_TRISC_FIRMWARE_SIZE (1024 * 3 / 2)
+#define MEM_DM_KERNEL_SIZE (1024 * 48)
+#define MEM_TRISC_KERNEL_SIZE (1024 * 24)
+#define MEM_DM_GLOBAL_SIZE (1024 * 1)
+#define MEM_TRISC_GLOBAL_SIZE (1024 * 1)
+#define MEM_DM_LOCAL_SIZE (1024 * 8)
+#define MEM_TRISC_LOCAL_SIZE (1024 * 4)
+
+#define NUM_DM_CORES 8
+#define NUM_TRISC_CORES 4
+
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
 #define MEM_TRISC1_FIRMWARE_SIZE 1536
 #define MEM_TRISC2_FIRMWARE_SIZE 1536
 #define MEM_TRISC3_FIRMWARE_SIZE 1536
 
-#define MEM_DM_KERNEL_SIZE (48 * 1024)
 #define MEM_TRISC0_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC1_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC2_KERNEL_SIZE (24 * 1024)
@@ -94,7 +101,6 @@
 
 #define MEM_LLK_DEBUG_BASE (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
 
-#define MEM_DM_FIRMWARE_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
 #define MEM_DM0_LOCAL_BASE (MEM_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM1_LOCAL_BASE (MEM_DM0_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM2_LOCAL_BASE (MEM_DM1_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
@@ -103,7 +109,15 @@
 #define MEM_DM5_LOCAL_BASE (MEM_DM4_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM6_LOCAL_BASE (MEM_DM5_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM7_LOCAL_BASE (MEM_DM6_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
-#define MEM_TRISC0_FIRMWARE_BASE (MEM_DM0_LOCAL_BASE + MEM_DM_LOCAL_SIZE * 8)  // 8 DM cores
+
+#define MEM_DM_FIRMWARE_BASE (MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE)
+#define MEM_TRISC_FIRMWARE_BASE (MEM_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
+#define MEM_DM_GLOBAL_BASE (MEM_TRISC_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
+#define MEM_TRISC_GLOBAL_BASE (MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE)
+#define MEM_DM_LOCAL_BASE (MEM_TRISC_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
+#define MEM_TRISC_LOCAL_BASE (MEM_DM_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
+
+#define MEM_TRISC0_FIRMWARE_BASE (MEM_DM0_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
 #define MEM_TRISC1_FIRMWARE_BASE (MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE)
 #define MEM_TRISC2_FIRMWARE_BASE (MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE)
 #define MEM_TRISC3_FIRMWARE_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
@@ -121,11 +135,11 @@
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
 #define MEM_ROUTING_TABLE_SIZE \
-    2096  // struct layout: base(484) + 1d_path(64) + 2d_path(512) + exit_table(1024) + padding(12)
+    2288  // struct layout: base(484) + 1d_path(256) + 2d_path(512) + exit_table(1024) + padding(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 484
 #define MEM_ROUTING_TABLE_PADDING 12
 
-#define ROUTING_PATH_SIZE_1D 64
+#define ROUTING_PATH_SIZE_1D 256
 // 2D uncompressed size is too large to fit in L1 memory
 #define COMPRESSED_ROUTING_PATH_SIZE_1D 0    // sizeof(intra_mesh_routing_path_t<1, true>)
 #define COMPRESSED_ROUTING_PATH_SIZE_2D 512  // sizeof(intra_mesh_routing_path_t<2, true>)
@@ -144,7 +158,7 @@
 #define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
-#define PACKET_HEADER_MAX_SIZE 96  // sizeof(UDMHybridMeshPacketHeader)
+#define PACKET_HEADER_MAX_SIZE 112  // sizeof(UDMHybridMeshPacketHeader)
 #define NUM_PACKET_HEADERS \
     (6 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH, UP, DOWN) * convention * (DM0, DM1)
 
@@ -188,7 +202,8 @@
 // Stack info
 // Stack and globals share the same piece of memory, one grows at the
 // expense of the other.
-#define MEM_BRISC_STACK_MIN_SIZE 256
+#define MEM_DM_STACK_MIN_SIZE (1024 / 4)
+#define MEM_TRISC_STACK_MIN_SIZE (1024 / 4)
 #define MEM_NCRISC_STACK_MIN_SIZE 256
 #define MEM_TRISC0_STACK_MIN_SIZE 192
 #define MEM_TRISC1_STACK_MIN_SIZE 192

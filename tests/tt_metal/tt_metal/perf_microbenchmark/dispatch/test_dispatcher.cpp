@@ -57,8 +57,7 @@ bool send_to_all_g = true;                                               // Send
 bool perf_test_g = false;                                                // Perf mode: use consistent sizes
 uint32_t hugepage_issue_buffer_size_g;                                   // Hugepage issue buffer size (runtime)
 
-namespace tt::tt_dispatch {
-namespace dispatcher_tests {
+namespace tt::tt_dispatch::dispatcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS_LINEAR_WRITE = 3;
 constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
@@ -738,12 +737,12 @@ class DispatchPagedWriteTestFixture : public BaseDispatchTestFixture,
     CoreCoord get_bank_core(uint32_t bank_id) const {
         // If DRAM, get the logical core from the DRAM channel
         if (is_dram_) {
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             return device_->logical_core_from_dram_channel(dram_channel);
         }
 
         // If L1, get logical core from the bank id
-        return device_->allocator()->get_logical_core_from_bank_id(bank_id);
+        return device_->allocator_impl()->get_logical_core_from_bank_id(bank_id);
     }
 
 protected:
@@ -1410,5 +1409,4 @@ INSTANTIATE_TEST_SUITE_P(
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
     });
 
-}  // namespace dispatcher_tests
-}  // namespace tt::tt_dispatch
+}  // namespace tt::tt_dispatch::dispatcher_tests

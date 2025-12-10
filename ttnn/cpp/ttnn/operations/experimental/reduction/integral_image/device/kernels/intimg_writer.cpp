@@ -18,7 +18,7 @@ FORCE_INLINE void receive_upper_block(
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
+    uint32_t generic_block_depth) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         const uint32_t read_tile_id = get_tile_id(
             num_blocks_in_column,
@@ -42,7 +42,7 @@ FORCE_INLINE void output_block(
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
+    uint32_t generic_block_depth) {
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t write_tile_id = get_tile_id(
             num_blocks_in_column,
@@ -56,50 +56,15 @@ FORCE_INLINE void output_block(
     }
 }
 
-template <typename output_number_t, typename output_addr_gen_t>
-FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
-    const output_addr_gen_t& output_addr_gen,
-    uint32_t axis_3_propagation_read_cb,
-    uint32_t axis_3_propagation_write_cb,
-    uint32_t tile_height = 32,
-    uint32_t tile_width = 32,
-    uint32_t block_depth = 32) {
-    // get the output after processing previous row (the block right above the currently processed block)
-    // make the axis 3 propagation tile
-    // push back to the compute
-
-    // this variable signifies the index of the last row in the imported tile from which values are supposed to be
-    // broadcasted across all other rows
-    const uint32_t LAST_ROW_INDEX = tile_height - 1;
-    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
-        ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
-        WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
-        uint32_t propagation_read_addr = get_read_ptr(axis_3_propagation_read_cb);
-        uint32_t propagation_write_addr = get_write_ptr(axis_3_propagation_write_cb);
-        volatile tt_l1_ptr output_number_t* propagation_read_ptr =
-            reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_read_addr);
-        volatile tt_l1_ptr output_number_t* propagation_write_ptr =
-            reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
-        for (uint32_t column_read_i = 0; column_read_i < tile_width; ++column_read_i) {
-            output_number_t value_to_broadcast =
-                propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW_INDEX)];
-            for (uint32_t row_write_i = 0; row_write_i < tile_height; ++row_write_i) {
-                propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] = value_to_broadcast;
-            }
-        }
-    }
-}
-
 }  // namespace
 
 void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
-    using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_slices_along_channels = ceil(ctas.num_channels, ctas.tile_width);
+    constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
@@ -116,7 +81,7 @@ void kernel_main() {
                     const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(
                         output_addr_gtor,
-                        ctas.axis_3_buffer_0_cb,
+                        ctas.axis_3_buffer_cb,
                         my_channel,
                         column_block_i,
                         previous_row_chunk_i,
@@ -124,13 +89,6 @@ void kernel_main() {
                         num_slices_along_channels,
                         block_depth,
                         ctas.block_depth);
-                    broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
-                        output_addr_gtor,
-                        ctas.axis_3_buffer_0_cb,
-                        ctas.axis_3_buffer_1_cb,
-                        ctas.tile_height,
-                        ctas.tile_width,
-                        block_depth);
                 }
                 output_block(
                     output_addr_gtor,

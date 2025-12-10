@@ -8,6 +8,7 @@
 
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
@@ -23,28 +24,17 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         }
     }
 
-    static FORCE_INLINE uint32_t round_down_to_eth_word_alignment(uint32_t addr) { return addr & ~0xF; }
-
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
         completion_counters[src_id]++;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
-        internal_::eth_send_packet_bytes_unsafe(
-            receiver_txq_id,
-            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->completion_counters_base_ptr + src_id)),
-            round_down_to_eth_word_alignment(
-                to_sender_remote_completion_counters_base_address + src_id * sizeof(uint32_t)),
-            ETH_WORD_SIZE_BYTES);
+        update_sender_side_credits();
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         ack_counters[src_id]++;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
-        internal_::eth_send_packet_bytes_unsafe(
-            receiver_txq_id,
-            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
-            round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
-            ETH_WORD_SIZE_BYTES);
+        update_sender_side_credits();
     }
 
     volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
@@ -52,6 +42,15 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     // Local memory copy to save an L1 load
     std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
     std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
+
+private:
+    FORCE_INLINE void update_sender_side_credits() const {
+        internal_::eth_send_packet_bytes_unsafe(
+            receiver_txq_id,
+            local_receiver_credits_base_address,
+            to_senders_credits_base_address,
+            total_number_of_receiver_to_sender_credit_num_bytes);
+    }
 };
 
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
@@ -127,15 +126,17 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         acks_received_and_processed(0),
         completions_received_and_processed(0) {}
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         return *acks_received_counter_ptr - acks_received_and_processed;
     }
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         return *completions_received_counter_ptr - completions_received_and_processed;
     }
 
@@ -155,6 +156,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(to_sender_packets_completed_streams[sender_channel_index]) {}
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         return get_ptr_val(to_sender_packets_acked_stream);
     }
@@ -163,6 +165,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         return get_ptr_val(to_sender_packets_completed_stream);
     }
