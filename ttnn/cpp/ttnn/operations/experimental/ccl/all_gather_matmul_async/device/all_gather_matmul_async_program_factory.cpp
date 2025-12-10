@@ -180,7 +180,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                                                                      // all_gather_async old program factories
 
     return cached_program_t(
-        {std::move(program),
+        {std::move(program_with_callbacks.program),
          shared_variables_t{
              .all_gather_override_runtime_arguments_callback =
                  all_gather_override_runtime_arguments_callback,  // TODO: migrate to not use the old
