@@ -8,7 +8,7 @@
 
 namespace tt::tt_fabric {
 
-enum class Topology { Ring = 0, Linear = 1, Mesh = 2, Torus = 3 };
+enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
 
 struct WorkerXY {
     uint16_t x;
