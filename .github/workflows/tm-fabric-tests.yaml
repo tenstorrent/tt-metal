@@ -20,6 +20,21 @@ on:
         required: false
         default: true
         type: boolean
+      run-perf-fabric-bw:
+        description: 'Run T3K ubench - Fabric BW performance test'
+        required: false
+        default: true
+        type: boolean
+      run-perf-fabric-latency:
+        description: 'Run T3K ubench - Fabric Latency performance test'
+        required: false
+        default: true
+        type: boolean
+      run-perf-fabric-mux-bw:
+        description: 'Run T3K ubench - Fabric Mux BW performance test'
+        required: false
+        default: true
+        type: boolean
       run-wh-6u-fabric-tests:
         description: 'Run Wormhole 6U fabric tests'
         required: false
@@ -27,6 +42,31 @@ on:
         type: boolean
       run-bh-multi-card-unit-tests:
         description: 'Run Blackhole multi-card unit tests'
+        required: false
+        default: true
+        type: boolean
+      bh-runner-llmbox:
+        description: 'Run tests on BH-LLMBox'
+        required: false
+        default: true
+        type: boolean
+      bh-runner-deskbox:
+        description: 'Run tests on BH-DeskBox'
+        required: false
+        default: true
+        type: boolean
+      bh-runner-loudbox:
+        description: 'Run tests on BH-LoudBox'
+        required: false
+        default: true
+        type: boolean
+      bh-runner-p300:
+        description: 'Run tests on P300-viommu'
+        required: false
+        default: true
+        type: boolean
+      bh-runner-qb-ge:
+        description: 'Run tests on BH-QB-GE'
         required: false
         default: true
         type: boolean
@@ -53,6 +93,11 @@ jobs:
       run-wh-t3k-fabric-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-fabric-tests != false || github.event_name == 'push' }}
       run-wh-6u-fabric-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-6u-fabric-tests != false || github.event_name == 'push' }}
       run-bh-multi-card-unit-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-bh-multi-card-unit-tests != false || github.event_name == 'push' }}
+      bh-runner-llmbox: ${{ github.event_name == 'workflow_dispatch' && inputs.bh-runner-llmbox != false || github.event_name == 'push' }}
+      bh-runner-deskbox: ${{ github.event_name == 'workflow_dispatch' && inputs.bh-runner-deskbox != false || github.event_name == 'push' }}
+      bh-runner-loudbox: ${{ github.event_name == 'workflow_dispatch' && inputs.bh-runner-loudbox != false || github.event_name == 'push' }}
+      bh-runner-p300: ${{ github.event_name == 'workflow_dispatch' && inputs.bh-runner-p300 != false || github.event_name == 'push' }}
+      bh-runner-qb-ge: ${{ github.event_name == 'workflow_dispatch' && inputs.bh-runner-qb-ge != false || github.event_name == 'push' }}
   fabric-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
     needs: build-artifact
@@ -62,3 +107,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-perf-fabric-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-bw != false || github.event_name == 'push' }}
+      run-perf-fabric-latency: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-latency != false || github.event_name == 'push' }}
+      run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}

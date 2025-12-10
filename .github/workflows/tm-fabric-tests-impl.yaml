@@ -36,6 +36,31 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card unit tests"
+      bh-runner-llmbox:
+        required: false
+        type: boolean
+        default: true
+        description: "Run tests on BH-LLMBox"
+      bh-runner-deskbox:
+        required: false
+        type: boolean
+        default: true
+        description: "Run tests on BH-DeskBox"
+      bh-runner-loudbox:
+        required: false
+        type: boolean
+        default: true
+        description: "Run tests on BH-LoudBox"
+      bh-runner-p300:
+        required: false
+        type: boolean
+        default: true
+        description: "Run tests on P300-viommu"
+      bh-runner-qb-ge:
+        required: false
+        type: boolean
+        default: true
+        description: "Run tests on BH-QB-GE"
 
 jobs:
   # Wormhole N300 - Fabric tests
@@ -123,11 +148,6 @@ jobs:
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           run_t3000_ttfabric_tests
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.t3k-fabric-tests.outcome == 'failure' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: UJ45FEC7M #Allan Liu
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 17
         if: ${{ !cancelled() }}
@@ -181,11 +201,6 @@ jobs:
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -205,24 +220,65 @@ jobs:
         if: always()
 
   # Blackhole - Multi-card unit tests
+  generate-bh-matrix:
+    if: ${{ inputs.run-bh-multi-card-unit-tests }}
+    runs-on: ubuntu-latest
+    outputs:
+      runner-matrix: ${{ steps.set-runner-matrix.outputs.matrix }}
+    steps:
+      - id: set-runner-matrix
+        shell: bash
+        run: |
+          runner_items=()
+
+          # Check which runner labels should be included
+          if [[ "${{ inputs.bh-runner-llmbox }}" == "true" ]]; then
+            runner_items+=('{"name":"LLMBox unit tests","runner-label":"BH-LLMBox"}')
+          fi
+
+          if [[ "${{ inputs.bh-runner-deskbox }}" == "true" ]]; then
+            runner_items+=('{"name":"DeskBox unit tests","runner-label":"BH-DeskBox"}')
+          fi
+
+          if [[ "${{ inputs.bh-runner-loudbox }}" == "true" ]]; then
+            runner_items+=('{"name":"LoudBox unit tests","runner-label":"BH-LoudBox"}')
+          fi
+
+          if [[ "${{ inputs.bh-runner-p300 }}" == "true" ]]; then
+            runner_items+=('{"name":"P300 unit tests","runner-label":"P300-viommu"}')
+          fi
+
+          if [[ "${{ inputs.bh-runner-qb-ge }}" == "true" ]]; then
+            runner_items+=('{"name":"QuietBox Global Edition unit tests","runner-label":"BH-QB-GE"}')
+          fi
+
+          # If no runners selected, add a placeholder to avoid matrix error
+          if [ ${#runner_items[@]} -eq 0 ]; then
+            echo "No BH runners selected, adding placeholder"
+            runner_items+=('{"name":"LLMBox unit tests","runner-label":"BH-LLMBox"}')
+          fi
+
+          # Convert array to JSON array format
+          matrix_json="["
+          for i in "${!runner_items[@]}"; do
+            if [ $i -gt 0 ]; then
+              matrix_json+=","
+            fi
+            matrix_json+="${runner_items[i]}"
+          done
+          matrix_json+="]"
+
+          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+          echo "Generated runner matrix: $matrix_json"
   bh-multi-card-unit-tests:
     if: ${{ inputs.run-bh-multi-card-unit-tests }}
+    needs: generate-bh-matrix
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-group:
-          - name: LLMBox unit tests
-            runner-label: BH-LLMBox
-          - name: DeskBox unit tests
-            runner-label: BH-DeskBox
-          - name: LoudBox unit tests
-            runner-label: BH-LoudBox
-          - name: P300 unit tests
-            runner-label: P300-viommu
-          - name: QuietBox Global Edition unit tests
-            runner-label: BH-QB-GE
+        runner-group: ${{ fromJson(needs.generate-bh-matrix.outputs.runner-matrix) }}
         test-group:
           - name: fabric 1D unit tests
             cmd: |
