@@ -1220,7 +1220,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 template <typename EdmChannelWorkerIFs>
 FORCE_INLINE void establish_edm_connection(
     EdmChannelWorkerIFs& local_sender_channel_worker_interface, uint32_t stream_id) {
-    local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
+    local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>(); // , USE_DYNAMIC_CREDIT_ADDR>();
 }
 
 bool any_sender_channels_active(
@@ -1364,6 +1364,7 @@ template <
     typename ReceiverChannelT,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_sender_channel_step_impl(
+    size_t const my_eth_channel_,
     SenderChannelT& local_sender_channel,
     WorkerInterfaceT& local_sender_channel_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
@@ -1453,7 +1454,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
-            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+            check_worker_connections<true>( // ENABLE_RISC_CPU_DATA_CACHE>(
                 local_sender_channel_worker_interface,
                 channel_connection_established,
                 sender_channel_free_slots_stream_id);
@@ -1472,6 +1473,7 @@ template <
     size_t NUM_SENDER_CHANNELS,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_sender_channel_step(
+    size_t const my_eth_channel_,
     EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
@@ -1486,9 +1488,10 @@ FORCE_INLINE bool run_sender_channel_step(
         // L1 locations to see if it can make progress
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return run_sender_channel_step_impl<
-            sender_channel_index,
-            to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
-            sender_ch_live_check_skip[sender_channel_index]>(
+               sender_channel_index,
+               to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+               sender_ch_live_check_skip[sender_channel_index]>(
+            my_eth_channel_,
             local_sender_channels.template get<sender_channel_index>(),
             local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
             outbound_to_receiver_channel_pointers,
@@ -1759,6 +1762,7 @@ template <
     typename EdmChannelWorkerIFs,
     typename TransactionIdTrackerCH0>
 FORCE_INLINE void run_fabric_edm_main_loop(
+    size_t const my_eth_channel_,
     EthReceiverChannels& local_receiver_channels,
     EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
@@ -1833,6 +1837,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0>(
+	        my_eth_channel_,
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointer_ch0,
@@ -1853,6 +1858,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 routing_table,
                 local_fabric_telemetry);
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
+	        my_eth_channel_,
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointer_ch0,
@@ -1864,6 +1870,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 local_fabric_telemetry);
             if constexpr (is_2d_fabric) {
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
+	            my_eth_channel_,
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -1874,6 +1881,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3>(
+	            my_eth_channel_,
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -2213,6 +2221,7 @@ void kernel_main() {
     ///////////////////////
     // Common runtime args:
     ///////////////////////
+    const size_t my_eth_channel_ = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_0_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_1_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -2772,6 +2781,7 @@ void kernel_main() {
         NUM_RECEIVER_CHANNELS,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
         RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS>>(
+        my_eth_channel_,
         local_receiver_channels,
         local_sender_channels,
         local_sender_channel_worker_interfaces,
