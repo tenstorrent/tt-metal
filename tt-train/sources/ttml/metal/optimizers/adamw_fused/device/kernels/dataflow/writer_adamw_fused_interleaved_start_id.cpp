@@ -5,8 +5,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "hostdevcommon/kernel_structs.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr auto cb_param_out_idx = tt::CBIndex::c_16;
 constexpr auto cb_exp_avg_out_idx = tt::CBIndex::c_17;
@@ -14,23 +13,6 @@ constexpr auto cb_exp_avg_sq_out_idx = tt::CBIndex::c_18;
 constexpr auto cb_max_exp_avg_sq_out_idx = tt::CBIndex::c_19;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
-
-template <typename AddrGen>
-inline void write_cb_block_to_dram(
-    uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    uint32_t start_idx,
-    uint32_t block_size,
-    uint32_t current_block_size,
-    uint32_t tile_size_bytes) {
-    cb_wait_front(cb_idx, block_size);
-    uint32_t l1_read_addr = get_read_ptr(cb_idx);
-
-    for (uint32_t k = 0; k < current_block_size; ++k) {
-        noc_async_write_tile(start_idx + k, addr_gen, l1_read_addr);
-        l1_read_addr += tile_size_bytes;
-    }
-}
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -61,20 +43,20 @@ void kernel_main() {
         uint32_t tiles_left = end_tile - tile_idx;
         uint32_t current_block_size = std::min(block_size, tiles_left);
 
-        write_cb_block_to_dram(
-            cb_param_out_idx, param_out_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
-        write_cb_block_to_dram(
-            cb_exp_avg_out_idx, exp_avg_out_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
-        write_cb_block_to_dram(
-            cb_exp_avg_sq_out_idx, exp_avg_sq_out_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+        write_tiles_by_row</* UseBarrier = */ false>(
+            cb_param_out_idx, param_out_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
+        write_tiles_by_row</* UseBarrier = */ false>(
+            cb_exp_avg_out_idx, exp_avg_out_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
+        write_tiles_by_row</* UseBarrier = */ false>(
+            cb_exp_avg_sq_out_idx, exp_avg_sq_out_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
 #if AMSGRAD
-        write_cb_block_to_dram(
+        write_tiles_by_row</* UseBarrier = */ false>(
             cb_max_exp_avg_sq_out_idx,
             max_exp_avg_sq_out_addr_gen,
             tile_idx,
-            block_size,
             current_block_size,
-            tile_size_bytes);
+            tile_size_bytes,
+            block_size);
 #endif
         noc_async_write_barrier();
         cb_pop_front(cb_param_out_idx, block_size);
