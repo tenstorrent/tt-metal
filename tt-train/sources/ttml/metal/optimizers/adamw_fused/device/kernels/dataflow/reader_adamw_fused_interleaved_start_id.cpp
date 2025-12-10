@@ -27,8 +27,6 @@ void kernel_main() {
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_size_bytes = get_tile_size(cb_param_idx);
-    // TODO: Remember about tile size if changing datatype for momentum buffers
-    // const uint32_t momentum_tile_size_bytes = get_tile_size(cb_exp_avg_idx);
 
     constexpr auto param_args = TensorAccessorArgs<1U>();
     constexpr auto grad_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
