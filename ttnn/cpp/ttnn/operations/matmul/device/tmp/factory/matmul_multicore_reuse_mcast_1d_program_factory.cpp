@@ -17,8 +17,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-
 using namespace tt;
 
 using ttnn::operations::unary::UnaryOpType;
@@ -2552,9 +2550,9 @@ inline void override_gather_in0_program_parameters(
 }
 
 void override_program_parameters(
-    Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    Program& program,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
     switch (override_variables.type) {
@@ -2914,9 +2912,9 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     reuse_mcast_1d_optimized_helpers::override_program_parameters(
-        cached_program.program,
         cached_program.shared_variables,
         operation_attributes.global_cb,
+        cached_program.program,
         tensor_args,
         tensor_return_value);
 }

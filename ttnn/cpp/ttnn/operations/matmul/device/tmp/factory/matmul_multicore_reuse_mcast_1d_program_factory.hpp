@@ -6,6 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 // TODO [migration]: Remove `using` aliases and the `tmp` namespace after migrating all dependent ops from the old
 // infra. Once complete, the old infra code can be deleted. #33531
@@ -58,12 +59,29 @@ struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
+MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index,
+    std::optional<CoreRangeSet> restricted_cores);
+
 namespace reuse_mcast_1d_optimized_helpers {
+
 void override_program_parameters(
-    Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    Program& program,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value);
-}
+}  // namespace reuse_mcast_1d_optimized_helpers
 }  // namespace ttnn::operations::matmul::program
