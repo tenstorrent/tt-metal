@@ -118,7 +118,6 @@ Tensor create_typed_tt_tensor_from_py_data(
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
-    //
     TT_FATAL(
         !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
             tensor_layout.get_memory_config().nd_shard_spec().has_value(),
@@ -174,7 +173,6 @@ Tensor create_tt_tensor_from_py_data(
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
-    //
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
             py_data, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
@@ -218,21 +216,10 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
-    std::vector<int64_t> shp;
-    shp.reserve(py_tensor.ndim());
-    for (size_t i = 0; i < py_tensor.ndim(); ++i) {
-        shp.emplace_back(static_cast<int64_t>(py_tensor.shape(i)));
-    }
-
-    // try brute force...
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
     config.device_type = nb::device::cpu::value;
-    // config.ndim = py_tensor.ndim();
-    //// config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import
-    /// copies / it
-    // config.shape = shp.data();  // was getting bad sizes
 
     TT_FATAL(
         data_type != DataType::INVALID || py_tensor.is_valid(),
@@ -248,11 +235,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         config.dtype.bits);
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
-        py_tensor.cast(nb::rv_policy::automatic).ptr(),
-        // py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
-        &config,
-        true /*convert*/,
-        nullptr);
+        py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 
     return {.contiguous_py_tensor{converted_tensor_handle}, .data_type = data_type};
 }
@@ -303,9 +286,9 @@ Tensor convert_python_tensor_to_tt_tensor(
         if (preprocessed_py_tensor.data_type == DataType::BFLOAT8_B ||
             preprocessed_py_tensor.data_type == DataType::BFLOAT4_B) {
             TT_FATAL(
-                !optional_layout.has_value() or *optional_layout == Layout::TILE,
+                !optional_layout.has_value() or optional_layout.value() == Layout::TILE,
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                *optional_layout);
+                optional_layout.value());
             return Layout::TILE;
         } else {
             return optional_layout.value_or(Layout::ROW_MAJOR);
@@ -422,7 +405,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
                     buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+                    "composer "
                     "to concatenate multi-device shards.",
                     storage.buffer().shape());
                 return buffers.front();
@@ -1355,7 +1339,9 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "storage_type", [](const Tensor& self) { return self.storage_type(); }, R"doc(
+            "storage_type",
+            [](const Tensor& self) { return self.storage_type(); },
+            R"doc(
             Check if the tensor is on host
 
             .. code-block:: python
@@ -1551,7 +1537,6 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, int N, int C, int H, int W) {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
-            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1562,7 +1547,6 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
-            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1575,7 +1559,6 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
-            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1636,7 +1619,6 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "tensor_topology",
             [](const Tensor& self) { return self.tensor_topology(); },
-            // nb::rv_policy::reference_internal,
             nb::keep_alive<1, 0>(),
             R"doc(
                 Get the topology of the tensor.
