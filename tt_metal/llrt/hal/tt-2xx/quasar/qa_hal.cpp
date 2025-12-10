@@ -66,7 +66,7 @@ namespace tt::tt_metal {
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     std::string linker_flags(const Params& params) const override {
-        std::string flags = "";
+        std::string flags;
         if (params.is_fw) {
             flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
             flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
