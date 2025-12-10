@@ -305,18 +305,24 @@ void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
 
+    // MATH(DPRINT << "Compute kernel start" << "\n");
+    // MATH(DPRINT << "num_rows_per_core: " << num_rows_per_core << "\n");
     for (uint32_t r = 0; r < num_rows_per_core; ++r) {
+        // MATH(DPRINT << "Processing row r: " << r << "\n");
         // ---- Phase A: Accumulate XW1[r,:] and XW3[r,:] in tiles over p ----
         // XW1[r,k] = sum_p( X[r,p] * W1[p,k] )
         // XW3[r,k] = sum_p( X[r,p] * W3[p,k] )
         compute_XW1_XW3_for_r();
+        // MATH(DPRINT << "  XW1 and XW3 computed for row r: " << r << "\n");
 
         // ---- Phase B: Compute M[r,:] once ----
         compute_M_for_r();
+        // MATH(DPRINT << "  M computed for row r: " << r << "\n");
         cb_wait_front(cb_m_idx, hidden_Wt_rounded_up);  // M[r, :] ready
 
         // ---- Phase C: Use M[r,:] for all c_blocks ----
         // Y[r, :] = sum_k( M[r,k] * W2[k,c] )
+        // MATH(DPRINT << "  Starting Y computation for row r: " << r << "\n");
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
             // Compute Y[r, c_block_start : c_block_start + c_block_size]
@@ -339,6 +345,7 @@ void kernel_main() {
                 // and maybe some smarter usage of cb_m_idx.
             }
         }
+        // MATH(DPRINT << "  Y computed for row r: " << r << "\n");
 
         // M[r, :] is no longer needed
         cb_pop_front(cb_m_idx, hidden_Wt_rounded_up);

@@ -404,7 +404,7 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
  * @param sender_sem_ptr Local pointer to sender's semaphore
  * @param num_receivers Number of receiver cores to wait for
  */
-inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_sem_ptr, uint32_t num_receivers) {
+inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_sem_ptr, const uint32_t num_receivers) {
     noc_semaphore_wait(sender_sem_ptr, num_receivers);
     noc_semaphore_set(sender_sem_ptr, 0);
 }
@@ -421,14 +421,14 @@ inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_
  * @param num_dests Number of destination cores
  */
 inline void mcast_sender_send_data(
-    uint32_t l1_addr,
-    uint32_t noc_start_x,
-    uint32_t noc_start_y,
-    uint32_t noc_end_x,
-    uint32_t noc_end_y,
-    uint32_t num_bytes,
-    uint32_t num_dests) {
-    uint64_t multicast_noc_addr = get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, l1_addr);
+    const uint32_t l1_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_bytes,
+    const uint32_t num_dests) {
+    const uint64_t multicast_noc_addr = get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, l1_addr);
     noc_async_write_multicast(l1_addr, multicast_noc_addr, num_bytes, num_dests);
     noc_async_write_barrier();
 }
@@ -446,14 +446,14 @@ inline void mcast_sender_send_data(
  */
 inline void mcast_sender_signal_receivers(
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
-    uint32_t receiver_sem_addr,
-    uint32_t noc_start_x,
-    uint32_t noc_start_y,
-    uint32_t noc_end_x,
-    uint32_t noc_end_y,
-    uint32_t num_dests) {
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_dests) {
     noc_semaphore_set(receiver_sem_ptr, 1);
-    uint64_t receiver_sem_noc_addr =
+    const uint64_t receiver_sem_noc_addr =
         get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_sem_addr);
     noc_semaphore_set_multicast(receiver_sem_addr, receiver_sem_noc_addr, num_dests);
     noc_async_write_barrier();
@@ -465,7 +465,8 @@ inline void mcast_sender_signal_receivers(
  * @param receiver_sem_ptr Local pointer to receiver's semaphore
  * @param sender_sem_noc_addr NOC address of sender's semaphore
  */
-inline void mcast_receiver_wait_for_data(volatile tt_l1_ptr uint32_t* receiver_sem_ptr, uint64_t sender_sem_noc_addr) {
+inline void mcast_receiver_wait_for_data(
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr, const uint64_t sender_sem_noc_addr) {
     noc_semaphore_set(receiver_sem_ptr, 0);
     noc_semaphore_inc(sender_sem_noc_addr, 1);
     noc_async_write_barrier();
@@ -473,15 +474,18 @@ inline void mcast_receiver_wait_for_data(volatile tt_l1_ptr uint32_t* receiver_s
 }
 
 /**
- * Complete sender-side multicast operation: read from DRAM, multicast, and signal
+ * Complete sender-side multicast operation for row reads
+ * Reads tiles by row from DRAM, multicasts to receivers (if any), and pushes to local CB.
+ * If num_dests == 0, simply reads from DRAM (single-core path, no multicast).
+ * Note: Multicasts only the actual tiles read (num_tiles), but reserves/pushes block_size to CB for alignment.
  *
  * @tparam AddrGen Address generator type
  * @param cb_idx Circular buffer index
  * @param addr_gen Address generator for DRAM reads
  * @param tile_start Starting tile index
- * @param num_tiles Number of tiles to read
+ * @param num_tiles Number of tiles to read (actual data size to multicast)
  * @param tile_bytes Bytes per tile
- * @param block_size Block size for CB operations
+ * @param block_size Block size for CB operations (must be >= num_tiles)
  * @param sender_sem_ptr Sender semaphore pointer
  * @param receiver_sem_ptr Receiver semaphore pointer (local)
  * @param receiver_sem_addr Receiver semaphore L1 address
@@ -489,42 +493,48 @@ inline void mcast_receiver_wait_for_data(volatile tt_l1_ptr uint32_t* receiver_s
  * @param noc_start_y NOC start Y coordinate
  * @param noc_end_x NOC end X coordinate
  * @param noc_end_y NOC end Y coordinate
- * @param num_dests Number of receiver cores
+ * @param num_dests Number of receiver cores (0 = single-core, no multicast)
  */
 template <typename AddrGen>
-inline void mcast_sender_read_and_send(
-    uint32_t cb_idx,
+inline void mcast_sender_read_row_and_send(
+    const uint32_t cb_idx,
     const AddrGen& addr_gen,
-    uint32_t tile_start,
-    uint32_t num_tiles,
-    uint32_t tile_bytes,
-    uint32_t block_size,
+    const uint32_t tile_start,
+    const uint32_t num_tiles,
+    const uint32_t tile_bytes,
+    const uint32_t block_size,
     volatile tt_l1_ptr uint32_t* sender_sem_ptr,
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
-    uint32_t receiver_sem_addr,
-    uint32_t noc_start_x,
-    uint32_t noc_start_y,
-    uint32_t noc_end_x,
-    uint32_t noc_end_y,
-    uint32_t num_dests) {
-    // 1. Wait for receivers to be ready
-    mcast_sender_wait_for_receivers(sender_sem_ptr, num_dests);
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_dests) {
+    if (num_dests > 0) {
+        // Multicast path
+        // 1. Wait for receivers to be ready
+        mcast_sender_wait_for_receivers(sender_sem_ptr, num_dests);
 
-    // 2. Read from DRAM into CB (don't push yet)
-    read_tiles_by_row<false>(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, block_size);
-    uint32_t l1_write_addr = get_write_ptr(cb_idx);
-    noc_async_read_barrier();
+        // 2. Read from DRAM into CB by row (don't push yet)
+        read_tiles_by_row<false>(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, block_size);
+        const uint32_t l1_write_addr = get_write_ptr(cb_idx);
+        noc_async_read_barrier();
 
-    // 3. Multicast data to receivers
-    mcast_sender_send_data(
-        l1_write_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_tiles * tile_bytes, num_dests);
+        // 3. Multicast actual data read (num_tiles, not block_size for padding)
+        mcast_sender_send_data(
+            l1_write_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_tiles * tile_bytes, num_dests);
 
-    // 4. Signal receivers that data is ready
-    mcast_sender_signal_receivers(
-        receiver_sem_ptr, receiver_sem_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
+        // 4. Signal receivers that data is ready
+        mcast_sender_signal_receivers(
+            receiver_sem_ptr, receiver_sem_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
 
-    // 5. Push to CB for local compute
-    cb_push_back(cb_idx, block_size);
+        // 5. Push to CB for local compute
+        cb_push_back(cb_idx, block_size);
+    } else {
+        // Single-core path: just read tiles normally
+        read_tiles_by_row(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, block_size);
+    }
 }
 
 /**
@@ -536,7 +546,10 @@ inline void mcast_sender_read_and_send(
  * @param sender_sem_noc_addr NOC address of sender's semaphore
  */
 inline void mcast_receiver_reserve_and_receive(
-    uint32_t cb_idx, uint32_t block_size, volatile tt_l1_ptr uint32_t* receiver_sem_ptr, uint64_t sender_sem_noc_addr) {
+    const uint32_t cb_idx,
+    const uint32_t block_size,
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint64_t sender_sem_noc_addr) {
     // 1. Reserve CB space
     cb_reserve_back(cb_idx, block_size);
 
@@ -545,4 +558,70 @@ inline void mcast_receiver_reserve_and_receive(
 
     // 3. Push to CB (multicast already wrote to L1)
     cb_push_back(cb_idx, block_size);
+}
+
+/**
+ * Complete sender-side multicast operation for column reads
+ * Reads tiles by column from DRAM, multicasts to receivers (if any), and pushes to local CB.
+ * If num_dests == 0, simply reads from DRAM (single-core path, no multicast).
+ * Note: Multicasts only the actual tiles read (num_tiles), but reserves/pushes block_size to CB for alignment.
+ *
+ * @tparam AddrGen Address generator type
+ * @param cb_idx Circular buffer index
+ * @param addr_gen Address generator for DRAM reads
+ * @param tile_start Starting tile index
+ * @param num_tiles Number of tiles to read (actual data size to multicast)
+ * @param tile_bytes Bytes per tile
+ * @param col_stride Stride for column access (width of matrix)
+ * @param block_size Block size for CB operations (must be >= num_tiles)
+ * @param sender_sem_ptr Sender semaphore pointer
+ * @param receiver_sem_ptr Receiver semaphore pointer (local)
+ * @param receiver_sem_addr Receiver semaphore L1 address
+ * @param noc_start_x NOC start X coordinate
+ * @param noc_start_y NOC start Y coordinate
+ * @param noc_end_x NOC end X coordinate
+ * @param noc_end_y NOC end Y coordinate
+ * @param num_dests Number of receiver cores (0 = single-core, no multicast)
+ */
+template <typename AddrGen>
+inline void mcast_sender_read_col_and_send(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t tile_start,
+    const uint32_t num_tiles,
+    const uint32_t tile_bytes,
+    const uint32_t col_stride,
+    const uint32_t block_size,
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr,
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_dests) {
+    if (num_dests > 0) {
+        // Multicast path
+        // 1. Wait for receivers to be ready
+        mcast_sender_wait_for_receivers(sender_sem_ptr, num_dests);
+
+        // 2. Read from DRAM into CB by column (don't push yet)
+        read_tiles_by_col<false>(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, col_stride, block_size);
+        const uint32_t l1_write_addr = get_write_ptr(cb_idx);
+        noc_async_read_barrier();
+
+        // 3. Multicast actual data read (num_tiles, not block_size for padding)
+        mcast_sender_send_data(
+            l1_write_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_tiles * tile_bytes, num_dests);
+
+        // 4. Signal receivers that data is ready
+        mcast_sender_signal_receivers(
+            receiver_sem_ptr, receiver_sem_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
+
+        // 5. Push to CB for local compute
+        cb_push_back(cb_idx, block_size);
+    } else {
+        // Single-core path: just read tiles normally by column
+        read_tiles_by_col(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, col_stride, block_size);
+    }
 }

@@ -110,10 +110,6 @@ void assign_per_core_runtime_args(
         // Determine if this core is a W1 sender (left column) or receiver
         bool is_w1_sender = (core.x == 0);
 
-        // std::cerr << "Core " << i << " (" << core.x << "," << core.y << "): " << (is_w1_sender ? "SENDER" :
-        // "RECEIVER")
-        //           << ", num_rows_per_core=" << num_rows_per_core << "\n";
-
         if (is_w1_sender) {
             // Sender core: reads from DRAM and multicasts W1 to receivers in same row
             // Count how many receiver cores actually exist in this sender's row
@@ -132,9 +128,6 @@ void assign_per_core_runtime_args(
                     mcast_num_dests++;
                 }
             }
-
-            // std::cerr << "  Sender (" << core.x << "," << core.y << ") found " << mcast_num_dests
-            //           << " receivers in same row (x range: " << mcast_start_x << " to " << mcast_end_x << ")\n";
 
             // Always count this core as a sender (even if it has 0 receivers)
             num_senders++;
@@ -202,9 +195,6 @@ void assign_per_core_runtime_args(
 
         num_rows_written += num_rows_per_core;
     }
-
-    // std::cerr << "Summary: " << num_senders << " sender cores, " << num_receivers
-    //           << " receiver cores (total: " << (num_senders + num_receivers) << ")\n";
 }
 
 bool row_of_m_fits_in_l1_check(
@@ -302,17 +292,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // it in the kernels.
     const uint32_t block_size = 4U;
 
-    // std::cerr << "SwiGLUForwardProgramFactory: total_rows_to_process=" << total_rows_to_process
-    //           << ", num_cores_x=" << num_cores_x << ", num_cores_y=" << num_cores_y << ", block_size=" <<
-    //           block_size
-    //           << ", Wt=" << Wt << ", hidden_Wt=" << hidden_Wt << "\n";
-
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process, /*row_wise=*/true);
-
-    // std::cerr << "SwiGLUForwardProgramFactory: num_cores=" << num_cores
-    //         << ", num_rows_per_core_group_1=" << num_rows_per_core_group_1
-    //         << ", num_rows_per_core_group_2=" << num_rows_per_core_group_2 << "\n";
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -320,10 +301,10 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     const uint32_t twice_block_size = 2U * block_size;
 
     // Check if row of M fits in L1 to determine CB sizing strategy
-    // TEMPORARY: Force flash-attention path for debugging multicast
-    const bool row_of_m_fits_in_l1 = true;
-    // const bool row_of_m_fits_in_l1 =
-    //     row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
+    // TEMPORARY: Force non-flash-attention path for testing multicast
+    // const bool row_of_m_fits_in_l1 = false;
+    const bool row_of_m_fits_in_l1 =
+        row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
 
     // CB sizing based on whether row of M fits in L1
     const uint32_t num_tiles_xw1 = row_of_m_fits_in_l1 ? ((hidden_Wt + block_size - 1U) / block_size) *
@@ -404,11 +385,9 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         enchantum::to_string(swiglu_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
-    // TEMPORARY: Force ROW_OF_M_FITS_IN_L1 define for debugging
-    defines[kRowOfMFitsInL1DefineKey] = "1";
-    // if (row_of_m_fits_in_l1) {
-    //     defines[kRowOfMFitsInL1DefineKey] = "1";
-    // }
+    if (row_of_m_fits_in_l1) {
+        defines[kRowOfMFitsInL1DefineKey] = "1";
+    }
 
     // -------------------------------------------------------------------------
     // 3.1) Split cores into leftmost column (senders) and rest (receivers)
