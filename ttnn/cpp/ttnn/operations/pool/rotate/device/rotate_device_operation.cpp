@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_rotate_device_operation.hpp"
+#include "rotate_device_operation.hpp"
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 using namespace tt;
 using namespace tt::tt_metal;
 
-ImageRotateDeviceOperation::program_factory_t ImageRotateDeviceOperation::select_program_factory(
+RotateDeviceOperation::program_factory_t RotateDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (operation_attributes.interpolation_mode == "nearest") {
         return NearestProgramFactory{};
@@ -21,7 +21,7 @@ ImageRotateDeviceOperation::program_factory_t ImageRotateDeviceOperation::select
     }
 }
 
-void ImageRotateDeviceOperation::validate_inputs(
+void RotateDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
@@ -72,21 +72,21 @@ void ImageRotateDeviceOperation::validate_inputs(
         operation_attributes.interpolation_mode);
 }
 
-void ImageRotateDeviceOperation::validate_on_program_cache_miss(
+void RotateDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void ImageRotateDeviceOperation::validate_on_program_cache_hit(
+void RotateDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
 
-ImageRotateDeviceOperation::spec_return_value_t ImageRotateDeviceOperation::compute_output_specs(
+RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    // Output shape is the same as input shape for image_rotate (expand=False)
+    // Output shape is the same as input shape for rotate (expand=False)
     ttnn::Shape output_shape = input.logical_shape();
     ttnn::Shape output_padded = input.padded_shape();
 
@@ -100,12 +100,12 @@ ImageRotateDeviceOperation::spec_return_value_t ImageRotateDeviceOperation::comp
             output_padded));
 }
 
-ImageRotateDeviceOperation::tensor_return_value_t ImageRotateDeviceOperation::create_output_tensors(
+RotateDeviceOperation::tensor_return_value_t RotateDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t ImageRotateDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t RotateDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Cache based on tensor shape, memory config, and interpolation mode
     // angle, center, and fill are runtime args and don't affect program structure
@@ -118,8 +118,8 @@ tt::stl::hash::hash_t ImageRotateDeviceOperation::compute_program_hash(
         tensor_args.input.dtype());
 }
 
-std::tuple<ImageRotateDeviceOperation::operation_attributes_t, ImageRotateDeviceOperation::tensor_args_t>
-ImageRotateDeviceOperation::invoke(
+std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
+RotateDeviceOperation::invoke(
     const Tensor& input,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -133,4 +133,4 @@ ImageRotateDeviceOperation::invoke(
         tensor_args_t{input}};
 }
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate

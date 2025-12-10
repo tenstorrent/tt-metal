@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for image_rotate operation - Stages 4-6 verification.
+Tests for rotate operation - Stages 4-6 verification.
 
 Stage 4: Device operation validation and factory selection
 Stage 5: Program factory with CBs and work distribution
@@ -40,7 +40,7 @@ class TestStage4DeviceOperation:
 
         # Call should succeed or fail at program/kernel level, not validation
         try:
-            result = ttnn.image_rotate(input_tensor, 45.0)
+            result = ttnn.rotate(input_tensor, 45.0)
             # If we get here, the operation executed
             assert result is not None
         except RuntimeError as e:
@@ -56,7 +56,7 @@ class TestStage4DeviceOperation:
         input_tensor = ttnn.from_torch(input_3d, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         with pytest.raises(RuntimeError) as exc:
-            ttnn.image_rotate(input_tensor, 45.0)
+            ttnn.rotate(input_tensor, 45.0)
 
         assert "4D" in str(exc.value) or "rank" in str(exc.value).lower()
 
@@ -66,7 +66,7 @@ class TestStage4DeviceOperation:
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         with pytest.raises(RuntimeError) as exc:
-            ttnn.image_rotate(input_tensor, 45.0, expand=True)
+            ttnn.rotate(input_tensor, 45.0, expand=True)
 
         assert "expand" in str(exc.value).lower()
 
@@ -85,7 +85,7 @@ class TestStage5ProgramFactory:
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         try:
-            result = ttnn.image_rotate(input_tensor, 45.0)
+            result = ttnn.rotate(input_tensor, 45.0)
         except RuntimeError as e:
             error_str = str(e).lower()
             # Should not fail at CB creation
@@ -106,7 +106,7 @@ class TestStage5ProgramFactory:
             input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
             try:
-                result = ttnn.image_rotate(input_tensor, 45.0)
+                result = ttnn.rotate(input_tensor, 45.0)
                 # Verify output shape matches input shape
                 assert list(result.shape) == list(input_tensor.shape), f"Shape mismatch for input {shape}"
             except RuntimeError:
@@ -128,7 +128,7 @@ class TestStage6KernelCompilation:
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         try:
-            result = ttnn.image_rotate(input_tensor, 45.0)
+            result = ttnn.rotate(input_tensor, 45.0)
         except RuntimeError as e:
             error_str = str(e)
             # Check if this is a kernel compilation error
@@ -143,7 +143,7 @@ class TestStage6KernelCompilation:
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         # Should complete without hanging
-        result = ttnn.image_rotate(input_tensor, 45.0)
+        result = ttnn.rotate(input_tensor, 45.0)
 
         # Basic sanity checks
         assert result is not None
@@ -154,7 +154,7 @@ class TestStage6KernelCompilation:
         input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-        result = ttnn.image_rotate(input_tensor, 45.0)
+        result = ttnn.rotate(input_tensor, 45.0)
 
         # Shape should match input
         assert list(result.shape) == list(input_tensor.shape)
@@ -167,7 +167,7 @@ class TestStage6KernelCompilation:
         input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-        result = ttnn.image_rotate(input_tensor, 0.0)
+        result = ttnn.rotate(input_tensor, 0.0)
 
         # Convert back to torch for comparison
         result_torch = ttnn.to_torch(result)
@@ -186,7 +186,7 @@ class TestStage6KernelCompilation:
         angles = [0.0, 45.0, 90.0, 180.0, -45.0, 360.0]
 
         for angle in angles:
-            result = ttnn.image_rotate(input_tensor, angle)
+            result = ttnn.rotate(input_tensor, angle)
             assert result is not None
             assert list(result.shape) == list(input_tensor.shape)
 
@@ -196,7 +196,7 @@ class TestStage6KernelCompilation:
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         # Custom center (top-left corner)
-        result = ttnn.image_rotate(input_tensor, 45.0, center=(0.0, 0.0))
+        result = ttnn.rotate(input_tensor, 45.0, center=(0.0, 0.0))
 
         assert result is not None
         assert list(result.shape) == list(input_tensor.shape)
@@ -207,7 +207,7 @@ class TestStage6KernelCompilation:
         input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         # Non-zero fill value
-        result = ttnn.image_rotate(input_tensor, 45.0, fill=1.0)
+        result = ttnn.rotate(input_tensor, 45.0, fill=1.0)
 
         assert result is not None
         assert list(result.shape) == list(input_tensor.shape)

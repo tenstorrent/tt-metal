@@ -2,59 +2,59 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_rotate_pybind.hpp"
+#include "rotate_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "image_rotate.hpp"
+#include "rotate.hpp"
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 
 namespace py = pybind11;
 
-void py_bind_image_rotate(py::module& module) {
+void py_bind_rotate(py::module& module) {
     const auto doc = R"doc(
-        Rotates an image tensor by an arbitrary angle around a specified center point using configurable interpolation.
+        Rotates a tensor by an arbitrary angle around a specified center point using configurable interpolation.
 
-        The image_rotate operation performs spatial transformation by rotating each pixel position
-        around a rotation center. Areas outside the rotated image are filled with a configurable
+        The rotate operation performs spatial transformation by rotating each pixel position
+        around a rotation center. Areas outside the rotated tensor are filled with a configurable
         fill value.
 
         Args:
-            input_tensor (ttnn.Tensor): Input image tensor of shape (N, H, W, C) in NHWC format
+            input_tensor (ttnn.Tensor): Input tensor of shape (N, H, W, C) in NHWC format
             angle (float): Rotation angle in degrees. Positive values rotate counter-clockwise
 
         Keyword Args:
             center (Optional[Tuple[float, float]]): Rotation center point (cx, cy) in pixel coordinates.
-                                                    Default: ((W-1)/2, (H-1)/2) - image center
-            fill (float): Fill value for areas outside the rotated image. Default: 0.0
+                                                    Default: ((W-1)/2, (H-1)/2) - tensor center
+            fill (float): Fill value for areas outside the rotated tensor. Default: 0.0
             expand (bool): If True, return error. Only False is supported (same output dimensions). Default: False
             interpolation_mode (str): Interpolation method - "bilinear" (smooth) or "nearest" (sharp, faster). Default: "bilinear"
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Default: DRAM_INTERLEAVED
 
         Returns:
-            ttnn.Tensor: Rotated image tensor of shape (N, H, W, C) - same as input
+            ttnn.Tensor: Rotated tensor of shape (N, H, W, C) - same as input
 
         Example:
             >>> # Create input tensor (N=1, H=256, W=256, C=32) - channel last format
             >>> input_tensor = ttnn.from_torch(torch.randn(1, 256, 256, 32), device=device)
             >>>
             >>> # Rotate 45 degrees counter-clockwise with bilinear interpolation (default)
-            >>> output = ttnn.image_rotate(input_tensor, 45.0)
+            >>> output = ttnn.rotate(input_tensor, 45.0)
             >>> print(output.shape)  # [1, 256, 256, 32]
             >>>
             >>> # Rotate 90 degrees clockwise with nearest interpolation (faster)
-            >>> output_cw = ttnn.image_rotate(input_tensor, -90.0, interpolation_mode="nearest")
+            >>> output_cw = ttnn.rotate(input_tensor, -90.0, interpolation_mode="nearest")
             >>>
             >>> # Rotate around custom center with white fill and smooth interpolation
-            >>> output_custom = ttnn.image_rotate(input_tensor, 30.0, center=(128, 128), fill=1.0, interpolation_mode="bilinear")
+            >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 128), fill=1.0, interpolation_mode="bilinear")
         )doc";
 
     ttnn::bind_registered_operation(
         module,
-        ttnn::image_rotate,
+        ttnn::rotate,
         doc,
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
@@ -67,4 +67,4 @@ void py_bind_image_rotate(py::module& module) {
             py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate
