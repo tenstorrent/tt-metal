@@ -28,6 +28,7 @@
 #include "tt_fabric_test_progress_monitor.hpp"
 #include "tt_fabric_test_results.hpp"
 #include "tt_fabric_test_bandwidth_profiler.hpp"
+#include "tt_fabric_test_latency_manager.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
 #include "tt_fabric_test_code_profiler.hpp"
 #include "tt_fabric_telemetry_manager.hpp"
@@ -88,6 +89,7 @@ using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyz
 using BandwidthStatistics = tt::tt_fabric::fabric_tests::BandwidthStatistics;
 using BandwidthProfiler = ::BandwidthProfiler;
 using BandwidthResultsManager = tt::tt_fabric::fabric_tests::BandwidthResultsManager;
+using LatencyTestManager = ::LatencyTestManager;
 
 // Helper functions for parsing traffic pattern parameters
 using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
@@ -127,6 +129,7 @@ public:
         bandwidth_profiler_ =
             std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);  // fixture implements interfaces
         bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
+        latency_test_manager_ = std::make_unique<LatencyTestManager>(*fixture_, sender_memory_map_);
     }
 
     void prepare_for_test(const TestConfig& config) {
@@ -482,19 +485,7 @@ public:
     void collect_latency_results();
     void report_latency_results(const TestConfig& config);
 
-    void generate_latency_summary() {
-        // Load golden latency CSV file
-        load_golden_latency_csv();
-
-        // Generate latency results CSV file with all results
-        generate_latency_results_csv();
-
-        // Compare latency results with golden CSV
-        compare_latency_results_with_golden();
-
-        // Validate latency results against golden (uses common validation method)
-        validate_against_golden();
-    }
+    void generate_latency_summary();
 
     void generate_bandwidth_summary() {
         TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
@@ -570,24 +561,8 @@ public:
         if (bandwidth_results_manager_) {
             bandwidth_results_manager_->setup_ci_artifacts();
         }
-
-        // Latency artifacts (unchanged)
-        for (const std::filesystem::path& csv_filepath : {latency_csv_file_path_, latency_diff_csv_file_path_}) {
-            if (csv_filepath.empty()) {
-                continue;
-            }
-            try {
-                std::filesystem::copy_file(
-                    csv_filepath,
-                    ci_artifacts_path / csv_filepath.filename(),
-                    std::filesystem::copy_options::overwrite_existing);
-            } catch (const std::filesystem::filesystem_error& e) {
-                log_debug(
-                    tt::LogTest,
-                    "Failed to copy CSV file {} to CI artifacts directory: {}",
-                    csv_filepath.filename().string(),
-                    e.what());
-            }
+        if (latency_test_manager_) {
+            latency_test_manager_->setup_ci_artifacts();
         }
         log_trace(tt::LogTest, "Copied CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
     }
@@ -615,82 +590,12 @@ private:
         performance_test_mode_ = PerformanceTestMode::NONE;
         global_sync_ = false;
         global_sync_val_ = 0;
-        // Note: latency_results_ is NOT cleared here to preserve for golden comparison at end
-        // Note: has_test_failures_ is NOT reset here to preserve failures across tests
-        // Note: golden_csv_entries_ is kept loaded for reuse across tests
-        // Note: latency_results_ is kept for golden comparison after all tests complete
     }
 
-    /**
-     * Setup latency test workers and configurations.
-     *
-     * Latency tests differ from bandwidth tests in several key ways:
-     * 1. Use specialized kernels (tt_fabric_latency_sender.cpp / tt_fabric_latency_responder.cpp)
-     *    that measure round-trip latency using hardware timestamps
-     * 2. Bypass the GlobalAllocator - latency tests use fixed memory layouts and don't need
-     *    dynamic allocation of send/receive buffers
-     * 3. Store latency samples in result buffers rather than throughput metrics
-     * 4. Use a single sender-responder pair rather than arbitrary traffic patterns
-     * 5. Constrained to 1 message per sample (no batching)
-     *
-     * This function manually populates the senders_ and receivers_ maps for latency test
-     * workers and sets their latency-specific kernel sources.
-     */
     void setup_latency_test_workers(TestConfig& config);
-
-    // Helper struct for latency worker location information
-    struct LatencyWorkerLocation {
-        TestDevice* device = nullptr;
-        MeshCoordinate mesh_coord{0, 0};
-        CoreCoord core;
-        FabricNodeId node_id{MeshId{0}, 0};
-    };
-
-    /**
-     * Find a latency worker device by checking for non-empty workers map.
-     * Used internally by get_latency_sender_location() and get_latency_receiver_location().
-     */
-    template <typename GetWorkersMapFunc>
-    LatencyWorkerLocation find_latency_worker_device(
-        GetWorkersMapFunc get_workers_map, const std::string& worker_type) {
-        LatencyWorkerLocation info;
-        for (auto& [coord, device] : test_devices_) {
-            const auto& workers_map = get_workers_map(device);
-            if (!workers_map.empty()) {
-                info.device = &device;
-                info.mesh_coord = coord;
-                info.core = workers_map.begin()->first;
-                info.node_id = device.get_node_id();
-                break;
-            }
-        }
-        TT_FATAL(info.device != nullptr, "Could not find latency {} device", worker_type);
-        return info;
-    }
-
-    /**
-     * Create latency kernels for a device based on its role (sender, responder, or neither).
-     * For sender devices: creates latency sender kernel with responder coordinates.
-     * For responder devices: creates latency responder kernel with sender buffer addresses.
-     * For other devices: creates normal kernels.
-     */
     void create_latency_kernels_for_device(TestDevice& test_device);
-
-    /**
-     * Get the location of the latency sender device/core.
-     * Searches for the first device with a non-empty senders_ map.
-     */
-    LatencyWorkerLocation get_latency_sender_location() {
-        return find_latency_worker_device([](TestDevice& d) -> const auto& { return d.get_senders(); }, "sender");
-    }
-
-    /**
-     * Get the location of the latency receiver/responder device/core.
-     * Searches for the first device with a non-empty receivers_ map.
-     */
-    LatencyWorkerLocation get_latency_receiver_location() {
-        return find_latency_worker_device([](TestDevice& d) -> const auto& { return d.get_receivers(); }, "receiver");
-    }
+    LatencyTestManager::LatencyWorkerLocation get_latency_sender_location();
+    LatencyTestManager::LatencyWorkerLocation get_latency_receiver_location();
 
     void add_traffic_config(const TestTrafficConfig& traffic_config) {
         // This function now assumes all allocation has been done by the GlobalAllocator.
@@ -872,57 +777,6 @@ private:
         }
     }
 
-    void generate_latency_results_csv();
-
-    std::vector<GoldenLatencyEntry>::iterator fetch_corresponding_golden_latency_entry(const LatencyResult& test_result);
-
-    std::string get_golden_latency_csv_filename();
-
-    bool load_golden_latency_csv();
-
-    void compare_latency_results_with_golden();
-
-    // Common helper to populate tolerance and status fields
-    template <typename CompResultType, typename GoldenIterType>
-    void populate_comparison_tolerance_and_status(
-        CompResultType& comp_result,
-        GoldenIterType golden_it,
-        GoldenIterType golden_end,
-        double golden_tolerance_default = 1.0) {
-        double test_tolerance = golden_tolerance_default;
-        if (golden_it != golden_end) {
-            test_tolerance = golden_it->tolerance_percent;
-            comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
-            comp_result.status = comp_result.within_tolerance ? "PASS" : "FAIL";
-        } else {
-            log_warning(tt::LogTest, "Golden entry not found for test {}", comp_result.test_name);
-            comp_result.within_tolerance = false;
-            comp_result.status = "NO_GOLDEN";
-        }
-    }
-
-    // Common CSV diff file initialization
-    std::ofstream init_diff_csv_file(std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
-        std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            std::string(OUTPUT_DIR);
-        std::ostringstream diff_oss;
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        diff_oss << test_type << "_diff_" << arch_name << ".csv";
-        diff_csv_path = output_path / diff_oss.str();
-
-        std::ofstream diff_csv_stream(diff_csv_path, std::ios::out | std::ios::trunc);
-        if (!diff_csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create {} diff CSV file: {}", test_type, diff_csv_path.string());
-        } else {
-            diff_csv_stream << csv_header << "\n";
-            log_info(tt::LogTest, "Initialized {} diff CSV file: {}", test_type, diff_csv_path.string());
-        }
-        return diff_csv_stream;
-    }
-
-    void validate_against_golden();
-
     // Track sync cores for each device
     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
     std::unordered_map<FabricNodeId, std::vector<CoreCoord>> device_local_sync_cores_;
@@ -949,21 +803,15 @@ private:
     // Managers (bandwidth)
     std::unique_ptr<BandwidthProfiler> bandwidth_profiler_;
     std::unique_ptr<BandwidthResultsManager> bandwidth_results_manager_;
-    std::vector<LatencyResult> latency_results_;
+    std::unique_ptr<LatencyTestManager> latency_test_manager_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
     bool code_profiling_enabled_ = false;
 
     // Progress monitoring
     ProgressMonitorConfig progress_config_;
     std::filesystem::path raw_telemetry_csv_path_;
-    std::filesystem::path latency_csv_file_path_;
 
-    // Golden CSV comparison data (latency only; bandwidth handled in manager)
-    std::vector<GoldenLatencyEntry> golden_latency_entries_;
-    std::vector<LatencyComparisonResult> latency_comparison_results_;
     std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
-    std::vector<std::string> all_failed_latency_tests_;    // Accumulates failed latency tests
-    std::filesystem::path latency_diff_csv_file_path_;
     bool has_test_failures_ = false;  // Track if any tests failed validation
 
     // Ethernet core buffer readback helper
