@@ -106,6 +106,14 @@ void create_ethernet_metrics(
                 telemetry_reader = std::make_shared<FabricTelemetryReader>(chip_id, cluster, hal);
             }
 
+            uint_metrics.push_back(std::make_unique<FabricMeshIdMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricDeviceIdMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricDirectionMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricConfigMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
             uint_metrics.push_back(std::make_unique<FabricTxWordsMetric>(
                 tray_id, asic_location, channel, telemetry_reader, topology_translation));
             uint_metrics.push_back(std::make_unique<FabricRxWordsMetric>(
@@ -494,6 +502,146 @@ static std::vector<std::string> build_fabric_erisc_path(
         "fabric",
         "erisc" + std::to_string(erisc_core),
         metric_name};
+}
+
+/**************************************************************************************************
+ FabricMeshIdMetric
+**************************************************************************************************/
+
+FabricMeshIdMetric::FabricMeshIdMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricMeshIdMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "meshId");
+}
+
+void FabricMeshIdMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot) {
+        set_value(snapshot->static_info.mesh_id);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricMeshIdMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricDeviceIdMetric
+**************************************************************************************************/
+
+FabricDeviceIdMetric::FabricDeviceIdMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricDeviceIdMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "deviceId");
+}
+
+void FabricDeviceIdMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot) {
+        set_value(snapshot->static_info.device_id);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricDeviceIdMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricDirectionMetric
+**************************************************************************************************/
+
+FabricDirectionMetric::FabricDirectionMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricDirectionMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "direction");
+}
+
+void FabricDirectionMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot) {
+        set_value(snapshot->static_info.direction);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricDirectionMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricConfigMetric
+**************************************************************************************************/
+
+FabricConfigMetric::FabricConfigMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricConfigMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "fabricConfig");
+}
+
+void FabricConfigMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot) {
+        set_value(snapshot->static_info.fabric_config);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricConfigMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
 }
 
 /**************************************************************************************************
