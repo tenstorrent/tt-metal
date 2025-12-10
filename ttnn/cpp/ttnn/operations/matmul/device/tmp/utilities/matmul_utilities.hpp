@@ -32,6 +32,8 @@ uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a);
 
 bool is_input_batched(const ttnn::Shape& shape);
 
+ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
+
 using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
 std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
     const std::optional<const Activation>& activation);

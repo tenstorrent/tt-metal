@@ -14,6 +14,7 @@
 #include "ttnn/operations/creation.hpp"
 
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
 
 namespace ttnn {
 
@@ -59,7 +60,7 @@ Tensor handle_zero_volume_matmul(
     const std::optional<DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias = std::nullopt) {
     // Calculate the expected output shape
-    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+    ttnn::Shape output_shape = utilities::compute_matmul_output_shape(input_tensor_a, input_tensor_b);
 
     // Use the appropriate data type (either from parameters or from input tensor)
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
