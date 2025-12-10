@@ -21,10 +21,9 @@
 #include <memory>
 #include <optional>
 #include <source_location>
-#include <unordered_map>
 #include <utility>
 
-#include "allocator.hpp"
+#include "impl/allocator/allocator.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -33,46 +32,39 @@
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
 #include "profiler_types.hpp"
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
-#include "tt_metal/common/thread_pool.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/distributed/sd_mesh_command_queue.hpp"
+#include "common/thread_pool.hpp"
+#include "device/device_manager.hpp"
+#include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/fabric_types.hpp>
+#include "distributed/fd_mesh_command_queue.hpp"
+#include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "tt_metal/distributed/distributed_coordinate_translator.hpp"
-
-#include "llrt/hal.hpp"
+#include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
 
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/inspector/inspector.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "allocator/l1_banking_allocator.hpp"
+#include "debug/inspector/inspector.hpp"
+#include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "impl/context/metal_context.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
-
-#include <umd/device/types/core_coordinates.hpp>
+#include "context/metal_context.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
 class SystemMemoryManager;
-namespace program_cache {
-namespace detail {
+
+namespace program_cache::detail {
 struct ProgramCache;
-}  // namespace detail
-}  // namespace program_cache
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace program_cache::detail
+
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -138,14 +130,15 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
 }  // namespace
 
 MeshDevice::ScopedDevices::ScopedDevices(
-    const std::vector<MaybeRemote<int>>& device_ids,
+    const std::vector<MaybeRemote<int>>& all_device_ids,
+    const std::vector<MaybeRemote<int>>& active_device_ids,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
-    auto local_devices = extract_locals(device_ids);
-    opened_local_devices_ = tt::tt_metal::detail::CreateDevices(
+    auto local_devices = extract_locals(all_device_ids);
+    opened_local_devices_ = tt_metal::detail::CreateDevices(
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -153,11 +146,11 @@ MeshDevice::ScopedDevices::ScopedDevices(
         dispatch_core_config,
         {},
         worker_l1_size,
-        /*init_profiler*/ false,
-        /*use_max_eth_core_count_on_all_devices*/ true,
+        /* init_profiler */ false,
+        /* ignored */ true,
         /* initialize_fabric_and_dispatch_fw */ false);
 
-    for (auto device_id : device_ids) {
+    for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);
             devices_.push_back(MaybeRemoteDevice::local(device));
@@ -174,8 +167,12 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
+        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
+}
+
+const std::map<ChipId, IDevice*>& MeshDevice::ScopedDevices::opened_local_devices() const {
+    return opened_local_devices_;
 }
 
 const std::vector<MaybeRemote<IDevice*>>& MeshDevice::ScopedDevices::root_devices() const { return devices_; }
@@ -210,9 +207,9 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
-void MeshDevice::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+void MeshDevice::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void MeshDevice::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+void MeshDevice::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -226,6 +223,9 @@ MeshDevice::MeshDevice(
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
+    const auto& mpi_context = MetalContext::instance().global_distributed_context();
+    distributed_context_ =
+        mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
@@ -240,8 +240,14 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
             auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            auto mapped_devices_full_system_device_ids =
+                (*MetalContext::instance().global_distributed_context().size() > 1)
+                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                    : mapped_devices.device_ids;
+
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
+                    mapped_devices_full_system_device_ids,
                     mapped_devices.device_ids,
                     l1_small_size,
                     trace_region_size,
@@ -263,8 +269,13 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
                         supplied_ids[i]);
                 fabric_node_ids.push_back(fabric_node_id);
             }
+            auto mapped_devices_full_system_device_ids =
+                (*MetalContext::instance().global_distributed_context().size() > 1)
+                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                    : wrap_to_maybe_remote(supplied_ids);
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
+                    mapped_devices_full_system_device_ids,
                     wrap_to_maybe_remote(supplied_ids),
                     l1_small_size,
                     trace_region_size,
@@ -285,13 +296,18 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
+
+    // Wait for all ranks to finish initializing the mesh device before proceeding.
+    mesh_device->distributed_context_->barrier();
+
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -307,7 +323,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    auto mapped_devices_full_system_device_ids =
+        (*MetalContext::instance().global_distributed_context().size() > 1)
+            ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+            : wrap_to_maybe_remote(device_ids);
     auto scoped_devices = std::make_shared<ScopedDevices>(
+        mapped_devices_full_system_device_ids,
         wrap_to_maybe_remote(device_ids),
         l1_small_size,
         trace_region_size,
@@ -338,9 +359,13 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     for (size_t i = 0; i < device_ids.size(); i++) {
         result[device_ids[i]] = submeshes[i];
     }
+
+    // Wait for all ranks to finish initializing the mesh device before proceeding.
+    mesh_device->distributed_context_->barrier();
+
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
 
@@ -418,7 +443,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         shared_from_this());
 
-    const auto& allocator_config = reference_device()->allocator()->get_config();
+    const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh->initialize(
         num_hw_cqs(),
         allocator_config.l1_small_size,
@@ -426,13 +451,19 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto* device : submesh->get_devices()) {
-        dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+    if (!submesh->get_view().get_devices().empty()) {
+        for (auto* device : submesh->get_devices()) {
+            dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+        }
     }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
-    log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
+    if (!submesh->get_view().get_devices().empty()) {
+        log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
+    } else {
+        log_trace(LogMetal, "Submesh {} instantiated with only remote devices", submesh->id());
+    }
     return submesh;
 }
 
@@ -518,7 +549,7 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDevice::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH MeshDevice::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
 
@@ -592,10 +623,16 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     ZoneScoped;
+
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     if (this->is_initialized()) {
         ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
+    }
+
+    if (distributed_context_) {
+        // Wait for all ranks to be ready to close the mesh device before proceeding.
+        distributed_context_->barrier();
     }
 
     // TODO #20966: Remove these calls
@@ -639,6 +676,10 @@ bool MeshDevice::close() {
     scoped_devices_.reset();
     parent_mesh_.reset();
     is_internal_state_initialized = false;
+    if (distributed_context_) {
+        distributed_context_.reset();
+    }
+
     return true;
 }
 
@@ -969,6 +1010,11 @@ bool MeshDevice::initialize(
     bool /*minimal*/) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
 
+    // If the mesh device has no local devices, do not attempt to initialize it.
+    if (view_->get_devices().empty()) {
+        return false;
+    }
+
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -978,12 +1024,13 @@ bool MeshDevice::initialize(
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
 
-    const auto& allocator = reference_device()->allocator();
+    const auto& allocator = reference_device()->allocator_impl();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
-    num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    num_virtual_eth_cores_ =
+        tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -1124,11 +1171,18 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
+const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
-const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator() const { return this->allocator_impl()->view(); }
+
+const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+}
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }

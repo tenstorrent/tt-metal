@@ -25,11 +25,7 @@
 
 using noc_grid_index_t = std::uint8_t;
 
-namespace tt {
-namespace tt_metal {
-
-namespace address_generators {
-
+namespace tt::tt_metal::address_generators {
 
 template <typename ArchSpecificWorkerToNocLookup>
 struct WorkerToNocCoordLookup {
@@ -612,7 +608,4 @@ using DefaultVirtualCoordWidthShardedAddressGenerator = WidthShardedAddressGener
 using DefaultVirtualCoordHeightShardedAddressGenerator = HeightShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
 using DefaultVirtualCoordBlockShardedAddressGenerator = BlockShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
 
-
-}  // namespace address_generators
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::address_generators

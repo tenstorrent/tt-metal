@@ -14,9 +14,8 @@
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace ccl {
+
+namespace operations::experimental::ccl {
 
 struct ExecuteAllReduceAsync {
     static ttnn::Tensor invoke(
@@ -82,9 +81,7 @@ struct ExecuteAllReduceAsync {
         bool use_optimal_ccl_for_llama);
 };
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 namespace experimental {
 

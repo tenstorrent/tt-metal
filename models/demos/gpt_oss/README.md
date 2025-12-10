@@ -44,7 +44,6 @@ export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b"
 pytest models/demos/gpt_oss/tests/unit/ -v
 
 # Run specific test files
-pytest models/demos/gpt_oss/tests/unit/test_submodules.py -v  # Utility components
 pytest models/demos/gpt_oss/tests/unit/test_modules.py -v     # Core components
 pytest models/demos/gpt_oss/tests/unit/test_model.py -v       # Full model accuracy
 ```
@@ -53,6 +52,5 @@ pytest models/demos/gpt_oss/tests/unit/test_model.py -v       # Full model accur
 
 | File | Purpose | Tests |
 |------|---------|-------|
-| **`test_submodules.py`** | Utility components | • RoPE embeddings<br>• Scaled Dot Product Attention (SDPA) |
 | **`test_modules.py`** | Core MoE components | • Attention component<br>• RMSNorm<br>• TopK router<br>• Experts<br>• Full MLP pipeline<br>• Complete decoder layer |
 | **`test_model.py`** | Full model integration | • End-to-end accuracy<br>• Teacher forcing<br>• Reference model comparison |

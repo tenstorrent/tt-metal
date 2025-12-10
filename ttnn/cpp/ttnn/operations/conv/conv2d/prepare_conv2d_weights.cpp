@@ -26,8 +26,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-namespace ttnn {
-namespace operations::conv {
+
+namespace ttnn::operations::conv {
 using namespace tt;
 using sliding_window::ParallelConfig;
 
@@ -1645,5 +1645,4 @@ ttnn::Tensor prepare_conv_bias(
 }
 
 }  // namespace conv2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv

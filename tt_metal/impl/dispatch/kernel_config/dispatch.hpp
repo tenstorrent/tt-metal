@@ -16,8 +16,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -55,6 +54,11 @@ struct dispatch_static_config_t {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
 };
 
 struct dispatch_dependent_config_t {
@@ -102,6 +106,8 @@ public:
 
     void GenerateDependentConfigs() override;
 
+    void InitializeRuntimeArgsValues() override;
+
     void ConfigureCore() override;
 
     uint32_t GetDispatchBufferSize() const {
@@ -117,5 +123,4 @@ private:
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

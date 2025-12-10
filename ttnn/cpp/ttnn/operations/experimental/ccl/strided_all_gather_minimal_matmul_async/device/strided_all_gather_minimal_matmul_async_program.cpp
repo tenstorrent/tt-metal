@@ -60,8 +60,8 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             shared_variables.mm_shared_variables,
             &attributes.matmul_struct,
             program,
-            {tensor_args.input_tensor, tensor_args.weight_tensor},
-            {tensor_args.bias},
+            {output_tensor.at(0), tensor_args.weight_tensor},
+            {tensor_args.bias, tensor_args.input_tensor},
             {output_tensor.at(1)});
     }
 }
@@ -72,6 +72,7 @@ strided_all_gather_minimal_matmul_async_program(
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
+    bool read_local_slice_from_input,
 
     /* All Gather Params */
     IDevice* target_device,
@@ -100,7 +101,12 @@ strided_all_gather_minimal_matmul_async_program(
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler();
     matmul_fused_op_signaler->init_all_gather(
-        ring_size, ring_index, input_tensor.padded_shape()[3] / TILE_WIDTH, topology);
+        ring_size,
+        ring_index,
+        input_tensor.padded_shape()[3] / TILE_WIDTH,
+        topology,
+        read_local_slice_from_input,
+        read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
     // Matmul
     auto mm_shared_variables = operations::experimental::minimal_matmul::detail::minimal_matmul_factory_helper(
@@ -139,6 +145,7 @@ strided_all_gather_minimal_matmul_async_program(
                 topology,
                 semaphore,
                 all_gather_fused_op_signaler,
+                read_local_slice_from_input,
                 std::nullopt,
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
@@ -182,6 +189,7 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         output_tensor[0],           // all_gather_output_tensor
         tensor_args.weight_tensor,  // weight_tensor
         output_tensor[1],           // matmul_output_tensor
+        attributes.read_local_slice_from_input,
 
         /* All Gather Params */
         target_device,

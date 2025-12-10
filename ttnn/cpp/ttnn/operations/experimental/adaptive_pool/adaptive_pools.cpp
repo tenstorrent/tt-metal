@@ -6,8 +6,8 @@
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
 #include "ttnn/operations/pool/generic/generic_pools.hpp"
-namespace ttnn {
-namespace operations::experimental::adaptive_pool {
+
+namespace ttnn::operations::experimental::adaptive_pool {
 
 // Reusing the generic pool2d functionality from the regular pool operations
 Tensor AdaptiveAvgPool2DOp::invoke(
@@ -90,5 +90,4 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     return result.at(0);
 }
 
-}  // namespace operations::experimental::adaptive_pool
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::adaptive_pool

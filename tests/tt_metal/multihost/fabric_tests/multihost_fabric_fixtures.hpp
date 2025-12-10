@@ -12,8 +12,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 template <typename Fixture>
 void validate_and_setup_control_plane_config(Fixture* fixture) {
@@ -312,5 +311,4 @@ public:
     }
 };
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

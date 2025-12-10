@@ -71,15 +71,13 @@ struct MatmulReduceScatterAsync {
     }
 };
 
-namespace ccl {
-namespace matmul_reduce_scatter_async_detail {
+namespace ccl::matmul_reduce_scatter_async_detail {
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
     CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices);
-}  // namespace matmul_reduce_scatter_async_detail
-}  // namespace ccl
+}  // namespace ccl::matmul_reduce_scatter_async_detail
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_core_with_workers(
     /* General Params */
@@ -109,9 +107,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::vector<Tensor> matmul_reduce_scatter_async(
     const Tensor& input_tensor,
@@ -137,8 +133,6 @@ std::vector<Tensor> matmul_reduce_scatter_async(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

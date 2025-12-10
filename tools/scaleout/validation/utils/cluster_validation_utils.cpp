@@ -1522,18 +1522,23 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     }
 
     if (cabling_descriptor_path.has_value()) {
+        if (fsd_path.has_value()) {
+            log_warning(
+                tt::LogDistributed,
+                "Both cabling_descriptor_path and fsd_path provided; using cabling_descriptor_path to generate FSD");
+        }
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator;
         if (!deployment_descriptor_path.has_value()) {
             TT_FATAL(
                 hostnames.size() == 1,
                 "Expected exactly one host in the cluster when no deployment descriptor is provided");
-            cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
+            return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
+                .generate_factory_system_descriptor();
         } else {
-            cabling_generator = tt::scaleout_tools::CablingGenerator(
-                cabling_descriptor_path.value(), deployment_descriptor_path.value());
+            return tt::scaleout_tools::CablingGenerator(
+                       cabling_descriptor_path.value(), deployment_descriptor_path.value())
+                .generate_factory_system_descriptor();
         }
-        return cabling_generator.generate_factory_system_descriptor();
     } else {
         // Load FSD from file
         fsd::proto::FactorySystemDescriptor fsd_proto;
@@ -1554,7 +1559,8 @@ tt_metal::AsicTopology validate_connectivity(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
     const YAML::Node& gsd_yaml_node,
     bool fail_on_warning,
-    PhysicalSystemDescriptor& physical_system_descriptor) {
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::optional<uint32_t> min_connections) {
     log_output_rank0(
         "Validating Factory System Descriptor (Golden Representation) against Global System Descriptor (in-memory)");
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
@@ -1563,7 +1569,8 @@ tt_metal::AsicTopology validate_connectivity(
         gsd_yaml_node,
         true /* strict_validation */,
         fail_on_warning,
-        *distributed_context.rank() == 0 /* log_output */);
+        *distributed_context.rank() == 0 /* log_output */,
+        min_connections);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }

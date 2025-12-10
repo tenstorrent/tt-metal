@@ -75,6 +75,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}

@@ -173,6 +173,10 @@ struct DistributionSpec {
         tensor_shape_rt(init_tensor_shape(tensor_shape_ptr, rank_rt_param)),
         shard_shape_rt(init_shard_shape(shard_shape_ptr, rank_rt_param)),
         bank_coords_rt(init_bank_coords(bank_coords_ptr, num_banks_rt_param)) {
+        // Lightweight asserts don't work with constexpr functions and classes.
+        // So we only enable these checks if watcher asserts are enabled.
+        // Problem is that ebreak instruction is not available in constexpr context.
+#if defined(WATCHER_ASSERT_ENABLED) && WATCHER_ASSERT_ENABLED
         uint32_t rank = has_static_rank ? RankCT : rank_rt_param;
 
         if constexpr (!tensor_shape_static) {
@@ -199,6 +203,7 @@ struct DistributionSpec {
                 ASSERT(shard_shape_rt[i] > 0);
             }
         }
+#endif
 
         init_runtime_values();
     }

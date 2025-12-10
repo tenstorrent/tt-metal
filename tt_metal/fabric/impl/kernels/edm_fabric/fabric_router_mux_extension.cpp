@@ -106,6 +106,7 @@ constexpr uint32_t NUM_BUFFERS_ROUTER = num_buffers_per_type[ROUTER_CHANNEL_TYPE
 constexpr size_t BUFFER_SIZE_WORKER = buffer_size_per_type[WORKER_CHANNEL_TYPE_IDX];
 constexpr size_t BUFFER_SIZE_ROUTER = buffer_size_per_type[ROUTER_CHANNEL_TYPE_IDX];
 
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -117,7 +118,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.cache_producer_noc_addr();
+    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -197,7 +198,7 @@ void forward_data(
     }
 
     if (!is_persistent_channel) {
-        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
             worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
     }
 }
@@ -351,7 +352,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             // Process worker channels (WORKER_CHANNEL)
             for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
