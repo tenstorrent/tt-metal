@@ -7,13 +7,13 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void relu_min(uint uint_threshold) {
     vFloat threshold = Converter::as_float(uint_threshold);
     for (int d = 0; d < 8; d++) {
@@ -25,7 +25,7 @@ inline void relu_min(uint uint_threshold) {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void relu_max(uint uint_threshold) {
     vFloat threshold = Converter::as_float(uint_threshold);
     for (int d = 0; d < 8; d++) {
@@ -39,9 +39,9 @@ inline void relu_max(uint uint_threshold) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_lrelu(uint slope) {
-    _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);
+    _calculate_lrelu_<APPROX_MODE>(ITERATIONS, slope);
 }
 
 }  // namespace sfpu

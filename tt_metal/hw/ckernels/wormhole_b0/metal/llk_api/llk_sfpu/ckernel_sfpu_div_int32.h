@@ -9,7 +9,7 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
@@ -36,9 +36,9 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void div_init() {
-    _init_sfpu_reciprocal_<false>();
+    _init_sfpu_reciprocal_<ApproximationMode::Precise>();
 }
 
 }  // namespace ckernel::sfpu

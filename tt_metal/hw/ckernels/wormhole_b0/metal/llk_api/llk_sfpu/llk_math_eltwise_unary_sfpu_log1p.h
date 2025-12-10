@@ -7,18 +7,19 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_log1p.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 
 template <bool APPROXIMATE, bool FAST_APPROX>
 inline void llk_math_eltwise_unary_sfpu_log1p_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log1p, APPROXIMATE>(sfpu::log1p_init<APPROXIMATE, FAST_APPROX>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::log1p, APPROXIMATE>(sfpu::log1p_init<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX>);
 }
 
 template <bool APPROXIMATE, bool FAST_APPROX>
 inline void llk_math_eltwise_unary_sfpu_log1p(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_log1p<APPROXIMATE, FAST_APPROX>, dst_index, vector_mode);
+        ckernel::sfpu::calculate_log1p<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

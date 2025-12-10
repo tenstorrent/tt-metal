@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_defs.h"
 #include "ckernel_sfpu_heaviside.h"
 
 namespace ckernel {
@@ -18,7 +19,10 @@ inline void llk_math_eltwise_unary_sfpu_heaviside_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_heaviside(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_heaviside<APPROXIMATE>, dst_index, vector_mode, param0);
+        ckernel::sfpu::calculate_heaviside<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise)>,
+        dst_index,
+        vector_mode,
+        param0);
 }
 
 }  // namespace ckernel

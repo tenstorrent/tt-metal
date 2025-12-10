@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_defs.h"
 #include "ckernel_sfpu_recip.h"
 
 namespace ckernel {
@@ -13,7 +14,11 @@ namespace ckernel {
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_reciprocal<APPROXIMATE, is_fp32_dest_acc_en, 8, legacy_compat>,
+        ckernel::sfpu::calculate_reciprocal<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            is_fp32_dest_acc_en,
+            8,
+            legacy_compat>,
         dst_index,
         vector_mode);
 }
@@ -21,7 +26,10 @@ inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mo
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_reciprocal_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal, APPROXIMATE>(
-        sfpu::recip_init<APPROXIMATE, is_fp32_dest_acc_en, legacy_compat>);
+        sfpu::recip_init<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            is_fp32_dest_acc_en,
+            legacy_compat>);
 }
 
 }  // namespace ckernel

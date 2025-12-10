@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
@@ -178,7 +179,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
 }
 
 template <
-    bool APPROXIMATION_MODE,
+    ApproximationMode APPROX_MODE,
     bool FAST_APPROX,
     bool HAS_BASE_SCALING,
     bool is_fp32_dest_acc_en,
@@ -198,14 +199,14 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm0 = 0.69314718246459961f;  // ln(2)
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
-        _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        _init_reciprocal_</*approx_mode*/ ApproximationMode::Precise, /*legacy_compat*/ false>();
     }
 }
 

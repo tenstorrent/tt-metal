@@ -7,6 +7,7 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_exp.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 
@@ -23,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_exponential(
     int param0 = p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor*/) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_exponential<
-            APPROXIMATE,
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
             FAST_APPROX,
             SCALE_EN,
             ITERATIONS,
@@ -37,7 +38,7 @@ inline void llk_math_eltwise_unary_sfpu_exponential(
 template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = p_sfpu::kCONST_1_FP16B>
 inline void llk_math_eltwise_unary_sfpu_exponential_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, APPROXIMATE>(
-        sfpu::exp_init<APPROXIMATE, FAST_APPROX, scale>);
+        sfpu::exp_init<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX, scale>);
 }
 
 }  // namespace ckernel
