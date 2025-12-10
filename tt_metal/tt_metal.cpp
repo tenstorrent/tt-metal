@@ -412,6 +412,8 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
+void ReleaseOwnership() { MetalContext::destroy_instance(); }
+
 void print_page(
     uint32_t dev_page_id,
     CoreCoord core,
