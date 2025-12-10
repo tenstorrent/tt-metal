@@ -83,21 +83,20 @@ jobs:
           apt update
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
 
-      - name: Download ttsim binary
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          set -euo pipefail
-          release_tag="${{ inputs.ttsim-version }}"
           asset_suffix="${{ matrix.build_suffix }}"
           asset_suffix="${asset_suffix#release_}"
-          asset_name="libttsim_${asset_suffix}.so"
-          base_url="https://github.com/tenstorrent/ttsim/releases"
-          if [[ "${release_tag}" == "latest" ]]; then
-            download_url="${base_url}/latest/download/${asset_name}"
-          else
-            download_url="${base_url}/download/${release_tag}/${asset_name}"
-          fi
-          mkdir -p /tmp/ttsim
-          curl -fL "${download_url}" -o /tmp/ttsim/libttsim.so
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@v1.10.1
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
@@ -183,21 +182,20 @@ jobs:
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Download ttsim binary
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          set -euo pipefail
-          release_tag="${{ inputs.ttsim-version }}"
           asset_suffix="${{ matrix.build_suffix }}"
           asset_suffix="${asset_suffix#release_}"
-          asset_name="libttsim_${asset_suffix}.so"
-          base_url="https://github.com/tenstorrent/ttsim/releases"
-          if [[ "${release_tag}" == "latest" ]]; then
-            download_url="${base_url}/latest/download/${asset_name}"
-          else
-            download_url="${base_url}/download/${release_tag}/${asset_name}"
-          fi
-          mkdir -p /tmp/ttsim
-          curl -fL "${download_url}" -o /tmp/ttsim/libttsim.so
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@v1.10.1
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
@@ -334,21 +332,20 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Download ttsim binary
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          set -euo pipefail
-          release_tag="${{ inputs.ttsim-version }}"
           asset_suffix="${{ matrix.build_suffix }}"
           asset_suffix="${asset_suffix#release_}"
-          asset_name="libttsim_${asset_suffix}.so"
-          base_url="https://github.com/tenstorrent/ttsim/releases"
-          if [[ "${release_tag}" == "latest" ]]; then
-            download_url="${base_url}/latest/download/${asset_name}"
-          else
-            download_url="${base_url}/download/${release_tag}/${asset_name}"
-          fi
-          mkdir -p /tmp/ttsim
-          curl -fL "${download_url}" -o /tmp/ttsim/libttsim.so
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@v1.10.1
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
@@ -426,21 +423,20 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Download ttsim binary
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          set -euo pipefail
-          release_tag="${{ inputs.ttsim-version }}"
           asset_suffix="${{ matrix.build_suffix }}"
           asset_suffix="${asset_suffix#release_}"
-          asset_name="libttsim_${asset_suffix}.so"
-          base_url="https://github.com/tenstorrent/ttsim/releases"
-          if [[ "${release_tag}" == "latest" ]]; then
-            download_url="${base_url}/latest/download/${asset_name}"
-          else
-            download_url="${base_url}/download/${release_tag}/${asset_name}"
-          fi
-          mkdir -p /tmp/ttsim
-          curl -fL "${download_url}" -o /tmp/ttsim/libttsim.so
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@v1.10.1
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
