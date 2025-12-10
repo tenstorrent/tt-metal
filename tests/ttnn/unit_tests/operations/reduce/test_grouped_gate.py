@@ -99,6 +99,7 @@ def test_grouped_gate(device):
     total_experts = 256
     # scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
     scores = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)
+
     logger.info(f"scores: {scores[-1, -1, -1, :]}")
     bias = 2 * torch.ones(
         num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16

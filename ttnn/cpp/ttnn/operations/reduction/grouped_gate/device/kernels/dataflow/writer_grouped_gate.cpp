@@ -385,6 +385,9 @@ void kernel_main() {
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
+    // Debug: print first generated index tile
+    DPRINT << "Generated index tiles" << ENDL();
+    print_tile(topk_index_creation_cb_index, 0, true, 0, 1, 0, 8);
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
     generate_reduce_scalar(reduce_scalar_cb_index, packed_one_scalar, n_activated_experts);
     write_single_scalar(epsilon_cb_index, packed_epsilon);

@@ -37,6 +37,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     // auto grid = device->compute_with_storage_grid_size();
     auto grid = CoreCoord(1, 1);
     auto num_tiles = scores.buffer()->num_pages();
+    log_info(tt::LogAlways, "num_tiles: {}", num_tiles);
     uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
     uint32_t tile_height = scores.tensor_spec().page_config().get_tile().get_height();
     auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
