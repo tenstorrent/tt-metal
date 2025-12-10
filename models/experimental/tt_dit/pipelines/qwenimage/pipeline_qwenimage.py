@@ -117,6 +117,7 @@ class QwenImagePipeline:
         logger.info("loading models...")
 
         checkpoint_name = "Qwen/Qwen-Image"
+        text_encoder_checkpoint_name = "Qwen/Qwen2.5-VL-7B-Instruct"
 
         torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
             checkpoint_name,
@@ -134,9 +135,9 @@ class QwenImagePipeline:
 
         head_dim = torch_transformer.config.attention_head_dim
         num_heads = torch_transformer.config.num_attention_heads
-        self._num_channels_latents = 16
+        self._num_channels_latents = 16  # TODO: correct?
         self._patch_size = torch_transformer.config.patch_size
-        self._vae_scale_factor = 8
+        self._vae_scale_factor = 8  # TODO: correct?
 
         if num_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -188,13 +189,11 @@ class QwenImagePipeline:
         with self.encoder_reshape(self.encoder_device):
             logger.info("creating TT-NN text encoder...")
             self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                checkpoint_name,
-                tokenizer_subfolder="tokenizer",
-                encoder_subfolder="text_encoder",
-                use_torch=use_torch_text_encoder,
-                device=self.encoder_device,
-                parallel_config=self._encoder_parallel_config,
+                text_encoder_checkpoint_name,
+                device=self._submesh_devices[self.encoder_submesh_idx],
                 ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
+                parallel_config=self._encoder_parallel_config,
+                use_torch=use_torch_text_encoder,
             )
 
             if self.encoder_device is not None:
@@ -314,7 +313,7 @@ class QwenImagePipeline:
         num_images_per_prompt: int = 1,
         cfg_scale: float,
         prompts: list[str],
-        negative_prompts: list[str],
+        negative_prompts: list[str | None],
         num_inference_steps: int,
         seed: int | None = None,
         traced: bool = False,
@@ -339,7 +338,7 @@ class QwenImagePipeline:
 
             with timer.time_section("total_encoding") if timer else nullcontext():
                 with self.encoder_reshape(self.encoder_device):
-                    prompt_embeds = self._encode_prompts(
+                    prompt_embeds, prompt_mask = self._encode_prompts(
                         prompts=prompts,
                         negative_prompts=negative_prompts,
                         num_images_per_prompt=num_images_per_prompt,
@@ -379,6 +378,7 @@ class QwenImagePipeline:
             prompt_rope_cos = prompt_rope.real.repeat_interleave(2, dim=-1)
             prompt_rope_sin = prompt_rope.imag.repeat_interleave(2, dim=-1)
 
+            tt_prompt_embeds_device_list = []
             tt_prompt_embeds_list = []
             tt_latents_step_list = []
             tt_spatial_rope_cos_list = []
@@ -386,10 +386,15 @@ class QwenImagePipeline:
             tt_prompt_rope_cos_list = []
             tt_prompt_rope_sin_list = []
             for i, submesh_device in enumerate(self._submesh_devices):
-                tt_prompt_embeds = tensor.from_torch(
+                tt_prompt_embeds_device = tensor.from_torch(
                     prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
                     device=submesh_device,
                     on_host=traced,
+                )
+                tt_prompt_embeds = tensor.from_torch(
+                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
+                    device=submesh_device,
+                    on_host=True,
                 )
 
                 tt_initial_latents = tensor.from_torch(
@@ -408,26 +413,27 @@ class QwenImagePipeline:
                 if traced:
                     if self._traces is None:
                         tt_initial_latents = tt_initial_latents.to(submesh_device)
-                        tt_prompt_embeds = tt_prompt_embeds.to(submesh_device)
+                        tt_prompt_embeds_device = tt_prompt_embeds_device.to(submesh_device)
                         tt_spatial_rope_cos = tt_spatial_rope_cos.to(submesh_device)
                         tt_spatial_rope_sin = tt_spatial_rope_sin.to(submesh_device)
                         tt_prompt_rope_cos = tt_prompt_rope_cos.to(submesh_device)
                         tt_prompt_rope_sin = tt_prompt_rope_sin.to(submesh_device)
                     else:
                         ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._traces[i].prompt_input)
+                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds_device, self._traces[i].prompt_input)
                         ttnn.copy_host_to_device_tensor(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
                         ttnn.copy_host_to_device_tensor(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
                         ttnn.copy_host_to_device_tensor(tt_prompt_rope_cos, self._traces[i].prompt_rope_cos)
                         ttnn.copy_host_to_device_tensor(tt_prompt_rope_sin, self._traces[i].prompt_rope_sin)
 
                         tt_initial_latents = self._traces[i].spatial_input
-                        tt_prompt_embeds = self._traces[i].prompt_input
+                        tt_prompt_embeds_device = self._traces[i].prompt_input
                         tt_spatial_rope_cos = self._traces[i].spatial_rope_cos
                         tt_spatial_rope_sin = self._traces[i].spatial_rope_sin
                         tt_prompt_rope_cos = self._traces[i].prompt_rope_cos
                         tt_prompt_rope_sin = self._traces[i].prompt_rope_sin
 
+                tt_prompt_embeds_device_list.append(tt_prompt_embeds_device)
                 tt_prompt_embeds_list.append(tt_prompt_embeds)
                 tt_latents_step_list.append(tt_initial_latents)
                 tt_spatial_rope_cos_list.append(tt_spatial_rope_cos)
@@ -462,11 +468,17 @@ class QwenImagePipeline:
                         )
                         tt_sigma_difference_list.append(tt_sigma_difference)
 
+                        # TODO: move out of the loop
+                        ttnn.copy_host_to_device_tensor(
+                            tt_prompt_embeds_list[submesh_nr],
+                            tt_prompt_embeds_device_list[submesh_nr],
+                        )
+
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
                         latents=tt_latents_step_list,
                         cfg_enabled=cfg_enabled,
-                        prompt_embeds=tt_prompt_embeds_list,
+                        prompt_embeds=tt_prompt_embeds_device_list,
                         cfg_scale=cfg_scale,
                         sigma_difference=tt_sigma_difference_list,
                         spatial_rope_cos=tt_spatial_rope_cos_list,
@@ -689,32 +701,21 @@ class QwenImagePipeline:
         self,
         *,
         prompts: list[str],
-        negative_prompts: list[str],
+        negative_prompts: list[str | None],
         num_images_per_prompt: int,
         cfg_enabled: bool,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         timer = self.timing_collector
 
         assert len(prompts) == len(negative_prompts), "prompts and negative_prompts must have the same length"
+
+        # TODO: necessary?
+        negative_prompts = [x if x is not None else "" for x in negative_prompts]
 
         if cfg_enabled:
             prompts = negative_prompts + prompts
 
         prompts = [PROMPT_TEMPLATE.format(e) for e in prompts]
-
-        # In order to support tracing, we encode to a fixed sequence length by zero padding. Since
-        # `ttnn.transformer.joint_scaled_dot_product_attention` and
-        # `ttnn.transformer.ring_joint_scaled_dot_product_attention` do not currently support
-        # attention masking, these tokens slightly affect the generated images. For comparison: The
-        # Hugging Face implementation, which we use as a reference, as well as the DiffSynth-Studio
-        # implementation do not add any padding when generating a single image. The Hugging Face
-        # implementation does add zero padding when generating multiple images with different
-        # prompts at once. It also creates an attention mask to mask out the padded tokens, but as
-        # of diffusers version 0.35.2, this attention mask passed to the transformer but never used.
-        # The DiffSynth-Studio implementation does not support generating multiple images with
-        # different prompts at once, so it never adds any padding. We created a comparison of images
-        # generated with and without padding. While small differences were visible, no clear
-        # difference in quality could be observed.
 
         with timer.time_section("text_encoding") if timer else nullcontext():
             embeds, mask = self._text_encoder.encode(
@@ -725,7 +726,7 @@ class QwenImagePipeline:
 
         embeds[torch.logical_not(mask)] = 0.0
 
-        return embeds[:, PROMPT_DROP_IDX:]  # , mask[:, PROMPT_DROP_IDX:]
+        return embeds[:, PROMPT_DROP_IDX:], mask[:, PROMPT_DROP_IDX:]
 
 
 def _schedule(
