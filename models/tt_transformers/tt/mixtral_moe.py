@@ -146,7 +146,7 @@ class TtMoeLayer(LightweightModule):
             results_11BH,
             self.mesh_device,
             tt_ccl=self.tt_ccl,
-            cluster_axis=0,
+            cluster_axis=0 if self.TG else None,
             dim=3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,

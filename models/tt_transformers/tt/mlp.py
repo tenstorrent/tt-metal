@@ -150,44 +150,30 @@ class MLP(LightweightModule):
             if self.dim == 8192 or mode == "prefill":
                 input_mem_cfg = w1_out.memory_config()
 
-                cluster_axis = 1
-                w1_out = ttnn.experimental.reduce_scatter_minimal_async(
+                cluster_axis = 0
+                w1_out = ttnn.reduce_scatter(
                     w1_out,
-                    persistent_output_buffers=None,
                     dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     num_links=self.args.num_reduce_scatter_links,
                     cluster_axis=cluster_axis,
                     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
                 )
 
-                w3_out = ttnn.experimental.reduce_scatter_minimal_async(
+                w3_out = ttnn.reduce_scatter(
                     w3_out,
-                    persistent_output_buffers=None,
                     dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=1,
+                    num_links=4,
                     cluster_axis=cluster_axis,
                     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
                 )
             else:
                 w1_out = tt_all_reduce(
                     w1_out,
                     self.mesh_device,
                     self.tt_ccl,
-                    cluster_axis=1,
+                    cluster_axis=0,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
@@ -197,7 +183,7 @@ class MLP(LightweightModule):
                     w3_out,
                     self.mesh_device,
                     self.tt_ccl,
-                    cluster_axis=1,
+                    cluster_axis=0,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
@@ -220,20 +206,13 @@ class MLP(LightweightModule):
         ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
-            cluster_axis = 1
-            w2_in = ttnn.experimental.all_gather_async(
+            w2_in = ttnn.all_gather(
                 w2_in,
-                persistent_output_buffer=None,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=2,
-                cluster_axis=1,
+                cluster_axis=0,
                 topology=ttnn.Topology.Linear,
                 memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
             )
 
             if mode == "decode":
@@ -258,7 +237,7 @@ class MLP(LightweightModule):
             w2_out,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=0,
+            cluster_axis=0 if TG else None,
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,

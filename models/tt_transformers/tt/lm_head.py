@@ -173,7 +173,7 @@ class LMHead(LightweightModule):
             output,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=1,
+            cluster_axis=0 if self.args.is_galaxy else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
             dim=3 if self.args.is_galaxy else 0,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,

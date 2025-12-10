@@ -410,11 +410,12 @@ class Attention(LightweightModule):
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
+
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=1,
+            cluster_axis=0 if self.TG else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
@@ -596,7 +597,7 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 dim=2,
-                cluster_axis=1,
+                cluster_axis=0 if self.TG else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
                 num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
@@ -632,7 +633,7 @@ class Attention(LightweightModule):
                 dense_out_sharded,
                 self.mesh_device,
                 self.tt_ccl,
-                cluster_axis=0,
+                cluster_axis=0 if self.TG else None,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
@@ -697,7 +698,7 @@ class Attention(LightweightModule):
             xqkv_fused,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=1,
+            cluster_axis=0 if self.TG else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -891,7 +892,7 @@ class Attention(LightweightModule):
                 output_11SH,
                 self.mesh_device,
                 self.tt_ccl,
-                cluster_axis=0,
+                cluster_axis=0 if self.TG else None,
                 dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,

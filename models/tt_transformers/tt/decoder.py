@@ -247,7 +247,7 @@ class TransformerBlock(LightweightModule):
                     hidden_states,
                     self.mesh_device,
                     tt_ccl=self.tt_ccl,
-                    cluster_axis=0,
+                    cluster_axis=0 if TG else None,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
                     num_all_gather_links=self.args.num_all_gather_links,
@@ -278,17 +278,13 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
             if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
+                hidden_states = ttnn.reduce_scatter(
                     hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    cluster_axis=0,
+                    cluster_axis=0 if TG else None,
                     dim=3,
-                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                    num_all_gather_links=self.args.num_all_gather_links,
+                    num_links=self.args.num_reduce_scatter_links,
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=self.args.ccl_dtype,
                 )
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)

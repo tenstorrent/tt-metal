@@ -465,7 +465,10 @@ class ModelArgs:
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.is_galaxy = self.num_devices == 32
+        self.is_galaxy = ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        ]
 
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -1291,10 +1294,8 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
-            self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
-            )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
+            self.num_reduce_scatter_links = 4 if self.is_galaxy else 1
+            self.num_all_gather_links = 4 if self.is_galaxy else 1
             self.ccl_dtype = ttnn.bfloat8_b
 
             logger.info(f"Attention grid: {attn_input_grid}")

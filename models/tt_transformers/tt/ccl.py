@@ -99,19 +99,13 @@ def tt_all_reduce(
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
-        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        reduced = ttnn.reduce_scatter(
             input_tensor,
-            persistent_output_buffers=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             num_links=num_reduce_scatter_links,
-            memory_config=memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=cluster_axis,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            memory_config=memory_config,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -128,19 +122,13 @@ def tt_all_reduce(
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     if not use_composite:
-        gathered_tensor = ttnn.experimental.all_gather_async(
+        gathered_tensor = ttnn.all_gather(
             input_tensor,
-            persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
         )
 
         if sharded:
@@ -158,35 +146,22 @@ def tt_all_reduce(
     else:
         input_mem_cfg = input_tensor.memory_config()
 
-        reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+        reduced_tensor = ttnn.reduce_scatter(
             input_tensor,
-            persistent_output_buffers=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             num_links=num_reduce_scatter_links,
             cluster_axis=cluster_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
         )
 
-        reduced_tensor = ttnn.experimental.all_gather_async(
+        reduced_tensor = ttnn.all_gather(
             reduced_tensor,
-            persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             topology=topology,
             memory_config=input_mem_cfg,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
         )
 
     # Reshape the reduced tensor to the original shape
@@ -221,35 +196,15 @@ def tt_all_gather(
         if sharded and memory_config is not None:
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config, dtype)  # to sharded
 
-    if cluster_axis is None:
-        gathered = ttnn.experimental.all_gather_async(
-            input_tensor,
-            persistent_output_buffer=None,
-            dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-            num_links=num_links,
-            topology=topology,
-            memory_config=memory_config,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-        )
-    else:
-        gathered = ttnn.experimental.all_gather_async(
-            input_tensor,
-            persistent_output_buffer=None,
-            dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-            num_links=num_links,
-            cluster_axis=cluster_axis,
-            topology=topology,
-            memory_config=memory_config,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-        )
+    gathered = ttnn.all_gather(
+        input_tensor,
+        dim=dim,
+        num_links=num_links,
+        cluster_axis=cluster_axis,
+        topology=topology,
+        memory_config=memory_config,
+    )
+
     input_tensor.deallocate(True)
     return gathered
 
@@ -264,7 +219,6 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_ker
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         dim=3,
-        cluster_axis=1,
         num_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -291,20 +245,14 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
-    cluster_axis = 1
-    tt_stats = ttnn.experimental.all_gather_async(
+    cluster_axis = 0
+    tt_stats = ttnn.all_gather(
         tt_stats,
-        persistent_output_buffer=None,
         dim=3,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
         num_links=1,
         cluster_axis=cluster_axis,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring,
         memory_config=ln_sharded_stats_memcfg,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
     )
 
     # Run distributed rmsnorm part 2
