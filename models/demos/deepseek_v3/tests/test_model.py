@@ -291,14 +291,7 @@ def run_test_forward_pass_dpmodel(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, 32),
-        # Powers of 2 up to 32K for prefill
-        ("prefill", 1, 1),
-        ("prefill", 2, 1),
-        ("prefill", 4, 1),
-        ("prefill", 8, 1),
-        ("prefill", 16, 1),
-        ("prefill", 32, 1),
-        ("prefill", 64, 1),
+        # Powers of 2 from 128 to 128K for prefill
         ("prefill", 128, 1),
         ("prefill", 256, 1),
         ("prefill", 512, 1),
@@ -308,6 +301,8 @@ def run_test_forward_pass_dpmodel(
         ("prefill", 8192, 1),
         ("prefill", 16384, 1),
         ("prefill", 32768, 1),
+        ("prefill", 65536, 1),
+        ("prefill", 131072, 1),
     ],
 )
 @pytest.mark.parametrize("test_closure", [run_test_forward_pass_ppmodel, run_test_forward_pass_dpmodel])
