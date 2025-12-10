@@ -27,7 +27,7 @@ file(
     pad/device/kernels/*
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
-    repeat/device/device/*
+    repeat/device/kernels/repeat_*_rm.cpp
     reshape_view/device/device/*
     scatter/device/kernels/*
     sort/device/kernels/*
@@ -109,6 +109,10 @@ target_sources(
         concat/concat.cpp
         concat/device/concat_device_operation.cpp
         concat/device/concat_program_factory.cpp
+        concat/device/concat_s2s_tiled_program_factory.cpp
+        concat/device/concat_s2s_rm_program_factory.cpp
+        concat/device/concat_s2s_multi_program_factory.cpp
+        concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
         copy/device/copy_device_operation.cpp
         copy/device/copy_program_factory.cpp
@@ -146,7 +150,8 @@ target_sources(
         permute/device/permute_rm_program_factory.cpp
         permute/device/permute_tiled_program_factory.cpp
         permute/permute.cpp
-        repeat/device/host/repeat_program_factory.cpp
+        repeat/device/repeat_program_factory_last_dim.cpp
+        repeat/device/repeat_program_factory_higher_dim.cpp
         repeat/device/repeat_device_operation.cpp
         repeat/repeat.cpp
         repeat_interleave/repeat_interleave.cpp

@@ -10,8 +10,7 @@
 #include <tt-metalium/math.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
     // CQ capacity would be reduced by the commands and alignment padding.
@@ -229,5 +228,4 @@ void read_core_data_from_completion_queue(
 }
 
 }  // namespace device_dispatch
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
