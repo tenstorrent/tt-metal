@@ -24,9 +24,9 @@ constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
 void kernel_main() {
     uint32_t ra = 0;
-    uint32_t y_addr = get_arg_val<uint32_t>(ra++);  // DRAM base for Y
-    uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
-    uint32_t start_row = get_arg_val<uint32_t>(ra++);
+    const uint32_t y_addr = get_arg_val<uint32_t>(ra++);  // DRAM base for Y
+    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
+    const uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
     const uint32_t tile_bytes = get_tile_size(cb_y_idx);
 
@@ -42,7 +42,9 @@ void kernel_main() {
     //     [compute processes all c for this (r, c_block)]
     //     write Y[r, c_block] to DRAM
     // ============================================================================
+    // DPRINT << "Writer kernel start, processing rows " << start_row << " to " << end_row - 1 << "\n";
     for (uint32_t r = start_row; r < end_row; ++r) {
+        // DPRINT << "Writing output row r: " << r << "\n";
         // Loop over output columns in blocks - matches compute kernel order
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t current_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
@@ -50,12 +52,10 @@ void kernel_main() {
             const uint32_t start_tile_idx = (r * Wt) + c_block_start;
             // Wait for and write Y[r, c_block] - this becomes available after compute kernel finishes processing all
             // k_blocks for this (r, c_block) combination
-            // DPRINT << "Writing Y tiles for row " << r << ", c_block starting at " << c_block_start << "\n";
             write_tiles_by_row(
                 cb_y_idx, y_address_generator, start_tile_idx, current_block_size, tile_bytes, block_size);
-            // DPRINT << "Finished writing Y tiles for row " << r << ", c_block starting at " << c_block_start << "\n";
         }
+        // DPRINT << "Finished writing output row r: " << r << "\n";
     }
-
-    // DPRINT << "Finished all rows\n";
+    // DPRINT << "Writer kernel end\n";
 }
