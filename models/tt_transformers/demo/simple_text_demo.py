@@ -665,7 +665,7 @@ def prepare_generator_args(
             False,  # stress_test
             True,  # enable_trace
             10,  # num_layers, if None -> defaults to all layers
-            "prefill",  # mode
+            "decode",  # mode
         ),
     ],
     ids=[
