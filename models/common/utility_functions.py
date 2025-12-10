@@ -518,9 +518,16 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
-def comp_pcc(golden, calculated, pcc=0.99):
+def comp_pcc(golden, calculated, pcc=0.99, save_mismatches_csv=None, input_tensor=None):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
+
+    # Store original tensors for mismatch reporting
+    golden_orig = golden.clone()
+    calculated_orig = calculated.clone()
+    input_orig = None
+    if input_tensor is not None:
+        input_orig = torch.Tensor(input_tensor).clone()
 
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
@@ -570,6 +577,10 @@ def comp_pcc(golden, calculated, pcc=0.99):
     if isinstance(cal_pcc, np.ma.core.MaskedConstant):
         return True, 1.0
 
+    # Save mismatches to CSV if PCC is below threshold
+    if cal_pcc < pcc:
+        _save_pcc_mismatches(golden_orig, calculated_orig, cal_pcc, save_mismatches_csv, input_orig)
+
     return cal_pcc >= pcc, cal_pcc
 
 
@@ -606,6 +617,131 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
         ulp_value = ttnn.from_torch(ulp_value)
 
     return ulp_value
+
+
+def comp_ulp_check(
+    input, golden, calculated, ulp_threshold, allow_nonfinite=False, input_b=None, output_dir="ulp_mismatches"
+):
+    """
+    Compute absolute error between two tensors in Units of Least Precision (ULP)
+
+    Args:
+        input: Input tensor A
+        golden: Golden reference tensor
+        calculated: Calculated tensor from device
+        ulp_threshold: ULP threshold for comparison
+        allow_nonfinite: Whether to allow non-finite values
+        input_b: Optional input B - can be:
+                 - scalar value for binary operations with broadcast B
+                 - tensor (same shape as input) for element-wise binary operations where A==B
+                 - None for unary operations
+        output_dir: Directory to save mismatch files (default: "ulp_mismatches")
+
+    Returns:
+        tuple: (max_ulp, file_path or None, failing_range or None)
+    """
+    import os
+
+    # If both tensors are empty, then we can return True
+    if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
+        return 0.0, None, None
+
+    # nonfinite elments can intefere with ULP error calculation
+    # To avoid this, replace nan, +inf, -inf with 0
+    # (we have already checked that both tensors have the same nonfinite elements)
+    mask_finite = ~torch.isfinite(golden)
+    golden = golden.clone()
+    calculated = calculated.clone()
+    golden[mask_finite] = 0
+    calculated[mask_finite] = 0
+
+    # ULP is measured according to the golden tensor
+    # In most cases, data type of golden tensor should be the same as calculated tensor.
+    # However, in some cases, we may want to measure < 1 ULP differences, which requires golden tensor
+    # to have higher precision than calculated tensor.
+    # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
+    # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
+    ulp_value = ulp(golden.type(calculated.dtype))
+
+    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+
+    ULP_Cond = torch.abs(calculated - golden) / ulp_value
+    mask = (ULP_Cond > 1.0) | torch.isnan(ULP_Cond)
+
+    ulp_delta = torch.max(ULP_Cond).item()
+    file_path = None
+    failing_range = None
+
+    # Determine if input_b is a scalar or a tensor (same shape as input means A==B case)
+    input_b_is_scalar = False
+    input_b_scalar_val = None
+    if input_b is not None:
+        if hasattr(input_b, "numel"):
+            # It's a tensor
+            if input_b.numel() == 1:
+                # Single element tensor - treat as scalar
+                input_b_is_scalar = True
+                input_b_scalar_val = input_b.item()
+            # else: Full tensor (A==B case) - don't use in filename
+        else:
+            # It's a Python scalar
+            input_b_is_scalar = True
+            input_b_scalar_val = input_b
+
+    if mask.any():
+        indices = torch.nonzero(mask, as_tuple=False)
+        output_lines = []
+        output_lines.append(f"Found {indices.shape[0]} values with ULP > 1:\n")
+
+        seen_inputs = set()
+        min_input = float("inf")
+        max_input = float("-inf")
+
+        for idx in indices:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            # Update min and max
+            if inp_val < min_input:
+                min_input = inp_val
+            if inp_val > max_input:
+                max_input = inp_val
+
+            if inp_val in seen_inputs:
+                continue
+            seen_inputs.add(inp_val)
+
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            ulp_val = ULP_Cond[idx_tuple].item()
+
+            # For A==B case, input value is used for both A and B
+            line = f"Input: {inp_val}, Calculated: {calc_val}, Golden: {golden_val}, ULP: {ulp_val}"
+            output_lines.append(line)
+
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Generate filename based on input_b if it's a scalar
+        if input_b_is_scalar and input_b_scalar_val is not None:
+            # Sanitize the value for use in filename (replace dots and minus signs)
+            sanitized_val = str(input_b_scalar_val).replace(".", "p").replace("-", "neg")
+            file_path = os.path.join(output_dir, f"ulp_mismatches_b_{sanitized_val}.txt")
+        else:
+            # For A==B case or no input_b, use generic filename
+            file_path = os.path.join(output_dir, "ulp_mismatches.txt")
+
+        with open(file_path, "w") as f:
+            f.write("\n".join(output_lines))
+
+        failing_range = f"({min_input}, {max_input})"
+        print(f"\nSaved mismatch details to {file_path}")
+        print(f"Failing range : {failing_range}")
+    else:
+        print("No values with ULP > 1 found.")
+
+    return ulp_delta, file_path, failing_range
 
 
 def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
