@@ -45,7 +45,7 @@ def decode_forward(
         Attention output [batch, 1, hidden_size]
     """
     # batch_size, seq_len, hidden_size = hidden_states.shape
-    seq_len, _, batch_size, hidden_size = hidden_states.shape
+    _, seq_len, batch_size, hidden_size = hidden_states.shape
 
     # Validate decode mode
     if seq_len != 1:
@@ -151,11 +151,6 @@ def decode_forward(
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-    tt_out = ttnn.reshape(
-        tt_out,
-        (batch_size, seq_len, hidden_size),
-        (batch_size, 32, hidden_size),
-    )
 
     # Tensor parallel allreduce
     # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns

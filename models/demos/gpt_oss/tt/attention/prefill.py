@@ -50,7 +50,7 @@ def prefill_forward(
         Attention output [batch, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat16
-    batch_size, seq_len, hidden_size = hidden_states.shape
+    _, batch_size, seq_len, hidden_size = hidden_states.shape
 
     # Validate prefill mode
     if seq_len <= 1:
@@ -108,7 +108,7 @@ def prefill_forward(
     tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
 
     tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
+    # tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 
     # Tensor parallel allreduce
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)

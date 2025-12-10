@@ -246,19 +246,20 @@ class Model:
         """
         # Embed tokens
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        breakpoint()
 
         # Ensure proper shape for decoder layers
-        if len(input_embeds.shape) == 4:
-            hidden_states = ttnn.squeeze(input_embeds, dim=1)
-        else:
-            hidden_states = input_embeds
+        # if len(input_embeds.shape) == 4:
+        #     hidden_states = ttnn.squeeze(input_embeds, dim=1)
+        # else:
+        #     hidden_states = input_embeds
 
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
         # Forward through layers and head (shared with prefill)
         return self._forward_layers_and_head(
-            hidden_states=hidden_states,
+            hidden_states=input_embeds,
             rope_mats=rope_mats,
             current_pos=current_pos,
             page_table=page_table,
@@ -279,13 +280,13 @@ class Model:
     ):
         """Prefill forward pass - processes full sequences"""
         # Ensure proper shape for decoder layers
-        if len(x.shape) == 4:
-            hidden_states = ttnn.squeeze(x, dim=1)
-        else:
-            hidden_states = x
+        # if len(x.shape) == 4:
+        #     hidden_states = ttnn.squeeze(x, dim=1)
+        # else:
+        #     hidden_states = x
 
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
-        seq_len = hidden_states.shape[-2]
+        seq_len = x.shape[-2]
         if rot_mats_global is not None:
             rope_mats = rot_mats_global
         else:
@@ -297,7 +298,7 @@ class Model:
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
-            hidden_states=hidden_states,
+            hidden_states=x,
             rope_mats=rope_mats,
             current_pos=None,  # No current_pos for prefill
             page_table=page_table,

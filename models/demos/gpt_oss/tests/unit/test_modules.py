@@ -40,18 +40,27 @@ def run_attention_component(
     tt_position_idx,
     reference_layer,
     decoder_layer,
+    is_decode,
 ):
     """Test attention component - extracted from decoder layer"""
 
     # Create input
     hidden_states = torch.randn(hidden_shape)
+    batch_size, seq_len, hidden_size = hidden_states.shape
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    if is_decode and hidden_states.shape[0] > 32:
+        mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        is_row_sharded = True
+    else:
+        mesh_mapper = None
+        is_row_sharded = False
+
     tt_hidden_states = ttnn.from_torch(
-        hidden_states,
+        hidden_states.reshape(1, 1, -1, hidden_states.shape[-1]),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
     )
@@ -61,7 +70,8 @@ def run_attention_component(
     # Reference attention forward
     with torch.no_grad():
         reference_out, _ = reference_attention(
-            hidden_states=hidden_states.reshape(-1, 1, hidden_states.shape[-1]),
+            # hidden_states=hidden_states.reshape(-1, 1, hidden_states.shape[-1]),
+            hidden_states=hidden_states,
             position_embeddings=position_embeddings,
             attention_mask=mask,
             use_cache=True,
@@ -75,6 +85,7 @@ def run_attention_component(
         position_idx=tt_position_idx,
         page_table=None,
         kv_cache=None,
+        is_decode=is_decode,
     )
 
     # Compare outputs
@@ -83,7 +94,13 @@ def run_attention_component(
     tt_output_torch = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=tuple(mesh_device.shape)),
-    )[:, :1, :]
+    )
+    if is_row_sharded:
+        # we sharded the input so we want to keep all rows but slice the replicated columns
+        tt_output_torch = tt_output_torch[:, 0, :]
+    else:
+        # inputs were replicated along the rows so we want to slice the replicated columns to get single output
+        tt_output_torch = tt_output_torch[0, :seq_len, :]
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=0.96)
@@ -136,7 +153,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
         assert passing, f"Experts test failed. Output: {output}"
 
 
-def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
+def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode):
     """Test TopK router component - extracted from decoder layer"""
 
     # Create input
@@ -158,10 +175,11 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device) if is_decode and hidden_states.shape[0] > 32 else None
     tt_hidden_states = ttnn.from_torch(
         hidden_states.reshape(-1, 1, 2880),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
     )
@@ -203,68 +221,80 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
     #     assert passing, f"TopK router test failed. Output: {output}"
 
 
-def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer):
+def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode):
     """Test experts component - extracted from decoder layer"""
 
     # Create input
-    hidden_shape = torch.Size([128, 1, 2880])
+    # hidden_shape = torch.Size([128, 1, 2880])
     hidden_states = torch.randn(hidden_shape)
     seq_len = hidden_shape[1]
     batch_size = hidden_shape[0]
     # Choose routing based on seq_len (sparse for seq_len=1, dense for seq_len>1)
-    if seq_len == 1:
-        # Sparse routing
-        import itertools
+    # if seq_len == 1:
+    # Sparse routing
+    import itertools
 
-        router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
-        routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+    router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
+    routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
 
-        for b, s in itertools.product(range(batch_size), range(seq_len)):
-            active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
-            router_indices[b * seq_len + s, :] = active_experts
-            weights = torch.rand(config.num_experts_per_tok)
-            weights = weights / weights.sum()  # Normalize
-            routing_weights[b * seq_len + s, active_experts] = weights
-    else:
-        # Dense routing
-        routing_weights = torch.ones(hidden_states.shape[-2], config.num_local_experts) / config.num_local_experts
+    for b, s in itertools.product(range(batch_size), range(seq_len)):
+        active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+        router_indices[b * seq_len + s, :] = active_experts
+        weights = torch.rand(config.num_experts_per_tok)
+        weights = weights / weights.sum()  # Normalize
+        routing_weights[b * seq_len + s, active_experts] = weights
+    # else:
+    #     # Dense routing
+    #     routing_weights = torch.ones(hidden_states.shape[-2], config.num_local_experts) / config.num_local_experts
     topk_weights_dense = torch.tensor([[routing_weights[i, j].item() for j in b] for i, b in enumerate(router_indices)])
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
     reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
 
     # Convert to TTNN tensors
+    if is_decode and hidden_states.shape[0] > 32:
+        mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        is_row_sharded = True
+    else:
+        mesh_mapper = None
+        is_row_sharded = False
     tt_hidden_states = ttnn.from_torch(
         hidden_states.unsqueeze(1),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=mesh_mapper,
     )
     tt_routing_weights = ttnn.from_torch(
         topk_weights_dense.unsqueeze(1).unsqueeze(1),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=mesh_mapper,
     )
     tt_router_indices = ttnn.from_torch(
         router_indices.unsqueeze(1).unsqueeze(1),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.uint16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=mesh_mapper,
     )
 
     # Extract TT experts from decoder layer
     # tt_experts = decoder_layer.mlp.experts
     tt_experts = decoder_layer.mlp.throughput_experts
-    tt_output = tt_experts(tt_hidden_states, tt_router_indices, tt_routing_weights)
+    tt_output = tt_experts(tt_hidden_states, tt_router_indices, tt_routing_weights, is_decode)
 
     tt_output = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0]
+    )
+    if is_row_sharded:
+        # we sharded the input so we want to keep all rows but slice the replicated columns
+        tt_output = tt_output[0]
+    else:
+        # inputs were replicated along the rows so we want to slice the replicated columns to get single output
+        tt_output = tt_output[0, ..., :seq_len, :]
     # Compare outputs
     # passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
@@ -274,32 +304,46 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         assert passing, f"Experts test failed. Output: {output}"
 
 
-def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer):
+def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode):
     """Test complete MLP (router + experts) - essential MoE functionality"""
 
     # Create input
     hidden_states = torch.randn(hidden_shape)
+    batch_size, seq_len, hidden_size = hidden_states.shape
 
     reference_model = reference_layer.mlp
     reference_output, routing_scores = reference_model(hidden_states)
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    if is_decode and batch_size > 32:
+        mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        is_row_sharded = True
+    else:
+        mesh_mapper = None
+        is_row_sharded = False
     tt_hidden_states = ttnn.from_torch(
         hidden_states.reshape(-1, 1, 2880),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
     )
 
     # Create TT MLP using TestFactory setup
     tt_mlp = decoder_layer.mlp
-    tt_output = tt_mlp(tt_hidden_states)
+    breakpoint()
+    tt_output = tt_mlp(tt_hidden_states, is_decode=is_decode)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0]
+    )
+    if is_row_sharded:
+        # we sharded the input so we want to keep all rows but slice the replicated columns
+        tt_output_torch = tt_output_torch[0]
+    else:
+        # inputs were replicated along the rows so we want to slice the replicated columns to get single output
+        tt_output_torch = tt_output_torch[0, ..., :seq_len, :]
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=0.88)
@@ -315,7 +359,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_batch_seq(
     [
         (128, 1),  # decode
-        # (1, 128),  # prefill
+        (1, 128),  # prefill
         # (1, 4096),  # prefill 4k
     ],
 )
@@ -344,7 +388,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
+    assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    is_decode = seq_len == 1
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
     config = setup["config"]
@@ -388,7 +434,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         dtype=setup["dtype"],
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
-        max_local_batch_size=batch_size // setup["mesh_device"].shape[0],
+        max_local_batch_size=batch_size // setup["mesh_device"].shape[0] if (is_decode and batch_size > 32) else batch_size,
     )
 
     # Create input
@@ -485,29 +531,13 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # tt_position_idx = ttnn.from_torch(
     #     position_ids, device=setup["mesh_device"], layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
     # )
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]) if is_decode and batch_size > 32 else None
     tt_position_idx = ttnn.from_torch(
         position_ids.squeeze(),
         device=setup["mesh_device"],
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            dims=(0, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
-        ),
+        mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
-    )
-
-    # Create TTNN tensors for component tests
-    # tt_hidden_states = ttnn.from_torch(
-    #     hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
-    # )
-    hidden_states = torch.reshape(hidden_states, (1, 1, batch_size, -1))
-    tt_hidden_states = ttnn.from_torch(
-        hidden_states,
-        device=setup["mesh_device"],
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
-        ),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
     )
 
     # Parse test_modules (supports comma-separated values)
@@ -523,13 +553,13 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     if should_test("router"):
         if seq_len == 1:
             logger.info("Testing TopK Router...")
-            run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+            run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode)
         elif "router" in modules_to_test:
             pytest.skip("Router test only runs in decode mode (seq_len=1)")
 
     if should_test("experts"):
         logger.info("Testing Experts...")
-        run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
+        run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer, is_decode=is_decode)
 
     if should_test("attention"):
         logger.info("Testing Attention...")
@@ -542,27 +572,50 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
             tt_position_idx,
             reference_layer,
             decoder_layer,
+            is_decode=is_decode,
         )
 
     if should_test("rms_norm"):
         logger.info("Testing RMS Norm...")
-        run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+        run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode)
 
     if should_test("mlp"):
         logger.info("Testing Full MLP Pipeline...")
-        run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+        run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer, is_decode=is_decode)
 
     if should_test("decoder"):
         logger.info("Testing Full Decoder Layer...")
+        # Create TTNN tensors for decoder layer test
+        # tt_hidden_states = ttnn.from_torch(
+        #     hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+        # )
+        # hidden_states = torch.reshape(hidden_states, (1, 1, batch_size*seq_len, -1))
+        if is_decode and batch_size > 32:
+            mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"])
+            is_row_sharded = True
+        else:
+            mesh_mapper = None
+            is_row_sharded = False
+        tt_hidden_states = ttnn.from_torch(
+            hidden_states.reshape(1, 1, batch_size*seq_len, -1),
+            device=setup["mesh_device"],
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+        )
         # Test full decoder layer integration
-        tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx)
+        tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode)
 
         # Compare outputs
         pcc_threshold = 0.924 if seq_len == 1 else 0.88
         tt_output_torch = ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[:1]
+        )
+        if is_row_sharded:
+            tt_output_torch = tt_output_torch[0]
+        else:
+            tt_output_torch = tt_output_torch[0, ..., :seq_len, :]
         passing, output = compare_tensors(
             tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
         )

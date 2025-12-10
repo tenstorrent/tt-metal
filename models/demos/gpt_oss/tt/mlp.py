@@ -83,7 +83,7 @@ class MLP:
             decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
         )
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, is_decode):
         """Forward pass: route -> experts
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
@@ -101,5 +101,5 @@ class MLP:
         # router_logits.deallocate()
         # router_indices.deallocate()
         # expert_output = self.experts(hidden_states, router_scores)
-        expert_output = self.throughput_experts(hidden_states, expert_indices, expert_weights)
+        expert_output = self.throughput_experts(hidden_states, expert_indices, expert_weights, is_decode=is_decode)
         return expert_output

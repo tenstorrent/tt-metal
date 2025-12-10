@@ -104,7 +104,7 @@ class Attention:
         self.head_dim = config.head_dim
         self.scaling = config.scaling
 
-    def __call__(self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None):
+    def __call__(self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None, is_decode=True):
         """
         Forward pass - automatically dispatches to decode or prefill.
 
@@ -122,7 +122,7 @@ class Attention:
 
         # Determine mode based on sequence length
         # is_decode = seq_len == 1
-        is_decode = True
+        # is_decode = True
 
         # Use provided kv_cache or internal cache
         cache = kv_cache if kv_cache is not None else self.kv_cache

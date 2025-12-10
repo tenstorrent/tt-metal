@@ -183,6 +183,7 @@ class ThroughputExperts:
         hidden_states: ttnn.Tensor,
         topk_expert_indices: ttnn.Tensor,
         topk_expert_weights: ttnn.Tensor,
+        is_decode: bool = True,
         chunk_size: int = 2048,
     ) -> ttnn.Tensor:
         """
@@ -199,15 +200,7 @@ class ThroughputExperts:
         Returns:
             Expert output tensor [batch/seq, 1, 1, hidden_size]
         """
-        # Determine mode based on input shape
-        # In decode: batch dimension varies, seq=1
-        # In prefill: treating sequence as batch for dispatch
-        batch_or_seq = hidden_states.shape[0]
-
-        # Heuristic: small batch/seq likely decode, large likely prefill
-        # Actual determination should be done by caller based on context
-        is_decode = batch_or_seq <= 32
-
+        is_decode=True
         if is_decode:
             return self.forward_decode(
                 hidden_states,
