@@ -1,3 +1,9 @@
+"""
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
 import torch
 import ttnn
 from transformers import DPTModel
@@ -16,4 +22,3 @@ def test_smoke_untraced():
         assert t.ndim in (3, 4)
     finally:
         ttnn.close_device(device)
-
