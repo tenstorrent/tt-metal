@@ -970,7 +970,6 @@ private:
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
     std::unique_ptr<CodeProfiler> code_profiler_;
     std::unique_ptr<TelemetryManager> telemetry_manager_;
-    uint32_t get_device_frequency_mhz(const FabricNodeId& device_id);
 
     // Getter for lazy initialization of eth_readback_
     EthCoreBufferReadback& get_eth_readback() {

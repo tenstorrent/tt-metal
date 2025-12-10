@@ -70,12 +70,6 @@ std::vector<GoldenLatencyEntry>::iterator TestContext::fetch_corresponding_golde
     return golden_it;
 }
 
-uint32_t TestContext::get_device_frequency_mhz(const FabricNodeId& device_id) {
-    auto& metal_context = tt::tt_metal::MetalContext::instance();
-    auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
-    return metal_context.get_cluster().get_device_aiclk(physical_chip_id);
-}
-
 void TestContext::collect_latency_results() {
     log_info(tt::LogTest, "Collecting latency results from sender and responder devices");
 
@@ -208,7 +202,9 @@ void TestContext::report_latency_results(const TestConfig& config) {
     std::sort(per_hop_latency_cycles.begin(), per_hop_latency_cycles.end());
 
     // Get device frequency for conversion to ns
-    uint32_t freq_mhz = get_device_frequency_mhz(sender_node_id);
+    auto& metal_context = tt::tt_metal::MetalContext::instance();
+    auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(sender_node_id);
+    uint32_t freq_mhz = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
     double freq_ghz = static_cast<double>(freq_mhz) / 1000.0;
     double ns_per_cycle = 1.0 / freq_ghz;
 

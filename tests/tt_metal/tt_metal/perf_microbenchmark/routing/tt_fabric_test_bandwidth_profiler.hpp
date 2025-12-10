@@ -7,7 +7,6 @@
 #include <unordered_map>
 #include <vector>
 #include <map>
-#include <set>
 #include <optional>
 
 #include "tt_fabric_test_common_types.hpp"
@@ -28,7 +27,6 @@ using FabricNodeId = tt::tt_fabric::FabricNodeId;
 using RoutingDirection = tt::tt_fabric::RoutingDirection;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
 using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
-using TrafficPatternFetch = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
 using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
 using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
 using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
@@ -69,7 +67,6 @@ private:
     std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
     std::map<FabricNodeId, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
-    std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
     std::optional<double> telemetry_bw_min_;
     std::optional<double> telemetry_bw_avg_;
     std::optional<double> telemetry_bw_max_;
@@ -85,7 +82,6 @@ private:
     void read_performance_results(
         const std::unordered_map<MeshCoordinate, TestDevice>& test_devices, const SenderMemoryMap& sender_memory_map);
     void convert_core_cycles_to_direction_cycles(const std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
-    unsigned int get_device_frequency_mhz(const FabricNodeId& device_id);
     void calculate_bandwidth(
         const TestConfig& config, const std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
 };

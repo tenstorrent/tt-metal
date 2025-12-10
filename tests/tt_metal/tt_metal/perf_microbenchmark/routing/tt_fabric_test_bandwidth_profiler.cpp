@@ -5,7 +5,6 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_bandwidth_profiler.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <numeric>
 #include <tuple>
 #include <limits>
@@ -28,7 +27,6 @@ void BandwidthProfiler::profile_results(
     outgoing_traffic_.clear();
     device_direction_cycles_.clear();
     device_core_cycles_.clear();
-    device_freq_mhz_map_.clear();
 
     calculate_outgoing_traffics_through_device_boundaries(test_devices);
     read_performance_results(test_devices, sender_memory_map);
@@ -49,7 +47,6 @@ void BandwidthProfiler::reset() {
     outgoing_traffic_.clear();
     device_direction_cycles_.clear();
     device_core_cycles_.clear();
-    device_freq_mhz_map_.clear();
     telemetry_bw_min_.reset();
     telemetry_bw_avg_.reset();
     telemetry_bw_max_.reset();
@@ -286,17 +283,6 @@ void BandwidthProfiler::convert_core_cycles_to_direction_cycles(
     }
 }
 
-unsigned int BandwidthProfiler::get_device_frequency_mhz(const FabricNodeId& device_id) {
-    if (!device_freq_mhz_map_.contains(device_id)) {
-        auto& metal_context = tt::tt_metal::MetalContext::instance();
-        auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
-        device_freq_mhz_map_[device_id] = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
-    }
-    auto freq_mhz = device_freq_mhz_map_.at(device_id);
-    TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
-    return freq_mhz;
-}
-
 void BandwidthProfiler::calculate_bandwidth(
     const TestConfig& config, const std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     log_debug(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
@@ -390,7 +376,7 @@ void BandwidthProfiler::calculate_bandwidth(
                 total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
 
                 // Calculate bandwidth in Bytes/cycle and convert to GB/s
-                const auto device_frequency_mhz = get_device_frequency_mhz(device_id);
+                const auto device_frequency_mhz = device_info_.get_device_frequency_mhz(device_id);
                 uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
                 // use min frequency (in real scenario we will have the same freq)
                 device_freq = std::min(device_freq, device_frequency_hz);

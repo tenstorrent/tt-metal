@@ -5,7 +5,6 @@
 #pragma once
 
 #include <filesystem>
-#include <unordered_map>
 #include <vector>
 
 #include "tt_fabric_telemetry.hpp"
@@ -35,13 +34,10 @@ public:
     const std::vector<TelemetryEntry>& get_entries() const { return telemetry_entries_; }
 
 private:
-    unsigned int get_device_frequency_mhz(const FabricNodeId& device_id);
-
     TestFixture& fixture_;
     EthCoreBufferReadback& eth_readback_;
 
     std::vector<TelemetryEntry> telemetry_entries_;
-    std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
     double measured_bw_min_ = 0.0;
     double measured_bw_avg_ = 0.0;
     double measured_bw_max_ = 0.0;

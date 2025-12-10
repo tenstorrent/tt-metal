@@ -24,17 +24,6 @@ double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
 TelemetryManager::TelemetryManager(TestFixture& fixture, EthCoreBufferReadback& eth_readback) :
     fixture_(fixture), eth_readback_(eth_readback) {}
 
-unsigned int TelemetryManager::get_device_frequency_mhz(const FabricNodeId& device_id) {
-    if (!device_freq_mhz_map_.contains(device_id)) {
-        auto& metal_context = tt::tt_metal::MetalContext::instance();
-        auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
-        device_freq_mhz_map_[device_id] = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
-    }
-    auto freq_mhz = device_freq_mhz_map_.at(device_id);
-    TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
-    return freq_mhz;
-}
-
 void TelemetryManager::read_telemetry() {
     telemetry_entries_.clear();
 
@@ -54,7 +43,7 @@ void TelemetryManager::read_telemetry() {
         const auto& core_data = result.buffer_data;
         auto device_id = result.fabric_node_id;
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto freq_mhz = get_device_frequency_mhz(device_id);
+        auto freq_mhz = fixture_.get_device_frequency_mhz(device_id);
         double freq_ghz = double(freq_mhz) / 1000.0;
 
         LowResolutionBandwidthTelemetryResult tel{};
