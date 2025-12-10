@@ -464,12 +464,22 @@ class Attention(LightweightModule):
 
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+            q_heads_pre_rot_1BQD,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["decode"],
+            is_decode_mode=True,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         # K Rotary Embeddings
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+            k_heads_pre_rot_1BKD,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["decode"],
+            is_decode_mode=True,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
@@ -719,7 +729,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for faster access
         )
 
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
@@ -740,6 +750,8 @@ class Attention(LightweightModule):
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for faster access
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
@@ -752,6 +764,8 @@ class Attention(LightweightModule):
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for faster access
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
@@ -849,7 +863,7 @@ class Attention(LightweightModule):
         ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for faster access to WO matmul
         )
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device

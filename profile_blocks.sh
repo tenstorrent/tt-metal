@@ -6,7 +6,10 @@ set -e
 # Export environment variables BEFORE profiling
 export HF_MODEL="meta-llama/Llama-2-7b-hf"
 export TT_METAL_DEVICE_PROFILER=1
+export TT_METAL_PROFILER_SYNC=1              # Synchronous profiling to avoid buffer drops
 export ENABLE_TRACY=1
+# Increase profiler buffer size to prevent overflow (default ~16MB). Use 512MB for full model.
+export TT_METAL_DEVICE_PROFILER_BUFFER_SIZE=536870912
 
 echo "========================================"
 echo "OpenVLA Block-by-Block Profiling"
@@ -35,15 +38,16 @@ profile_block() {
 
 # Check arguments
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [all|1|2|3|4|5]"
+    echo "Usage: $0 [all|1|2|3|4|5|full]"
     echo ""
     echo "Blocks:"
-    echo "  1 - DinoV2 Vision Backbone (~35s)"
-    echo "  2 - SigLIP Vision Backbone (~26s)"
-    echo "  3 - Projector (~9s)"
-    echo "  4 - LLM Prefill (~4s)"
-    echo "  5 - LLM Decode Single Step (~0.06s)"
-    echo "  all - Profile all blocks sequentially"
+    echo "  1    - DinoV2 Vision Backbone"
+    echo "  2    - SigLIP Vision Backbone"
+    echo "  3    - Projector"
+    echo "  4    - LLM Prefill"
+    echo "  5    - LLM Decode Single Step"
+    echo "  full - Full OpenVLA Model (32 layers, 7 actions)"
+    echo "  all  - Profile all blocks sequentially"
     exit 1
 fi
 
@@ -71,9 +75,16 @@ case "$1" in
     5)
         profile_block 5 "llm_decode" "test_block5_llm_decode_only"
         ;;
+    full)
+        echo "Profiling Full OpenVLA Model (32 layers, 7 actions)..."
+        python3 tools/tracy/profile_this.py \
+            -n "full_openvla_model" \
+            -c "pytest models/tt_transformers/tt/multimodal/open_vla.py::test_openvla_model -v -s"
+        echo "✓ Full model profiling complete!"
+        ;;
     *)
         echo "Invalid option: $1"
-        echo "Use: all, 1, 2, 3, 4, or 5"
+        echo "Use: all, 1, 2, 3, 4, 5, or full"
         exit 1
         ;;
 esac

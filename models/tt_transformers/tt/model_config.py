@@ -705,12 +705,13 @@ class ModelArgs:
             )
 
             # Chunk values based on what works best empirically
+            # P150/Blackhole has 13x10 grid with more L1 per core, can use larger chunks
             sdpa_grid_size = (13, 10) if is_blackhole() else (8, 8)
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=sdpa_grid_size,
-                exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=256 if seqlen >= 2048 else 64,
+                exp_approx_mode=True,  # Enable exp approximation for faster softmax
+                q_chunk_size=256 if seqlen >= 2048 else (128 if is_blackhole() else 64),
+                k_chunk_size=256 if seqlen >= 2048 else (128 if is_blackhole() else 64),
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
@@ -783,7 +784,7 @@ class ModelArgs:
             # Using dram_shard_grid_width to ensure per_core_N matches DRAM shard width for P100, otherwise matmuls silently give bad PCC
             dram_shard_grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                m=min(seq_len, self.prefill_len_cutoff),
                 k=self.dim // self.cluster_shape[0],
                 n=n_w1_w3,
                 grid_size=mlp1_3_grid(seq_len),
@@ -793,7 +794,7 @@ class ModelArgs:
             )
             n_w2 = self.dim
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                m=min(seq_len, self.prefill_len_cutoff),
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=n_w2,
                 grid_size=mlp2_grid(seq_len),
@@ -894,7 +895,9 @@ class ModelArgs:
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
                     1,
-                    qkv_grid_rows if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / qkv_grid_rows),
+                    qkv_grid_rows
+                    if seq_len >= self.MAX_QKV_MM_SEQ_LEN
+                    else math.ceil(seq_len / self.tile_size / qkv_grid_rows),
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / qkv_grid_cols
@@ -919,18 +922,20 @@ class ModelArgs:
                 else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
             )
 
+            # P150/Blackhole has 13x10 grid, Wormhole has 8x8
+            sdpa_decode_grid = (13, 10) if is_blackhole() else (8, 8)
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
+                compute_with_storage_grid_size=sdpa_decode_grid,
+                exp_approx_mode=True,  # Enable exp approximation for faster softmax
                 q_chunk_size=128 if is_blackhole() else 256,
                 k_chunk_size=128 if is_blackhole() else 256,
             )
 
             self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
+                math_approx_mode=True,  # Enable math approximation for faster computation
                 fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                packer_l1_acc=True,  # Enable L1 accumulation for better perf
             )
 
             self.model_config[

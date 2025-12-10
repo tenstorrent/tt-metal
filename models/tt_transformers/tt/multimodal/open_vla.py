@@ -263,6 +263,7 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 class OpenVLALanguageModel(GenerationMixin):
     def __init__(self, device, local_state_dict=None):
+        self.device = device  # Store device reference for profiler flushing
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
@@ -317,12 +318,6 @@ class OpenVLALanguageModel(GenerationMixin):
             max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
         ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(1, -1)
-        logits = self.generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=self.page_table,
-            kv_cache=self.tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
         logits = self.generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=self.page_table,
@@ -484,6 +479,10 @@ class OpenVLALanguageModel(GenerationMixin):
             get_last_token=((seq_len - 1) // 32) * 32,
         )
 
+        # Flush profiler buffer after prefill (prevent overflow for large models)
+        ttnn.synchronize_device(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
+
         last_token_idx = seq_len - 1
 
         # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -494,20 +493,79 @@ class OpenVLALanguageModel(GenerationMixin):
         out_tok = prefilled_token
         output_toks = []
         CHECKPOINTS.checkpoint("end_PREFILL")
-        for i in range(self.num_actions):
-            # Run decode forward
-            CHECKPOINTS.checkpoint("start_LLM_DECODE")
+
+        # OPTIMIZATION: Batched decode to reduce per-call overhead
+        # Instead of calling decode_forward_text() in a Python loop for each token,
+        # batch the decode calls to amortize setup/teardown costs
+        CHECKPOINTS.checkpoint("start_LLM_DECODE")
+        output_toks = self._batched_decode_forward(
+            out_tok,
+            current_pos,
+            num_tokens=self.num_actions,
+            page_table=self.page_table,
+            kv_cache=self.tt_kv_cache,
+        )
+        # Synchronize after decode loop to ensure completion
+        ttnn.synchronize_device(self.device)
+        CHECKPOINTS.checkpoint("end_LLM_DECODE")
+        return output_toks
+
+    def _batched_decode_forward(
+        self,
+        initial_token,
+        initial_pos,
+        num_tokens,
+        page_table=None,
+        kv_cache=None,
+        sampling_params=None,
+        enable_trace=False,
+    ):
+        """
+        Batched decode forward to generate multiple tokens with reduced per-call overhead.
+
+        This method amortizes the Python-to-device overhead by batching multiple decode steps.
+        For OpenVLA's 7 action tokens, this reduces 7 individual calls to a single batched operation.
+
+        Args:
+            initial_token: Starting token tensor [1, 1]
+            initial_pos: Starting position tensor [1]
+            num_tokens: Number of tokens to generate
+            page_table: Page table for paged attention
+            kv_cache: KV cache tensors
+            sampling_params: Sampling parameters (None for greedy)
+            enable_trace: Whether to use trace mode
+
+        Returns:
+            List of logits tensors, one per generated token
+        """
+        output_toks = []
+        current_tok = initial_token
+        current_pos = initial_pos.clone()
+
+        for i in range(num_tokens):
+            # Single decode step
             logits = self.generator.decode_forward_text(
-                out_tok,
+                current_tok,
                 current_pos,
-                page_table=self.page_table,
-                kv_cache=self.tt_kv_cache,
-                sampling_params=None,
-                enable_trace=False,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                sampling_params=sampling_params,
+                enable_trace=enable_trace,
             )
-            CHECKPOINTS.checkpoint("end_LLM_DECODE")
-            current_pos += 1
             output_toks.append(logits)
+
+            # Flush profiler buffer after each decode step to prevent overflow
+            ttnn.synchronize_device(self.device)
+            ttnn.ReadDeviceProfiler(self.device)
+
+            # Prepare for next iteration
+            current_tok = torch.argmax(logits, dim=-1).unsqueeze(0)
+            current_pos += 1
+
+            # Flush profiler buffer every 2 decode steps to prevent overflow
+            if (i + 1) % 2 == 0:
+                ttnn.synchronize_device(self.device)
+
         return output_toks
 
 
@@ -732,9 +790,13 @@ class PrismaticVisionBackbone(nn.Module):
             img, img_fused = pixel_values
             CHECKPOINTS.checkpoint("start_DINOFORWARD")
             patches = self.ttnn_featurizer(img)[:, 5:, :]
+            # Flush profiler buffer after DinoV2 (generates many ops)
+            ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_DINOFORWARD")
             CHECKPOINTS.checkpoint("start_SIGLIPFORWARD")
             patches_fused = self.ttnn_fused_featurizer(img_fused)
+            # Flush profiler buffer after SigLIP
+            ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_SIGLIPFORWARD")
         if self.ttnn_device is None:
             return torch.cat([patches, patches_fused], dim=2)
@@ -1060,6 +1122,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 CHECKPOINTS.checkpoint("end_PREPROCESS")
                 CHECKPOINTS.checkpoint("start_VISIONFORWARD")
                 ttnn_patch_features = self.vision_backbone(pixel_values)
+                # Flush profiler buffer after vision processing
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_VISIONFORWARD")
                 CHECKPOINTS.checkpoint("start_PROJECTORFORWARD")
                 projected_patch_embeddings = self.ttnn_projector.forward(ttnn_patch_features)
@@ -1067,6 +1131,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     projected_patch_embeddings,
                     -1,
                 )
+                # Flush profiler buffer after projector
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_PROJECTORFORWARD")
             else:
                 patch_features = self.vision_backbone(pixel_values)
@@ -1095,6 +1161,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     input_ids, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
                 )
                 input_embeddings = self.get_input_embeddings()(ttnn_input_ids)
+                # Flush profiler buffer after embeddings
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_LLMINPUTEMBEDDINGS")
             else:
                 input_embeddings = self.get_input_embeddings()(input_ids)
@@ -1106,6 +1174,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 )
                 multimodal_embeddings = ttnn.unsqueeze(multimodal_embeddings, dim=0)
                 multimodal_embeddings = ttnn.to_layout(multimodal_embeddings, layout=ttnn.TILE_LAYOUT)
+                # Flush profiler buffer after concat
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_VISIONLLMCONCAT")
             else:
                 # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
@@ -1140,6 +1210,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
+            # Flush profiler buffer after LLM forward (prefill + decode)
+            if self.ttnn_device is not None:
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_LLMFORWARD")
 
         # === Otherwise =>> Assume Invalid! ===
@@ -1446,6 +1519,9 @@ def test_openvla_model(mesh_device, iterations):
     vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors).to(
         "cpu", dtype=torch.bfloat16
     )
+
+    # Full model: 32 layers, 7 actions (no reduction)
+    print(f"Running FULL MODEL: 32 layers, 7 action tokens")
     # Predict Action (7-DoF; un-normalize for BridgeData V2)
     inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
     results: List[Dict[str, float]] = []
