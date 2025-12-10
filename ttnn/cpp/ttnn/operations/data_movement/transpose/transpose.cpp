@@ -1,27 +1,25 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "transpose.hpp"
+
 #include "clone/clone.hpp"
-#include "ttnn/run_operation.hpp"
+#include "device/transpose_device_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "device/transpose_op.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 
 #include <tt-metalium/hal.hpp>
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::transpose {
 
 namespace detail {
 
 using namespace tt::tt_metal::experimental;
 using namespace tt;
-using namespace tt::tt_metal::operation;
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -60,13 +58,13 @@ inline Tensor transpose_(
             break;
         default: break;
     }
-    return tt::tt_metal::operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);
+    return ttnn::prim::transpose(a, transpose_dim, output_mem_config, pad_value);
 }
 
 ttnn::Tensor transpose_nd(
     const ttnn::Tensor& input_tensor,
-    const uint32_t dim1,
-    const uint32_t dim2,
+    uint32_t dim1,
+    uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
     const auto rank = input_tensor.logical_shape().rank();
@@ -162,8 +160,8 @@ MassagedTranspose build_memory_config_transpose(BaseTransposeType base_transpose
 
 ttnn::Tensor transpose_impl(
     const ttnn::Tensor& input_tensor,
-    const int64_t& dim1,
-    const int64_t& dim2,
+    int64_t dim1,
+    int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
     const auto& input_shape = input_tensor.logical_shape();
@@ -231,8 +229,8 @@ ttnn::Tensor transpose_impl(
 
 ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor,
-    const int64_t& dim1,
-    const int64_t& dim2,
+    int64_t dim1,
+    int64_t dim2,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<float>& pad_value) {
     auto base_transpose = [](const ttnn::Tensor& input_tensor,
@@ -247,8 +245,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
 }
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2, const std::optional<float>& pad_value) {
+    const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, const std::optional<float>& pad_value) {
     return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::transpose
