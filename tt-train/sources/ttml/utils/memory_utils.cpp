@@ -147,10 +147,16 @@ void end_capture() {
 }
 
 DRAMUsage get_DRAM_usage() {
+    if (trace.empty()) {
+        fmt::print("WARNING: Calling get_DRAM_usage() before trace capture\n");
+    }
     return extract_DRAM_usage(trace);
 }
 
 L1Usage get_L1_usage() {
+    if (trace.empty()) {
+        fmt::print("WARNING: Calling get_L1_usage() before trace capture\n");
+    }
     return extract_L1_usage(trace);
 }
 
