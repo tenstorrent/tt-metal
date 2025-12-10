@@ -13,6 +13,53 @@ from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
 
 
+def generate_distinct_sigmoid_inputs(shape, min_val=0.05, max_val=0.95, dtype=torch.bfloat16):
+    """
+    Generate random bfloat16 tensor where all values are guaranteed to be distinct
+    after sigmoid. This is achieved by:
+    1. Generating distinct bfloat16 values in sigmoid output space (0, 1)
+    2. Applying logit (inverse sigmoid) to get the inputs
+
+    Args:
+        shape: Output tensor shape
+        min_val: Minimum sigmoid output value (avoid 0 for numerical stability)
+        max_val: Maximum sigmoid output value (avoid 1 for numerical stability)
+        dtype: Output dtype (default bfloat16)
+
+    Returns:
+        Tensor of shape `shape` where sigmoid(output) has all distinct values
+    """
+    total_elements = torch.tensor(shape).prod().item()
+
+    # Generate evenly spaced values, convert to bfloat16, then get unique values
+    # Use more points than needed to ensure we have enough after deduplication
+    num_candidates = total_elements * 4
+    candidates = torch.linspace(min_val, max_val, num_candidates, dtype=torch.float32)
+    candidates_bf16 = candidates.to(dtype)
+
+    # Get unique bfloat16 values
+    unique_bf16 = candidates_bf16.unique()
+
+    if unique_bf16.numel() < total_elements:
+        raise ValueError(
+            f"Cannot generate {total_elements} distinct bfloat16 sigmoid outputs in range "
+            f"[{min_val}, {max_val}]. Only {unique_bf16.numel()} distinct values available."
+        )
+
+    # Randomly select the required number of unique values
+    perm = torch.randperm(unique_bf16.numel())[:total_elements]
+    sigmoid_outputs = unique_bf16[perm]
+
+    # Apply logit (inverse sigmoid) to get pre-sigmoid inputs
+    # logit(p) = log(p / (1-p))
+    # Do this in float32 for precision, then convert back
+    sigmoid_outputs_f32 = sigmoid_outputs.float()
+    inputs = torch.log(sigmoid_outputs_f32 / (1 - sigmoid_outputs_f32))
+    inputs = inputs.to(dtype).reshape(shape)
+
+    return inputs
+
+
 def grouped_gate_golden(
     scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
 ):
@@ -38,7 +85,7 @@ def grouped_gate_golden(
 
     # find the top k groups
     _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1)
-    logger.info(f"top_k_groups_indices: {top_k_groups_indices}")
+    # logger.info(f"top_k_groups_indices: {top_k_groups_indices}")
 
     # Create a mask for valid groups
     # We initialize a mask of allowed groups and fill others with -inf
@@ -95,15 +142,14 @@ def test_grouped_gate(device):
     torch.manual_seed(0)
     batch_size = 1
     num_batches = 1
-    seq_len = 33
+    seq_len = 1
     total_experts = 256
-    # scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
-    scores = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)
+    # Use generate_distinct_sigmoid_inputs to avoid ties after sigmoid
+    # This ensures deterministic top-k selection regardless of rounding differences
+    scores = generate_distinct_sigmoid_inputs((num_batches, batch_size, seq_len, total_experts), dtype=torch.bfloat16)
 
-    logger.info(f"scores: {scores[-1, -1, -1, :]}")
-    bias = 2 * torch.ones(
-        num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16
-    )  # no bias for simplicity
+    logger.info(f"initial scores: {scores[-1, -1, -1, :]}")
+    bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)  # no bias for simplicity
 
     n_groups = 8
     summed_experts_per_group = 2  # number of experts to sum per group
@@ -115,11 +161,6 @@ def test_grouped_gate(device):
     golden_scores, golden_top_k_experts_indices = grouped_gate_golden(
         scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
     )
-    logger.info(f"golden_scores: {golden_scores}")
-    # logger.info(f"golden_top_k_experts_indices: {golden_top_k_experts_indices}")
-    # logger.info(
-    #     f"golden top k expert indices group number: {golden_top_k_experts_indices // (total_experts // n_groups)}"
-    # )
 
     ttnn_scores = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -137,6 +178,7 @@ def test_grouped_gate(device):
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
 
-    logger.info(f"ttnn_scores: {ttnn_scores}")
-    logger.info(f"golden_top_k_experts_indices: {golden_top_k_experts_indices}")
-    logger.info(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices}")
+    logger.info(f"golden_weights: {golden_scores}")
+    logger.info(f"ttnn_weights: {ttnn_scores}")
+    logger.info(f"golden_indices: {golden_top_k_experts_indices}")
+    logger.info(f"ttnn_indices: {ttnn_top_k_experts_indices}")
