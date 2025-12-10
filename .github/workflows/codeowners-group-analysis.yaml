@@ -117,14 +117,20 @@ jobs:
                                          -H "Accept: application/vnd.github.v3+json" \
                                          "$INFRA_TEAM_API" 2>/dev/null)
 
-                INFRA_MEMBERS=$(echo "$INFRA_MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-
-                if echo "$INFRA_MEMBERS" | grep -q "$COMMENT_AUTHOR"; then
-                  echo "✅ User $COMMENT_AUTHOR is authorized (metalium-developers-infra member)"
-                  echo "bypass-authorized=true" >> $GITHUB_OUTPUT
-                else
-                  echo "❌ User $COMMENT_AUTHOR is NOT authorized (not in metalium-developers-infra)"
+                # Verify the API call was successful and returned valid JSON
+                if ! echo "$INFRA_MEMBERS_DATA" | jq -e '.[0]' > /dev/null 2>&1; then
+                  echo "❌ Failed to fetch team members, denying access"
                   echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                else
+                  # Use jq to perform exact username matching
+                  IS_MEMBER=$(echo "$INFRA_MEMBERS_DATA" | jq -r --arg user "$COMMENT_AUTHOR" '[.[].login] | contains([$user])')
+                  if [ "$IS_MEMBER" = "true" ]; then
+                    echo "✅ User $COMMENT_AUTHOR is authorized (metalium-developers-infra member)"
+                    echo "bypass-authorized=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "❌ User $COMMENT_AUTHOR is NOT authorized (not in metalium-developers-infra)"
+                    echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                  fi
                 fi
               elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
                 echo "create-new-comment=true" >> $GITHUB_OUTPUT
@@ -336,6 +342,14 @@ jobs:
             echo "❌ Failed to approve PR #$PR_NUMBER"
             echo "Response: $REVIEW_RESPONSE"
 
+            # Post failure comment with explanation
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"❌ **Bypass Approval Failed**\\n\\nFailed to approve PR #$PR_NUMBER. This might be a temporary issue with the GitHub API.\\n\\nPlease try again or contact the infra team if the problem persists.\"}" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
             # Add failure reaction
             curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -370,7 +384,7 @@ jobs:
 
   bypass-unauthorized:
     needs: [parse-comment, find-pr]
-    if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'false'
+    if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'false' && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Post unauthorized message
