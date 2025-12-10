@@ -7,7 +7,7 @@
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
 
-namespace ttnn::operations::matmul::config {
+namespace ttnn::operations::matmul {
 namespace bmm_op_utils {
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const uint32_t per_core_M,
@@ -32,4 +32,4 @@ MatmulProgramConfig get_program_config(
     const uint32_t bias_single_tile_size,
     const matmul::operation_attributes_t& attributes);
 
-}  // namespace ttnn::operations::matmul::config
+}  // namespace ttnn::operations::matmul

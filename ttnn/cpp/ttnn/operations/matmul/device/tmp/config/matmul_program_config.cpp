@@ -7,7 +7,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::matmul::config {
+namespace ttnn::operations::matmul {
 
 namespace {
 
@@ -1116,4 +1116,4 @@ MatmulProgramConfig create_simple_matmul_program_config(
     return MatmulMultiCoreProgramConfig{};
 }
 
-}  // namespace ttnn::operations::matmul::config
+}  // namespace ttnn::operations::matmul

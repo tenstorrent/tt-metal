@@ -117,7 +117,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::config::MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb);
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(
@@ -128,7 +128,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::config::MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
@@ -151,7 +151,7 @@ Tensor llama_all_gather_matmul_async(
     const std::optional<MemoryConfig>& mm_memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
@@ -174,7 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const matmul::config::MatmulProgramConfig& program_config,
+    const matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,

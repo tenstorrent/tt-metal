@@ -96,17 +96,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
         [&](const auto& config) {
             using ProgramConfigType = std::decay_t<decltype(config)>;
             if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-                    program,
-                    all_gather_output_tensor,
-                    weight_tensor,
-                    bias,
-                    matmul_output_tensor,
-                    bcast_batch,
-                    compute_kernel_config,
-                    config,
-                    untilize_out,
-                    matmul_fused_op_signaler);
+                matmul_program_with_callbacks =
+                    operations::matmul::program::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+                        program,
+                        all_gather_output_tensor,
+                        weight_tensor,
+                        bias,
+                        matmul_output_tensor,
+                        bcast_batch,
+                        compute_kernel_config,
+                        config,
+                        untilize_out,
+                        matmul_fused_op_signaler);
                 matmul_override_runtime_arguments_callback =
                     matmul_program_with_callbacks->override_runtime_arguments_callback;
             } else if (std::is_same_v<

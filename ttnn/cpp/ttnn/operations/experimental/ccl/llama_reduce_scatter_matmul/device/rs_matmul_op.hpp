@@ -99,7 +99,7 @@ struct Matmul_RS {
         bool transpose_a = false,
         bool transpose_b = false,
         std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,

@@ -178,18 +178,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-// TODO: Uplift this to support fused activation and bias
-// TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
-// for in1 iff B=1 for in0 (ie. single core)
-using MatmulMultiCoreReuseProgramConfig = config::MatmulMultiCoreReuseProgramConfig;
-using MatmulMultiCoreReuseMultiCastProgramConfig = config::MatmulMultiCoreReuseMultiCastProgramConfig;
-using MatmulMultiCoreReuseMultiCast1DProgramConfig = config::MatmulMultiCoreReuseMultiCast1DProgramConfig;
-using MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig =
-    config::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig;
-using MatmulMultiCoreProgramConfig = config::MatmulMultiCoreProgramConfig;
-
-using MatmulProgramConfig = config::MatmulProgramConfig;
-
 struct Matmul {
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const std::optional<bool> bcast_batch = std::nullopt;

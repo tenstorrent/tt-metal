@@ -109,7 +109,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     std::optional<const Tensor> bias,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::config::MatmulProgramConfig& program_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out);
 
 namespace operations {
@@ -133,7 +133,7 @@ std::vector<Tensor> all_gather_matmul_async(
     bool transpose_a = false,
     bool transpose_b = false,
     std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,

@@ -37,7 +37,7 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                const std::optional<MemoryConfig>& ag_memory_config,
                const std::optional<MemoryConfig>& mm_memory_config,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config,
+               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const DataType> dtype,
                const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {

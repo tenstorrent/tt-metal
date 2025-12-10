@@ -72,11 +72,10 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const bool transpose_a,                                      // mm2 set false
                const bool transpose_b,                                      // mm3 set false
                const std::optional<const DataType>& dtype,                  // mm5 set false
-               const std::optional<const operations::matmul::config::MatmulProgramConfig>&
-                   program_config,                                          // mm6 std::nullopt
-               const std::optional<const std::string>& activation,          // mm7 set false
-               const std::optional<const tt::tt_metal::Tile>& output_tile,  // mm10 std::nullopt
-               std::optional<Tensor>& optional_output_tensor,               // mm11 std::nullopt
+               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // mm6 std::nullopt
+               const std::optional<const std::string>& activation,                                  // mm7 set false
+               const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
+               std::optional<Tensor>& optional_output_tensor,                                       // mm11 std::nullopt
                bool use_noc1_only
 
                ) -> std::vector<ttnn::Tensor> {

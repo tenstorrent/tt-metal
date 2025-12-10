@@ -101,18 +101,18 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
     const uint32_t ring_devices,
     const uint32_t num_links,
     const tt::tt_metal::SubDeviceId& subdevice_id,
-    const std::optional<ttnn::MemoryConfig>& memory_config_rs,                                   // default std::nullopt
-    const std::optional<ttnn::MemoryConfig>& memory_config_mm,                                   // default std::nullopt
-    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,            // default std::nullopt
-    const std::optional<const GlobalCircularBuffer>& global_cb,                                  // default std::nullopt
-    const std::optional<const ttnn::CoreGrid> core_grid,                                         // default std::nullopt
-    const bool transpose_a,                                                                      // degault false
-    const bool transpose_b,                                                                      // default false
-    const std::optional<const DataType> dtype,                                                   // default std::nullopt
-    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config,  // default std::nullopt
-    const std::optional<const std::string>& activation,                                          // default std::nullopt
-    const std::optional<const tt::tt_metal::Tile>& output_tile,                                  // default std::nullopt
-    const std::optional<Tensor>& optional_output_tensor,                                         // default std::nullopt
+    const std::optional<ttnn::MemoryConfig>& memory_config_rs,                           // default std::nullopt
+    const std::optional<ttnn::MemoryConfig>& memory_config_mm,                           // default std::nullopt
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,    // default std::nullopt
+    const std::optional<const GlobalCircularBuffer>& global_cb,                          // default std::nullopt
+    const std::optional<const ttnn::CoreGrid> core_grid,                                 // default std::nullopt
+    const bool transpose_a,                                                              // degault false
+    const bool transpose_b,                                                              // default false
+    const std::optional<const DataType> dtype,                                           // default std::nullopt
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // default std::nullopt
+    const std::optional<const std::string>& activation,                                  // default std::nullopt
+    const std::optional<const tt::tt_metal::Tile>& output_tile,                          // default std::nullopt
+    const std::optional<Tensor>& optional_output_tensor,                                 // default std::nullopt
     tt::tt_fabric::Topology topology,
     bool use_noc1_only,
     const std::optional<const ttnn::Tensor>& second_weight_tensor) {

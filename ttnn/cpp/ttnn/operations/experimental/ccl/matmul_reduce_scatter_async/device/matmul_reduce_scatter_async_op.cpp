@@ -53,7 +53,7 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
                 using ProgramConfigType = std::decay_t<decltype(config)>;
                 if (not(std::is_same_v<
                         ProgramConfigType,
-                        operations::matmul::config::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
+                        operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
                     TT_THROW(
                         "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast.");
                 }
@@ -208,7 +208,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const DataType> dtype,
-    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
