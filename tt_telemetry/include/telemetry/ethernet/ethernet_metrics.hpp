@@ -287,7 +287,9 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
+        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -301,6 +303,8 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
     uint64_t prev_cycles_ = 0;
@@ -314,7 +318,9 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
+        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -328,6 +334,8 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
     uint64_t prev_cycles_ = 0;
@@ -341,7 +349,9 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
+        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -355,6 +365,8 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
     uint64_t prev_cycles_ = 0;
@@ -368,7 +380,9 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
+        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -382,6 +396,8 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
     uint64_t prev_cycles_ = 0;
