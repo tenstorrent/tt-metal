@@ -6,6 +6,7 @@
 
 #include <optional>
 #include "ttnn/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
