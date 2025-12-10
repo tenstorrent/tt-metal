@@ -91,8 +91,7 @@ struct AllReduceAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-namespace ccl {
-namespace all_reduce_async_detail {
+namespace ccl::all_reduce_async_detail {
 AllReduceAsync create_all_reduce_async_struct(
     const Tensor& input_tensor,
     uint32_t num_links,
@@ -105,8 +104,7 @@ AllReduceAsync create_all_reduce_async_struct(
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama);
 
-}  // namespace all_reduce_async_detail
-}  // namespace ccl
+}  // namespace ccl::all_reduce_async_detail
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores);
@@ -128,9 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
@@ -160,8 +156,6 @@ std::vector<Tensor> all_reduce_async(
     bool use_noc1_only = false,
     bool use_optimal_ccl_for_llama = false);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

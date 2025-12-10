@@ -34,9 +34,7 @@ inline void concat_db_print(bool condition, const std::string& msg) {
     }
 }
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
@@ -332,6 +330,4 @@ ttnn::Tensor ConcatOperation::invoke(
     return res;
 }
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

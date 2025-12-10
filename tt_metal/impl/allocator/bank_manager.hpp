@@ -22,9 +22,7 @@
 #include "hal_types.hpp"
 #include <tt-metalium/allocator_state.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class BufferType;
 namespace allocator {
 class Algorithm;
@@ -203,6 +201,4 @@ private:
         AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit);
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

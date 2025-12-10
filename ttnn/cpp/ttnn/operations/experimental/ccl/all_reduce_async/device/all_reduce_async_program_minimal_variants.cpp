@@ -98,7 +98,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
     const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
+    // Get only cores that have actual data
+    const auto& cores_with_data = output_tensor.buffer()->buffer_distribution_spec()->cores_with_data();
+    const auto output_tensor_cores = CoreRangeSet(cores_with_data);
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();

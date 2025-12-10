@@ -241,9 +241,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_optimal_ccl_for_llama);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -315,8 +313,6 @@ Tensor all_gather_async(
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

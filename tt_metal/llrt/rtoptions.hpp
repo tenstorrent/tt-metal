@@ -27,9 +27,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
 
@@ -677,6 +675,4 @@ private:
 // Function declarations for operation timeout and synchronization
 std::chrono::duration<float> get_timeout_duration_for_operations();
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

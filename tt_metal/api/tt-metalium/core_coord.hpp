@@ -19,16 +19,12 @@
 
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace stl {
-namespace json {
+namespace tt::stl::json {
 template <typename T>
 struct from_json_t;
 template <typename T>
 struct to_json_t;
-}  // namespace json
-}  // namespace stl
-}  // namespace tt
+}  // namespace tt::stl::json
 
 namespace tt::tt_metal {
 

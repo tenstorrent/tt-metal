@@ -14,8 +14,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size);
 
@@ -54,5 +53,4 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
     const CoreCoord& core_grid, uint32_t units_to_divide, uint32_t multiple, bool row_wise = false);
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

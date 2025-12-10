@@ -24,11 +24,7 @@
 
 using json = nlohmann::json;
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace op_profiler {
+namespace tt::tt_metal::op_profiler {
 
 enum class OpType { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };
 
@@ -584,6 +580,4 @@ inline std::string op_meta_data_serialized_json(
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)
 
 #endif
-}  // namespace op_profiler
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::op_profiler
