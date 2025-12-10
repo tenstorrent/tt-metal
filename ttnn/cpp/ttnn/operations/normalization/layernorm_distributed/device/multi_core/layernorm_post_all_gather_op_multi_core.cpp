@@ -327,7 +327,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         gamma_is_row_major = 1;
     } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        gamma_stick_size = gamma.value().element_size() * 1024;  // size of tile in bytes bf16
+        gamma_stick_size = gamma.value().element_size() * (TILE_WIDTH * TILE_HEIGHT);  // size of tile in bytes bf16
     }
     uint32_t beta_stick_size = 0;
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
@@ -336,7 +336,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
     } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
+        beta_stick_size = beta.value().element_size() * (TILE_WIDTH * TILE_HEIGHT);  // size of tile in bytes bf16
     }
     reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
     reader_compile_time_args.push_back((std::uint32_t)beta_stick_size);
