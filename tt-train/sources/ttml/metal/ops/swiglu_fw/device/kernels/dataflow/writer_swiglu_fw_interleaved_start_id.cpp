@@ -50,8 +50,12 @@ void kernel_main() {
             const uint32_t start_tile_idx = (r * Wt) + c_block_start;
             // Wait for and write Y[r, c_block] - this becomes available after compute kernel finishes processing all
             // k_blocks for this (r, c_block) combination
+            // DPRINT << "Writing Y tiles for row " << r << ", c_block starting at " << c_block_start << "\n";
             write_tiles_by_row(
                 cb_y_idx, y_address_generator, start_tile_idx, current_block_size, tile_bytes, block_size);
+            // DPRINT << "Finished writing Y tiles for row " << r << ", c_block starting at " << c_block_start << "\n";
         }
     }
+
+    // DPRINT << "Finished all rows\n";
 }
