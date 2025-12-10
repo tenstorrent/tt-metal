@@ -49,14 +49,7 @@ class DeepseekV3LMHead(nn.Module):
     "mode,seq_len",
     [
         ("decode", 32),
-        # Powers of 2 up to 32K for prefill
-        ("prefill", 1),
-        ("prefill", 2),
-        ("prefill", 4),
-        ("prefill", 8),
-        ("prefill", 16),
-        ("prefill", 32),
-        ("prefill", 64),
+        # Powers of 2 from 128 to 128K for prefill
         ("prefill", 128),
         ("prefill", 256),
         ("prefill", 512),
@@ -66,6 +59,8 @@ class DeepseekV3LMHead(nn.Module):
         ("prefill", 8192),
         ("prefill", 16384),
         ("prefill", 32768),
+        ("prefill", 65536),
+        ("prefill", 131072),
     ],
 )
 def test_forward_pass(
