@@ -27,6 +27,7 @@
 #include "tt_fabric_telemetry.hpp"
 #include "tt_fabric_test_progress_monitor.hpp"
 #include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_bandwidth_profiler.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
 #include "tt_fabric_test_code_profiler.hpp"
 #include "tt_fabric_telemetry_manager.hpp"
@@ -84,6 +85,9 @@ using GoldenLatencyEntry = tt::tt_fabric::fabric_tests::GoldenLatencyEntry;
 using ComparisonResult = tt::tt_fabric::fabric_tests::ComparisonResult;
 using LatencyComparisonResult = tt::tt_fabric::fabric_tests::LatencyComparisonResult;
 using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyzer;
+using BandwidthStatistics = tt::tt_fabric::fabric_tests::BandwidthStatistics;
+using BandwidthProfiler = ::BandwidthProfiler;
+using BandwidthResultsManager = tt::tt_fabric::fabric_tests::BandwidthResultsManager;
 
 // Helper functions for parsing traffic pattern parameters
 using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
@@ -91,26 +95,6 @@ using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
 using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
-
-// Bandwidth Summary Statistics
-// If you want to add new statistics, populate this enum with their names
-enum class BandwidthStatistics {
-    BandwidthMean,
-    BandwidthMin,
-    BandwidthMax,
-    BandwidthStdDev,
-    PacketsPerSecondMean,
-    CyclesMean
-};
-// The header of each statistic in the Bandwidth Summary CSV
-const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHeader = {
-    {BandwidthStatistics::BandwidthMean, "avg_bandwidth_gigabytes_per_s"},
-    {BandwidthStatistics::BandwidthMin, "bw_min_gigabytes_per_s"},
-    {BandwidthStatistics::BandwidthMax, "bw_max_gigabytes_per_s"},
-    {BandwidthStatistics::BandwidthStdDev, "bw_std_dev_gigabytes_per_s"},
-    {BandwidthStatistics::PacketsPerSecondMean, "avg_packets_per_s"},
-    {BandwidthStatistics::CyclesMean, "avg_cycles"},
-};
 
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
@@ -138,6 +122,11 @@ public:
         // Note: Memory maps will be updated in prepare_for_test() if using dynamic policies
         this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
+
+        // Initialize bandwidth managers (telemetry/code profiler are lazy)
+        bandwidth_profiler_ =
+            std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);  // fixture implements interfaces
+        bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
     }
 
     void prepare_for_test(const TestConfig& config) {
@@ -467,20 +456,27 @@ public:
     }
 
     void profile_results(const TestConfig& config) {
-        // calculate per device boundary/direction traffic passing through
-        calculate_outgoing_traffics_through_device_boundaries();
+        TT_FATAL(bandwidth_profiler_ && bandwidth_results_manager_, "Bandwidth managers not initialized");
 
-        // Read performance results from sender cores
-        read_performance_results();
+        bandwidth_profiler_->profile_results(config, test_devices_, sender_memory_map_);
 
-        // Convert core cycles to direction-based cycles
-        convert_core_cycles_to_direction_cycles();
+        // Inject telemetry before retrieving result
+        if (telemetry_enabled_) {
+            auto& telemetry = get_telemetry_manager();
+            bandwidth_profiler_->set_telemetry_bandwidth(
+                telemetry.get_measured_bw_min(), telemetry.get_measured_bw_avg(), telemetry.get_measured_bw_max());
+        }
 
-        // Calculate and print bandwidth (Bytes/cycle)
-        calculate_bandwidth(config);
+        const auto& latest_results = bandwidth_profiler_->get_latest_results();
+        for (const auto& result : latest_results) {
+            bandwidth_results_manager_->add_result(config, result);
+        }
+        bandwidth_results_manager_->add_summary(config, bandwidth_profiler_->get_latest_summary());
 
-        // Generate CSV file with bandwidth results
-        generate_bandwidth_csv(config);
+        // Append last result (matches previous behavior)
+        if (!latest_results.empty()) {
+            bandwidth_results_manager_->append_to_csv(config, latest_results.back());
+        }
     }
 
     void collect_latency_results();
@@ -501,67 +497,21 @@ public:
     }
 
     void generate_bandwidth_summary() {
-        // Load golden CSV file
-        load_golden_csv();
-
-        // Calculate bandwidth statistics for multi-iteration tests
-        calculate_bandwidth_summary_statistics();
-
-        // Generate bandwidth summary CSV file
-        generate_bandwidth_summary_csv();
-
-        // Generate bandwidth summary upload CSV file with metadata
-        generate_bandwidth_summary_upload_csv();
-
-        // Compare summary results with golden CSV
-        compare_summary_results_with_golden();
-
-        // Generate statistics based on golden comparison
-        PostComparisonAnalyzer post_comparison_analyzer(comparison_results_);
-        post_comparison_analyzer.generate_comparison_statistics();
-
-        // Generate comparison statistics CSV file
-        set_comparison_statistics_csv_file_path();
-        post_comparison_analyzer.generate_comparison_statistics_csv(comparison_statistics_csv_file_path_);
-
-        validate_against_golden();
+        TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
+        bandwidth_results_manager_->load_golden_csv();
+        bandwidth_results_manager_->generate_summary();
+        bandwidth_results_manager_->validate_against_golden();
+        // Track failures from bandwidth manager
+        if (bandwidth_results_manager_->has_failures()) {
+            const auto failed = bandwidth_results_manager_->get_failed_tests();
+            all_failed_bandwidth_tests_.insert(all_failed_bandwidth_tests_.end(), failed.begin(), failed.end());
+            has_test_failures_ = true;
+        }
     }
 
     void initialize_bandwidth_results_csv_file() {
-        // Create output directory
-        std::filesystem::path tt_metal_home =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path bandwidth_results_path = tt_metal_home / std::string(OUTPUT_DIR);
-
-        if (!std::filesystem::exists(bandwidth_results_path)) {
-            std::filesystem::create_directories(bandwidth_results_path);
-        }
-
-        // Generate detailed CSV filename
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        std::ostringstream oss;
-        oss << "bandwidth_results_" << arch_name << ".csv";
-        csv_file_path_ = bandwidth_results_path / oss.str();
-
-        // Create detailed CSV file with header
-        std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
-        if (!csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create CSV file: {}", csv_file_path_.string());
-            return;
-        }
-
-        // Write detailed header
-        csv_stream
-            << "test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,"
-               "packet_size,cycles,"
-               "bandwidth_GB_s,packets_per_second";
-        if (this->telemetry_enabled_) {
-            csv_stream << ",telemetry_bw_GB_s_min,telemetry_bw_GB_s_avg,telemetry_bw_GB_s_max";
-        }
-        csv_stream << "\n";
-        csv_stream.close();
-
-        log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
+        TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
+        bandwidth_results_manager_->initialize_bandwidth_csv_file(this->telemetry_enabled_);
     }
 
     void initialize_latency_results_csv_file();
@@ -600,45 +550,10 @@ public:
 
     std::vector<std::string> get_all_failed_tests() const;
 
-    // Determine tolerance percentage by looking up from golden CSV entries
-    double get_tolerance_percent(
-        const std::string& test_name,
-        const std::string& ftype,
-        const std::string& ntype,
-        const std::string& topology,
-        const std::string& num_devices,
-        uint32_t num_links,
-        uint32_t packet_size) const {
-        // Search for matching entry in golden CSV
-        auto golden_it =
-            std::find_if(golden_csv_entries_.begin(), golden_csv_entries_.end(), [&](const GoldenCsvEntry& golden) {
-                return golden.test_name == test_name && golden.ftype == ftype && golden.ntype == ntype &&
-                       golden.topology == topology && golden.num_devices == num_devices &&
-                       golden.num_links == num_links && golden.packet_size == packet_size;
-            });
-
-        if (golden_it != golden_csv_entries_.end()) {
-            return golden_it->tolerance_percent;
-        }
-
-        log_warning(
-            tt::LogTest,
-            "No golden entry found for tolerance lookup: {}, {}, {}, {}, {}, {}, {} - using default 5.0%",
-            test_name,
-            ftype,
-            ntype,
-            topology,
-            num_devices,
-            num_links,
-            packet_size);
-        return 0.0;
-    }
-
     void setup_ci_artifacts() {
         std::filesystem::path tt_metal_home =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
         std::filesystem::path ci_artifacts_path = tt_metal_home / std::string(CI_ARTIFACTS_DIR);
-        // Create CI artifacts directory if it doesn't exist
         if (!std::filesystem::exists(ci_artifacts_path)) {
             try {
                 std::filesystem::create_directories(ci_artifacts_path);
@@ -651,10 +566,16 @@ public:
             }
         }
 
-        // Copy CSV files to CI artifacts directory
-        for (const std::filesystem::path& csv_filepath :
-             {csv_file_path_, csv_summary_file_path_, csv_summary_upload_file_path_, diff_csv_file_path_, comparison_statistics_csv_file_path_,
-              latency_csv_file_path_, latency_diff_csv_file_path_}) {
+        // Delegate bandwidth artifacts to results manager
+        if (bandwidth_results_manager_) {
+            bandwidth_results_manager_->setup_ci_artifacts();
+        }
+
+        // Latency artifacts (unchanged)
+        for (const std::filesystem::path& csv_filepath : {latency_csv_file_path_, latency_diff_csv_file_path_}) {
+            if (csv_filepath.empty()) {
+                continue;
+            }
             try {
                 std::filesystem::copy_file(
                     csv_filepath,
@@ -694,10 +615,6 @@ private:
         performance_test_mode_ = PerformanceTestMode::NONE;
         global_sync_ = false;
         global_sync_val_ = 0;
-        outgoing_traffic_.clear();
-        device_direction_cycles_.clear();
-        device_core_cycles_.clear();
-        bandwidth_results_.clear();
         // Note: latency_results_ is NOT cleared here to preserve for golden comparison at end
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
@@ -955,738 +872,9 @@ private:
         }
     }
 
-    std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>>
-    calculate_outgoing_traffics_through_device_boundaries() {
-        outgoing_traffic_.clear();  // Clear previous data
-
-        log_debug(tt::LogTest, "Calculating outgoing traffic through device boundaries");
-
-        // Process each test device and its sender configurations
-        for (const auto& [device_coord, test_device] : test_devices_) {
-            const auto& src_node_id = test_device.get_node_id();
-
-            // Process regular senders only (ignore sync senders)
-            for (const auto& [core_coord, sender] : test_device.get_senders()) {
-                for (const auto& [config, _] : sender.get_configs()) {
-                    uint32_t link_id = config.link_id;
-                    if (link_id == 0) {
-                        trace_traffic_path(src_node_id, config);
-                    }
-                }
-            }
-        }
-        return outgoing_traffic_;
-    }
-
-    void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        // Use proper topology detection from fixture
-        if (fixture_->get_topology() == Topology::Ring) {
-            // Ring topology - use ring traversal logic with boundary turning
-            trace_ring_traffic_path(src_node_id, config);
-        } else {
-            // Regular hop-based tracing for linear/mesh topologies
-            trace_line_or_mesh_traffic_path(src_node_id, config);
-        }
-    }
-
-    void trace_ring_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        const auto& hops = config.hops;
-
-        // Find the initial direction and total hops for ring traversal
-        for (const auto& [initial_direction, hop_count] : *hops) {
-            if (hop_count == 0) {
-                continue;
-            }
-
-            // Use the appropriate ring traversal helper based on mesh type
-            std::vector<std::pair<FabricNodeId, RoutingDirection>> ring_path;
-
-            // Check if this is a wrap-around mesh
-            bool is_wrap_around = fixture_->wrap_around_mesh(src_node_id);
-
-            if (is_wrap_around) {
-                // Use the existing wrap-around mesh logic
-                ring_path = fixture_->trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
-            } else {
-                // Use the new non wrap-around mesh logic
-                ring_path = fixture_->trace_ring_path(src_node_id, initial_direction, hop_count);
-            }
-
-            // Count traffic at each device boundary
-            // ring_path contains (destination_node, direction_to_reach_it)
-            // We need to record traffic from the SOURCE node that sent in that direction
-            FabricNodeId source_node = src_node_id;
-            for (const auto& [destination_node, direction] : ring_path) {
-                outgoing_traffic_[source_node][direction]++;
-                source_node = destination_node;  // Move to next source for the next hop
-            }
-        }
-    }
-
-    void trace_line_or_mesh_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        auto remaining_hops = config.hops.value();  // Make a copy to modify
-        FabricNodeId current_node = src_node_id;
-
-        // For mesh topology, use dimension-order routing
-        // Continue until all hops are consumed
-        while (true) {
-            // Check if all remaining hops are 0
-            bool all_hops_zero = true;
-            for (const auto& [direction, hop_count] : remaining_hops) {
-                if (hop_count > 0) {
-                    all_hops_zero = false;
-                    break;
-                }
-            }
-            if (all_hops_zero) {
-                break;  // No more hops to process
-            }
-
-            // Find the next direction to route in
-            RoutingDirection next_direction = fixture_->get_forwarding_direction(remaining_hops);
-
-            // Check if we have any remaining hops in this direction
-            if (remaining_hops.count(next_direction) == 0 || remaining_hops[next_direction] == 0) {
-                break;  // No more hops to process
-            }
-
-            uint32_t hops_in_direction = remaining_hops[next_direction];
-
-            // Trace all hops in this direction sequentially
-            for (uint32_t hop = 0; hop < hops_in_direction; hop++) {
-                // Record traffic from current node in this direction
-                outgoing_traffic_[current_node][next_direction]++;
-
-                // Move to next node in this direction
-                current_node = fixture_->get_neighbor_node_id(current_node, next_direction);
-            }
-
-            // Mark this direction as completed
-            remaining_hops[next_direction] = 0;
-        }
-    }
-
-    void read_performance_results() {
-        // Clear previous data
-        device_core_cycles_.clear();
-
-        log_debug(tt::LogTest, "Reading performance results from sender cores");
-
-        // Fixed group size for concurrent reads
-        constexpr uint32_t MAX_CONCURRENT_DEVICES = 16;
-
-        // Prepare read operation tracking
-        struct DeviceReadInfo {
-            MeshCoordinate device_coord;
-            FabricNodeId device_node_id;
-            std::vector<CoreCoord> sender_cores;
-            TestFixture::ReadBufferOperation read_op;
-        };
-
-        // Collect all devices that need reading
-        std::vector<DeviceReadInfo> all_devices;
-        for (const auto& [device_coord, test_device] : test_devices_) {
-            const auto& device_node_id = test_device.get_node_id();
-
-            // Get sender cores (excluding sync cores)
-            std::vector<CoreCoord> sender_cores;
-            sender_cores.reserve(test_device.get_senders().size());
-            for (const auto& [core, _] : test_device.get_senders()) {
-                sender_cores.push_back(core);
-            }
-
-            if (!sender_cores.empty()) {
-                all_devices.push_back({device_coord, device_node_id, sender_cores, {}});
-            }
-        }
-
-        // Process devices in groups
-        for (size_t group_start = 0; group_start < all_devices.size(); group_start += MAX_CONCURRENT_DEVICES) {
-            size_t group_end = std::min(group_start + MAX_CONCURRENT_DEVICES, all_devices.size());
-
-            log_debug(
-                tt::LogTest, "Processing device group {}-{} of {}", group_start, group_end - 1, all_devices.size() - 1);
-
-            // First loop: Initiate non-blocking reads for group
-            for (size_t i = group_start; i < group_end; ++i) {
-                auto& device = all_devices[i];
-                device.read_op = fixture_->initiate_read_buffer_from_cores(
-                    device.device_coord,
-                    device.sender_cores,
-                    sender_memory_map_.get_result_buffer_address(),
-                    sender_memory_map_.get_result_buffer_size());
-            }
-
-            // Barrier to wait for all reads in this group to complete
-            fixture_->barrier_reads();
-
-            // Second loop: Process completed results
-            for (size_t i = group_start; i < group_end; ++i) {
-                auto& device = all_devices[i];
-                auto data = fixture_->complete_read_buffer_from_cores(device.read_op);
-
-                // Extract cycles from each core and store in map
-                for (const auto& [core, core_data] : data) {
-                    // Cycles are stored as 64-bit value split across two 32-bit words
-                    uint32_t cycles_low = core_data[TT_FABRIC_CYCLES_INDEX];
-                    uint32_t cycles_high = core_data[TT_FABRIC_CYCLES_INDEX + 1];
-                    uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
-
-                    device_core_cycles_[device.device_node_id][core] = total_cycles;
-                }
-            }
-        }
-    }
-
-    void convert_core_cycles_to_direction_cycles() {
-        // Clear previous data
-        device_direction_cycles_.clear();
-
-        log_debug(tt::LogTest, "Converting core cycles to direction cycles");
-
-        for (const auto& [device_coord, test_device] : test_devices_) {
-            const auto& device_node_id = test_device.get_node_id();
-
-            // Process each sender core
-            for (const auto& [core, sender] : test_device.get_senders()) {
-                // Get cycles for this core (if available)
-                if (device_core_cycles_.count(device_node_id) == 0 ||
-                    device_core_cycles_[device_node_id].count(core) == 0) {
-                    continue;
-                }
-
-                uint64_t core_cycles = device_core_cycles_[device_node_id][core];
-
-                // Get unique (direction, link_id) pairs this core sends traffic to
-                std::set<std::pair<RoutingDirection, uint32_t>> core_direction_links;
-                for (const auto& [config, _] : sender.get_configs()) {
-                    RoutingDirection direction = fixture_->get_forwarding_direction(*config.hops);
-                    uint32_t link_id = config.link_id;
-                    core_direction_links.insert({direction, link_id});
-                }
-
-                // Add cycles to each (direction, link_id) pair this core sends to
-                // Only one core per device should send in each (direction, link) combination
-                for (const auto& [direction, link_id] : core_direction_links) {
-                    if (device_direction_cycles_[device_node_id][direction].count(link_id) > 0) {
-                        TT_THROW(
-                            "Multiple cores on device {} are sending traffic in direction {} on link {}. "
-                            "Only one core per device should send in each (direction, link) combination.",
-                            device_node_id.chip_id,
-                            direction,
-                            link_id);
-                    }
-                    device_direction_cycles_[device_node_id][direction][link_id] = core_cycles;
-                }
-            }
-        }
-    }
-
-    unsigned int get_device_frequency_mhz(const FabricNodeId& device_id) {
-        if (!device_freq_mhz_map_.contains(device_id)) {
-            auto& metal_context = tt::tt_metal::MetalContext::instance();
-            auto physical_chip_id =
-                metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
-            device_freq_mhz_map_[device_id] = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
-        }
-        auto freq_mhz = device_freq_mhz_map_.at(device_id);
-        TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
-        return freq_mhz;
-    }
-
-    void calculate_bandwidth(const TestConfig& config) {
-        log_debug(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
-
-        // Clear previous bandwidth results
-        bandwidth_results_.clear();
-
-        uint64_t max_cycles = 0;
-        uint32_t max_traffic_count = 0;
-        // Calculate total bytes and packets sent in this direction from this device
-        uint64_t total_bytes = 0;
-        uint32_t total_packets = 0;
-        uint32_t total_traffic_count = 0;
-        uint32_t packet_size = 0;
-        uint32_t num_packets = 0;
-        uint32_t device_freq = std::numeric_limits<uint32_t>::max();
-        std::set<uint32_t> num_devices_set;
-
-        // Pre-compute topology information (moved outside inner loop)
-        const auto mesh_shape = fixture_->get_mesh_shape();
-        const auto topology = fixture_->get_topology();
-        // Pre-compute sender config lookup cache to avoid O(n³) search in inner loop
-        std::unordered_map<std::string, std::tuple<uint32_t, uint32_t, uint32_t>> config_cache;
-        for (const auto& [device_coord, test_device] : test_devices_) {
-            const auto& device_id = test_device.get_node_id();
-            for (const auto& [core, sender] : test_device.get_senders()) {
-                for (const auto& [config, _] : sender.get_configs()) {
-                    RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
-                    uint32_t config_link_id = config.link_id;
-
-                    // Create cache key: device_id + direction + link_id
-                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
-                                            std::to_string(static_cast<int>(config_direction)) + "_" +
-                                            std::to_string(config_link_id);
-
-                    config_cache[cache_key] = std::make_tuple(
-                        config.parameters.payload_size_bytes,
-                        config.parameters.num_packets,
-                        config.parameters.payload_size_bytes  // packet_size
-                    );
-                }
-            }
-        }
-
-        for (const auto& [device_id, direction_map] : device_direction_cycles_) {
-            for (const auto& [direction, link_map] : direction_map) {
-                // Calculate num_devices once per direction (moved outside link loop)
-                uint32_t num_devices = 0;
-                if (topology == Topology::Linear) {
-                    if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
-                        num_devices = mesh_shape[0];
-                    } else {
-                        num_devices = mesh_shape[1];
-                    }
-                } else if (topology == Topology::Ring) {
-                    num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
-                } else if (topology == Topology::Mesh) {
-                    num_devices = mesh_shape[0] * mesh_shape[1];
-                }
-
-                for (const auto& [link_id, cycles] : link_map) {
-                    if (cycles == 0) {
-                        continue;  // Skip to avoid division by zero
-                    }
-
-                    // Get traffic count for this device and direction
-                    if (outgoing_traffic_.count(device_id) > 0 && outgoing_traffic_[device_id].count(direction) > 0) {
-                        total_traffic_count = outgoing_traffic_[device_id][direction];
-                    }
-
-                    // calculate the max for summary info
-                    max_cycles = std::max(max_cycles, cycles);
-                    max_traffic_count = std::max(max_traffic_count, total_traffic_count);
-
-                    // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
-                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
-                                            std::to_string(static_cast<int>(direction)) + "_" + std::to_string(link_id);
-
-                    TT_FATAL(
-                        config_cache.contains(cache_key),
-                        "Config not found in cache for device {} direction {} link {}",
-                        device_id.chip_id,
-                        static_cast<int>(direction),
-                        link_id);
-                    auto [payload_size_bytes, num_packets_val, packet_size_val] = config_cache.at(cache_key);
-                    num_packets = num_packets_val;
-                    packet_size = packet_size_val;
-                    total_bytes = static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
-                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
-
-                    // Calculate bandwidth in Bytes/cycle and convert to GB/s
-                    const auto device_frequency_mhz = get_device_frequency_mhz(device_id);
-                    uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
-                    // use min frequency (in real senario we will have the same freq)
-                    device_freq = std::min(device_freq, device_frequency_hz);
-                    const auto duration_seconds =
-                        static_cast<double>(cycles) / static_cast<double>(device_frequency_hz);
-
-                    double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
-                    double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
-                    double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
-
-                    // save all possible num devices
-                    num_devices_set.insert(num_devices);
-
-                    auto bw_result = BandwidthResult{
-                        .num_devices = num_devices,
-                        .device_id = device_id.chip_id,
-                        .direction = direction,
-                        .total_traffic_count = total_traffic_count,
-                        .num_packets = num_packets,
-                        .packet_size = packet_size,
-                        .cycles = cycles,
-                        .bandwidth_GB_s = bandwidth_GB_s,
-                        .packets_per_second = packets_per_second};
-
-                    if (telemetry_enabled_) {
-                        bw_result.telemetry_bw_GB_s_min = measured_bw_min_;
-                        bw_result.telemetry_bw_GB_s_avg = measured_bw_avg_;
-                        bw_result.telemetry_bw_GB_s_max = measured_bw_max_;
-                    }
-
-                    // Store result for CSV generation (using GB/s)
-                    bandwidth_results_.emplace_back(bw_result);
-                }
-            }
-        }
-
-        // Calculate and store a summary of this test
-        total_bytes = static_cast<uint64_t>(packet_size) * num_packets * max_traffic_count;
-        double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(max_cycles);
-        double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_freq) / 1e9;
-
-        // Calculate packets per second
-        double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
-        double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
-
-        // Case 1: This test is the first iteration of a new test, or is a single iteration test
-        // Generate a new entry for the test, grouping multi-iteration tests into the same entry
-        if (config.iteration_number == 0) {
-            // Use base name for test name, rather than name with _iter_0 suffix
-            const std::string& test_name = config.name;
-            // Find test parameters based on the test's first test pattern
-            const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-            std::string ftype_str = fetch_pattern_ftype(first_pattern);
-            std::string ntype_str = fetch_pattern_ntype(first_pattern);
-            uint32_t num_packets_first_pattern = fetch_pattern_num_packets(first_pattern);
-            uint32_t packet_size_first_pattern = fetch_pattern_packet_size(first_pattern);
-
-            // Create a new entry that represents all iterations of the same test
-            bandwidth_results_summary_.emplace_back(BandwidthResultSummary{
-                .test_name = test_name,
-                .num_iterations = 1,
-                .ftype = ftype_str,
-                .ntype = ntype_str,
-                .topology = std::string(enchantum::to_string(config.fabric_setup.topology)),
-                .num_links = config.fabric_setup.num_links,
-                .num_packets = num_packets_first_pattern,
-                .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
-                .packet_size = packet_size_first_pattern,
-                // Push in results for the first iteration
-                .cycles_vector = {static_cast<double>(max_cycles)},
-                .bandwidth_vector_GB_s = {bandwidth_GB_s},
-                .packets_per_second_vector = {packets_per_second},
-            });
-        }
-        // Case 2: This is not the first iteration of a test.
-        // Multi-iteration tests are executed sequentially, so we can just append to the last-created test entry
-        else {
-            BandwidthResultSummary& test_result = bandwidth_results_summary_.back();
-            test_result.cycles_vector.push_back(static_cast<double>(max_cycles));
-            test_result.bandwidth_vector_GB_s.push_back(bandwidth_GB_s);
-            test_result.packets_per_second_vector.push_back(packets_per_second);
-            test_result.num_iterations++;
-        }
-    }
-
-    void calculate_mean(const BandwidthStatistics& stat, const auto& lambda_measurement_vector) {
-        // Push statistics name into results summary csv header
-        stat_order_.push_back(stat);
-        for (auto& result : bandwidth_results_summary_) {
-            const std::vector<double>& measurements_vector = lambda_measurement_vector(result);
-            double sum = std::accumulate(measurements_vector.begin(), measurements_vector.end(), 0.0);
-            double mean = sum / result.num_iterations;
-            result.statistics_vector.push_back(mean);
-        }
-    }
-
-    void calculate_cycles_mean() {
-        calculate_mean(BandwidthStatistics::CyclesMean, [](const auto& result) { return result.cycles_vector; });
-    }
-
-    void calculate_packets_per_second_mean() {
-        calculate_mean(BandwidthStatistics::PacketsPerSecondMean, [](const auto& result) {
-            return result.packets_per_second_vector;
-        });
-    }
-
-    void calculate_bandwidth_mean() {
-        calculate_mean(
-            BandwidthStatistics::BandwidthMean, [](const auto& result) { return result.bandwidth_vector_GB_s; });
-    }
-
-    void calculate_bandwidth_min() {
-        // Push statistics name into results summary csv header
-        stat_order_.push_back(BandwidthStatistics::BandwidthMin);
-        for (auto& result : bandwidth_results_summary_) {
-            result.statistics_vector.push_back(
-                *std::min_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end()));
-        }
-    }
-
-    void calculate_bandwidth_max() {
-        // Push statistics name into results summary csv header
-        stat_order_.push_back(BandwidthStatistics::BandwidthMax);
-        for (auto& result : bandwidth_results_summary_) {
-            result.statistics_vector.push_back(
-                *std::max_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end()));
-        }
-    }
-
-    void calculate_bandwidth_std_dev() {
-        // Push statistics name into results summary csv header
-        stat_order_.push_back(BandwidthStatistics::BandwidthStdDev);
-        for (auto& result : bandwidth_results_summary_) {
-            double sum = std::accumulate(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end(), 0.0);
-            double mean = sum / result.num_iterations;
-            double variance = 0.0;
-            for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-                variance += std::pow(bandwidth_gb_s - mean, 2);
-            }
-            variance /= result.num_iterations;
-            double std_dev = std::sqrt(variance);
-            result.statistics_vector.push_back(std_dev);
-        }
-    }
-
-    void calculate_bandwidth_summary_statistics() {
-        // Add new statistics here
-        // The statistics will be displayed in the bandwidth summary CSV file in this order
-        // The name of each statistic collected is maintained in-order in the stat_order_ vector
-        // The statistics are calculated for each test in the same order and are stored in each test's
-        // BandwidthResultSummary.statistics_vector Each function here should calculate the statistics for every test
-        // within a single invocation (see functions for details) NOTE: If you add new statistics, you must re-generate
-        // the golden CSV file, otherwise benchmarking will fail.
-        calculate_cycles_mean();
-        calculate_packets_per_second_mean();
-        calculate_bandwidth_mean();
-        calculate_bandwidth_min();
-        calculate_bandwidth_max();
-        calculate_bandwidth_std_dev();
-    }
-
-    void generate_bandwidth_csv(const TestConfig& config) {
-        // Extract representative ftype and ntype from first sender's first pattern
-        const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-        std::string ftype_str = fetch_pattern_ftype(first_pattern);
-        std::string ntype_str = fetch_pattern_ntype(first_pattern);
-
-        // Open CSV file in append mode
-        std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
-        if (!csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to open CSV file for appending: {}", csv_file_path_.string());
-            return;
-        }
-
-        // Write only the last entry (just added)
-        if (!bandwidth_results_.empty()) {
-            const auto& result = bandwidth_results_.back();
-            csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
-                       << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
-                       << result.device_id << "," << config.fabric_setup.num_links << ","
-                       << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","
-                       << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
-                       << std::setprecision(6) << result.bandwidth_GB_s << "," << std::fixed << std::setprecision(3)
-                       << result.packets_per_second;
-
-            if (this->telemetry_enabled_) {
-                csv_stream << "," << std::fixed << std::setprecision(3) << result.telemetry_bw_GB_s_min.value() << ","
-                           << std::fixed << std::setprecision(3) << result.telemetry_bw_GB_s_avg.value() << ","
-                           << std::fixed << std::setprecision(3) << result.telemetry_bw_GB_s_max.value();
-            }
-            csv_stream << "\n";
-        }
-
-        csv_stream.close();
-        log_info(tt::LogTest, "Bandwidth results appended to CSV file: {}", csv_file_path_.string());
-    }
-
     void generate_latency_results_csv();
 
-    std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
-
     std::vector<GoldenLatencyEntry>::iterator fetch_corresponding_golden_latency_entry(const LatencyResult& test_result);
-
-    void write_bandwidth_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) {
-        // Create CSV file with header
-        std::ofstream csv_stream(csv_path, std::ios::out | std::ios::trunc);
-        if (!csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create CSV file: {}", csv_path.string());
-            return;
-        }
-
-        // Write header
-        if (include_upload_columns) {
-            csv_stream << "file_name,machine_type,test_ts,";
-        }
-        csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
-        for (BandwidthStatistics stat : stat_order_) {
-            const std::string& stat_name = BandwidthStatisticsHeader.at(stat);
-            csv_stream << "," << stat_name;
-        }
-        csv_stream << ",tolerance_percent\n";
-        log_info(tt::LogTest, "Initialized CSV file: {}", csv_path.string());
-
-        // Write data rows
-        for (const auto& result : bandwidth_results_summary_) {
-            // Write upload columns if present
-            if (include_upload_columns) {
-                csv_stream << result.file_name.value() << "," << result.machine_type.value() << ","
-                           << result.test_ts.value() << ",";
-            }
-
-            // Convert vector of num_devices to a string representation
-            std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
-
-            // Write standard columns
-            csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
-                       << ",\"" << num_devices_str << "\"," << result.num_links << "," << result.packet_size << ","
-                       << result.num_iterations;
-            for (double stat : result.statistics_vector) {
-                csv_stream << "," << std::fixed << std::setprecision(6) << stat;
-            }
-
-            // Find the corresponding golden entry for this test result
-            auto golden_it = fetch_corresponding_golden_entry(result);
-            if (golden_it == golden_csv_entries_.end()) {
-                csv_stream << "," << 1.0;
-            } else {
-                csv_stream << "," << golden_it->tolerance_percent;
-            }
-            csv_stream << "\n";
-        }
-        csv_stream.close();
-        log_info(tt::LogTest, "Bandwidth summary results written to CSV file: {}", csv_path.string());
-    }
-
-    void generate_bandwidth_summary_csv() {
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        std::ostringstream summary_oss;
-        summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
-
-        std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            std::string(OUTPUT_DIR);
-        csv_summary_file_path_ = output_path / summary_oss.str();
-
-        write_bandwidth_summary_csv_to_file(csv_summary_file_path_, false);
-    }
-
-    void populate_upload_metadata_fields() {
-        // Get arch name and cluster type
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-        std::string machine_type = std::string(enchantum::to_string(cluster_type));
-        std::transform(machine_type.begin(), machine_type.end(), machine_type.begin(), ::tolower);
-
-        // Generate file_name column value
-        std::string file_name = "bw_" + arch_name + "_" + machine_type;
-
-        // Capture current timestamp
-        auto now = std::chrono::system_clock::now();
-        auto time_t_now = std::chrono::system_clock::to_time_t(now);
-        std::tm timestamp_now{};
-        localtime_r(&time_t_now, &timestamp_now);
-        std::ostringstream timestamp_oss;
-        timestamp_oss << std::put_time(&timestamp_now, "%Y-%m-%d %H:%M:%S");
-        std::string test_ts = timestamp_oss.str();
-
-        // Populate optional fields in all result objects
-        for (auto& result : bandwidth_results_summary_) {
-            result.file_name = file_name;
-            result.machine_type = machine_type;
-            result.test_ts = test_ts;
-        }
-    }
-
-    void generate_bandwidth_summary_upload_csv() {
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        std::ostringstream upload_oss;
-        upload_oss << "bandwidth_summary_results_" << arch_name << "_upload.csv";
-
-        std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            std::string(OUTPUT_DIR);
-        csv_summary_upload_file_path_ = output_path / upload_oss.str();
-
-        // Populate upload metadata fields
-        populate_upload_metadata_fields();
-
-        // Write CSV with upload columns
-        write_bandwidth_summary_csv_to_file(csv_summary_upload_file_path_, true);
-    }
-
-    std::string get_golden_csv_filename() {
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-
-        // Convert cluster type enum to lowercase string
-        std::string cluster_name = std::string(enchantum::to_string(cluster_type));
-        std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
-
-        std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
-        return file_name;
-    }
-
-    bool load_golden_csv() {
-        golden_csv_entries_.clear();
-
-        std::string golden_filename = get_golden_csv_filename();
-        std::filesystem::path golden_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
-
-        if (!std::filesystem::exists(golden_path)) {
-            log_warning(tt::LogTest, "Golden CSV file not found: {}", golden_path.string());
-            return false;
-        }
-
-        std::ifstream golden_file(golden_path);
-        if (!golden_file.is_open()) {
-            log_error(tt::LogTest, "Failed to open golden CSV file: {}", golden_path.string());
-            return false;
-        }
-
-        std::string line;
-        bool is_header = true;
-        while (std::getline(golden_file, line)) {
-            if (is_header) {
-                is_header = false;
-                continue;  // Skip header
-            }
-
-            std::istringstream ss(line);
-            std::string token;
-            std::vector<std::string> tokens;
-
-            // Parse CSV line
-            while (std::getline(ss, token, ',')) {
-                // Handle quoted strings for num_devices
-                if (token.front() == '"' && token.back() != '"') {
-                    std::string quoted_token = token;
-                    while (std::getline(ss, token, ',') && token.back() != '"') {
-                        quoted_token += "," + token;
-                    }
-                    quoted_token += "," + token;
-                    // Remove quotes
-                    quoted_token = quoted_token.substr(1, quoted_token.length() - 2);
-                    tokens.push_back(quoted_token);
-                } else if (token.front() == '"' && token.back() == '"') {
-                    // Remove quotes from single quoted token
-                    tokens.push_back(token.substr(1, token.length() - 2));
-                } else {
-                    tokens.push_back(token);
-                }
-            }
-
-            // Validate we have enough tokens for the new format with tolerance
-            if (tokens.size() < 11) {
-                log_error(tt::LogTest, "Invalid CSV format in golden file. Expected 11 fields, got {}", tokens.size());
-                continue;
-            }
-
-            GoldenCsvEntry entry;
-            entry.test_name = tokens[0];
-            entry.ftype = tokens[1];
-            entry.ntype = tokens[2];
-            entry.topology = tokens[3];
-            entry.num_devices = tokens[4];
-            entry.num_links = std::stoul(tokens[5]);
-            entry.packet_size = std::stoul(tokens[6]);
-            entry.num_iterations = std::stoul(tokens[7]);
-            entry.cycles = std::stod(tokens[8]);
-            entry.packets_per_second = std::stod(tokens[9]);
-            entry.bandwidth_GB_s = std::stod(tokens[10]);
-            // Skip min, max, std dev
-            entry.tolerance_percent = std::stod(tokens[14]);
-            golden_csv_entries_.push_back(entry);
-        }
-
-        golden_file.close();
-        log_info(tt::LogTest, "Loaded {} golden entries from: {}", golden_csv_entries_.size(), golden_path.string());
-        return true;
-    }
 
     std::string get_golden_latency_csv_filename();
 
@@ -1733,100 +921,7 @@ private:
         return diff_csv_stream;
     }
 
-    void populate_comparison_result_bandwidth(
-        double result_bandwidth_GB_s, ComparisonResult& comp_result, auto& golden_it) {
-        comp_result.current_bandwidth_GB_s = result_bandwidth_GB_s;
-
-        // Populate golden value
-        if (golden_it != golden_csv_entries_.end()) {
-            comp_result.golden_bandwidth_GB_s = golden_it->bandwidth_GB_s;
-        } else {
-            comp_result.golden_bandwidth_GB_s = 0.0;
-        }
-
-        // Use common helper for tolerance and status
-        populate_comparison_tolerance_and_status(comp_result, golden_it, golden_csv_entries_.end());
-    }
-
-    ComparisonResult create_comparison_result(const BandwidthResultSummary& test_result);
-
-    std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
-
-    void compare_summary_results_with_golden() {
-        if (golden_csv_entries_.empty()) {
-            log_warning(tt::LogTest, "Skipping golden CSV comparison - no golden file found");
-            return;
-        }
-        if (bandwidth_results_summary_.size() != golden_csv_entries_.size()) {
-            log_warning(
-                tt::LogTest,
-                "Number of test results ({}) does not match number of golden entries ({})",
-                bandwidth_results_summary_.size(),
-                golden_csv_entries_.size());
-        }
-
-        for (int i = 0; i < bandwidth_results_summary_.size(); i++) {
-            BandwidthResultSummary& test_result = bandwidth_results_summary_[i];
-            // Find Average bandwidth result for the test
-            // Statistic name for average bandwidth is set in calculate_bandwidth_mean()
-            auto bandwidth_stat_location =
-                std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::BandwidthMean);
-            if (bandwidth_stat_location == stat_order_.end()) {
-                log_error(tt::LogTest, "Average bandwidth statistic not found, was it calculated?");
-                return;
-            }
-            int bandwidth_stat_index = std::distance(stat_order_.begin(), bandwidth_stat_location);
-            double test_result_avg_bandwidth = test_result.statistics_vector[bandwidth_stat_index];
-
-            // Search for the corresponding golden entry for this test result
-            auto golden_it = fetch_corresponding_golden_entry(test_result);
-
-            // Compare the test result with the golden entry
-            ComparisonResult comp_result = create_comparison_result(test_result);
-            populate_comparison_result_bandwidth(test_result_avg_bandwidth, comp_result, golden_it);
-            comparison_results_.push_back(comp_result);
-
-            // Only count as failure if golden entry exists and test failed
-            // NO_GOLDEN status is just a warning, not a failure
-            if (!comp_result.within_tolerance && comp_result.status != "NO_GOLDEN") {
-                std::ostringstream oss;
-                oss << comp_result.test_name << " [" << comp_result.status << "]";
-                all_failed_bandwidth_tests_.push_back(oss.str());
-            }
-        }
-
-        // Initialize diff CSV file using common helper (note: bandwidth uses different prefix)
-        std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            std::string(OUTPUT_DIR);
-        std::ostringstream diff_oss;
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        diff_oss << "bandwidth_summary_results_" << arch_name << "_diff.csv";
-        diff_csv_file_path_ = output_path / diff_oss.str();
-
-        std::ofstream diff_csv_stream(diff_csv_file_path_, std::ios::out | std::ios::trunc);
-        if (!diff_csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create bandwidth diff CSV file: {}", diff_csv_file_path_.string());
-            return;
-        }
-        diff_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,num_iterations,"
-                           "current_avg_bandwidth_gb_s,golden_avg_bandwidth_gb_s,difference_percent,status\n";
-        log_info(tt::LogTest, "Initialized bandwidth diff CSV file: {}", diff_csv_file_path_.string());
-
-        for (const auto& result : comparison_results_) {
-            diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
-                            << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size
-                            << "," << result.num_iterations << "," << std::fixed << std::setprecision(6)
-                            << result.current_bandwidth_GB_s << "," << result.golden_bandwidth_GB_s << ","
-                            << std::setprecision(2) << result.difference_percent() << "," << result.status << "\n";
-        }
-        diff_csv_stream.close();
-        log_info(tt::LogTest, "Bandwidth comparison diff CSV results written to: {}", diff_csv_file_path_.string());
-    }
-
     void validate_against_golden();
-
-    void set_comparison_statistics_csv_file_path();
 
     // Track sync cores for each device
     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
@@ -1851,50 +946,31 @@ private:
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 
-    // Performance profiling data
-    // TODO: add link index into the result
-    std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
-    std::map<FabricNodeId, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
-    std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
-    std::vector<BandwidthResult> bandwidth_results_;
-    std::vector<BandwidthResultSummary> bandwidth_results_summary_;
+    // Managers (bandwidth)
+    std::unique_ptr<BandwidthProfiler> bandwidth_profiler_;
+    std::unique_ptr<BandwidthResultsManager> bandwidth_results_manager_;
     std::vector<LatencyResult> latency_results_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
     bool code_profiling_enabled_ = false;
 
-    // Device frequency cache to avoid repeated calculations
-    std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
-    double measured_bw_min_ = 0.0;
-    double measured_bw_avg_ = 0.0;
-    double measured_bw_max_ = 0.0;
-
     // Progress monitoring
     ProgressMonitorConfig progress_config_;
     std::filesystem::path raw_telemetry_csv_path_;
-    std::vector<BandwidthStatistics> stat_order_;
-    std::filesystem::path csv_file_path_;
-    std::filesystem::path csv_summary_file_path_;
-    std::filesystem::path csv_summary_upload_file_path_;
     std::filesystem::path latency_csv_file_path_;
 
-    // Golden CSV comparison data
-    std::vector<GoldenCsvEntry> golden_csv_entries_;
-    std::vector<ComparisonResult> comparison_results_;
+    // Golden CSV comparison data (latency only; bandwidth handled in manager)
     std::vector<GoldenLatencyEntry> golden_latency_entries_;
     std::vector<LatencyComparisonResult> latency_comparison_results_;
     std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
     std::vector<std::string> all_failed_latency_tests_;    // Accumulates failed latency tests
-    std::filesystem::path diff_csv_file_path_;
     std::filesystem::path latency_diff_csv_file_path_;
     bool has_test_failures_ = false;  // Track if any tests failed validation
-
-    // Golden CSV comparison statistics
-    std::filesystem::path comparison_statistics_csv_file_path_;
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
     std::unique_ptr<CodeProfiler> code_profiler_;
     std::unique_ptr<TelemetryManager> telemetry_manager_;
+    uint32_t get_device_frequency_mhz(const FabricNodeId& device_id);
 
     // Getter for lazy initialization of eth_readback_
     EthCoreBufferReadback& get_eth_readback() {

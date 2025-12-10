@@ -33,9 +33,6 @@ void TestContext::wait_for_programs_with_progress() {
 void TestContext::read_telemetry() {
     auto& tm = get_telemetry_manager();
     tm.read_telemetry();
-    measured_bw_min_ = tm.get_measured_bw_min();
-    measured_bw_avg_ = tm.get_measured_bw_avg();
-    measured_bw_max_ = tm.get_measured_bw_max();
 }
 
 void TestContext::clear_telemetry() {
@@ -44,7 +41,6 @@ void TestContext::clear_telemetry() {
         telemetry_manager_->reset();
     }
     telemetry_entries_.clear();
-    measured_bw_min_ = measured_bw_avg_ = measured_bw_max_ = 0.0;
 }
 
 void TestContext::clear_code_profiling_buffers() { get_code_profiler().clear_code_profiling_buffers(); }
@@ -56,39 +52,10 @@ void TestContext::report_code_profiling_results() { get_code_profiler().report_c
 void TestContext::process_telemetry_for_golden() {
     auto& tm = get_telemetry_manager();
     tm.process_telemetry_for_golden();
-    measured_bw_min_ = tm.get_measured_bw_min();
-    measured_bw_avg_ = tm.get_measured_bw_avg();
-    measured_bw_max_ = tm.get_measured_bw_max();
 }
 
 void TestContext::dump_raw_telemetry_csv(const TestConfig& config) {
     get_telemetry_manager().dump_raw_telemetry_csv(config);
-}
-
-// Converts vector of num_devices to a string representation eg. <2, 4> -> "[2, 4]"
-std::string TestContext::convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) {
-    std::string num_devices_str = "[";
-    for (size_t i = 0; i < num_devices.size(); ++i) {
-        if (i > 0) {
-            num_devices_str += ",";
-        }
-        num_devices_str += std::to_string(num_devices[i]);
-    }
-    num_devices_str += "]";
-    return num_devices_str;
-}
-
-std::vector<GoldenCsvEntry>::iterator TestContext::fetch_corresponding_golden_entry(
-    const BandwidthResultSummary& test_result) {
-    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-    auto golden_it =
-        std::find_if(golden_csv_entries_.begin(), golden_csv_entries_.end(), [&](const GoldenCsvEntry& golden) {
-            return golden.test_name == test_result.test_name && golden.ftype == test_result.ftype &&
-                   golden.ntype == test_result.ntype && golden.topology == test_result.topology &&
-                   golden.num_devices == num_devices_str && golden.num_links == test_result.num_links &&
-                   golden.packet_size == test_result.packet_size;
-        });
-    return golden_it;
 }
 
 std::vector<GoldenLatencyEntry>::iterator TestContext::fetch_corresponding_golden_latency_entry(
@@ -103,31 +70,10 @@ std::vector<GoldenLatencyEntry>::iterator TestContext::fetch_corresponding_golde
     return golden_it;
 }
 
-ComparisonResult TestContext::create_comparison_result(const BandwidthResultSummary& test_result) {
-    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-    ComparisonResult comp_result;
-    comp_result.test_name = test_result.test_name;
-    comp_result.ftype = test_result.ftype;
-    comp_result.ntype = test_result.ntype;
-    comp_result.topology = test_result.topology;
-    comp_result.num_devices = num_devices_str;
-    comp_result.num_links = test_result.num_links;
-    comp_result.packet_size = test_result.packet_size;
-    comp_result.num_iterations = test_result.num_iterations;
-    return comp_result;
-}
-
-void TestContext::set_comparison_statistics_csv_file_path() {
-    // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all multirun
-    // tests to complete Generate detailed CSV filename
-    std::ostringstream comparison_statistics_oss;
-    auto arch_name = tt::tt_metal::hal::get_arch_name();
-    comparison_statistics_oss << "bandwidth_comparison_statistics_" << arch_name << ".csv";
-    // Output directory already set in initialize_bandwidth_results_csv_file()
-    std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
-    comparison_statistics_csv_file_path_ = output_path / comparison_statistics_oss.str();
+uint32_t TestContext::get_device_frequency_mhz(const FabricNodeId& device_id) {
+    auto& metal_context = tt::tt_metal::MetalContext::instance();
+    auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
+    return metal_context.get_cluster().get_device_aiclk(physical_chip_id);
 }
 
 void TestContext::collect_latency_results() {
@@ -850,56 +796,7 @@ bool TestContext::load_golden_latency_csv() {
 }
 
 void TestContext::validate_against_golden() {
-    // Handle both bandwidth and latency comparisons
-    bool has_bandwidth_results = !comparison_results_.empty();
     bool has_latency_results = !latency_comparison_results_.empty();
-
-    if (!has_bandwidth_results && !has_latency_results) {
-        log_info(tt::LogTest, "No golden comparison performed (no golden file found)");
-        return;
-    }
-
-    // Report bandwidth failures separately
-    if (has_bandwidth_results) {
-        if (!all_failed_bandwidth_tests_.empty()) {
-            has_test_failures_ = true;
-            log_error(tt::LogTest, "=== BANDWIDTH TEST FAILURES ===");
-            log_error(
-                tt::LogTest,
-                "{} bandwidth test(s) failed golden comparison (using per-test tolerance):",
-                all_failed_bandwidth_tests_.size());
-
-            // Print detailed failure information
-            for (const auto& result : comparison_results_) {
-                if (!result.within_tolerance && result.status != "NO_GOLDEN") {
-                    // Look up tolerance from golden entry by searching directly
-                    double tolerance = 1.0;
-                    for (const auto& golden : golden_csv_entries_) {
-                        if (golden.test_name == result.test_name && golden.ftype == result.ftype &&
-                            golden.ntype == result.ntype && golden.topology == result.topology &&
-                            golden.num_links == result.num_links && golden.packet_size == result.packet_size) {
-                            tolerance = golden.tolerance_percent;
-                            break;
-                        }
-                    }
-
-                    log_error(tt::LogTest, "  - {} [{}]:", result.test_name, result.status);
-                    log_error(tt::LogTest, "      Expected: {:.6f} GB/s", result.golden_bandwidth_GB_s);
-                    log_error(tt::LogTest, "      Actual:   {:.6f} GB/s", result.current_bandwidth_GB_s);
-                    log_error(
-                        tt::LogTest,
-                        "      Diff:     {:.2f}% (tolerance: {:.2f}%)",
-                        result.difference_percent(),
-                        tolerance);
-                }
-            }
-        } else {
-            log_info(
-                tt::LogTest,
-                "All {} bandwidth tests passed golden comparison using per-test tolerance values",
-                comparison_results_.size());
-        }
-    }
 
     // Report latency failures separately
     if (has_latency_results) {
