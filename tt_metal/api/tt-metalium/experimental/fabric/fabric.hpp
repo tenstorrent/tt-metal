@@ -16,11 +16,9 @@
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
