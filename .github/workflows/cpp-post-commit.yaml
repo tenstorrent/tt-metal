@@ -1,5 +1,5 @@
 name: "[internal] C++ tests impl"
-
+# This workflow file does not run in APC (CCL runs in merge-gate and the others run in Nightly L2)
 on:
   workflow_call:
     inputs:
@@ -52,11 +52,9 @@ jobs:
             { name: "dispatch", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*', nightly: true },  # Only runs on Nightly-L2
             { name: "dispatch multicmd queue", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*', nightly: true }, # Only runs on Nightly-L2
             { name: "distributed", cmd: './build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=* && ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh', nightly: true, auto-triage: true },  # Only runs on Nightly-L2
-            { name: "eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_misc --gtest_filter=$GTEST_FILTER && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}', nightly: false, auto-triage: true },
-            # { name: "Nightly eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_misc --gtest_filter=$GTEST_FILTER && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}', nightly: true, auto-triage: true },
+            { name: "eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth && ./build/test/tt_metal/unit_tests_misc && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*', nightly: true, auto-triage: true },
             { name: "tools", cmd: './tests/scripts/run_tools_tests.sh && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=* && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=*', nightly: true, auto-triage: false },  # Only runs on Nightly-L2
-            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER', nightly: false, auto-triage: true },
-            # { name: "Nightly ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER', nightly: true, auto-triage: true },
+            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true },
             { name: "Nightly data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: true, auto-triage: true },
           ]]
     steps:
