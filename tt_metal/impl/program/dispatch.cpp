@@ -2018,7 +2018,7 @@ void update_program_dispatch_commands(
                 "Kernel binary size exceeds prefetcher cache size ({}, {})",
                 program_sizeB,
                 max_program_sizeB);
-            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            bool wraparound_flag = cache_offset != 0 ? false : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
                     .flags = uint8_t(wraparound_flag),
@@ -2188,7 +2188,7 @@ void update_traced_program_dispatch_commands(
                 "Kernel binary size exceeds prefetcher cache size ({}, {})",
                 program_sizeB,
                 max_program_sizeB);
-            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            bool wraparound_flag = cache_offset != 0 ? false : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
                     .flags = uint8_t(wraparound_flag),
