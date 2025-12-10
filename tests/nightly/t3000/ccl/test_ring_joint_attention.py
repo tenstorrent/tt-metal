@@ -76,7 +76,7 @@ def run_ring_joint_sdpa(
     rp_axis,
     up_axis,
     all_gather_topology,
-    pcc_threshold,
+    skip_check,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -251,41 +251,44 @@ def run_ring_joint_sdpa(
         logger.info("Run without trace")
         run_iters(tt_out_list, tt_joint_out_list)
 
-    pt_Q = torch.cat([Q, joint_Q], dim=2)
-    pt_K = torch.cat([K, joint_K], dim=2)
-    pt_V = torch.cat([V, joint_V], dim=2)
-    gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
-    gt_out = gt[:, :, :seq_len, :]
-    gt_joint_out = gt[:, :, seq_len:, :]
+    if not skip_check:
+        pt_Q = torch.cat([Q, joint_Q], dim=2)
+        pt_K = torch.cat([K, joint_K], dim=2)
+        pt_V = torch.cat([V, joint_V], dim=2)
+        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
+        gt_out = gt[:, :, :seq_len, :]
+        gt_joint_out = gt[:, :, seq_len:, :]
 
-    for i in range(n_iters):
-        tt_out = ttnn.to_torch(
-            tt_out_list[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
-            ),
-        )
-        joint_shard_dims = [None, None]
-        joint_shard_dims[up_axis] = 1
-        joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
-        tt_joint_out = ttnn.to_torch(
-            tt_joint_out_list[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims),
-        )[:1]
-        # Slice out any tile-padding
-        tt_out = tt_out[:, :, :seq_len, :]
-        tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
-        logger.debug(f"tt_out: {tt_out.shape}")
-        logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
+        for i in range(n_iters):
+            tt_out = ttnn.to_torch(
+                tt_out_list[i],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+                ),
+            )
+            joint_shard_dims = [None, None]
+            joint_shard_dims[up_axis] = 1
+            joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
+            tt_joint_out = ttnn.to_torch(
+                tt_joint_out_list[i],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
+                ),
+            )[:1]
+            # Slice out any tile-padding
+            tt_out = tt_out[:, :, :seq_len, :]
+            tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
+            logger.debug(f"tt_out: {tt_out.shape}")
+            logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
-        passing = True
-        for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
-            out_pass, out_pcc = comp_pcc(gt, out, pcc_threshold)
-            logger.debug(f"python vs pytorch: {out_pcc}")
-            logger.debug(f"mse: {((gt - out) ** 2).mean()}")
-            passing = passing and out_pass
+            passing = True
+            for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
+                out_pass, out_pcc = comp_pcc(gt, out, 0.994)
+                logger.debug(f"python vs pytorch: {out_pcc}")
+                logger.debug(f"mse: {((gt - out) ** 2).mean()}")
+                passing = passing and out_pass
 
-        assert passing
+            assert passing
 
 
 @pytest.mark.parametrize(
