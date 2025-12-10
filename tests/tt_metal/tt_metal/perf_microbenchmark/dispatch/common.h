@@ -48,7 +48,7 @@ struct one_core_data_t {
 
 class DeviceData {
 private:
-    int amt_written;
+    int amt_written{0};
     // 10 is a hack...bigger than any core_type
     uint64_t base_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
     uint64_t base_result_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
@@ -116,8 +116,7 @@ inline DeviceData::DeviceData(
     uint32_t dram_data_addr,
     void* pcie_data_addr,
     bool is_banked,
-    uint32_t dram_data_size_words) :
-    amt_written(0) {
+    uint32_t dram_data_size_words) {
     this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
