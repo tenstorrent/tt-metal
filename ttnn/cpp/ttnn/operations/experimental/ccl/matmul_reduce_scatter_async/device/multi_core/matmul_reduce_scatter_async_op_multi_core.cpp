@@ -46,7 +46,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset);
+    CoreCoord core_grid_offset);
 
 using namespace experimental::ccl;
 using Tensors = std::vector<Tensor>;
