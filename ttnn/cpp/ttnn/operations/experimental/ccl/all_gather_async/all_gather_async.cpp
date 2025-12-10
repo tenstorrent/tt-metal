@@ -43,23 +43,23 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::prim::all_gather_async(
             input_tensor,
-            std::nullopt,
+            /*persistent_output_buffer*/ std::nullopt,
             dim,
             multi_device_global_semaphore,
             num_links,
             memory_config,
             topology_,
             subdevice_id,
-            std::nullopt,
+            /*cluster_axis*/ std::nullopt,
             use_optimal_ccl_for_llama,
             all_gather_async_llama_sharded_case,
             barrier_semaphore,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
+            /*chunks_per_sync*/ std::nullopt,
+            /*num_workers_per_link*/ std::nullopt,
+            /*num_buffers_per_channel*/ std::nullopt,
             reverse_order,
             sub_core_grid,
-            nullptr);
+            /*mesh_device*/ nullptr);
     }
 }
 
@@ -109,7 +109,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             num_buffers_per_channel,
             reverse_order,
             sub_core_grid,
-            nullptr);
+            /*mesh_device*/ nullptr);
     }
 }
 
@@ -165,9 +165,9 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
                 chunks_per_sync,
                 num_workers_per_link,
                 num_buffers_per_channel,
-                false,
+                /*reverse_order*/ false,
                 sub_core_grid,
-                nullptr));
+                /*mesh_device*/ nullptr));
         }
         return output_tensors;
     }
@@ -212,9 +212,9 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             use_optimal_ccl_for_llama,
             all_gather_async_llama_sharded_case,
             barrier_semaphore,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
+            /*chunks_per_sync*/ std::nullopt,
+            /*num_workers_per_link*/ std::nullopt,
+            /*num_buffers_per_channel*/ std::nullopt,
             reverse_order,
             sub_core_grid,
             &mesh_device);
@@ -252,23 +252,23 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::prim::all_gather_async(
             input_tensor,
-            std::nullopt,
+            /*persistent_output_buffer*/ std::nullopt,
             dim,
             multi_device_global_semaphore,
             num_links,
             memory_config,
             topology_,
             subdevice_id,
-            std::nullopt,
+            /*cluster_axis*/ std::nullopt,
             use_optimal_ccl_for_llama,
             all_gather_async_llama_sharded_case,
             barrier_semaphore,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            true,
+            /*chunks_per_sync*/ std::nullopt,
+            /*num_workers_per_link*/ std::nullopt,
+            /*num_buffers_per_channel*/ std::nullopt,
+            /*reverse_order*/ true,
             sub_core_grid,
-            nullptr);  // reverse_order=true for reversed API
+            /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
     }
 }
 
@@ -315,9 +315,9 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel,
-            true,
+            /*reverse_order*/ true,
             sub_core_grid,
-            nullptr);  // reverse_order=true for reversed API
+            /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
     }
 }
 
@@ -360,10 +360,10 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
             use_optimal_ccl_for_llama,
             all_gather_async_llama_sharded_case,
             barrier_semaphore,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            true,
+            /*chunks_per_sync*/ std::nullopt,
+            /*num_workers_per_link*/ std::nullopt,
+            /*num_buffers_per_channel*/ std::nullopt,
+            /*reverse_order*/ true,
             sub_core_grid,
             &mesh_device);  // reverse_order=true for reversed API
     }
