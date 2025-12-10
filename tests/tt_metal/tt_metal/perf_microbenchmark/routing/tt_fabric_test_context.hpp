@@ -219,6 +219,7 @@ public:
             this->set_global_sync(config.global_sync);
             this->set_global_sync_val(config.global_sync_val);
             this->set_performance_test_mode(config.performance_test_mode);
+            this->set_benchmark_kernels(config.benchmark_kernels);
 
             log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
             log_debug(tt::LogTest, "Performance test mode: {}", enchantum::to_string(performance_test_mode_));
@@ -366,7 +367,9 @@ public:
         fixture_->setup_workload();
         // TODO: should we be taking const ref?
         for (auto& [coord, test_device] : test_devices_) {
-            test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+            bool enable_kernel_benchmark =
+                benchmark_kernels_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+            test_device.set_benchmark_mode(enable_kernel_benchmark);
             test_device.set_global_sync(global_sync_);
             test_device.set_global_sync_val(global_sync_val_);
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
@@ -570,6 +573,10 @@ public:
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
 
+    void set_benchmark_kernels(bool benchmark_kernels) { benchmark_kernels_ = benchmark_kernels; }
+
+    bool get_benchmark_kernels() { return benchmark_kernels_; }
+
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
     void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
@@ -675,6 +682,7 @@ public:
 private:
     void reset_local_variables() {
         performance_test_mode_ = PerformanceTestMode::NONE;
+        benchmark_kernels_ = false;
         global_sync_ = false;
         global_sync_val_ = 0;
         outgoing_traffic_.clear();
@@ -1828,6 +1836,7 @@ private:
 
     PerformanceTestMode performance_test_mode_ = PerformanceTestMode::NONE;  // Performance test mode for current test
     bool telemetry_enabled_ = false;                                         // Telemetry enabled for current test
+    bool benchmark_kernels_ = false;                                         // Enable benchmark mode in kernels only
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 

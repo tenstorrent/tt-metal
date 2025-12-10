@@ -273,6 +273,10 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.enable_flow_control = parse_scalar<bool>(test_yaml["enable_flow_control"]);
     }
 
+    if (test_yaml["benchmark_kernels"]) {
+        test_config.benchmark_kernels = parse_scalar<bool>(test_yaml["benchmark_kernels"]);
+    }
+
     return test_config;
 }
 
