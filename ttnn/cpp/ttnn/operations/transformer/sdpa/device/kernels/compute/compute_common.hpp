@@ -701,8 +701,10 @@ template <
     uint32_t cb_qk_im,
     uint32_t cb_identity_scale_in,
     uint32_t cb_attention_sink,
+    uint32_t cb_scale_in,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t DHt,
     uint32_t vDHt,
     bool use_attention_sink,
     bool is_causal,
@@ -714,7 +716,6 @@ template <
     uint32_t sliding_window_size>
 void sdpa_inner_loop(
     const uint32_t Skt,
-    const uint32_t DHt,
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
     const uint32_t qk_subblock_h,
@@ -757,7 +758,6 @@ void sdpa_inner_loop(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
-    const uint32_t cb_scale_in,
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
