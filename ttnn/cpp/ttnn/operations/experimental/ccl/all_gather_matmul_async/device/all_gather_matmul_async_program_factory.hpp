@@ -14,7 +14,9 @@
 
 namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program {
 
-struct AllGatherMatmulAsyncSharedVariables {
+struct AllGatherMatmulAsyncSharedVariables {  // TODO: migrate shared_variables to not use the old
+                                              // override_runtime_arguments_callback in matmul and all_gather_async old
+                                              // program factories
     std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
         all_gather_override_runtime_arguments_callback;
     std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<Tensors>>

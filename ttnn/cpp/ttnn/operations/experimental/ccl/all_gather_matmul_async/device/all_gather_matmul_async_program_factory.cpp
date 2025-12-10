@@ -77,9 +77,13 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     );
 
     // Matmul
-    std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks;
+    std::optional<tt::tt_metal::operation::ProgramWithCallbacks>
+        matmul_program_with_callbacks;  // TODO: migrate to not use the old program_with_callbacks in matmul old program
+                                        // factories
     std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<Tensors>>
-        matmul_override_runtime_arguments_callback;
+        matmul_override_runtime_arguments_callback;  // TODO: migrate to not use the old
+                                                     // override_runtime_arguments_callback in matmul old program
+                                                     // factories
 
     std::visit(
         [&](const auto& config) {
@@ -95,9 +99,13 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                     compute_kernel_config,
                     config,
                     untilize_out,
-                    matmul_fused_op_signaler);
+                    matmul_fused_op_signaler);  // TODO: migrate to not use the old program_with_callbacks in matmul old
+                                                // program factories
                 matmul_override_runtime_arguments_callback =
-                    matmul_program_with_callbacks->override_runtime_arguments_callback;
+                    matmul_program_with_callbacks
+                        ->override_runtime_arguments_callback;  // TODO: migrate to not use the old
+                                                                // override_runtime_arguments_callback in matmul old
+                                                                // program factories
             } else if (std::is_same_v<
                            ProgramConfigType,
                            operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
@@ -113,9 +121,13 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                     untilize_out,
                     matmul_fused_op_signaler,
                     std::nullopt,
-                    std::nullopt);
+                    std::nullopt);  // TODO: migrate to not use the old program_with_callbacks in matmul old program
+                                    // factories
                 matmul_override_runtime_arguments_callback =
-                    matmul_program_with_callbacks->override_runtime_arguments_callback;
+                    matmul_program_with_callbacks
+                        ->override_runtime_arguments_callback;  // TODO: migrate to not use the old
+                                                                // override_runtime_arguments_callback in matmul old
+                                                                // program factories
             } else {
                 TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
             }
@@ -123,7 +135,9 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         program_config);
 
     if (!matmul_program_with_callbacks.has_value()) {
-        TT_THROW("Matmul program with callbacks not created");
+        TT_THROW("Matmul program with callbacks not created");  // TODO: migrate to not use the old
+                                                                // matmul_program_with_callbacks in matmul old program
+                                                                // factories
     }
 
     // Create the all gather fused op signaler
@@ -135,7 +149,9 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
+    tt::tt_metal::operation::ProgramWithCallbacks
+        program_with_callbacks =  // TODO: migrate to not use the old program_with_callbacks in all_gather_async old
+                                  // program factories
         ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
@@ -159,12 +175,17 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
             core_grid_offset,
             false);  // reverse_order = false by default
     const auto all_gather_override_runtime_arguments_callback =
-        program_with_callbacks.override_runtime_arguments_callback;
+        program_with_callbacks.override_runtime_arguments_callback;  // TODO: migrate to not use the old
+                                                                     // override_runtime_arguments_callback in
+                                                                     // all_gather_async old program factories
 
     return cached_program_t(
         {std::move(program),
          shared_variables_t{
-             .all_gather_override_runtime_arguments_callback = all_gather_override_runtime_arguments_callback,
+             .all_gather_override_runtime_arguments_callback =
+                 all_gather_override_runtime_arguments_callback,  // TODO: migrate to not use the old
+                                                                  // override_runtime_arguments_callback in matmul and
+                                                                  // all_gather_async old program factories
              .matmul_override_runtime_arguments_callback = matmul_override_runtime_arguments_callback}});
 }
 
@@ -246,23 +267,27 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         if (shared_vars.matmul_override_runtime_arguments_callback.has_value()) {
-            shared_vars.matmul_override_runtime_arguments_callback.value()(
-                &operation_attributes,
-                program,
-                {tensor_return_value[0], tensor_args.weight_tensor}, /* all gather output tensor, weight tensor */
-                {tensor_args.bias},
-                {tensor_return_value[1]} /* matmul output tensor */
-            );
+            shared_vars.matmul_override_runtime_arguments_callback
+                .value()(  // TODO: migrate to not use the old override_runtime_arguments_callback in matmul old program
+                           // factories
+                    &operation_attributes,
+                    program,
+                    {tensor_return_value[0], tensor_args.weight_tensor}, /* all gather output tensor, weight tensor */
+                    {tensor_args.bias},
+                    {tensor_return_value[1]} /* matmul output tensor */
+                );
         }
 
         if (shared_vars.all_gather_override_runtime_arguments_callback.has_value()) {
-            shared_vars.all_gather_override_runtime_arguments_callback.value()(
-                &operation_attributes,
-                program,
-                {tensor_args.input_tensor}, /* input tensor */
-                {tensor_args.bias},
-                {tensor_return_value[0]} /* all gather output tensor */
-            );
+            shared_vars.all_gather_override_runtime_arguments_callback
+                .value()(  // TODO: migrate to not use the old override_runtime_arguments_callback in all_gather_async
+                           // old program factories
+                    &operation_attributes,
+                    program,
+                    {tensor_args.input_tensor}, /* input tensor */
+                    {tensor_args.bias},
+                    {tensor_return_value[0]} /* all gather output tensor */
+                );
         }
     }
 }
