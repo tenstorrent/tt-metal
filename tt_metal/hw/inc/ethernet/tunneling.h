@@ -12,11 +12,6 @@
 #include "tt_eth_ss_regs.h"
 #include "tt_eth_api.h"
 
-inline void RISC_POST_STATUS(uint32_t status) {
-    volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-    ptr[0] = status;
-}
-
 // Ultra-fast postcode implementation: direct memory write with zero function call overhead
 // Pre-calculated pointer to postcode memory region
 static volatile uint8_t* const fabric_postcodes =
@@ -24,7 +19,7 @@ static volatile uint8_t* const fabric_postcodes =
 
 // Macro for maximum speed - no function call, just direct memory write
 // Compiles to: load address, mask index, write byte (3 instructions)
-#define POSTCODE(status) (fabric_postcodes[(status) & 0x7] = static_cast<uint8_t>(status))
+#define RISC_POST_STATUS(status) (fabric_postcodes[(status) & 0x7] = static_cast<uint8_t>(status))
 
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use

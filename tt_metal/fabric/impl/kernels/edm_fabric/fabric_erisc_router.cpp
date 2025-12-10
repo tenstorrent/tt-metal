@@ -2142,7 +2142,11 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
-    POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
+    // Direct postcode writes - fastest possible, no function/macro overhead
+    volatile uint8_t* const postcodes =
+        reinterpret_cast<volatile uint8_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
+
+    postcodes[0] = 0xE0;  // INITIALIZATION_STARTED
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
@@ -2157,7 +2161,7 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
-    POSTCODE(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED);
+    postcodes[0] = 0xE1;  // TXQ_INITIALIZED
 
     //
     // COMMON CT ARGS (not specific to sender or receiver)
@@ -2197,7 +2201,7 @@ void kernel_main() {
         }(std::make_index_sequence<6>{});
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED);
+    postcodes[0] = 0xE2;  // STREAM_REG_INITIALIZED
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
@@ -2368,7 +2372,7 @@ void kernel_main() {
         }
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::STARTED);
+    postcodes[0] = 0xD0;  // STARTED
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
     //////////////////////////////
@@ -2452,7 +2456,7 @@ void kernel_main() {
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
-    POSTCODE(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED);
+    postcodes[0] = 0xE3;  // DOWNSTREAM_EDM_SETUP_STARTED
 
     // TODO: change to TMP.
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_DOWNSTREAM_SENDERS_VC0>
@@ -2581,7 +2585,7 @@ void kernel_main() {
         }
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE);
+    postcodes[0] = 0xE4;  // EDM_VCS_SETUP_COMPLETE
     // helps ubenchmark performance
     // __asm__("nop");
 
@@ -2621,7 +2625,7 @@ void kernel_main() {
         receiver_channel_0_trid_tracker;
     receiver_channel_0_trid_tracker.init();
 
-    POSTCODE(tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED);
+    postcodes[0] = 0xE6;  // WORKER_INTERFACES_INITIALIZED
 
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
@@ -2692,7 +2696,7 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE);
+    postcodes[0] = 0xE7;  // ETHERNET_HANDSHAKE_COMPLETE
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_ds_or_local_tensix_connections) {
@@ -2740,7 +2744,7 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
+    postcodes[0] = 0xE8;  // VCS_OPENED (overwrites slot 0)
 
     if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
@@ -2768,7 +2772,7 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED);
+    postcodes[0] = 0xE9;  // ROUTING_TABLE_INITIALIZED (overwrites slot 1)
 
     WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
@@ -2779,7 +2783,7 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-    POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
+    postcodes[0] = 0xEA;  // INITIALIZATION_COMPLETE (overwrites slot 2)
 
     //////////////////////////////
     //////////////////////////////
