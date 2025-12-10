@@ -254,21 +254,22 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
+        bool can_forward = tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
             packet_header, fabric_connection, downstream_mux_connections);
+        if (can_forward) {
+            worker_interface.local_write_counter.increment();
+            worker_interface.local_read_counter.increment();
 
-        worker_interface.local_write_counter.increment();
-        worker_interface.local_read_counter.increment();
+            // not handling/processing acks for now, re-evaluate if needed
+            increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
 
-        // not handling/processing acks for now, re-evaluate if needed
-        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
+            noc_async_writes_flushed();
 
-        noc_async_writes_flushed();
-
-        if (is_persistent_channel) {
-            worker_interface.notify_worker_of_read_counter_update();
-        } else if (channel_connection_established) {
-            worker_interface.notify_worker_of_read_counter_update();
+            if (is_persistent_channel) {
+                worker_interface.notify_worker_of_read_counter_update();
+            } else if (channel_connection_established) {
+                worker_interface.notify_worker_of_read_counter_update();
+            }
         }
     }
 
