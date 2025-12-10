@@ -91,7 +91,7 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@v1.10.1
+        uses: robinraju/release-downloader@vdaf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
           tag: ${{ inputs.ttsim-version }}
@@ -190,7 +190,7 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@v1.10.1
+        uses: robinraju/release-downloader@vdaf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
           tag: ${{ inputs.ttsim-version }}
@@ -340,7 +340,7 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@v1.10.1
+        uses: robinraju/release-downloader@vdaf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
           tag: ${{ inputs.ttsim-version }}
@@ -431,7 +431,7 @@ jobs:
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
       - name: Download ttsim binary
-        uses: robinraju/release-downloader@v1.10.1
+        uses: robinraju/release-downloader@vdaf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
           tag: ${{ inputs.ttsim-version }}
