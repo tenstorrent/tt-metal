@@ -99,8 +99,6 @@ void MAIN {
             uint32_t alias_mm2_prev_out = cb_out_im_A;
             uint32_t alias_mm2_cur_out = cb_out_im_B;
 
-            cb_wait_front(cb_q_in, q_chunk_tiles);
-
             for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
                 if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
                     // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
@@ -158,7 +156,6 @@ void MAIN {
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
                     alias_cur_max, alias_cur_sum);
 
-                cb_wait_front(cb_qk_im, qk_chunk_tiles);
                 /* OUT_IM = QK @ V_CHUNK */
                 matmul_blocks(
                     cb_qk_im,
