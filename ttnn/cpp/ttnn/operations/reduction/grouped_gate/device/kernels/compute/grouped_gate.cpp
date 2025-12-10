@@ -321,7 +321,11 @@ void normalize_scores(
     const uint32_t transpose_cb_index,
     const uint32_t epsilon_cb_index,
     const uint32_t normalized_scores_cb_index) {
-    compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
+    // compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
+
+    reconfig_data_format(unnormalized_scores_cb_index, reduce_scalar_cb_index);
+    pack_reconfig_data_format(intermediate_reduce_cb_index);
+
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
 
@@ -347,6 +351,10 @@ void normalize_scores(
     tile_regs_acquire();
     cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(intermediate_reduce_cb_index, 1);
+
+    reconfig_data_format(intermediate_reduce_cb_index, epsilon_cb_index);
+    pack_reconfig_data_format(transpose_cb_index);
+
     add_bcast_scalar_init_short(intermediate_reduce_cb_index, epsilon_cb_index);
     add_tiles_bcast<BroadcastType::SCALAR>(intermediate_reduce_cb_index, epsilon_cb_index, 0, 0, 0);
 
@@ -364,32 +372,47 @@ void normalize_scores(
     // PACK(DPRINT << "Reserving back transpose cb index" << ENDL();)
     pack_tile(0, transpose_cb_index);
     // PACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
+    tile_regs_release();  // Release dest registers before next operation!
     cb_push_back(transpose_cb_index, 1);
     // PACK(DPRINT << "End of push back transpose cb index" << ENDL();)
 
     // 6. Broadcast multiply
-    tile_regs_acquire();
+    // Need to wait for unnormalized_scores again - it's still in CB but we need to ensure it's ready
+    cb_wait_front(unnormalized_scores_cb_index, 1);
     cb_wait_front(transpose_cb_index, 1);
-    UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
-    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
-    mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
-    mul_tiles_bcast<BroadcastType::COL>(
-        unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
-    tile_regs_commit();
-    cb_pop_front(transpose_cb_index, 1);
-    cb_pop_front(unnormalized_scores_cb_index, 1);
-
-    tile_regs_wait();
 
     cb_reserve_back(normalized_scores_cb_index, 1);
+    tile_regs_acquire();
+    // tensix_sync();
+    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 32));
+    // UNPACK(print_tile(transpose_cb_index, 0, true, 0, 32, 0, 32));
+    // tensix_sync();
+
+    reconfig_data_format(unnormalized_scores_cb_index, transpose_cb_index);
+
+    mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
+
+    mul_tiles_bcast<BroadcastType::COL>(
+        unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // C[h,w] = A[h,w] * B[?]
+    // dprint_tensix_dest_reg(0);
+
+    tile_regs_commit();
+
+    tile_regs_wait();
     // PACK(DPRINT << "Reserving back normalized scores cb index" << ENDL();)
     pack_reconfig_data_format(normalized_scores_cb_index);
     pack_tile(0, normalized_scores_cb_index);
-    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+
+    // tensix_sync();
+    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 32, 0, 32));
+    // tensix_sync();
+    tile_regs_release();
     // PACK(DPRINT << "End of push back normalized scores cb index" << ENDL();)
     cb_push_back(normalized_scores_cb_index, 1);
+    cb_pop_front(transpose_cb_index, 1);
+    cb_pop_front(unnormalized_scores_cb_index, 1);
     // PACK(DPRINT << "End of push back on normalized scores cb index" << ENDL();)
-    tile_regs_release();
+
     // PACK(DPRINT << "End of tile regs release after normalized scores cb index" << ENDL();)
 }
 
