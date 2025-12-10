@@ -4,22 +4,23 @@
 
 #pragma once
 
-#include "untilize_with_unpadding_device_operation_types.hpp"
-#include "untilize_with_unpadding_single_core_program_factory.hpp"
-#include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
-#include "untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
-#include "untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
-#include "untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation_types.hpp"
+#include "factories/untilize_with_unpadding_single_core_program_factory.hpp"
+#include "factories/untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
+#include "factories/untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
+#include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
+#include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include <variant>
 
 namespace ttnn::operations::data_movement {
 
 struct UntilizeWithUnpaddingDeviceOperation {
-    using operation_attributes_t = untilize_with_unpadding::operation_attributes_t;
-    using tensor_args_t = untilize_with_unpadding::tensor_args_t;
-    using spec_return_value_t = untilize_with_unpadding::spec_return_value_t;
-    using tensor_return_value_t = untilize_with_unpadding::tensor_return_value_t;
+    using operation_attributes_t =
+        ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t;
+    using spec_return_value_t = ttnn::operations::data_movement::untilize_with_unpadding_types::spec_return_value_t;
+    using tensor_return_value_t = ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t;
 
     using program_factory_t = std::variant<
         detail::UntilizeWithUnpaddingSingleCoreProgramFactory,

@@ -23,9 +23,9 @@ namespace ttnn::operations::data_movement::detail {
 
 UntilizeWithUnpaddingMultiCoreShardedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_with_unpadding::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding::tensor_args_t& tensor_args,
-    ttnn::operations::data_movement::untilize_with_unpadding::tensor_return_value_t& output) {
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
+    ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -82,7 +82,9 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     }
 
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
-    auto [src0_cb_index, cb_src0] = create_cb(
+    uint32_t src0_cb_index;
+    CBHandle cb_src0;
+    std::tie(src0_cb_index, cb_src0) = create_cb(
         tt::CBIndex::c_0,
         program,
         all_cores,
@@ -92,19 +94,27 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         src_sharded ? a.buffer() : nullptr);
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    auto aligned_page_size = output.buffer()->aligned_page_size();
-    auto [output_cb_index, cb_output] = create_cb(
+    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    uint32_t output_cb_index;
+    CBHandle cb_output;
+    std::tie(output_cb_index, cb_output) = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
 
-    auto [sharded_output_cb_index, cb_sharded_output] = out_sharded ? create_cb(
-                                                                          tt::CBIndex::c_17,
-                                                                          program,
-                                                                          all_cores,
-                                                                          block_row_size,
-                                                                          num_output_rows_unpadded,
-                                                                          output_cb_data_format,
-                                                                          output.buffer())
-                                                                    : std::make_tuple(tt::CBIndex::c_17, CBHandle{});
+    uint32_t sharded_output_cb_index;
+    CBHandle cb_sharded_output;
+    if (out_sharded) {
+        std::tie(sharded_output_cb_index, cb_sharded_output) = create_cb(
+            tt::CBIndex::c_17,
+            program,
+            all_cores,
+            block_row_size,
+            num_output_rows_unpadded,
+            output_cb_data_format,
+            output.buffer());
+    } else {
+        sharded_output_cb_index = static_cast<uint32_t>(tt::CBIndex::c_17);
+        cb_sharded_output = CBHandle{};
+    }
 
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -112,7 +122,8 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     /** reader
      */
     KernelHandle unary_reader_kernel_id;
-    std::vector<uint32_t> reader_ct_args = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_ct_args;
+    reader_ct_args.push_back(src0_cb_index);
 
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -124,8 +135,10 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        std::vector<uint32_t> writer_ct_args = {
-            (uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index, aligned_page_size};
+        std::vector<uint32_t> writer_ct_args;
+        writer_ct_args.push_back(output_cb_index);
+        writer_ct_args.push_back(sharded_output_cb_index);
+        writer_ct_args.push_back(aligned_page_size);
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16
@@ -292,9 +305,9 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
 
 void UntilizeWithUnpaddingMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_with_unpadding::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_with_unpadding::tensor_return_value_t& tensor_return_value) {
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto* src_buffer = tensor_args.input_tensor.buffer();

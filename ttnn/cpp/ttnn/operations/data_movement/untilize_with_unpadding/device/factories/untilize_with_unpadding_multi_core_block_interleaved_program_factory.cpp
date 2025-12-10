@@ -23,9 +23,9 @@ namespace ttnn::operations::data_movement::detail {
 
 UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_with_unpadding::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding::tensor_args_t& tensor_args,
-    ttnn::operations::data_movement::untilize_with_unpadding::tensor_return_value_t& output) {
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
+    ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -301,9 +301,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
 
 void UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_with_unpadding::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_with_unpadding::tensor_return_value_t& tensor_return_value) {
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto* src_buffer = tensor_args.input_tensor.buffer();
