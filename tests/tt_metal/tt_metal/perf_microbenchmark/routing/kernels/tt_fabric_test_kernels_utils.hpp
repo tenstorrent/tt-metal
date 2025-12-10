@@ -422,7 +422,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
-        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, unicast_fields.num_hops);
+        fabric_set_unicast_route<false>(packet_header, unicast_fields.num_hops);
     }
 };
 

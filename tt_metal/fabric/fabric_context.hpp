@@ -81,6 +81,7 @@ private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
     size_t compute_packet_header_size_bytes() const;
     size_t compute_max_payload_size_bytes() const;
+    bool should_use_1D_big_packet_header() const;
 
     tt::tt_fabric::FabricConfig fabric_config_{};
     tt::tt_fabric::Topology topology_{};
@@ -88,6 +89,7 @@ private:
     bool is_2D_routing_enabled_ = false;
     bool bubble_flow_control_enabled_ = false;
     bool tensix_enabled_ = false;
+    bool use_1D_big_packet_header_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
 

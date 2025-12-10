@@ -24,7 +24,7 @@ class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 void set_routing_mode(uint16_t routing_mode);
-void set_routing_mode(Topology topology, uint32_t dimension = 1);
+void set_routing_mode(Topology topology, uint32_t dimension = 1, bool use_big_low_latency_header = false);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
 
