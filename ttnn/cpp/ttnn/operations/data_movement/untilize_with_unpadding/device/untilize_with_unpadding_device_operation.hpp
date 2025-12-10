@@ -17,10 +17,10 @@ namespace ttnn::operations::data_movement {
 
 struct UntilizeWithUnpaddingDeviceOperation {
     using operation_attributes_t =
-        ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t;
-    using spec_return_value_t = ttnn::operations::data_movement::untilize_with_unpadding_types::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t;
+        untilize_with_unpadding_types::operation_attributes_t;
+    using tensor_args_t = untilize_with_unpadding_types::tensor_args_t;
+    using spec_return_value_t = untilize_with_unpadding_types::spec_return_value_t;
+    using tensor_return_value_t = untilize_with_unpadding_types::tensor_return_value_t;
 
     using program_factory_t = std::variant<
         detail::UntilizeWithUnpaddingSingleCoreProgramFactory,
@@ -46,7 +46,7 @@ struct UntilizeWithUnpaddingDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const ttnn::Shape output_tensor_end,
+        const ttnn::Shape& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         const bool use_multicore,
         const bool use_pack_untilize,

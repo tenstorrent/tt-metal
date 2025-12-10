@@ -178,7 +178,7 @@ std::tuple<
     UntilizeWithUnpaddingDeviceOperation::tensor_args_t>
 UntilizeWithUnpaddingDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const ttnn::Shape output_tensor_end,
+    const ttnn::Shape& output_tensor_end,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const bool use_multicore,
     const bool use_pack_untilize,
