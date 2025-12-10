@@ -74,3 +74,6 @@ class DummyT3000MultiProcessModel:
 
     def allocate_kv_cache(self, *args, **kwargs):
         return None
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params):
+        pass
