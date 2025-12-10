@@ -9,20 +9,20 @@
 #include <string>
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 
-struct ImageRotate {
+struct Rotate {
     /**
-     * Image rotation operation with configurable interpolation.
+     * Rotation operation with configurable interpolation.
      *
-     * Rotates an image tensor by an arbitrary angle around a specified center point.
-     * Areas outside the rotated image are filled with a configurable fill value.
+     * Rotates a tensor by an arbitrary angle around a specified center point.
+     * Areas outside the rotated tensor are filled with a configurable fill value.
      *
      * Args:
      *   input_tensor: Input tensor of shape (N, H, W, C) in NHWC format
      *   angle: Rotation angle in degrees. Positive values rotate counter-clockwise
-     *   center: Optional rotation center point (cx, cy). Default: image center
-     *   fill: Fill value for areas outside the rotated image. Default: 0.0
+     *   center: Optional rotation center point (cx, cy). Default: tensor center
+     *   fill: Fill value for areas outside the rotated tensor. Default: 0.0
      *   expand: Must be false. Only same-size rotation is supported
      *   interpolation_mode: Interpolation method - "bilinear" or "nearest". Default: "bilinear"
      *   memory_config: Memory configuration for the output tensor
@@ -40,9 +40,8 @@ struct ImageRotate {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate
 
 namespace ttnn {
-constexpr auto image_rotate =
-    ttnn::register_operation<"ttnn::image_rotate", ttnn::operations::image_rotate::ImageRotate>();
+constexpr auto rotate = ttnn::register_operation<"ttnn::rotate", ttnn::operations::rotate::Rotate>();
 }  // namespace ttnn

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_rotate.hpp"
-#include "device/image_rotate_device_operation.hpp"
+#include "rotate.hpp"
+#include "device/rotate_device_operation.hpp"
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 
-Tensor ImageRotate::invoke(
+Tensor Rotate::invoke(
     const Tensor& input_tensor,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -15,7 +15,7 @@ Tensor ImageRotate::invoke(
     bool expand,
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prim::image_rotate(input_tensor, angle, center, fill, expand, interpolation_mode, memory_config);
+    return ttnn::prim::rotate(input_tensor, angle, center, fill, expand, interpolation_mode, memory_config);
 }
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate
