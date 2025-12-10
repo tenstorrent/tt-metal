@@ -185,6 +185,8 @@ std::tuple<operation_attributes_t, tensor_args_t> ReduceScatterMinimalAsyncDevic
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    const auto resolved_sub_device_id = sub_device_id.value_or(input_tensor.device()->get_sub_device_ids().at(0));
+
     return {
         operation_attributes_t{
             dim,
@@ -196,7 +198,7 @@ std::tuple<operation_attributes_t, tensor_args_t> ReduceScatterMinimalAsyncDevic
             std::move(semaphore),
             std::move(barrier_semaphore),
             using_persistent_buffers,
-            sub_device_id,
+            resolved_sub_device_id,
             cluster_axis,
             chunks_per_sync,
             num_workers_per_link,
