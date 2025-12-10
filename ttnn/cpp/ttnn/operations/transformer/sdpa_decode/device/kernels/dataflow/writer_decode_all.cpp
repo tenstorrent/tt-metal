@@ -236,7 +236,7 @@ void kernel_main() {
             constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
 
             if (!is_out_sharded) {
-                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold>(
+                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
                     out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
             }
             // sharded out case
