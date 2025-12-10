@@ -140,14 +140,8 @@ class CustomTracedModelExecutor(Executor):
         """
         Executes the traced model for a single input tensor.
         """
-        # Transfer host input directly to L1, then copy to persistent L1 tensor
-        temp_l1_input = ttnn.to_device(input_tensor, device=self.device, memory_config=self.l1_input_memory_config)
-
-        # Copy data from temporary L1 tensor to persistent L1 tensor using to_memory_config
-        self.l1_input_tensor = ttnn.to_memory_config(
-            temp_l1_input, self.l1_input_memory_config, output_tensor=self.l1_input_tensor
-        )
-        ttnn.deallocate(temp_l1_input)
+        # Transfer host input directly to L1
+        ttnn.copy_host_to_device_tensor(input_tensor, self.l1_input_tensor, cq_id=self.cq_id)
 
         # Validate address consistency with captured trace
         actual_addr = self.l1_input_tensor.buffer_address()

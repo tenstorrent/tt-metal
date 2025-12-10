@@ -33,7 +33,6 @@ from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
-    preprocess_nchw_input_tensor,
 )
 from models.common.utility_functions import profiler
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -133,8 +132,10 @@ def create_host_input_tensors(
     """
     Create host input tensors for Panoptic DeepLab.
 
-    Uses interleaved DRAM to avoid core grid constraints (especially for traced executors),
-    and converts to L1 using to_memory_config which handles the interleaved-to-sharded conversion.
+    Preprocesses input tensors directly in Python:
+    - Pads channels to SHARD_WIDTH (8)
+    - Converts to channel last (NHWC)
+    - Creates host tensors directly without device preprocessing
 
     Args:
         device: TTNN device
@@ -145,36 +146,69 @@ def create_host_input_tensors(
 
     Returns:
         Tuple of (list of host input tensors, dram_memory_config, l1_memory_config)
-        - dram_memory_config: Interleaved DRAM (no core constraints)
-        - l1_memory_config: Sharded L1 with full grid (original sharding from preprocessed tensor)
+        - dram_memory_config: None (not used)
+        - l1_memory_config: Sharded L1 with full grid
     """
     host_inputs = []
     dram_memory_config = None
     l1_memory_config = None
 
+    SHARD_WIDTH = 8
+
     for i in range(num_inputs):
         # Create random input in NCHW format
         torch_input = torch.randn(batch_size, 3, input_height, input_width, dtype=torch.bfloat16)
-        # Preprocess to TTNN format (height-sharded on device)
-        ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
-        # Extract memory config from first tensor
+        assert len(torch_input.shape) == 4, f"Expected input tensor to be rank 4 (was {len(torch_input.shape)})"
+
+        C = torch_input.shape[1]
+        H = torch_input.shape[2]
+        W = torch_input.shape[3]
+        HW = H * W
+
+        # Pad channels to SHARD_WIDTH (8) if needed
+        # Padding format: (pad_left, pad_right, pad_top, pad_bottom, pad_front, pad_back)
+        # For channel dimension (dim=1), we pad at the end: pad_front=0, pad_back=SHARD_WIDTH-C
+        torch_input = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, SHARD_WIDTH - C), mode="constant", value=0)
+
+        # Convert to channel last (NHWC): [1, H, W, SHARD_WIDTH]
+        torch_input = torch_input.permute(0, 2, 3, 1)
+
+        # Create memory configs on first iteration
         if i == 0:
-            # Get the L1 memory config from the preprocessed tensor (full grid sharding)
-            original_mem_config = ttnn_input.memory_config()
-            original_shard_spec = original_mem_config.shard_spec
-
+            # CustomTracedModelExecutor doesn't use DRAM memory config - it transfers directly to L1
             dram_memory_config = None
 
-            # Use the original L1 sharding (full grid) - to_memory_config will handle conversion
-            l1_memory_config = ttnn.MemoryConfig(
-                original_mem_config.memory_layout,
-                ttnn.BufferType.L1,
-                original_shard_spec,
+            # Create L1 sharded memory config (height sharding across full grid)
+            core_range_set = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
+            )
+            num_cores = device.core_grid.x * device.core_grid.y
+            shard_height = (1 * HW + num_cores - 1) // num_cores
+
+            sharded_memory_config = ttnn.create_sharded_memory_config_(
+                shape=(shard_height, SHARD_WIDTH),
+                core_grid=core_range_set,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
-        # Convert to host tensor for pipeline
-        host_input = ttnn_input.cpu()
+            # Use the L1 sharding config for the pipeline
+            l1_memory_config = ttnn.MemoryConfig(
+                sharded_memory_config.memory_layout,
+                ttnn.BufferType.L1,
+                sharded_memory_config.shard_spec,
+            )
+
+        # Convert to TTNN host tensor (not on device)
+        # Use ROW_MAJOR_LAYOUT and bfloat16 dtype to match the original preprocessing
+        host_input = ttnn.from_torch(
+            torch_input,
+            device=None,  # Host tensor, not on device
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
         host_inputs.append(host_input)
 
     return host_inputs, dram_memory_config, l1_memory_config
