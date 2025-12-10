@@ -41,7 +41,8 @@ template <
     bool use_padded_mask,
     bool use_joint_mask,
     bool is_chunked,
-    bool scale_fp32>
+    bool scale_fp32,
+    uint32_t sliding_window_size>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t DHt,
@@ -60,7 +61,6 @@ void sdpa_inner_loop(
     const uint32_t out_in0_num_subblocks,
     const uint32_t out_in1_num_subblocks,
     const uint32_t out_num_blocks,
-    const uint32_t sliding_window_size,
     const uint32_t iter_q_start,
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
@@ -75,8 +75,8 @@ void sdpa_inner_loop(
     const uint32_t mask_chunk_0,
     const uint32_t mask_chunk_1,
     const uint32_t ring_id,
-    const bool N_mask_ring_id,
-    const bool L_mask_ring_id,
+    const uint32_t N_mask_ring_id,
+    const uint32_t L_mask_ring_id,
     const uint32_t cb_q_in,
     const uint32_t cb_k_in,
     const uint32_t cb_v_in,
