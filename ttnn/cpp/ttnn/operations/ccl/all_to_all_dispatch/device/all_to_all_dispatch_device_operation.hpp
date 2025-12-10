@@ -6,7 +6,7 @@
 
 #include <variant>
 #include <optional>
-
+#include "ttnn/operations/data_movement/untilize/device/untilize_program_factory.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -55,12 +55,20 @@ struct AllToAllDispatchDeviceOperation {
         const Tensor input_tensor;
         const Tensor expert_indices_tensor;
         const Tensor expert_mapping_tensor;
-        const std::optional<std::array<Tensor, 2>> optional_output_tensors;
+        const std::optional<std::array<Tensor, 3>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    struct tensor_return_value_t {
+        Tensor output_tokens;
+        Tensor output_metadata;
+        std::optional<Tensor> optional_untilized_intermediate;
+    };
 
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    struct spec_return_value_t{
+        ttnn::TensorSpec output_tokens_spec;
+        ttnn::TensorSpec metadata_spec;
+        std::optional<ttnn::TensorSpec> untilized_input_tensor;
+    };
 
     struct AllToAllDispatchSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -70,6 +78,8 @@ struct AllToAllDispatchDeviceOperation {
             std::vector<CoreCoord> cores;
             const GlobalSemaphore init_semaphore;
             const GlobalSemaphore cross_device_semaphore;
+            const std::optional<GlobalSemaphore> untilize_sync_semaphore;
+            const std::optional<data_movement::untilize::FuseableUntilizeCallback> untilize_callback;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -86,7 +96,8 @@ struct AllToAllDispatchDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore);
+            const GlobalSemaphore& cross_device_semaphore,
+            const std::optional<GlobalSemaphore> & untilize_sync_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
@@ -119,7 +130,7 @@ struct AllToAllDispatchDeviceOperation {
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+        const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,

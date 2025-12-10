@@ -6,6 +6,7 @@
 
 #include <optional>
 #include "ttnn/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -16,7 +17,9 @@ struct ExecuteUntilize {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         bool use_multicore = true,
         bool use_pack_untilize = true,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+        bool _internal_row_wise = false,
+        const std::optional<GlobalSemaphore> & _internal_semaphore = std::nullopt);
 };
 
 }  // namespace operations::data_movement

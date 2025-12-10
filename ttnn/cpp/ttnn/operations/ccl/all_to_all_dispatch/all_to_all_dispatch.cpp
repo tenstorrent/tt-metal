@@ -19,7 +19,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+    const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -54,21 +54,22 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
             total_size_bytes += metadata_tensor.buffer()->aligned_size_per_bank();
         }
     } else if (memory_config_.buffer_type() == tt::tt_metal::BufferType::L1) {
-        std::array<ttnn::TensorSpec, 2> specs = AllToAllDispatchDeviceOperation::compute_output_specs(
-            AllToAllDispatchDeviceOperation::operation_attributes_t{
-                .worker_core_range_set = subdevice_core_range_set,
-                .output_mem_config = memory_config_,
-                .axis = axis,
-                .num_links = num_links_,
-                .topology = topology_,
-                .impl = impl,
-                .output_concat_dim = output_concat_dim_},
-            AllToAllDispatchDeviceOperation::tensor_args_t{
-                .input_tensor = input_tensor,
-                .expert_indices_tensor = expert_indices_tensor,
-                .expert_mapping_tensor = expert_mapping_tensor,
-                .optional_output_tensors = optional_output_tensors});
-
+        const auto [output_spec, metadata_spec, untilize_intermediate_spec] =
+            AllToAllDispatchDeviceOperation::compute_output_specs(
+                AllToAllDispatchDeviceOperation::operation_attributes_t{
+                    .worker_core_range_set = subdevice_core_range_set,
+                    .output_mem_config = memory_config_,
+                    .axis = axis,
+                    .num_links = num_links_,
+                    .topology = topology_,
+                    .impl = impl,
+                    .output_concat_dim = output_concat_dim_},
+                AllToAllDispatchDeviceOperation::tensor_args_t{
+                    .input_tensor = input_tensor,
+                    .expert_indices_tensor = expert_indices_tensor,
+                    .expert_mapping_tensor = expert_mapping_tensor,
+                    .optional_output_tensors = optional_output_tensors});
+        const std::array<TensorSpec, 2> specs = {output_spec, metadata_spec};
         auto alignment = mesh_device->allocator()->get_alignment(memory_config_.buffer_type());
         auto num_banks = mesh_device->allocator()->get_num_banks(memory_config_.buffer_type());
         total_size_bytes +=
@@ -88,7 +89,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         "impl: {}",
         impl == AllToAllDispatchDeviceOperation::AllToAllTransferType::PageByPage ? "PageByPage" : "FullPacket");
 
-    return ttnn::prim::all_to_all_dispatch(
+    const auto [output_tensor, metadata_tensor, untilize_intermediate_tensor] = ttnn::prim::all_to_all_dispatch(
         input_tensor,
         expert_indices_tensor,
         expert_mapping_tensor,
@@ -100,6 +101,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         subdevice_core_range_set,
         impl,
         output_concat_dim_);
+
+    return {output_tensor, metadata_tensor};
 }
 
 }  // namespace ttnn::operations::ccl

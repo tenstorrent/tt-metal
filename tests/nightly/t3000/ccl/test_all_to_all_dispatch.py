@@ -200,6 +200,7 @@ def run_all_to_all_dispatch_test(
     dtype=ttnn.bfloat16,
     profiler=BenchmarkProfiler(),
     topology=None,
+    input_layout=ttnn.ROW_MAJOR_LAYOUT,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     cluster_axis=1,
@@ -229,6 +230,7 @@ def run_all_to_all_dispatch_test(
     input_tensors = []
     output_tensors = []
     metadata_tensors = []
+    intermediate_tensors = []
 
     torch_expert_mappings = []
 
@@ -250,6 +252,7 @@ def run_all_to_all_dispatch_test(
         )
         preallocated_output_tensor = torch.zeros((devices, batch, seq_len, hidden_size), dtype=tt_to_torch_dtype(dtype))
         preallocated_metadata_tensor = torch.zeros((devices, batch, seq_len, select_experts_k), dtype=torch.int32)
+        preallocated_intermediate_tensor = torch.zeros((batch, 1, seq_len, hidden_size), dtype=tt_to_torch_dtype(dtype))
 
         if iter == 0:
             logger.info(f"input_tokens shape: {input_tokens.shape}")
@@ -262,10 +265,21 @@ def run_all_to_all_dispatch_test(
         output_metadata_goldens_list.append(metadata_tensor)
         torch_expert_mappings.append(expert_mapping)
 
+        # TODO more elegant handling and validation in op.
+        if input_layout == ttnn.TILE_LAYOUT:
+            input_shape = input_tokens.shape
+            tile_shape = [
+                mesh_shape[cluster_axis],
+                1,
+                input_shape[0] * input_shape[2] // mesh_shape[cluster_axis],
+                input_shape[-1],
+            ]
+            input_tokens = input_tokens.reshape(tile_shape)
+
         tt_input = ttnn.from_torch(
             input_tokens,
             device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=input_layout,
             dtype=dtype,
             memory_config=input_memory_config,
             mesh_mapper=mesh_mapper,
@@ -307,6 +321,15 @@ def run_all_to_all_dispatch_test(
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
         )
 
+        tt_intermediate_tensor = ttnn.from_torch(
+            preallocated_intermediate_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=output_memory_config,
+            mesh_mapper=mesh_mapper,
+        )
+
         if iter == 0:
             logger.info(f"tt_input shape: {tt_input.shape}")
             logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
@@ -317,6 +340,7 @@ def run_all_to_all_dispatch_test(
         expert_mapping_tensors.append(tt_expert_mapping)
         output_tensors.append(tt_output_tensor)
         metadata_tensors.append(tt_metadata_tensor)
+        intermediate_tensors.append(tt_intermediate_tensor)
 
     ccl_sub_device_crs = subdevice_shard_cores_grid
     worker_sub_device = ttnn.SubDevice(
@@ -358,7 +382,11 @@ def run_all_to_all_dispatch_test(
                 topology=topology,
                 memory_config=output_memory_config,
                 subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
+                output_tensors=[
+                    output_tensors[buffer_index],
+                    metadata_tensors[buffer_index],
+                    intermediate_tensors[buffer_index],
+                ]
                 if use_optional_output_tensors
                 else None,
             )
@@ -539,15 +567,22 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["row_major", "tile"],
+)
+@pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters, input_memory_config, output_memory_config",
     [
         (16, 2, 2, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b16s2, dram-dram
+        (256, 2, 2, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b256s2, dram-dram
         (1, 3, 2, 1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),  # b1s3, l1-l1
     ],
-    ids=["b16s2-dram", "b1s3-l1"],
+    ids=["b16s2-dram", "b256s2-dram", "b1s3-l1"],
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_optional_output_tensors", [False, True], ids=["output_alloc", "prealloc"])
 def test_all_to_all_dispatch_no_trace(
     mesh_device,
     trace_mode,
@@ -560,11 +595,13 @@ def test_all_to_all_dispatch_no_trace(
     seq_len,
     num_iters,
     warmup_iters,
+    input_layout,
     input_memory_config,
     output_memory_config,
     num_links,
     dtype,
     device_params,
+    use_optional_output_tensors,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -590,10 +627,12 @@ def test_all_to_all_dispatch_no_trace(
         trace_mode,
         num_links=num_links,
         scheme="random",
+        input_layout=input_layout,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=use_optional_output_tensors,
     )
 
 
@@ -640,6 +679,11 @@ def test_all_to_all_dispatch_no_trace(
 )
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["row_major", "tile"],
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_dispatch_trace(
     mesh_device,
@@ -655,6 +699,7 @@ def test_all_to_all_dispatch_trace(
     warmup_iters,
     num_links,
     dtype,
+    input_layout,
     input_memory_config,
     output_memory_config,
     device_params,
@@ -683,6 +728,7 @@ def test_all_to_all_dispatch_trace(
         trace_mode,
         num_links=num_links,
         scheme="random",
+        input_layout=input_layout,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
@@ -717,6 +763,11 @@ def test_all_to_all_dispatch_trace(
     ],
     ids=["s1"],
 )
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["row_major", "tile"],
+)
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
@@ -735,6 +786,7 @@ def test_decode_perf(
     warmup_iters,
     num_links,
     dtype,
+    input_layout,
     input_memory_config,
     output_memory_config,
 ):
@@ -759,6 +811,7 @@ def test_decode_perf(
         trace_mode,
         num_links=num_links,
         scheme="worst_perf",
+        input_layout=input_layout,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
@@ -786,13 +839,19 @@ def test_decode_perf(
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("hidden_size", [32])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
         (128, 1, 1),
+        (512, 1, 1),
     ],
-    ids=["s128"],
+    ids=["s128", "s512"],
+)
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["row_major", "tile"],
 )
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -812,6 +871,7 @@ def test_prefill_perf(
     warmup_iters,
     num_links,
     dtype,
+    input_layout,
     input_memory_config,
     output_memory_config,
 ):
@@ -836,6 +896,7 @@ def test_prefill_perf(
         trace_mode,
         num_links=num_links,
         scheme="worst_perf",
+        input_layout=input_layout,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,

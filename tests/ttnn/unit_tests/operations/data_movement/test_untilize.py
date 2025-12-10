@@ -1317,3 +1317,34 @@ def test_untilize_multi_core_buffer_type_variations(
     )
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape", [[1, 1, 32, 7168], [1, 1, 8, 7168], [1, 1, 128, 7168], [1, 1, 2048, 7168], [1, 1, 4096, 7168]]
+)
+@pytest.mark.parametrize("end_core_coord", [(0, 0), (0, 1), (0, 3)])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("num_iters", [1, 2])
+def test_untilize_deepseek(
+    device,
+    dtype,
+    tensor_shape,
+    end_core_coord,
+    input_buffer_type,
+    output_buffer_type,
+    num_iters,
+):
+    sub_core_range = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*end_core_coord))])
+    semaphore = ttnn.create_global_semaphore(device, sub_core_range, 0)
+
+    for _ in range(num_iters):
+        input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn_output_tensor = ttnn.untilize(
+            input_ttnn_tensor, sub_core_grids=sub_core_range, _internal_row_wise=True, _internal_semaphore=semaphore
+        )
+
+        assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)

@@ -17,7 +17,7 @@ struct ExecuteAllToAllDispatch {
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis = std::nullopt,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors = std::nullopt,
+        const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors = std::nullopt,
         std::optional<uint32_t> num_links = std::nullopt,
         std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

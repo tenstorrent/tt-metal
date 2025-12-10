@@ -78,7 +78,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                const std::optional<uint32_t> cluster_axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<std::array<ttnn::Tensor, 2>>& output_tensors,
+               const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
