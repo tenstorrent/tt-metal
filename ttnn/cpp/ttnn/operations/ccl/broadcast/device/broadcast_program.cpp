@@ -388,24 +388,13 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_batch1(
     }
     auto sender_worker_core_range = CoreRangeSet(sender_worker_cores);
 
-    printf(
-        "sender cores are : %zu %zu and %zu %zu \n",
-        sender_worker_cores[0].x,
-        sender_worker_cores[0].y,
-        sender_worker_cores.size() > 1 ? sender_worker_cores[1].x : 0,
-        sender_worker_cores.size() > 1 ? sender_worker_cores[1].y : 0);
-
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
 
-    printf("num_targets_forward: %u , num_targets_backward: %u \n", num_targets_forward, num_targets_backward);
-
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-
-    printf("packet_size_bytes: %zu \n", packet_size_bytes);
 
     // Tensor Info - get num_pages early for CB config
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -414,8 +403,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_batch1(
     const auto tiny_tile = tt::tt_metal::Tile({1, 32});
 
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    printf("num_pages_per_packet: %u \n", num_pages_per_packet);
-    // uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     // CB page size should be individual tile size, not the entire packet
@@ -498,7 +485,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_batch1(
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
-        printf("input tile id start: %u , input tile id end: %u \n", input_tile_id_start, input_tile_id_end);
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // tensor_address0
             input_tile_id_start,               // tile_id_start
@@ -513,7 +499,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_batch1(
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
 
-        printf("output tile id start: %u , output tile id end: %u \n", output_tile_id_start, output_tile_id_end);
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0  //HERE
             semaphore.address(),                // out_ready_sem_bank_addr (absolute address)

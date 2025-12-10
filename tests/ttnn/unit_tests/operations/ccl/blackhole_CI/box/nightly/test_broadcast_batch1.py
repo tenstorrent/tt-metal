@@ -9,52 +9,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
-
-
-def run_with_trace(
-    mesh_device,
-    sender_coord,
-    broadcast_topology,
-    input_tensor_mesh,
-    num_links,
-    output_mem_config,
-    num_iter=20,
-    subdevice_id=None,
-):
-    # Compile Run
-    logger.info("Compiling model")
-    tt_out_tensor = ttnn.broadcast(
-        input_tensor_mesh,
-        sender_coord=sender_coord,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=broadcast_topology,
-        subdevice_id=subdevice_id,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    # Capture trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
-        tt_out_tensor = ttnn.broadcast(
-            input_tensor_mesh,
-            sender_coord=sender_coord,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=broadcast_topology,
-            subdevice_id=subdevice_id,
-        )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-
-    # Run the op
-    logger.info("Starting Trace perf test...")
-    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
-
-    return tt_out_tensor
+from tests.nightly.t3000.ccl.test_broadcast_op import run_with_trace
 
 
 def run_broadcast_impl(
@@ -69,7 +24,7 @@ def run_broadcast_impl(
     function_level_defaults,
     broadcast_topology,
     num_iters=1,
-    trace_mode=False,
+    trace_mode=True,
     rand_tensor=True,
     mem_config=None,
     input_shard_shape=None,
@@ -279,7 +234,7 @@ def run_broadcast_impl(
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize(
     "device_params",
     [
