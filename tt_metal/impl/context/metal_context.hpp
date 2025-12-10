@@ -52,6 +52,8 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
 
+    static void destroy_instance();
+
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
     const Cluster& get_cluster() const;
