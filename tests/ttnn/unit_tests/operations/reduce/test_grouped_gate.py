@@ -15,8 +15,8 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
 
 def generate_distinct_sigmoid_inputs(shape, min_val=0.05, max_val=0.95, dtype=torch.bfloat16):
     """
-    Generate random bfloat16 tensor where all values are guaranteed to be distinct
-    after sigmoid. This is achieved by:
+    Generate random bfloat16 tensor where values are guaranteed to be distinct
+    after sigmoid WITHIN EACH ROW (last dimension). This is achieved by:
     1. Generating distinct bfloat16 values in sigmoid output space (0, 1)
     2. Applying logit (inverse sigmoid) to get the inputs
 
@@ -27,35 +27,42 @@ def generate_distinct_sigmoid_inputs(shape, min_val=0.05, max_val=0.95, dtype=to
         dtype: Output dtype (default bfloat16)
 
     Returns:
-        Tensor of shape `shape` where sigmoid(output) has all distinct values
+        Tensor of shape `shape` where sigmoid(output) has distinct values per row
     """
-    total_elements = torch.tensor(shape).prod().item()
+    row_size = shape[-1]  # Number of elements per row (e.g., total_experts)
+    num_rows = torch.tensor(shape[:-1]).prod().item()  # Total number of rows
 
-    # Generate evenly spaced values, convert to bfloat16, then get unique values
+    # Generate enough unique candidates for one row
     # Use more points than needed to ensure we have enough after deduplication
-    num_candidates = total_elements * 4
+    num_candidates = row_size * 4
     candidates = torch.linspace(min_val, max_val, num_candidates, dtype=torch.float32)
     candidates_bf16 = candidates.to(dtype)
 
     # Get unique bfloat16 values
     unique_bf16 = candidates_bf16.unique()
 
-    if unique_bf16.numel() < total_elements:
+    if unique_bf16.numel() < row_size:
         raise ValueError(
-            f"Cannot generate {total_elements} distinct bfloat16 sigmoid outputs in range "
+            f"Cannot generate {row_size} distinct bfloat16 sigmoid outputs per row in range "
             f"[{min_val}, {max_val}]. Only {unique_bf16.numel()} distinct values available."
         )
 
-    # Randomly select the required number of unique values
-    perm = torch.randperm(unique_bf16.numel())[:total_elements]
-    sigmoid_outputs = unique_bf16[perm]
+    # Generate distinct values for each row independently
+    all_rows = []
+    for _ in range(num_rows):
+        # Randomly select row_size unique values for this row
+        perm = torch.randperm(unique_bf16.numel())[:row_size]
+        sigmoid_outputs = unique_bf16[perm]
 
-    # Apply logit (inverse sigmoid) to get pre-sigmoid inputs
-    # logit(p) = log(p / (1-p))
-    # Do this in float32 for precision, then convert back
-    sigmoid_outputs_f32 = sigmoid_outputs.float()
-    inputs = torch.log(sigmoid_outputs_f32 / (1 - sigmoid_outputs_f32))
-    inputs = inputs.to(dtype).reshape(shape)
+        # Apply logit (inverse sigmoid) to get pre-sigmoid inputs
+        # logit(p) = log(p / (1-p))
+        # Do this in float32 for precision, then convert back
+        sigmoid_outputs_f32 = sigmoid_outputs.float()
+        row_inputs = torch.log(sigmoid_outputs_f32 / (1 - sigmoid_outputs_f32))
+        all_rows.append(row_inputs)
+
+    # Stack all rows and reshape to desired shape
+    inputs = torch.stack(all_rows).to(dtype).reshape(shape)
 
     return inputs
 
@@ -145,7 +152,7 @@ def test_grouped_gate(device):
     torch.manual_seed(0)
     batch_size = 1
     num_batches = 1
-    seq_len = 1
+    seq_len = 64
     total_experts = 256
     # Use generate_distinct_sigmoid_inputs to avoid ties after sigmoid
     # This ensures deterministic top-k selection regardless of rounding differences

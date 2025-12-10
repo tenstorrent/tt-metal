@@ -156,7 +156,6 @@ void process_and_sort_tiles(
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
-    cb_pop_front(input_cb_index, Wt);
 }
 
 void sum_top_experts_per_group(
@@ -308,7 +307,7 @@ void topk(
     tile_regs_release();
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
-    transpose_and_pack(post_sort_transpose_cb_index, unnormalized_scores_cb_index, 1);
+    // transpose_and_pack(post_sort_transpose_cb_index, unnormalized_scores_cb_index, 1);
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
 
     cb_pop_front(winning_group_scores_cb_index, tiles);
@@ -449,7 +448,7 @@ void MAIN {
     constexpr uint32_t scales_cb_index = get_named_compile_time_arg_val("scales_cb_index");
     constexpr uint32_t normalized_cb_index = get_named_compile_time_arg_val("normalized_cb_index");
     constexpr uint32_t transpose_cb_index = get_named_compile_time_arg_val("transpose_cb_index");
-    constexpr uint32_t normalized_transpose_cb_index = get_named_compile_time_arg_val("normalized_transpose_cb_index");
+    constexpr uint32_t gathered_cb_index = get_named_compile_time_arg_val("gathered_cb_index");
     constexpr uint32_t post_sort_transpose_cb_index = get_named_compile_time_arg_val("post_sort_transpose_cb_index");
 
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
@@ -467,6 +466,7 @@ void MAIN {
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
         blocks::add_bias(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
+        // Note: sigmoid_input_cb_index is NOT popped here - writer will pop it after gather
         // Transpose tiles into dest and then perform topk_local_sort
         blocks::process_and_sort_tiles(
             add_bias_cb_index,
@@ -497,7 +497,7 @@ void MAIN {
             n_activated_experts,
             log_n_activated_experts);
         blocks::normalize_scores(
-            pre_normalized_scores_cb_index,
+            gathered_cb_index,
             reduce_scalar_cb_index,
             intermediate_local_sort_cb_index,
             transpose_cb_index,

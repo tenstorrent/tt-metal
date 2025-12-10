@@ -224,9 +224,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         2 * n_activated_expert_tiles,
         scores_data_format);
 
-    auto normalized_transpose_cb_index = tt::CBIndex::c_23;
+    auto gathered_cb_index = tt::CBIndex::c_23;
     tt::tt_metal::create_cb(
-        normalized_transpose_cb_index,
+        gathered_cb_index,
         program,
         all_cores,
         scores.buffer()->page_size(),
@@ -304,7 +304,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"scales_cb_index", scales_cb_index},
         {"normalized_cb_index", normalized_cb_index},
         {"transpose_cb_index", transpose_cb_index},
-        {"normalized_transpose_cb_index", normalized_transpose_cb_index},
+        {"gathered_cb_index", gathered_cb_index},
         {"post_sort_transpose_cb_index", post_sort_transpose_cb_index},
     };
 
@@ -331,6 +331,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"topk_index_creation_cb_index", topk_index_creation_cb_index},
         {"group_indices_cb_index", group_indices_cb_index},
         {"summed_experts_cb_index", summed_experts_cb_index},
+        {"gathered_cb_index", gathered_cb_index},
         {"topk_input_cb_index", topk_input_cb_index},
         {"weights_page_size", output_weights.buffer()->page_size()},
         {"indices_page_size", output_indices.buffer()->page_size()},
@@ -348,6 +349,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"sorted_group_indices_cb_index", sorted_group_indices_cb_index},
         {"scores_cb_index", scores_cb_index},
         {"sigmoid_input_cb_index", sigmoid_input_cb_index},
+        {"add_bias_cb_index", add_bias_cb_index},
         {"reduce_scalar_cb_index", reduce_scalar_cb_index},
         {"n_activated_experts", operation_attributes.n_activated_experts},
         {"packed_one_scalar", static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(1.0f))) << 16},
@@ -359,6 +361,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"scales_cb_index", scales_cb_index},
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},
         {"remainder_tokens_per_tile", remainder_tokens_per_tile},
+        {"n_activated_expert_tiles", n_activated_expert_tiles},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};

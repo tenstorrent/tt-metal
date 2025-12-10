@@ -234,7 +234,7 @@ FORCE_INLINE void generate_summed_experts_tiles(
 
 template <
     uint32_t sorted_group_indices_cb_index,
-    uint32_t sigmoid_input_cb_index,
+    uint32_t biased_scores_cb_index,
     uint32_t topk_index_creation_cb_index,
     uint32_t winning_group_scores_cb_index,
     uint32_t winning_group_indices_cb_index,
@@ -246,7 +246,7 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t face_line_bytes = 32;
 
-    cb_wait_front(sigmoid_input_cb_index, width_tiles);
+    cb_wait_front(biased_scores_cb_index, width_tiles);
     cb_wait_front(topk_index_creation_cb_index, width_tiles);
     cb_wait_front(sorted_group_indices_cb_index, num_group_tiles);
 
@@ -254,7 +254,7 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     cb_reserve_back(winning_group_indices_cb_index, topk_groups);
 
     // Pointers
-    uint64_t scores_base_noc_addr = get_noc_addr(get_read_ptr(sigmoid_input_cb_index));
+    uint64_t scores_base_noc_addr = get_noc_addr(get_read_ptr(biased_scores_cb_index));
     uint64_t indices_base_noc_addr = get_noc_addr(get_read_ptr(topk_index_creation_cb_index));
     uint32_t scores_dest_base_addr = get_write_ptr(winning_group_scores_cb_index);
     uint32_t indices_dest_base_addr = get_write_ptr(winning_group_indices_cb_index);
@@ -322,7 +322,7 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
 
     noc_async_read_barrier();
 
-    cb_pop_front(sigmoid_input_cb_index, width_tiles);
+    cb_pop_front(biased_scores_cb_index, width_tiles);
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
 
     for (uint32_t i = 0; i < topk_groups; i++) {
@@ -341,6 +341,87 @@ void write_single_scalar(const uint32_t scales_cb_index, const uint32_t packed_r
     cb_push_back(scales_cb_index, 1);
 }
 
+template <
+    uint32_t indices_cb_index,
+    uint32_t sigmoid_input_cb_index,
+    uint32_t gathered_cb_index,
+    uint32_t width_tiles,
+    uint32_t n_activated_experts,
+    uint32_t n_activated_expert_tiles>
+FORCE_INLINE void gather(uint32_t tokens_per_tile) {
+    constexpr uint32_t tile_size_bytes = 2048;
+    constexpr uint32_t face_size_bytes = 512;
+    constexpr uint32_t face_line_bytes = 32;
+    constexpr uint32_t elements_per_face_row = 16;
+
+    cb_wait_front(sigmoid_input_cb_index, width_tiles);
+    cb_wait_front(indices_cb_index, 1);
+
+    cb_reserve_back(gathered_cb_index, n_activated_expert_tiles);
+
+    // Get base addresses
+    uint32_t sigmoid_base_addr = get_read_ptr(sigmoid_input_cb_index);
+    uint32_t indices_addr = get_read_ptr(indices_cb_index);
+    uint32_t gathered_addr = get_write_ptr(gathered_cb_index);
+
+    volatile tt_l1_ptr uint16_t* indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(indices_addr);
+    volatile tt_l1_ptr uint16_t* sigmoid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sigmoid_base_addr);
+    volatile tt_l1_ptr uint16_t* gathered_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(gathered_addr);
+
+    DPRINT << "=== Gather Debug ===" << ENDL();
+
+    for (uint32_t token = 0; token < tokens_per_tile; token++) {
+        // Token's row position within tile faces
+        uint32_t token_face_row = token % 16;
+        // Face base: 0 for rows 0-15, 2 for rows 16-31 (faces 0/1 vs 2/3)
+        uint32_t token_face_base = (token < 16) ? 0 : 2;
+
+        for (uint32_t expert = 0; expert < n_activated_experts; expert++) {
+            // Calculate index position in indices tile
+            // indices tile layout: row=token, col=expert
+            uint32_t idx_col = expert;
+            uint32_t idx_face_col = idx_col % 16;
+            uint32_t idx_face = token_face_base + (idx_col < 16 ? 0 : 1);
+            // Each face is 256 uint16 elements (16x16), laid out row-major within face
+            uint32_t idx_offset =
+                idx_face * (face_size_bytes / 2) + token_face_row * elements_per_face_row + idx_face_col;
+
+            // Read the expert index
+            uint16_t expert_idx = indices_ptr[idx_offset];
+
+            // Calculate sigmoid position: tile = expert_idx / 32, col = expert_idx % 32
+            uint32_t sigmoid_tile = expert_idx / 32;
+            uint32_t sigmoid_col = expert_idx % 32;
+            uint32_t sigmoid_face_col = sigmoid_col % 16;
+            uint32_t sigmoid_face = token_face_base + (sigmoid_col < 16 ? 0 : 1);
+            // Offset into sigmoid buffer (multiple tiles)
+            uint32_t sigmoid_offset = sigmoid_tile * (tile_size_bytes / 2) + sigmoid_face * (face_size_bytes / 2) +
+                                      token_face_row * elements_per_face_row + sigmoid_face_col;
+
+            uint16_t sigmoid_val = sigmoid_ptr[sigmoid_offset];
+
+            // Write to gathered CB at position [token, expert]
+            uint32_t gathered_face_col = idx_col % 16;
+            uint32_t gathered_face = token_face_base + (idx_col < 16 ? 0 : 1);
+            uint32_t gathered_offset =
+                gathered_face * (face_size_bytes / 2) + token_face_row * elements_per_face_row + gathered_face_col;
+
+            gathered_ptr[gathered_offset] = sigmoid_val;
+
+            // Debug print: show index and gathered value
+            DPRINT << "t=" << token << " e=" << expert << " idx=" << expert_idx << " sigmoid_val=" << BF16(sigmoid_val)
+                   << ENDL();
+        }
+    }
+
+    DPRINT << "=== Gather Complete ===" << ENDL();
+
+    // Pop the sigmoid input now that we're done gathering from it
+    cb_pop_front(sigmoid_input_cb_index, width_tiles);
+
+    cb_push_back(gathered_cb_index, n_activated_expert_tiles);
+}
+
 void kernel_main() {
     constexpr uint32_t weights_cb_index = get_named_compile_time_arg_val("weights_cb_index");
     constexpr uint32_t indices_cb_index = get_named_compile_time_arg_val("indices_cb_index");
@@ -356,6 +437,8 @@ void kernel_main() {
     constexpr uint32_t winning_group_indices_cb_index =
         get_named_compile_time_arg_val("winning_group_indices_cb_index");
     constexpr uint32_t sigmoid_input_cb_index = get_named_compile_time_arg_val("sigmoid_input_cb_index");
+    constexpr uint32_t add_bias_cb_index = get_named_compile_time_arg_val("add_bias_cb_index");
+    constexpr uint32_t n_activated_expert_tiles = get_named_compile_time_arg_val("n_activated_expert_tiles");
 
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
@@ -370,11 +453,13 @@ void kernel_main() {
     constexpr uint32_t packed_one_scalar = get_named_compile_time_arg_val("packed_one_scalar");
     constexpr uint32_t packed_route_scale = get_named_compile_time_arg_val("packed_route_scale");
     constexpr uint32_t n_activated_experts = get_named_compile_time_arg_val("n_activated_experts");
+
     constexpr uint32_t packed_epsilon = get_named_compile_time_arg_val("packed_epsilon");
     constexpr uint32_t epsilon_cb_index = get_named_compile_time_arg_val("epsilon_cb_index");
     constexpr uint32_t scales_cb_index = get_named_compile_time_arg_val("scales_cb_index");
     constexpr uint32_t seq_len_tiles = get_named_compile_time_arg_val("seq_len_tiles");
     constexpr uint32_t remainder_tokens_per_tile = get_named_compile_time_arg_val("remainder_tokens_per_tile");
+    constexpr uint32_t gathered_cb_index = get_named_compile_time_arg_val("gathered_cb_index");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -402,7 +487,7 @@ void kernel_main() {
             summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group, tokens_per_tile);
         generate_winning_group_tiles<
             sorted_group_indices_cb_index,
-            sigmoid_input_cb_index,
+            add_bias_cb_index,  // Use biased scores for selection (intermediate step - weights will also use biased)
             topk_index_creation_cb_index,
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
@@ -411,6 +496,21 @@ void kernel_main() {
             num_group_tiles>(tokens_per_tile);
 
         cb_wait_front(indices_cb_index, 1);
+
+        // Gather unbiased sigmoid scores using the final expert indices
+        gather<
+            indices_cb_index,
+            sigmoid_input_cb_index,
+            gathered_cb_index,
+            width_tiles,
+            n_activated_experts,
+            n_activated_expert_tiles>(tokens_per_tile);
+
+        // TODO: Pass gathered_cb to compute for normalization instead of pre_normalized_scores
+        // For now, just pop it since we're only testing the gather
+        cb_wait_front(gathered_cb_index, n_activated_expert_tiles);
+        cb_pop_front(gathered_cb_index, n_activated_expert_tiles);
+
         noc_async_write_page(height_tile, indices_accessor, get_read_ptr(indices_cb_index));
         cb_wait_front(weights_cb_index, 1);
         noc_async_write_page(height_tile, weights_accessor, get_read_ptr(weights_cb_index));
