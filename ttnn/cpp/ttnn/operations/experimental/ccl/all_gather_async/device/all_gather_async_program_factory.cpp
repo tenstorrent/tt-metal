@@ -56,7 +56,7 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    AllGatherAsyncVersion version = select_version(operation_attributes);
+    [[maybe_unused]] AllGatherAsyncVersion version = select_version(operation_attributes);
     const auto& sender_device_coord = mesh_coordinate;  // coord
     const auto& forward_coord = get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
@@ -403,7 +403,7 @@ DefaultMeshWorkloadFactory::cached_program_t DefaultMeshWorkloadFactory::create_
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    AllGatherAsyncVersion version = select_version(operation_attributes);
+    [[maybe_unused]] AllGatherAsyncVersion version = select_version(operation_attributes);
     const auto& sender_device_coord = mesh_coordinate;  // coord
     const auto& forward_coord = get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
