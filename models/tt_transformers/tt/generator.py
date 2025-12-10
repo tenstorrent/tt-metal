@@ -1525,6 +1525,7 @@ class Generator:
             (
                 trace_ids,
                 tt_logits_rm,
+                tt_log_probs_rm,
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
