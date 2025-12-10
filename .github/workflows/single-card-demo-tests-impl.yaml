@@ -230,13 +230,29 @@ jobs:
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
+      - name: Rename Tracy output files with model name
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        shell: bash
+        run: |
+          MODEL_NAME="${{ matrix.test-group.name }}"
+          RUNNER_LABEL="${{ matrix.test-group.runner-label }}"
+          REPORTS_DIR="/work/generated/profiler/reports"
+
+          if [[ -d "$REPORTS_DIR" ]]; then
+            for csv in $(find "$REPORTS_DIR" -name "ops_perf_results_*.csv" -type f); do
+              dir=$(dirname "$csv")
+              new_name="${dir}/ops_perf_results_${MODEL_NAME}_${RUNNER_LABEL}.csv"
+              mv "$csv" "$new_name"
+              echo "Renamed: $csv -> $new_name"
+            done
+          fi
       - name: Upload Tracy profiler reports (operations recording)
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
           path: /work/generated/profiler/reports
-          prefix: "tracy_ops_"
+          prefix: "tracy_ops_${{ matrix.test-group.name }}_${{ matrix.test-group.runner-label }}_"
       - name: Save environment data
         id: save-environment-data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
@@ -293,38 +309,39 @@ jobs:
           echo "=========================================="
           echo "Aggregating Operations from All Models"
           echo "=========================================="
-          
+
           # Create output directory
           mkdir -p aggregated_ops
-          
+
           # Aggregate using Python
           python3 << 'EOF'
           import csv
           import json
+          import re
           from pathlib import Path
-          from collections import defaultdict
-          
-          model_ops = {}  # model -> set of ops
-          
+
+          model_ops = {}  # model_runner -> set of ops
+
           for csv_path in Path("all_tracy_reports").rglob("ops_perf_results_*.csv"):
-              parts = str(csv_path).split("/")
-              model_name = parts[1] if len(parts) > 1 else csv_path.parent.name
-              
+              # Extract model name from filename: ops_perf_results_<model>_<runner>.csv
+              filename = csv_path.stem  # e.g., ops_perf_results_resnet_N150
+              match = re.match(r'ops_perf_results_(.+)$', filename)
+              model_name = match.group(1) if match else csv_path.parent.name
+
               try:
                   with open(csv_path, 'r') as f:
                       reader = csv.DictReader(f)
                       ops_data = list(reader)
-                  
+
                   ops_in_model = set()
                   for op in ops_data:
                       op_name = op.get("OP CODE", op.get("op_code", "unknown"))
                       ops_in_model.add(op_name)
-                  
+
                   model_ops[model_name] = sorted(ops_in_model)
                   print(f"{model_name}: {len(ops_in_model)} unique operations")
               except Exception as e:
                   print(f"{model_name}: Error - {e}")
-          
           # Write aggregated report
           with open("aggregated_ops/aggregated_operations.txt", "w") as f:
               f.write("\n" + "=" * 60 + "\n")
@@ -340,9 +357,9 @@ jobs:
               json.dump({
                   "by_model": model_ops
               }, f, indent=2)
-          
+
           EOF
-          
+
           cat aggregated_ops/aggregated_operations.txt
 
       - name: Upload aggregated operations report
