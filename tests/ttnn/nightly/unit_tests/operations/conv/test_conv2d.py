@@ -5085,3 +5085,222 @@ def test_conv_block_sharding(
         force_split_reader=force_split_reader,
         enable_act_double_buffer=act_double_buffer,
     )
+
+
+@pytest.mark.parametrize(
+    "input_channels",
+    [
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+    ],
+)
+@pytest.mark.parametrize("output_channels", [512])  # Match matmul N dimension
+@pytest.mark.parametrize("matrix_inputs_dtype", [ttnn.bfloat16,ttnn.float32])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
+# @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4])
+@pytest.mark.parametrize("fp32_accum", [True])
+@pytest.mark.parametrize("packer_l1_acc", [True])
+@pytest.mark.parametrize(
+    "scaler",
+    [
+        # 0.001,  # Very small values
+        # 0.01,
+        # 0.1,
+        # 1.0,    # Standard normal range
+        # 10.0,
+        # 100.0,
+        # 1000.0, # Large values
+        0.3333
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_3x3_ulp_accuracy(
+    device,
+    input_channels,
+    output_channels,
+    matrix_inputs_dtype,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    scaler,
+):
+    """
+    Test conv2d with 3x3 kernel using ULP accuracy metric.
+
+    This test measures ULP (Units in the Last Place) error for conv2d operations
+    with varying inner dimensions, matching the matmul dimensions from matmul_accuracy.ipynb.
+
+    Matmul equivalent dimensions:
+    - M (output rows) = batch_size × output_height × output_width = 2 × 16 × 16 = 512
+    - K (accumulation dim) = input_channels × kernel_height × kernel_width = input_channels × 9
+    - N (output cols) = output_channels = 512
+
+    For a 3x3 kernel: inner_dim = input_channels * 9
+
+    The test varies:
+    - matrix_inputs_dtype: Data type for weights, bias, and output (bfloat16 or float32)
+    - math_fidelity: Math fidelity mode (LoFi, HiFi2, HiFi4)
+    - fp32_accum: Whether to use fp32 accumulation in compute kernel
+    - scaler: Scaler for input and weight tensors
+    """
+    from tests.ttnn.utils_for_testing import assert_with_ulp
+    from models.common.utility_functions import comp_ulp
+
+    batch_size = 1  # M = batch_size × 16 × 16 = 512 (matches matmul M dimension)
+    input_height = 32
+    input_width = 16
+    filter_height = 3
+    filter_width = 3
+    stride_h = 1
+    stride_w = 1
+    padding = 1
+
+    inner_dim = input_channels * filter_height * filter_width
+    output_spatial_size = batch_size * input_height * input_width  # Assuming same padding keeps spatial dims
+    logger.info(f"Conv2d 3x3 ULP test: M={output_spatial_size}, K={inner_dim}, N={output_channels}, dtype={matrix_inputs_dtype}, math_fidelity={math_fidelity}, fp32_accum={fp32_accum}, packer_l1_acc={packer_l1_acc}, scaler={scaler}")
+
+    # Convert ttnn dtype to torch dtype
+    torch_dtype = torch.bfloat16 if matrix_inputs_dtype == ttnn.bfloat16 else torch.float32
+
+    # Create random input and weight tensors
+
+    rand_func = torch.randn
+    # rand_func = torch.rand
+    torch_input_nchw = rand_func((batch_size, input_channels, input_height, input_width), dtype=torch_dtype) * scaler
+    torch_weight = rand_func((output_channels, input_channels, filter_height, filter_width), dtype=torch_dtype) * scaler
+
+    # Compute torch reference output (in NCHW format)
+    torch_output_nchw = torch.nn.functional.conv2d(
+        torch_input_nchw,
+        torch_weight,
+        bias=None,
+        stride=(stride_h, stride_w),
+        padding=padding,
+    )
+    # Convert reference to NHWC for comparison with ttnn output
+    torch_output_nhwc = torch.permute(torch_output_nchw, (0, 2, 3, 1))
+
+    # Convert input to NHWC format for ttnn
+    torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=matrix_inputs_dtype, device=device)
+
+    # Convert weight to ttnn
+    tt_weight = ttnn.from_torch(torch_weight, dtype=matrix_inputs_dtype)
+
+    # Create compute kernel config with math_fidelity and fp32_accum
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    # Run ttnn conv2d with minimal configuration
+    [tt_output, [out_h, out_w]] = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config,
+        groups=1,
+        return_output_dim=True,
+    )
+
+    # Convert ttnn output to torch (output is in NHWC format)
+    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = tt_output_torch.reshape(batch_size, out_h, out_w, output_channels)
+
+    # Determine ULP threshold based on inner dimension and fp32_accum
+    # These thresholds account for accumulation errors during convolution
+    if fp32_accum:
+        if inner_dim <= 100:
+            ulp_threshold = 10
+        elif inner_dim <= 1000:
+            ulp_threshold = 20
+        elif inner_dim <= 3000:
+            ulp_threshold = 40
+        elif inner_dim <= 5000:
+            ulp_threshold = 60
+        else:
+            ulp_threshold = 100
+    else:
+        if inner_dim <= 100:
+            ulp_threshold = 20
+        elif inner_dim <= 1000:
+            ulp_threshold = 50
+        elif inner_dim <= 3000:
+            ulp_threshold = 100
+        elif inner_dim <= 5000:
+            ulp_threshold = 150
+        else:
+            ulp_threshold = 200
+
+    # Compute ULP error for conv2d (without asserting yet)
+    conv2d_ulp_passed, conv2d_ulp_message = comp_ulp(torch_output_nhwc, tt_output_torch, ulp_threshold)
+    logger.info(f"Conv2d ULP result: {conv2d_ulp_message} (threshold={ulp_threshold})")
+
+    # Now test the equivalent matmul operation for comparison
+    logger.info(f"Starting equivalent matmul test for comparison...")
+
+    # Matmul dimensions: M x K @ K x N = M x N
+    M = output_spatial_size  # 512
+    K = inner_dim  # input_channels * 9
+    N = output_channels  # 512
+
+    # Create random matmul input tensors with same scaler
+    torch.manual_seed(0)
+    torch_matmul_a = rand_func((M, K), dtype=torch_dtype) * scaler
+    torch_matmul_b = rand_func((K, N), dtype=torch_dtype) * scaler
+
+    # Compute torch reference matmul
+    if matrix_inputs_dtype == ttnn.bfloat16:
+        torch.set_float32_matmul_precision("medium")
+    print("torch matmul precision: ", torch.get_float32_matmul_precision())
+    torch_matmul_output = torch.matmul(torch_matmul_a, torch_matmul_b)
+
+    # Convert tensors to ttnn
+    tt_matmul_a = ttnn.from_torch(torch_matmul_a, dtype=matrix_inputs_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_matmul_b = ttnn.from_torch(torch_matmul_b, dtype=matrix_inputs_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Run ttnn matmul with same compute config as conv2d
+    tt_matmul_output = ttnn.matmul(
+        tt_matmul_a,
+        tt_matmul_b,
+        compute_kernel_config=compute_config,
+    )
+
+    # Convert ttnn output to torch
+    tt_matmul_output_torch = ttnn.to_torch(tt_matmul_output)
+
+    # Compute ULP error for matmul (without asserting yet)
+    matmul_ulp_passed, matmul_ulp_message = comp_ulp(torch_matmul_output, tt_matmul_output_torch, ulp_threshold)
+    logger.info(f"Matmul ULP result: {matmul_ulp_message} (threshold={ulp_threshold})")
+
+    # Log comparison summary
+    logger.info(f"=" * 80)
+    logger.info(f"ULP COMPARISON - M={M}, K={K}, N={N}, scaler={scaler}, threshold={ulp_threshold}")
+    logger.info(f"Conv2d:  {conv2d_ulp_message} - {'PASS' if conv2d_ulp_passed else 'FAIL'}")
+    logger.info(f"Matmul:  {matmul_ulp_message} - {'PASS' if matmul_ulp_passed else 'FAIL'}")
+    logger.info(f"=" * 80)
+
+    # Assert both passed (this will fail the test if either operation exceeded threshold)
+    assert conv2d_ulp_passed, f"Conv2d ULP check failed: {conv2d_ulp_message}"
+    assert matmul_ulp_passed, f"Matmul ULP check failed: {matmul_ulp_message}"
+
+    logger.info(f"Both Conv2d and Matmul ULP tests PASSED")

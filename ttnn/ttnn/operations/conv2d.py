@@ -240,6 +240,104 @@ def _golden_function(
     return output_tensor
 
 
+def conv2d_unfold_matmul(input, weight, bias=None, stride=1, padding=0, dilation=1, matmul_precision="highest"):
+    """
+    Recreate torch.conv2d using unfold and matmul operations.
+
+    This function provides an alternative implementation of 2D convolution that decomposes
+    the operation into im2col (unfold) followed by matrix multiplication. This is useful
+    for understanding the relationship between convolution and matmul, and for comparing
+    numerical precision across different implementations.
+
+    Note: This implementation assumes groups=1 (standard convolution).
+
+    Args:
+        input (torch.Tensor): Input tensor of shape (N, C_in, H_in, W_in)
+        weight (torch.Tensor): Weight tensor of shape (C_out, C_in, kH, kW)
+        bias (torch.Tensor, optional): Bias tensor of shape (C_out,). Default: None
+        stride (int or tuple): Stride of the convolution. Default: 1
+        padding (int or tuple): Zero-padding added to both sides of input. Default: 0
+        dilation (int or tuple): Spacing between kernel elements. Default: 1
+        matmul_precision (str): Torch matmul precision, either "highest", "high", or "medium". Default: "highest"
+            - "highest": Most accurate, uses TF32 on Ampere+ GPUs (mantissa: ~19 bits)
+            - "medium": Faster but less accurate, uses TF32 (mantissa: 10 bits)
+            - "high": Balance between speed and accuracy (mantissa: ~16 bits)
+
+    Returns:
+        torch.Tensor: Output tensor of shape (N, C_out, H_out, W_out)
+
+    Example:
+        >>> input = torch.randn(1, 3, 32, 32)
+        >>> weight = torch.randn(64, 3, 3, 3)
+        >>> # Standard conv2d
+        >>> output1 = torch.nn.functional.conv2d(input, weight, stride=1, padding=1)
+        >>> # Unfold + matmul version with highest precision
+        >>> output2 = conv2d_unfold_matmul(input, weight, stride=1, padding=1, matmul_precision="highest")
+        >>> # outputs should be very close (within numerical precision)
+
+    Note:
+        This implementation is primarily for testing and analysis. For production use,
+        torch.nn.functional.conv2d is more optimized.
+    """
+    import torch
+
+    # Ensure stride, padding, and dilation are tuples
+    if isinstance(stride, int):
+        stride = (stride, stride)
+    if isinstance(padding, int):
+        padding = (padding, padding)
+    if isinstance(dilation, int):
+        dilation = (dilation, dilation)
+
+    # Set torch matmul precision
+    original_precision = torch.get_float32_matmul_precision()
+    if matmul_precision in ["highest", "high", "medium"]:
+        torch.set_float32_matmul_precision(matmul_precision)
+    else:
+        raise ValueError(f"matmul_precision must be 'highest', 'high', or 'medium', got {matmul_precision}")
+
+    try:
+        # Extract dimensions
+        batch_size, in_channels, in_height, in_width = input.shape
+        out_channels, _, kernel_height, kernel_width = weight.shape
+
+        # Calculate output dimensions
+        out_height = (in_height + 2 * padding[0] - dilation[0] * (kernel_height - 1) - 1) // stride[0] + 1
+        out_width = (in_width + 2 * padding[1] - dilation[1] * (kernel_width - 1) - 1) // stride[1] + 1
+
+        # Step 1: Unfold - Extract sliding local blocks (im2col operation)
+        # Output shape: (N, C_in * kH * kW, L) where L = out_height * out_width
+        unfolded = torch.nn.functional.unfold(
+            input, kernel_size=(kernel_height, kernel_width), dilation=dilation, padding=padding, stride=stride
+        )
+        # unfolded shape: (batch_size, in_channels * kernel_height * kernel_width, out_height * out_width)
+
+        # Step 2: Reshape weight for matmul
+        # Weight shape: (out_channels, in_channels, kernel_height, kernel_width)
+        # Reshape to: (out_channels, in_channels * kernel_height * kernel_width)
+        weight_reshaped = weight.view(out_channels, -1)
+        # weight_reshaped shape: (out_channels, in_channels * kernel_height * kernel_width)
+
+        # Step 3: Perform matrix multiplication
+        # (out_channels, K) @ (K, L) = (out_channels, L)
+        # where K = in_channels * kernel_height * kernel_width, L = out_height * out_width
+        output = torch.matmul(weight_reshaped, unfolded)
+        # output shape: (batch_size, out_channels, out_height * out_width)
+
+        # Step 4: Reshape output to spatial dimensions
+        output = output.view(batch_size, out_channels, out_height, out_width)
+
+        # Step 5: Add bias if provided
+        if bias is not None:
+            output = output + bias.view(1, -1, 1, 1)
+
+        return output
+
+    finally:
+        # Restore original precision
+        torch.set_float32_matmul_precision(original_precision)
+
+
 ttnn.attach_golden_function(
     ttnn.conv2d,
     golden_function=_golden_function,
