@@ -49,25 +49,45 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     presence_term_bf16.deallocate()
 
     # repetition
+    # Use additive penalty formulation to avoid bf16 precision loss
+    # Original formulation: logits = logits / penalty (for positive) or logits * penalty (for negative)
+    # Additive formulation: logits = logits - logits * (1 - 1/penalty)
+    # This is mathematically equivalent but preserves more precision in bf16
 
     # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
-
     combined_mask_int32 = ttnn.add(context.prompt_mask, context.output_mask, **op_kwargs)
     combined_mask = ttnn.typecast(combined_mask_int32, ttnn.bfloat16, **op_kwargs)
     combined_mask_int32.deallocate()
-    penalties = ttnn.where(combined_mask, context.repetition_penalties, 1.0, **op_kwargs)
-    inverse_penalties = ttnn.where(combined_mask, context.inverse_repetition_penalties, 1.0, **op_kwargs)
+
+    # Calculate penalty adjustment: (1 - 1/penalty)
+    # For penalty = 1.5: adjustment = 1 - 1/1.5 = 1 - 0.667 = 0.333
+    # For positive logits: logits - logits * 0.333 = logits * 0.667 = logits / 1.5
+    penalty_adjustment = ttnn.subtract(1.0, context.inverse_repetition_penalties, **op_kwargs)
+    # Apply mask: only adjust tokens that appeared
+    penalty_adjustment = ttnn.where(combined_mask, penalty_adjustment, 0.0, **op_kwargs)
     combined_mask.deallocate()
 
-    # If logits are >0, divide by penalty, otherwise multiply by penalty.
+    # If logits are >0, use the positive penalty adjustment, otherwise negate it
     logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op_kwargs)
-    logits_gt1 = ttnn.gt(logits_bf16, 0, **op_kwargs)
-    scaling = ttnn.where(logits_gt1, inverse_penalties, penalties, **op_kwargs)
-    logits_gt1.deallocate()
-    penalties.deallocate()
-    inverse_penalties.deallocate()
-    logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
-    scaling.deallocate()
+    logits_gt0 = ttnn.gt(logits_bf16, 0, **op_kwargs)
+
+    # For negative logits, we want to make them more negative (multiply by penalty instead of divide)
+    # So we negate the adjustment: negative_adj = -(1 - 1/penalty) = (1/penalty - 1)
+    negative_penalty_adjustment = ttnn.multiply(penalty_adjustment, -1.0, **op_kwargs)
+
+    # Select the appropriate adjustment based on sign of logits
+    final_adjustment = ttnn.where(logits_gt0, penalty_adjustment, negative_penalty_adjustment, **op_kwargs)
+    logits_gt0.deallocate()
+    penalty_adjustment.deallocate()
+    negative_penalty_adjustment.deallocate()
+
+    # Apply: logits = logits - logits * adjustment = logits * (1 - adjustment)
+    adjustment_term = ttnn.multiply(logits, final_adjustment, **op_kwargs)
+    final_adjustment.deallocate()
+    adjustment_term_bf16 = ttnn.typecast(adjustment_term, ttnn.bfloat16, **op_kwargs)
+    adjustment_term.deallocate()
+    logits = ttnn.subtract(logits, adjustment_term_bf16, output_tensor=logits, **op_kwargs)
+    adjustment_term_bf16.deallocate()
 
     return logits
 
