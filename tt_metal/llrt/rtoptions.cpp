@@ -1189,7 +1189,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Enables LLK assertions. If watcher asserts are enabled, they take precedence.
         // Default: false (disabled)
         // Usage: export TT_METAL_LLK_ASSERTS=1
-        case EnvVarID::TT_METAL_LLK_ASSERTS: this->llk_asserts_enabled = true; break;
+        case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
 
         // ========================================
         // DEVICE MANAGER

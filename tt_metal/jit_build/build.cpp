@@ -252,7 +252,7 @@ void JitBuildEnv::init(
         this->defines_ += "-DLIGHTWEIGHT_KERNEL_ASSERTS ";
     }
 
-    if (rtoptions.get_llk_asserts_enabled()) {
+    if (rtoptions.get_llk_asserts()) {
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
