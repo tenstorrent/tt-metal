@@ -75,16 +75,14 @@ def test_eltwise_exp(device, num_tiles):
     writer_compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_compile_time_args = [work_per_core1, 1]
 
-    num_x_cores = max_core.x + 1
-    num_y_cores = max_core.y + 1
-    reader_rt_args = [[[] for _ in range(num_y_cores)] for _ in range(num_x_cores)]
-    writer_rt_args = [[[] for _ in range(num_y_cores)] for _ in range(num_x_cores)]
+    reader_rt_args = []
+    writer_rt_args = []
     current_tile = 0
     for core_range in core_group_1.ranges():
         for x in range(core_range.start.x, core_range.end.x + 1):
             for y in range(core_range.start.y, core_range.end.y + 1):
-                reader_rt_args[x][y] = [input_tensor.buffer_address(), work_per_core1, current_tile]
-                writer_rt_args[x][y] = [output_tensor.buffer_address(), work_per_core1, current_tile]
+                reader_rt_args.append([ttnn.CoreCoord(x, y), [input_tensor.buffer_address(), work_per_core1, current_tile]])
+                writer_rt_args.append([ttnn.CoreCoord(x, y), [output_tensor.buffer_address(), work_per_core1, current_tile]])
                 current_tile += work_per_core1
 
     reader_kernel_descriptor = ttnn.KernelDescriptor(
@@ -111,7 +109,7 @@ def test_eltwise_exp(device, num_tiles):
         core_ranges=core_grid,
         compile_time_args=compute_compile_time_args,
         defines=sfpu_defines,
-        runtime_args=[[[]]],
+        runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(),
     )
 
