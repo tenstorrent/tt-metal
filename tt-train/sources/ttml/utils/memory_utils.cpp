@@ -132,7 +132,7 @@ L1Usage extract_L1_usage(const nlohmann::json& trace) {
     return result;
 }
 
-namespace MemoryUsageHelper {
+namespace MemoryUsageTracker {
 static std::shared_ptr<ttnn::graph::GraphProcessor> graph_processor;
 static nlohmann::json trace;
 
@@ -187,6 +187,6 @@ void print_memory_usage() {
             l1_usage.current[dev_id] / 1024.0 / 1024.0);
     }
 }
-}  // namespace MemoryUsageHelper
+}  // namespace MemoryUsageTracker
 
 }  // namespace ttml::utils

@@ -676,7 +676,7 @@ int main(int argc, char **argv) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
             if (!is_everything_compiled && training_config.estimate_memory_usage) {
-                ttml::utils::MemoryUsageHelper::start_capture();
+                ttml::utils::MemoryUsageTracker::start_capture();
             }
 
             // TODO(rfurko): add mask sending, once mask becomes non-constant
@@ -747,8 +747,8 @@ int main(int argc, char **argv) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
                     if (training_config.estimate_memory_usage) {
-                        ttml::utils::MemoryUsageHelper::end_capture();
-                        ttml::utils::MemoryUsageHelper::print_memory_usage();
+                        ttml::utils::MemoryUsageTracker::end_capture();
+                        ttml::utils::MemoryUsageTracker::print_memory_usage();
                     }
                 }
             }
