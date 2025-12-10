@@ -38,13 +38,13 @@ void MAIN {
 
     constexpr uint32_t num_cores = get_compile_time_arg_val(22);
 
-    constexpr uint32_t is_causal = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(26) == 1;
+    constexpr bool is_causal = get_compile_time_arg_val(23) == 1;
+    constexpr bool use_provided_mask = get_compile_time_arg_val(24) == 1;
+    constexpr bool use_padded_mask = get_compile_time_arg_val(25) == 1;
+    constexpr bool is_chunked = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(29) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -101,6 +101,12 @@ void MAIN {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 sdpa_inner_loop<
                     STANDARD,
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_attention_sink,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    vDHt,
                     use_attention_sink,
                     is_causal,
                     use_provided_mask,
@@ -111,9 +117,6 @@ void MAIN {
                     sliding_window_size>(
                     Skt,
                     DHt,
-                    vDHt,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
                     qk_in0_block_w,
                     qk_subblock_w,
                     qk_subblock_h,
@@ -137,8 +140,10 @@ void MAIN {
                     k_chunk_tiles,
                     qk_chunk_tiles,
                     out_chunk_tiles,
-                    mask_chunk_0,
-                    mask_chunk_1,
+                    0,
+                    0,
+                    0,
+                    0,
                     0,
                     0,
                     0,
@@ -146,10 +151,7 @@ void MAIN {
                     cb_k_in,
                     cb_v_in,
                     cb_mask_in,
-                    cb_attention_sink,
-                    cb_identity_scale_in,
                     cb_col_identity,
-                    cb_qk_im,
                     cb_out_im_A,
                     cb_out_im_B,
                     cb_max_A,
