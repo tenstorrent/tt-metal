@@ -9,20 +9,20 @@
 namespace ttnn::operations::data_movement::untilize_with_unpadding_types {
 
 struct operation_attributes_t {
-    ttnn::Shape output_tensor_end;
-    tt::tt_metal::MemoryConfig output_mem_config;
-    bool use_multicore;
-    bool use_pack_untilize;
-    bool fp32_dest_acc_en;
-    bool enough_space_width;
-    bool enough_space_height;
+    ttnn::Shape output_tensor_end{};
+    tt::tt_metal::MemoryConfig output_mem_config{};
+    bool use_multicore = false;
+    bool use_pack_untilize = false;
+    bool fp32_dest_acc_en = false;
+    bool enough_space_width = false;
+    bool enough_space_height = false;
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
+    const ttnn::Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
+using tensor_return_value_t = ttnn::Tensor;
+using spec_return_value_t = ttnn::TensorSpec;
 
 }  // namespace ttnn::operations::data_movement::untilize_with_unpadding_types

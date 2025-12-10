@@ -11,10 +11,10 @@ namespace ttnn::operations::data_movement::detail {
 
 struct UntilizeWithUnpaddingMultiCoreShardedProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        tt::tt_metal::CBHandle cb_src0;
-        tt::tt_metal::CBHandle cb_sharded_output;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
+        tt::tt_metal::CBHandle cb_src0{};
+        tt::tt_metal::CBHandle cb_sharded_output{};
         std::vector<tt::tt_metal::CoreCoord> cores;
     };
 
