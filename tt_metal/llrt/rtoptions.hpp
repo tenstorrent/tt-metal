@@ -152,6 +152,8 @@ class RunTimeOptions {
 
     bool lightweight_kernel_asserts = false;
 
+    bool enable_llk_asserts = false;
+
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
@@ -355,6 +357,9 @@ public:
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
+
+    bool get_llk_asserts() const { return enable_llk_asserts; }
+    void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.

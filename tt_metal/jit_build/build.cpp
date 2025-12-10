@@ -252,6 +252,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DLIGHTWEIGHT_KERNEL_ASSERTS ";
     }
 
+    if (rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENABLE_LLK_ASSERT ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
