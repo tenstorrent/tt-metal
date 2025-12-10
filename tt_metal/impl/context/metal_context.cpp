@@ -447,6 +447,9 @@ MetalContext& MetalContext::instance() {
 
 void MetalContext::destroy_instance() {
     std::lock_guard<std::mutex> lock(g_instance_mutex);
+    if (DeviceManager::is_initialized() && !DeviceManager::instance().get_all_active_devices().empty()) {
+        TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
+    }
     g_instance.reset();
 }
 
