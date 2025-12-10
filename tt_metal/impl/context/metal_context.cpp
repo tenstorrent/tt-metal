@@ -434,13 +434,14 @@ void MetalContext::teardown() {
     }
 }
 
-std::unique_ptr<MetalContext> g_instance;
+// MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
+MetalContext* g_instance;
 std::mutex g_instance_mutex;
 
 MetalContext& MetalContext::instance() {
     std::lock_guard<std::mutex> lock(g_instance_mutex);
     if (!g_instance) {
-        g_instance = std::unique_ptr<MetalContext>(new MetalContext());
+        g_instance = new MetalContext();
     }
     return *g_instance;
 }
@@ -450,7 +451,8 @@ void MetalContext::destroy_instance() {
     if (DeviceManager::is_initialized() && !DeviceManager::instance().get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
-    g_instance.reset();
+    delete g_instance;
+    g_instance = nullptr;
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).

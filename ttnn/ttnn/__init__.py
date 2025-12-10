@@ -266,6 +266,7 @@ from ttnn.device import (
     DispatchCoreConfig,
     open_device,
     close_device,
+    release_ownership,
     manage_device,
     synchronize_device,
     dump_device_memory_state,

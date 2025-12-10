@@ -388,5 +388,17 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
  */
 std::string get_platform_architecture_name();
 
+/**
+ * Release ownership of the MetalContext singleton instance.
+ *
+ * This function destroys the MetalContext instance, releasing all associated resources.
+ * All devices must be closed before calling this function.
+ *
+ * After calling this function, the MetalContext will be re-created on the next access.
+ *
+ * Return value: void
+ */
+void ReleaseOwnership();
+
 }  // namespace detail
 }  // namespace tt::tt_metal
