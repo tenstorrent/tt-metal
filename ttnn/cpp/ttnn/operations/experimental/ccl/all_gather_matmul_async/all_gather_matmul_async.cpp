@@ -25,7 +25,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const DataType> dtype,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid,

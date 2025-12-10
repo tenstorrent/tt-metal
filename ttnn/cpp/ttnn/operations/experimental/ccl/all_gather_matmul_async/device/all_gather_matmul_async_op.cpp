@@ -4,6 +4,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
@@ -19,7 +20,7 @@ namespace all_gather_matmul_async_detail {
 
 AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const ttnn::AllGatherAsync& all_gather_struct_input,
-    const operations::matmul::Matmul& matmul_struct_input,
+    const AllGatherMatmulAsync::matmul_device_t::operation_attributes_t& matmul_struct_input,
     const CoreCoord all_gather_core_grid_offset,
     const std::vector<IDevice*>& devices) {
     return ttnn::AllGatherMatmulAsync{
@@ -47,7 +48,8 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         // All Gather validate
         this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
         // Matmul validate.
-        this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
+        AllGatherMatmulAsync::matmul_device_t::validate_on_program_cache_hit(
+            matmul_struct, {{all_gather_output_tensor, weight_tensor}, optional_input_tensors, {}});
     }
 
     // All Gather Matmul validate
@@ -74,7 +76,8 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         const auto& all_gather_output_tensor = output_tensors.at(0).value();
         const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
         if (all_gather_output_tensor_shard_spec.has_value()) {
-            const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
+            const uint32_t num_all_gather_output_shards =
+                shard_builder::get_sharding_core_count(all_gather_output_tensor);
             TT_FATAL(
                 this->all_gather_async_struct.ring_size == num_all_gather_output_shards,
                 "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
@@ -90,8 +93,8 @@ std::vector<ttnn::TensorSpec> AllGatherMatmulAsync::compute_output_specs(
         this->all_gather_async_struct.compute_output_specs({input_tensors[0]})[0];
 
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs =
-        this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
+    ttnn::TensorSpec matmul_output_specs = AllGatherMatmulAsync::matmul_device_t::compute_output_specs(
+        matmul_struct, {{input_tensors[0], input_tensors[1]}, {}})[0];
 
     return {all_gather_output_shape, matmul_output_specs};
 }
@@ -103,8 +106,8 @@ std::vector<Tensor> AllGatherMatmulAsync::create_output_tensors(
         this->all_gather_async_struct.create_output_tensors({input_tensors[0]}, {optional_output_tensors[0]})[0];
 
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor =
-        this->matmul_struct.create_output_tensors({all_gather_output_tensor, input_tensors[1]})[0];
+    ttnn::Tensor matmul_output_tensor = AllGatherMatmulAsync::matmul_device_t::create_output_tensors(
+        matmul_struct, {{all_gather_output_tensor, input_tensors[1]}, {}})[0];
 
     return {all_gather_output_tensor, matmul_output_tensor};
 }
@@ -283,11 +286,11 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+    auto matmul_struct = operations::matmul::create_matmul_attributes(
         all_gather_out_tensor,
         weight_tensor,
         /*parameters=*/
-        operations::matmul::Matmul{
+        operations::matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),
@@ -300,7 +303,8 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
             transpose_a,
             transpose_b,
             /*output_tile=*/std::nullopt,
-            /*global_cb=*/std::nullopt});
+            /*global_cb=*/std::nullopt},
+        {});
 
     return tt::tt_metal::operation::run(
         ttnn::ccl::all_gather_matmul_async_detail::create_all_gather_matmul_async_struct(
