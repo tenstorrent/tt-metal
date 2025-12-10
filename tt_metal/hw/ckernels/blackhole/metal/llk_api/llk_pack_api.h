@@ -302,15 +302,6 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>(face_r_dim, narrow_tile);
 }
 
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_pack_get_tile(std::uint32_t output, std::uint32_t tile_index, std::uint32_t* p_tile) {
-    _llk_pack_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
-}
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_pack_release_tile(std::uint32_t output) {
-    _llk_pack_release_tile_<mail2math, mail2pack>();
-}
-
 inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_pack_debug_dump_(data, byte_size); }
 
 inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
