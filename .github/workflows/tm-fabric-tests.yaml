@@ -1,8 +1,6 @@
 name: "(TM-Fabric) Fabric Tests"
 
 on:
-  push:
-    branches: ["mchiou/31319-create-consolidated-fabric-test-pipeline"]
   workflow_dispatch:
     inputs:
       run-wh-n300-fabric-tests:
@@ -91,29 +89,16 @@ jobs:
         run: |
           matrix_items=()
 
-          # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
-            run_wh_t3k="${{ inputs.run-wh-t3k-fabric-tests }}"
-            run_wh_6u="${{ inputs.run-wh-6u-fabric-tests }}"
-            run_bh="${{ inputs.run-bh-multi-card-unit-tests }}"
-            bh_llmbox="${{ inputs.bh-runner-llmbox }}"
-            bh_deskbox="${{ inputs.bh-runner-deskbox }}"
-            bh_loudbox="${{ inputs.bh-runner-loudbox }}"
-            bh_p300="${{ inputs.bh-runner-p300 }}"
-            bh_qb_ge="${{ inputs.bh-runner-qb-ge }}"
-          else
-            # Default to true for workflow_call and push events
-            run_wh_n300="true"
-            run_wh_t3k="true"
-            run_wh_6u="true"
-            run_bh="true"
-            bh_llmbox="true"
-            bh_deskbox="true"
-            bh_loudbox="true"
-            bh_p300="true"
-            bh_qb_ge="true"
-          fi
+          # Use inputs from workflow_dispatch
+          run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
+          run_wh_t3k="${{ inputs.run-wh-t3k-fabric-tests }}"
+          run_wh_6u="${{ inputs.run-wh-6u-fabric-tests }}"
+          run_bh="${{ inputs.run-bh-multi-card-unit-tests }}"
+          bh_llmbox="${{ inputs.bh-runner-llmbox }}"
+          bh_deskbox="${{ inputs.bh-runner-deskbox }}"
+          bh_loudbox="${{ inputs.bh-runner-loudbox }}"
+          bh_p300="${{ inputs.bh-runner-p300 }}"
+          bh_qb_ge="${{ inputs.bh-runner-qb-ge }}"
 
           if [[ "$run_wh_n300" == "true" ]]; then
             matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
@@ -186,7 +171,7 @@ jobs:
       bh-runner-p300: ${{ matrix.test-config.bh-runner-p300 || false }}
       bh-runner-qb-ge: ${{ matrix.test-config.bh-runner-qb-ge || false }}
   fabric-perf-tests:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
+    if: ${{ inputs.run-wh-t3k-perf-tests != false }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
@@ -194,6 +179,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-perf-fabric-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-bw != false || github.event_name == 'push' }}
-      run-perf-fabric-latency: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-latency != false || github.event_name == 'push' }}
-      run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}
+      run-perf-fabric-bw: ${{ inputs.run-perf-fabric-bw != false }}
+      run-perf-fabric-latency: ${{ inputs.run-perf-fabric-latency != false }}
+      run-perf-fabric-mux-bw: ${{ inputs.run-perf-fabric-mux-bw != false }}
