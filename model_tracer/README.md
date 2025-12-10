@@ -10,6 +10,21 @@ Automatically extracts real-world operation configurations from model tests and 
 - ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
+### Currently Traced Models
+
+The following models have been traced and their configurations are available in `ttnn_operations_master.json`:
+
+**N300 Machine:**
+- **meta-llama/Llama-3.2-11B-Vision-Instruct** - Vision-language model
+- **Qwen/Qwen2.5-Coder-7B-Instruct** - Code generation model
+- **deepseek-ai/deepseek-llm-7b-chat** - Chat model
+- **meta-llama/Llama-3.2-1B-Instruct** - Small instruction-tuned model
+- **efficientnetb0** - EfficientNet-B0 vision model
+
+These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
+
+*Last updated: December 10, 2025*
+
 ---
 
 ## Quick Reference
