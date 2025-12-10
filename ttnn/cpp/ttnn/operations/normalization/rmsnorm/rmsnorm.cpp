@@ -55,7 +55,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(LayerNormDefaultProgramConfig{}),
+        program_config.value_or(create_program_config(input_tensor)),
         kernel_config_val,
         std::nullopt,  // dtype
         LayerNormType::RMSNORM);
