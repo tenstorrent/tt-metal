@@ -29,7 +29,6 @@ def dropout(hidden_states, p, training):
 def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapper, n_layers=None):
     """
     Generates empty KV cache for self-attention and cross-attention, and sends to device.
-
     Returns:
         tuple: (kv_cache, cross_attn_cache)
             - kv_cache: List of [K, V] tensors per layer for self-attention
@@ -65,8 +64,6 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
             )
             kv_cache_layer.append(cache_k_or_v)
         kv_cache.append(kv_cache_layer)
-
-        # Cross-attention cache (populated lazily on first decoder pass, then reused)
         cross_attn_cache.append([None, None])
 
     return kv_cache, cross_attn_cache
@@ -264,8 +261,8 @@ def whisper_attention(
     is_decode,
     encoder_hidden_states=None,
     kv_cache=None,
-    current_decode_pos=None,
     cross_attn_cache=None,
+    current_decode_pos=None,
     *,
     parameters,
 ):
@@ -291,7 +288,6 @@ def whisper_attention(
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         # Use cached cross-attention K/V if available, otherwise compute and cache
-        # cross_attn_cache format: [K, V] - stores tensor references directly
         if cross_attn_cache is not None and cross_attn_cache[0] is not None:
             # Use cached K/V from previous decoder step
             key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
@@ -299,10 +295,8 @@ def whisper_attention(
             # First pass: compute K/V and store references in cache
             key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
             if cross_attn_cache is not None:
-                # Store references directly (no copy overhead)
                 cross_attn_cache[0] = key_states
                 cross_attn_cache[1] = value_states
-
         attn_output = functional_sdpa(
             query_states,
             key_states,
@@ -528,6 +522,7 @@ def decoder_layer(
         is_decode=True,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
         cross_attn_cache=cross_attn_cache,
         parameters=parameters.encoder_attn,
@@ -577,8 +572,8 @@ def decoder(
     decoder_attention_mask,
     encoder_hidden_states,
     kv_cache=None,
-    current_decode_pos=None,
     cross_attn_cache=None,
+    current_decode_pos=None,
     *,
     parameters,
 ):
@@ -594,6 +589,7 @@ def decoder(
             decoder_attention_mask,
             encoder_hidden_states,
             kv_cache=kv_cache[i] if kv_cache is not None else None,
+            cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             current_decode_pos=current_decode_pos,
             cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             parameters=decoder_layer_parameter,
@@ -793,8 +789,8 @@ def whisper(
     decoder_hidden_states,
     decoder_attention_mask,
     kv_cache=None,
-    current_decode_pos=None,
     cross_attn_cache=None,
+    current_decode_pos=None,
     *,
     parameters,
 ):
@@ -805,6 +801,7 @@ def whisper(
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
         cross_attn_cache=cross_attn_cache,
         parameters=parameters.decoder,

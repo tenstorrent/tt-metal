@@ -95,7 +95,6 @@ def generate(
     use_trace = generation_params.use_trace
 
     # Reset cross-attention cache for new generation
-    # Explicitly deallocate tensors from previous generation to free DRAM
     if cross_attn_cache is not None:
         for layer_cache in cross_attn_cache:
             if layer_cache[0] is not None:
@@ -466,6 +465,7 @@ def _generate_with_temperature(
                 decoder_attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_hidden_states,
                 kv_cache=kv_cache,
+                cross_attn_cache=cross_attn_cache,
                 current_decode_pos=current_decode_pos,
                 parameters=parameters.decoder,
             )
@@ -604,8 +604,8 @@ def _generate_with_temperature(
                         decoder_attention_mask=None,  # Not used with KV cache
                         encoder_hidden_states=encoder_hidden_states,
                         kv_cache=kv_cache,
-                        current_decode_pos=current_decode_pos,
                         cross_attn_cache=cross_attn_cache,
+                        current_decode_pos=current_decode_pos,
                         parameters=parameters.decoder,
                     )
 
