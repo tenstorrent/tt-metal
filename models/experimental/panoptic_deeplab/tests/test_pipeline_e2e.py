@@ -35,7 +35,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
 )
 from models.common.utility_functions import profiler
-from tests.ttnn.utils_for_testing import check_with_pcc
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 from models.tt_cnn.tt.executor import (
     ModelExecutor,
 )
@@ -377,25 +377,9 @@ def test_panoptic_deeplab_pipeline_e2e(
         assert len(outputs) == len(reference_outputs), f"Expected {len(reference_outputs)} outputs, got {len(outputs)}"
         assert len(outputs) == num_inputs, f"Expected {num_inputs} outputs, got {len(outputs)}"
 
-        # Validate outputs with PCC checks
-        logger.info("Validating outputs with PCC checks...")
+        # Validate outputs with PCC and relative error checks
+        logger.info("Validating outputs with PCC and relative error checks...")
         all_passed = []
-        semantic_pcc_values = []
-        center_pcc_values = []
-        offset_pcc_values = []
-
-        def get_pcc_value(pytorch_output, ttnn_output, to_channel_first=False, output_channels=None, exp_pcc=0.999):
-            """Helper function to get PCC value without logging."""
-            ttnn_output_torch = ttnn.to_torch(ttnn_output)
-
-            if to_channel_first:
-                ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
-
-            if output_channels is not None:
-                ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
-
-            passed, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
-            return passed, float(pcc)
 
         for i, (ttnn_output, ref_tuple) in enumerate(zip(outputs, reference_outputs)):
             pytorch_semantic, pytorch_center, pytorch_offset = ref_tuple
@@ -423,70 +407,58 @@ def test_panoptic_deeplab_pipeline_e2e(
                 assert isinstance(ttnn_offset, ttnn.Tensor), f"Offset output {i} should be ttnn.Tensor"
                 assert ttnn_offset.storage_type() == ttnn.StorageType.HOST, f"Offset output {i} should be on host"
 
-            # Check semantic output
-            passed, pcc = get_pcc_value(
-                pytorch_semantic,
-                ttnn_semantic,
+            # Check semantic output with PCC and relative errors
+            passed = check_ttnn_output(
+                layer_name=f"semantic_{i}",
+                pytorch_output=pytorch_semantic,
+                ttnn_output=ttnn_semantic,
                 to_channel_first=False,
                 output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
                 exp_pcc=0.985,
+                exp_abs_err=1.340,
+                exp_rel_err=0.480,
             )
             all_passed.append(passed)
-            semantic_pcc_values.append(pcc)
 
             # Check instance outputs (only for PANOPTIC_DEEPLAB)
             if model_category == PANOPTIC_DEEPLAB:
-                passed_center, pcc_center = get_pcc_value(
-                    pytorch_center,
-                    ttnn_center,
+                passed_center = check_ttnn_output(
+                    layer_name=f"center_{i}",
+                    pytorch_output=pytorch_center,
+                    ttnn_output=ttnn_center,
                     to_channel_first=False,
                     output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
                     exp_pcc=0.784,
+                    exp_abs_err=0.001,
+                    exp_rel_err=2.710,
                 )
                 all_passed.append(passed_center)
-                center_pcc_values.append(pcc_center)
 
-                passed_offset, pcc_offset = get_pcc_value(
-                    pytorch_offset,
-                    ttnn_offset,
+                passed_offset = check_ttnn_output(
+                    layer_name=f"offset_{i}",
+                    pytorch_output=pytorch_offset,
+                    ttnn_output=ttnn_offset,
                     to_channel_first=False,
                     output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
                     exp_pcc=0.985,
+                    exp_abs_err=11.480,
+                    exp_rel_err=1.120,
                 )
                 all_passed.append(passed_offset)
-                offset_pcc_values.append(pcc_offset)
 
         # Cleanup
         pipe.cleanup()
 
-        # Calculate and display PCC statistics
-        def print_pcc_stats(pcc_values, output_name):
-            """Helper function to calculate and print PCC statistics."""
-            if pcc_values:
-                min_pcc = min(pcc_values)
-                max_pcc = max(pcc_values)
-                avg_pcc = sum(pcc_values) / len(pcc_values)
-                logger.info(f"  {output_name}: Min: {min_pcc:.6f}, Max: {max_pcc:.6f}, Avg: {avg_pcc:.6f}")
-            else:
-                logger.warning(f"  {output_name}: No PCC values collected!")
-
-        logger.info(f"PCC statistics for {executor_config.name} with {model_category}:")
-        print_pcc_stats(semantic_pcc_values, "Semantic")
-
-        if model_category == PANOPTIC_DEEPLAB:
-            print_pcc_stats(center_pcc_values, "Center")
-            print_pcc_stats(offset_pcc_values, "Offset")
-
-        # Print timing results after PCC statistics
+        # Print timing results
         logger.info(
             f"Timing results for {executor_config.name} with {model_category}: "
             f"Average execution time: {avg_execution_time_us:.2f} μs, "
             f"Average samples per second: {samples_per_second:.2f}"
         )
 
-        # Fail test if any PCC checks failed
-        assert all(all_passed), f"Some outputs did not pass PCC check. Results: {all_passed}"
-        logger.info(f"✅ All PCC tests passed for {executor_config.name} with {model_category}!")
+        # Fail test if any PCC or relative error checks failed
+        assert all(all_passed), f"Some outputs did not pass PCC or relative error check. Results: {all_passed}"
+        logger.info(f"✅ All PCC and relative error tests passed for {executor_config.name} with {model_category}!")
 
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")

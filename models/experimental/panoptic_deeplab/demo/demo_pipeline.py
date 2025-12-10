@@ -36,7 +36,7 @@ from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
     create_pipeline_from_config,
 )
 from models.common.utility_functions import profiler
-from tests.ttnn.utils_for_testing import check_with_pcc
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 def create_model_wrapper(ttnn_model: TtPanopticDeepLab):
@@ -344,28 +344,12 @@ def run_panoptic_deeplab_demo_pipeline(
     assert len(outputs) == len(reference_outputs), f"Expected {len(reference_outputs)} outputs, got {len(outputs)}"
     assert len(outputs) == num_inputs, f"Expected {num_inputs} outputs, got {len(outputs)}"
 
-    # Validate outputs with PCC checks
-    logger.info("Validating outputs with PCC checks...")
+    # Validate outputs with PCC and relative error checks
+    logger.info("Validating outputs with PCC and relative error checks...")
     logger.info("=" * 80)
-    logger.info(f"PCC Values for Individual Images ({model_category}):")
+    logger.info(f"Validation Results for Individual Images ({model_category}):")
     logger.info("=" * 80)
     all_passed = []
-    semantic_pcc_values = []
-    center_pcc_values = []
-    offset_pcc_values = []
-
-    def get_pcc_value(pytorch_output, ttnn_output, to_channel_first=False, output_channels=None, exp_pcc=0.999):
-        """Helper function to get PCC value without logging."""
-        ttnn_output_torch = ttnn.to_torch(ttnn_output)
-
-        if to_channel_first:
-            ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
-
-        if output_channels is not None:
-            ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
-
-        passed, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
-        return passed, float(pcc)
 
     for i, (ttnn_output, ref_tuple) in enumerate(zip(outputs, reference_outputs)):
         # Get image name for this output
@@ -397,45 +381,46 @@ def run_panoptic_deeplab_demo_pipeline(
             assert isinstance(ttnn_offset, ttnn.Tensor), f"Offset output {i} should be ttnn.Tensor"
             assert ttnn_offset.storage_type() == ttnn.StorageType.HOST, f"Offset output {i} should be on host"
 
-        # Check semantic output
-        passed, pcc = get_pcc_value(
-            pytorch_semantic,
-            ttnn_semantic,
+        logger.info(f"Image {i+1}/{num_inputs}: {image_name}")
+
+        # Check semantic output with PCC and relative errors
+        passed = check_ttnn_output(
+            layer_name=f"semantic_{image_name}",
+            pytorch_output=pytorch_semantic,
+            ttnn_output=ttnn_semantic,
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-            exp_pcc=0.95,
+            exp_pcc=0.951,
+            exp_abs_err=1.952,
+            exp_rel_err=0.180,
         )
         all_passed.append(passed)
-        semantic_pcc_values.append(pcc)
-
-        # Print PCC for this image
-        logger.info(f"Image {i+1}/{num_inputs}: {image_name}")
-        logger.info(f"  Semantic PCC: {pcc:.6f} {'✅' if passed else '❌'}")
 
         # Check instance outputs (only for PANOPTIC_DEEPLAB)
         if model_category == PANOPTIC_DEEPLAB:
-            passed_center, pcc_center = get_pcc_value(
-                pytorch_center,
-                ttnn_center,
+            passed_center = check_ttnn_output(
+                layer_name=f"center_{image_name}",
+                pytorch_output=pytorch_center,
+                ttnn_output=ttnn_center,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-                exp_pcc=0.784,
+                exp_pcc=0.949,
+                exp_abs_err=0.008,
+                exp_rel_err=22.349,
             )
             all_passed.append(passed_center)
-            center_pcc_values.append(pcc_center)
 
-            passed_offset, pcc_offset = get_pcc_value(
-                pytorch_offset,
-                ttnn_offset,
+            passed_offset = check_ttnn_output(
+                layer_name=f"offset_{image_name}",
+                pytorch_output=pytorch_offset,
+                ttnn_output=ttnn_offset,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                exp_pcc=0.965,
+                exp_pcc=0.966,
+                exp_abs_err=12.160,
+                exp_rel_err=2.405,
             )
             all_passed.append(passed_offset)
-            offset_pcc_values.append(pcc_offset)
-
-            logger.info(f"  Center PCC: {pcc_center:.6f} {'✅' if passed_center else '❌'}")
-            logger.info(f"  Offset PCC: {pcc_offset:.6f} {'✅' if passed_offset else '❌'}")
 
         logger.info("")  # Empty line between images
 
@@ -456,11 +441,11 @@ def run_panoptic_deeplab_demo_pipeline(
     logger.info("=" * 80)
     logger.info("")
 
-    # Log PCC check results (but don't fail - this is a demo)
+    # Log PCC and relative error check results
     if not all(all_passed):
-        logger.warning(f"Some outputs did not pass PCC check. Results: {all_passed}")
+        logger.warning(f"Some outputs did not pass PCC or relative error check. Results: {all_passed}")
     else:
-        logger.info(f"✅ All PCC checks passed for {model_category}!")
+        logger.info(f"✅ All PCC and relative error checks passed for {model_category}!")
 
     # Process results
     logger.info("Processing results...")
