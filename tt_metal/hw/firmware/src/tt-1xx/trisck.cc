@@ -35,6 +35,9 @@ namespace ckernel {
 #endif
 volatile tt_reg_ptr uint* PTR_CONST regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
 volatile tt_reg_ptr uint* PTR_CONST pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
+#if defined(__INSTRN_BUFFER_TOS)
+volatile tt_reg_ptr uint32_t* const instrn_buffer = reinterpret_cast<volatile uint32_t*>(INSTRN_BUF_BASE);
+#endif
 volatile tt_reg_ptr uint* PTR_CONST mailbox_base[4] = {
     reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX0_BASE),
     reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX1_BASE),
