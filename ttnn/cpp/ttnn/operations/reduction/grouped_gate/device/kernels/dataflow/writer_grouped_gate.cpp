@@ -355,6 +355,7 @@ void kernel_main() {
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
+    constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
@@ -390,7 +391,8 @@ void kernel_main() {
     write_single_scalar(scales_cb_index, packed_route_scale);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        uint32_t tokens_per_tile = height_tile % seq_len_tiles == 0 ? remainder_tokens_per_tile : tokens_per_tile;
+        // Use remainder_tokens_per_tile only for the LAST tile of the sequence, otherwise use full tile_height
+        uint32_t tokens_per_tile = ((height_tile + 1) % seq_len_tiles == 0) ? remainder_tokens_per_tile : tile_height;
         generate_summed_experts_tiles(
             summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group, tokens_per_tile);
         generate_winning_group_tiles<

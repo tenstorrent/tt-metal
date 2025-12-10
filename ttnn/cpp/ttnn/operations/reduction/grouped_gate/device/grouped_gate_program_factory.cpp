@@ -336,6 +336,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"experts", experts},
         {"width_tiles", width_tiles},
         {"tile_width", tile_width},
+        {"tile_height", tile_height},
         {"tokens", tokens},
         {"topk_groups", operation_attributes.topk_groups},
         {"n_groups", operation_attributes.n_groups},
