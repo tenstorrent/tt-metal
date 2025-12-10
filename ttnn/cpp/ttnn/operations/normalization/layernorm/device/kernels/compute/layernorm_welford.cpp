@@ -117,17 +117,17 @@ void MAIN {
             cb_wait_front(cb_x, wt + 1);
             // Welford's needs transposed input tile
             transpose_wh_tile(cb_x, wt, input_dst);
-            welford_tile<W>(input_dst, start_N, *p_reciprocals);
+            welford_update<W>(input_dst, start_N, *p_reciprocals);
             start_N += tile_width;
         }
 
         // Process the last tile
         cb_wait_front(cb_x, Wt);
         transpose_wh_tile(cb_x, Wt - 1, input_dst);
-        welford_partial_tile<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
+        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
 
         // Store the mean and variance to the destination registers
-        welford_store_mean_var_to_dst_row<W>(mean_dst, W - 1, *p_reciprocals);
+        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
         tile_regs_commit();
 
         // Transpose mean and var back to columns

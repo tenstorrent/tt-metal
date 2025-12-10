@@ -129,7 +129,6 @@ void MAIN {
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t tile_id = b * block_hw;
         cb_reserve_back(cb_ex_partial, 2);
-        reconfig_data_format_srcb(cb_in0);
         transpose_wh_init(cb_in0, cb_ex_partial);
         tile_regs_acquire();
         welford_init();
@@ -137,7 +136,7 @@ void MAIN {
         uint32_t block_xy_coord = 0;
 
         for (uint32_t g = 0; g < num_groups; ++g) {
-            welford_store_mean_m2_to_dst(mean_dst, g);
+            welford_save_state(mean_dst, g);
         }
 
         for (uint32_t i = 0; i < block_h; ++i) {
@@ -173,10 +172,9 @@ void MAIN {
                     uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                    welford_load_mean_m2_from_dst(mean_dst, g);
-                    welford_partial_tile<0>(
-                        input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
-                    welford_store_mean_m2_to_dst(mean_dst, g);
+                    welford_restore_state(mean_dst, g);
+                    welford_update_rows<0>(input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
+                    welford_save_state(mean_dst, g);
 
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
@@ -209,8 +207,8 @@ void MAIN {
 
         for (uint32_t g = 0; g < num_groups; ++g) {
             // Convert M2 to variance
-            welford_load_mean_m2_from_dst(mean_dst, g);
-            welford_store_mean_var_to_dst_raw<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
+            welford_restore_state(mean_dst, g);
+            welford_finalize_to_face<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
         }
 
         tile_regs_commit();
@@ -225,7 +223,7 @@ void MAIN {
         cb_reserve_back(cb_ex2pe, num_groups);
         // (Var + eps)
         add_tiles_init(cb_ex_global, cb_eps);
-        reconfig_data_format_srcb(cb_in0, cb_eps);
+        reconfig_data_format_srcb(cb_eps);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(cb_ex_global, cb_eps, 1 + (g << 1), 0, dst0);
@@ -271,7 +269,7 @@ void MAIN {
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
                     sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
-                    reconfig_data_format_srcb(cb_eps, cb_ex_global);
+                    reconfig_data_format(cb_in0, cb_ex_global);
 
                     tile_regs_acquire();
 #ifdef TILIZE_IN
@@ -289,8 +287,7 @@ void MAIN {
                     const uint32_t mask_index = mask_offset + block_w_index;
 
                     mul_tiles_bcast_scalar_init_short(cb_input_mask, cb_ex2pe);
-                    reconfig_data_format_srca(cb_input_mask);
-                    reconfig_data_format_srcb(cb_ex_global, cb_ex2pe);
+                    reconfig_data_format(cb_in0, cb_input_mask, cb_ex_global, cb_ex2pe);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(cb_input_mask, cb_ex2pe, mask_index, g, dst0);
                     tile_regs_commit();
@@ -302,8 +299,7 @@ void MAIN {
                     // // c. a * b
                     cb_wait_front(cb_xmm, 2);
                     mul_tiles_init(cb_xmm, cb_xmm);
-                    reconfig_data_format_srca(cb_xmm);
-                    reconfig_data_format_srcb(cb_ex2pe, cb_xmm);
+                    reconfig_data_format(cb_input_mask, cb_xmm, cb_ex2pe, cb_xmm);
                     tile_regs_acquire();
                     mul_tiles(cb_xmm, cb_xmm, 0, 1, dst0);
                     tile_regs_commit();
@@ -329,6 +325,7 @@ void MAIN {
                     } else {
                         // This is not the first group for this tile, so we need to add
                         // the results over what is already in cb_x
+                        reconfig_data_format_srca(cb_xmm, cb_x);
                         add_tiles_init(cb_x, cb_xmm);
 
                         cb_wait_front(cb_xmm, 1);
@@ -394,7 +391,7 @@ void MAIN {
 
                 if constexpr (do_beta) {
                     add_bcast_rows_init_short(cb_x, cb_beta);
-                    reconfig_data_format_srcb(cb_gamma, cb_beta);
+                    reconfig_data_format_srcb(do_gamma ? cb_gamma : cb_xmm, cb_beta);
 
                     cb_wait_front(cb_x, 1);
                     tile_regs_acquire();
@@ -410,7 +407,7 @@ void MAIN {
 
                 // Write out the final output
                 copy_tile_init(cb_x);
-                reconfig_data_format_srcb(cb_beta, cb_x);
+                reconfig_data_format_srcb(do_beta ? cb_beta : cb_xmm, cb_x);
 
                 cb_wait_front(cb_x, 1);
                 tile_regs_acquire();
