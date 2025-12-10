@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
@@ -70,7 +71,10 @@ class Demo:
 
         # Create TTNN model
         self.ttnn_model = ttnn_MobileNetV3(
-            inverted_residual_setting=inverted_residual_setting, last_channel=last_channel, parameters=parameters
+            inverted_residual_setting=inverted_residual_setting,
+            last_channel=last_channel,
+            parameters=parameters,
+            device=self.ttnn_device,
         )
         logger.info("TTNN model ready.")
 

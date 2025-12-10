@@ -1,6 +1,6 @@
 # MobileNetV3
 
-**Platforms:** Wormhole (n150)
+**Platforms:** Wormhole (n150 and n300)
 **Supported Input Resolution:** `(224, 224)` = (Height, Width)
 
 ## Introduction
@@ -37,8 +37,8 @@ models/
 └── experimental/
     └── mobileNetV3/
         ├── resources/
-        │   ├── dog.jpeg              # sample input image
-        │   └── image_with_label.jpg  # sample output with label overlay
+        │   └── dog.jpeg              # sample input image
+        │
         │
         ├── tt/
         │   ├── custom_preprocessor.py
@@ -84,9 +84,15 @@ This runs an end-to-end flow that:
   - Runs the TT-NN graph,
   - Compares results (PCC validation).
 
+### Multi-Device:
+To run multi-device test:
+```
+pytest models/experimental/mobileNetV3/tests/pcc/test_mobilenetv3_multi_device.py
+```
+
 ### Run the Demo
 ```
-python3 models/experimental/mobileNetV3/demo/mobilenetV3_demo.py
+python3 models/experimental/mobileNetV3/demo/mobilenetV3_demo.py --input <input image path> --output <output image path>
 ```
 
 ### Custom Images
@@ -96,23 +102,22 @@ models/experimental/mobileNetV3/resources/
 ```
 Then re-run either the demo:
 ```
-python3 models/experimental/mobileNetV3/demo/mobilenetV3_demo.py
+python3 models/experimental/mobileNetV3/demo/mobilenetV3_demo.py --input models/experimental/mobileNetV3/resources/dog.jpeg --output models/experimental/mobileNetV3/resources/
 ```
 
 ## Performance
-### Single Device (BS=1):
+### Single Device (BS=1)(n150):
 - end-2-end perf with trace enable and 2CQ is `250` FPS
+
+### Multi Device (BS=2)(n300):
+- end-2-end perf with trace enable and 2CQ is `454` FPS
 
 To run perf test:
 ```
-pytest models/experimental/mobileNetV3/tests/perf/test_e2e_performant.py
+pytest models/experimental/mobileNetV3/tests/perf/test_mobilenetv3_perf.py::test_mobilenetv3_perf_single_device -s
+pytest models/experimental/mobileNetV3/tests/perf/test_mobilenetv3_perf.py::test_mobilenetv3_perf_multi_device -s
 ```
 
-### Multi-Device:
-To run multi-device test:
-```
-pytest models/experimental/mobileNetV3/tests/perf/test_mobilenetv3_multi_device.py
-```
 This test validates MobileNetV3-Small on multiple devices using data parallelism with:
   - `ShardTensorToMesh` for input distribution across devices,
   - `ReplicateTensorToMesh` for weight replication,

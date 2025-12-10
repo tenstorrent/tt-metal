@@ -16,12 +16,12 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 def run_model_pipeline(device, test_infra, num_measurement_iterations):
     tt_inputs_host, dram_input_mem_config, l1_input_mem_config, channels = test_infra.setup_sharded_input(device)
 
-    original_batch = test_infra.batch_size
     original_height = test_infra.resolution[0]
     original_width = test_infra.resolution[1]
+    batch_per_device = tt_inputs_host.shape[2] // (original_height * original_width)
 
     def model_wrapper(input_tensor):
-        reshaped_input = ttnn.reshape(input_tensor, (original_batch, original_height, original_width, channels))
+        reshaped_input = ttnn.reshape(input_tensor, (batch_per_device, original_height, original_width, channels))
         test_infra.input_tensor = reshaped_input
         test_infra.run()
         return test_infra.tt_output
@@ -119,7 +119,7 @@ def run_perf_e2e_mobilenetV3(
     "resolution, expected_inference_throughput",
     [((224, 224), 250)],
 )
-def test_e2e_performant(
+def test_mobilenetv3_perf_single_device(
     device,
     batch_size_per_device,
     model_location_generator,
@@ -143,9 +143,9 @@ def test_e2e_performant(
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((224, 224), 250)],
+    [((224, 224), 454)],
 )
-def test_e2e_performant_dp(
+def test_mobilenetv3_perf_multi_device(
     mesh_device,
     batch_size_per_device,
     model_location_generator,

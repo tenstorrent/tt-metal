@@ -115,12 +115,14 @@ class MobileNetV3PerformanceRunnerInfra:
                 torch_input_tensor, (0, pad_channels - original_channels), value=0
             )
 
-        batch = torch_input_tensor.shape[0]
-        height = torch_input_tensor.shape[1]
-        width = torch_input_tensor.shape[2]
-        channels = torch_input_tensor.shape[3]
-
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+
+        # ttnn tensor shape reflects per-device shape when using ShardTensorToMesh
+        batch = tt_inputs_host.shape[0]
+        height = tt_inputs_host.shape[1]
+        width = tt_inputs_host.shape[2]
+        channels = tt_inputs_host.shape[3]
+
         tt_inputs_host = ttnn.reshape(tt_inputs_host, (1, 1, batch * height * width, channels))
 
         dram_input_mem_config = get_memory_config_for_persistent_dram_tensor(
@@ -157,16 +159,27 @@ class MobileNetV3PerformanceRunnerInfra:
         # Validate output tensor
         tt_output = self.tt_output if tt_output is None else tt_output
         tt_output = ttnn.reshape(tt_output, (1, -1))
-        tt_output = ttnn.to_torch(tt_output)
+        tt_output = ttnn.to_torch(tt_output, mesh_composer=self.outputs_mesh_composer)
 
         self._PCC_THRESH = 0.98
         self.pcc_passed = self.pcc_message = []
 
         logger.info(f"MobileNet V3: batch_size={self.batch_size}, ")
-        passed, msg = check_with_pcc(self.torch_output, tt_output, pcc=self._PCC_THRESH)
-        self.pcc_passed.append(passed)
-        self.pcc_message.append(msg)
-        logger.info(f"MobileNet V3: PCC {msg}, shape={tt_output.shape}")
+
+        torch_output_ref = self.torch_output
+        if tt_output.shape[0] > torch_output_ref.shape[0]:
+            # Multi-device validation
+            for i in range(tt_output.shape[0]):
+                passed, msg = check_with_pcc(torch_output_ref[0:1], tt_output[i : i + 1], pcc=self._PCC_THRESH)
+                self.pcc_passed.append(passed)
+                self.pcc_message.append(msg)
+                logger.info(f"MobileNet V3 device {i}: PCC {msg}, shape={tt_output[i:i+1].shape}")
+        else:
+            # Single-device validation
+            passed, msg = check_with_pcc(torch_output_ref, tt_output, pcc=self._PCC_THRESH)
+            self.pcc_passed.append(passed)
+            self.pcc_message.append(msg)
+            logger.info(f"MobileNet V3: PCC {msg}, shape={tt_output.shape}")
 
         assert all(self.pcc_passed), logger.error(f"MobileNet V3 PCC check failed: {self.pcc_message}")
 
