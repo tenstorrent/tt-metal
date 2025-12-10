@@ -263,6 +263,7 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 class OpenVLALanguageModel(GenerationMixin):
     def __init__(self, device, local_state_dict=None):
+        self.device = device  # Store device reference for profiler flushing
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
@@ -484,6 +485,10 @@ class OpenVLALanguageModel(GenerationMixin):
             get_last_token=((seq_len - 1) // 32) * 32,
         )
 
+        # Flush profiler buffer after prefill (prevent overflow for large models)
+        ttnn.synchronize_device(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
+
         last_token_idx = seq_len - 1
 
         # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -505,9 +510,13 @@ class OpenVLALanguageModel(GenerationMixin):
                 sampling_params=None,
                 enable_trace=False,
             )
+            # Flush profiler buffer after each decode step to prevent overflow
+            ttnn.synchronize_device(self.device)
+            ttnn.ReadDeviceProfiler(self.device)
             CHECKPOINTS.checkpoint("end_LLM_DECODE")
             current_pos += 1
             output_toks.append(logits)
+            out_tok = torch.argmax(logits, dim=-1).unsqueeze(0)
         return output_toks
 
 
@@ -732,9 +741,13 @@ class PrismaticVisionBackbone(nn.Module):
             img, img_fused = pixel_values
             CHECKPOINTS.checkpoint("start_DINOFORWARD")
             patches = self.ttnn_featurizer(img)[:, 5:, :]
+            # Flush profiler buffer after DinoV2 (generates many ops)
+            ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_DINOFORWARD")
             CHECKPOINTS.checkpoint("start_SIGLIPFORWARD")
             patches_fused = self.ttnn_fused_featurizer(img_fused)
+            # Flush profiler buffer after SigLIP
+            ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_SIGLIPFORWARD")
         if self.ttnn_device is None:
             return torch.cat([patches, patches_fused], dim=2)
@@ -1060,6 +1073,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 CHECKPOINTS.checkpoint("end_PREPROCESS")
                 CHECKPOINTS.checkpoint("start_VISIONFORWARD")
                 ttnn_patch_features = self.vision_backbone(pixel_values)
+                # Flush profiler buffer after vision processing
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_VISIONFORWARD")
                 CHECKPOINTS.checkpoint("start_PROJECTORFORWARD")
                 projected_patch_embeddings = self.ttnn_projector.forward(ttnn_patch_features)
@@ -1067,6 +1082,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     projected_patch_embeddings,
                     -1,
                 )
+                # Flush profiler buffer after projector
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_PROJECTORFORWARD")
             else:
                 patch_features = self.vision_backbone(pixel_values)
@@ -1095,6 +1112,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     input_ids, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
                 )
                 input_embeddings = self.get_input_embeddings()(ttnn_input_ids)
+                # Flush profiler buffer after embeddings
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_LLMINPUTEMBEDDINGS")
             else:
                 input_embeddings = self.get_input_embeddings()(input_ids)
@@ -1106,6 +1125,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 )
                 multimodal_embeddings = ttnn.unsqueeze(multimodal_embeddings, dim=0)
                 multimodal_embeddings = ttnn.to_layout(multimodal_embeddings, layout=ttnn.TILE_LAYOUT)
+                # Flush profiler buffer after concat
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
                 CHECKPOINTS.checkpoint("end_VISIONLLMCONCAT")
             else:
                 # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
@@ -1140,6 +1161,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
+            # Flush profiler buffer after LLM forward (prefill + decode)
+            if self.ttnn_device is not None:
+                ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_LLMFORWARD")
 
         # === Otherwise =>> Assume Invalid! ===
