@@ -734,7 +734,6 @@ void sdpa_inner_loop(
     const uint32_t chunked_q_chunk_offset,
     const uint32_t iter_k_chunk_start,
     const uint32_t iter_k_chunk_end,
-    const uint32_t k_num_chunks,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
     const uint32_t qk_chunk_tiles,
@@ -863,7 +862,7 @@ void sdpa_inner_loop(
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
             } else if constexpr (use_padded_mask) {
                 // only uses mask on the last K chunk if it exists at all
-                if (k_chunk == k_num_chunks - 1) {
+                if (k_chunk == iter_k_chunk_end - 1) {
                     /* QK += MASK */
                     reconfig_data_format(cb_qk_im, cb_mask_in);
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
