@@ -18,6 +18,21 @@
  Metric Creation
 **************************************************************************************************/
 
+// Helper function to get ERISC clock speed in Hz
+static float get_erisc_clock_speed_hz(tt::umd::FirmwareInfoProvider* firmware_info_provider, tt::ARCH arch) {
+    // Try to use AI clock from firmware info provider if available
+    if (firmware_info_provider != nullptr) {
+        std::optional<uint32_t> aiclk_mhz = firmware_info_provider->get_aiclk();
+        if (aiclk_mhz.has_value()) {
+            // Convert from MHz to Hz
+            return static_cast<float>(aiclk_mhz.value()) * 1e6f;
+        }
+    }
+
+    // Default: return 1200 MHz in Hz regardless of architecture
+    return 1200000000.0f;
+}
+
 // Creates Ethernet metrics with contiguous IDs and returns the next free ID value
 void create_ethernet_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
@@ -106,6 +121,39 @@ void create_ethernet_metrics(
                 telemetry_reader = std::make_shared<FabricTelemetryReader>(chip_id, cluster, hal);
             }
 
+            tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
+            tt::ChipId pcie_chip_id = cluster_descriptor->get_closest_mmio_capable_chip(chip_id);
+            tt::umd::TTDevice* pcie_device = cluster->get_tt_device(pcie_chip_id);
+            tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr;
+            if (pcie_device) {
+                // Use ARC telemetry from the *nearest* PCIE chip (ARC telemetry not available for
+                // remote chips). This is primarily for N300-based systems (such as LoudBox). ARC
+                // telemetry provides the core clock speed but is not accessible on remote chips,
+                // therefore we just use the adjacent chip's speed, which is not necessarily
+                // correct but is reasonable. Not an issue on e.g. Galaxy boxes where every chip
+                // is MMIO-mapped and therefore has ARC firmware telemetry.
+                firmware_info_provider = pcie_device->get_firmware_info_provider();
+            } else {
+                float default_erisc_clock_speed_hz = get_erisc_clock_speed_hz(nullptr, hal->get_arch());
+                log_warning(
+                    tt::LogAlways,
+                    "Unable to obtain ARC firmware telemetry for tray_id={}, asic_location={}, channel={}, chip_id={}. "
+                    "Bandwidth estimates will use {} MHz.",
+                    *tray_id,
+                    *asic_location,
+                    channel,
+                    chip_id,
+                    int(default_erisc_clock_speed_hz / 1e6));
+            }
+
+            uint_metrics.push_back(std::make_unique<FabricMeshIdMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricDeviceIdMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricDirectionMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricConfigMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
             uint_metrics.push_back(std::make_unique<FabricTxWordsMetric>(
                 tray_id, asic_location, channel, telemetry_reader, topology_translation));
             uint_metrics.push_back(std::make_unique<FabricRxWordsMetric>(
@@ -117,13 +165,37 @@ void create_ethernet_metrics(
             uint_metrics.push_back(std::make_unique<FabricSupportedStatsMetric>(
                 tray_id, asic_location, channel, telemetry_reader, topology_translation));
             double_metrics.push_back(std::make_unique<FabricTxBandwidthMetric>(
-                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+                tray_id,
+                asic_location,
+                channel,
+                telemetry_reader,
+                topology_translation,
+                firmware_info_provider,
+                hal->get_arch()));
             double_metrics.push_back(std::make_unique<FabricRxBandwidthMetric>(
-                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+                tray_id,
+                asic_location,
+                channel,
+                telemetry_reader,
+                topology_translation,
+                firmware_info_provider,
+                hal->get_arch()));
             double_metrics.push_back(std::make_unique<FabricTxPeakBandwidthMetric>(
-                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+                tray_id,
+                asic_location,
+                channel,
+                telemetry_reader,
+                topology_translation,
+                firmware_info_provider,
+                hal->get_arch()));
             double_metrics.push_back(std::make_unique<FabricRxPeakBandwidthMetric>(
-                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+                tray_id,
+                asic_location,
+                channel,
+                telemetry_reader,
+                topology_translation,
+                firmware_info_provider,
+                hal->get_arch()));
 
             size_t num_erisc_cores = (hal->get_arch() == tt::ARCH::BLACKHOLE) ? 2 : 1;
             for (size_t erisc_core = 0; erisc_core < num_erisc_cores; erisc_core++) {
@@ -412,7 +484,12 @@ std::unordered_map<std::string, std::string> EthernetUncorrectedCodewordCountMet
 // Helper to calculate bandwidth from word and cycle deltas
 // Returns bandwidth in MB/sec, or std::nullopt if calculation should be skipped
 static std::optional<double> calculate_bandwidth(
-    uint64_t delta_words, uint64_t delta_cycles, uint32_t channel, const char* metric_type) {
+    uint64_t delta_words,
+    uint64_t delta_cycles,
+    uint32_t channel,
+    const char* metric_type,
+    tt::umd::FirmwareInfoProvider* firmware_info_provider,
+    tt::ARCH arch) {
     if (delta_cycles == 0) {
         return std::nullopt;
     }
@@ -434,10 +511,10 @@ static std::optional<double> calculate_bandwidth(
         return std::nullopt;
     }
 
-    constexpr uint64_t BYTES_PER_WORD = 16;
-    constexpr uint64_t CLOCK_FREQ_MHZ = 1200;
+    constexpr uint64_t BYTES_PER_WORD = 4;
+    float clock_freq_hz = get_erisc_clock_speed_hz(firmware_info_provider, arch);
     double bytes_transferred = static_cast<double>(delta_words) * BYTES_PER_WORD;
-    double time_seconds = static_cast<double>(delta_cycles) / (CLOCK_FREQ_MHZ * 1e6);
+    double time_seconds = static_cast<double>(delta_cycles) / clock_freq_hz;
     return bytes_transferred / time_seconds / 1e6;
 }
 
@@ -450,7 +527,9 @@ static std::optional<double> update_bandwidth_metric_impl(
     uint64_t& prev_cycles,
     bool& first_update,
     uint32_t channel,
-    const char* metric_type) {
+    const char* metric_type,
+    tt::umd::FirmwareInfoProvider* firmware_info_provider,
+    tt::ARCH arch) {
     if (first_update) {
         prev_words = curr_words;
         prev_cycles = curr_cycles;
@@ -461,7 +540,7 @@ static std::optional<double> update_bandwidth_metric_impl(
     uint64_t delta_words = curr_words - prev_words;
     uint64_t delta_cycles = curr_cycles - prev_cycles;
 
-    auto bandwidth = calculate_bandwidth(delta_words, delta_cycles, channel, metric_type);
+    auto bandwidth = calculate_bandwidth(delta_words, delta_cycles, channel, metric_type, firmware_info_provider, arch);
 
     prev_words = curr_words;
     prev_cycles = curr_cycles;
@@ -680,12 +759,16 @@ FabricTxBandwidthMetric::FabricTxBandwidthMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    const std::unique_ptr<TopologyHelper>& topology_helper,
+    tt::umd::FirmwareInfoProvider* firmware_info_provider,
+    tt::ARCH arch) :
     DoubleMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
     channel_(channel),
-    telemetry_reader_(telemetry_reader) {
+    telemetry_reader_(telemetry_reader),
+    firmware_info_provider_(firmware_info_provider),
+    arch_(arch) {
     value_ = 0.0;
     link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
@@ -701,7 +784,15 @@ void FabricTxBandwidthMetric::update(
         uint64_t curr_words = snapshot->dynamic_info->tx_bandwidth.words_sent;
         uint64_t curr_cycles = snapshot->dynamic_info->tx_bandwidth.elapsed_cycles;
         auto bandwidth = update_bandwidth_metric_impl(
-            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "TX bandwidth");
+            curr_words,
+            curr_cycles,
+            prev_words_,
+            prev_cycles_,
+            first_update_,
+            channel_,
+            "TX bandwidth",
+            firmware_info_provider_,
+            arch_);
         if (bandwidth.has_value()) {
             set_value(bandwidth.value());
         }
@@ -721,12 +812,16 @@ FabricRxBandwidthMetric::FabricRxBandwidthMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    const std::unique_ptr<TopologyHelper>& topology_helper,
+    tt::umd::FirmwareInfoProvider* firmware_info_provider,
+    tt::ARCH arch) :
     DoubleMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
     channel_(channel),
-    telemetry_reader_(telemetry_reader) {
+    telemetry_reader_(telemetry_reader),
+    firmware_info_provider_(firmware_info_provider),
+    arch_(arch) {
     value_ = 0.0;
     link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
@@ -742,7 +837,15 @@ void FabricRxBandwidthMetric::update(
         uint64_t curr_words = snapshot->dynamic_info->rx_bandwidth.words_sent;
         uint64_t curr_cycles = snapshot->dynamic_info->rx_bandwidth.elapsed_cycles;
         auto bandwidth = update_bandwidth_metric_impl(
-            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "RX bandwidth");
+            curr_words,
+            curr_cycles,
+            prev_words_,
+            prev_cycles_,
+            first_update_,
+            channel_,
+            "RX bandwidth",
+            firmware_info_provider_,
+            arch_);
         if (bandwidth.has_value()) {
             set_value(bandwidth.value());
         }
@@ -762,12 +865,16 @@ FabricTxPeakBandwidthMetric::FabricTxPeakBandwidthMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    const std::unique_ptr<TopologyHelper>& topology_helper,
+    tt::umd::FirmwareInfoProvider* firmware_info_provider,
+    tt::ARCH arch) :
     DoubleMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
     channel_(channel),
-    telemetry_reader_(telemetry_reader) {
+    telemetry_reader_(telemetry_reader),
+    firmware_info_provider_(firmware_info_provider),
+    arch_(arch) {
     value_ = 0.0;
     link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
@@ -783,7 +890,15 @@ void FabricTxPeakBandwidthMetric::update(
         uint64_t curr_words = snapshot->dynamic_info->tx_bandwidth.words_sent;
         uint64_t curr_cycles = snapshot->dynamic_info->tx_bandwidth.elapsed_active_cycles;
         auto bandwidth = update_bandwidth_metric_impl(
-            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "TX peak bandwidth");
+            curr_words,
+            curr_cycles,
+            prev_words_,
+            prev_cycles_,
+            first_update_,
+            channel_,
+            "TX peak bandwidth",
+            firmware_info_provider_,
+            arch_);
         if (bandwidth.has_value()) {
             set_value(bandwidth.value());
         }
@@ -803,12 +918,16 @@ FabricRxPeakBandwidthMetric::FabricRxPeakBandwidthMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader,
-    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    const std::unique_ptr<TopologyHelper>& topology_helper,
+    tt::umd::FirmwareInfoProvider* firmware_info_provider,
+    tt::ARCH arch) :
     DoubleMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
     channel_(channel),
-    telemetry_reader_(telemetry_reader) {
+    telemetry_reader_(telemetry_reader),
+    firmware_info_provider_(firmware_info_provider),
+    arch_(arch) {
     value_ = 0.0;
     link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
 }
@@ -824,7 +943,15 @@ void FabricRxPeakBandwidthMetric::update(
         uint64_t curr_words = snapshot->dynamic_info->rx_bandwidth.words_sent;
         uint64_t curr_cycles = snapshot->dynamic_info->rx_bandwidth.elapsed_active_cycles;
         auto bandwidth = update_bandwidth_metric_impl(
-            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "RX peak bandwidth");
+            curr_words,
+            curr_cycles,
+            prev_words_,
+            prev_cycles_,
+            first_update_,
+            channel_,
+            "RX peak bandwidth",
+            firmware_info_provider_,
+            arch_);
         if (bandwidth.has_value()) {
             set_value(bandwidth.value());
         }
