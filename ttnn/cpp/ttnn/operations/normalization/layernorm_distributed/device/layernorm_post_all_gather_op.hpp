@@ -11,7 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "layernorm_distributed_types.hpp"
-#include "layernorm_types.hpp"
+#include "layernorm/device/layernorm_types.hpp"
 
 namespace ttnn::operations::normalization {
 

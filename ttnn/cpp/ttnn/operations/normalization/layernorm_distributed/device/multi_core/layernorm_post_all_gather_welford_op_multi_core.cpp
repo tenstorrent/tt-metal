@@ -375,7 +375,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         fp32_dest_acc_en,
         cb_length};
 
-    auto compute_kernel_file =
+    const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_post_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
