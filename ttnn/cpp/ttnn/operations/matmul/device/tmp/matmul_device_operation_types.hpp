@@ -38,14 +38,12 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    Tensor input_tensor_a;
-    Tensor input_tensor_b;
-    std::optional<Tensor> bias;
-    std::optional<Tensor> output_tensor;
-    std::vector<Tensor> batched_weights;
+    std::vector<Tensor> input_tensors;                           // a,b, weights
+    std::vector<std::optional<Tensor>> optional_input_tensors;   // bias
+    std::vector<std::optional<Tensor>> optional_output_tensors;  // output
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = Tensor;
+using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using tensor_return_value_t = std::vector<Tensor>;
 
 }  // namespace ttnn::operations::matmul

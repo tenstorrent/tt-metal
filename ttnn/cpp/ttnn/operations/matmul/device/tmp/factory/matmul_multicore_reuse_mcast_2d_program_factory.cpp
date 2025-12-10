@@ -1344,7 +1344,7 @@ void override_runtime_arguments_impl(
     const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
     tt::tt_metal::Program& program,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output_tensors) {
     auto mm_kernel_in0_sender_id = shared_variables.mm_kernel_in0_sender_id;
     auto in0_sender_interleaved_cores = shared_variables.in0_sender_interleaved_cores;
     auto mm_kernel_in1_sender_writer_id = shared_variables.mm_kernel_in1_sender_writer_id;
@@ -1358,13 +1358,25 @@ void override_runtime_arguments_impl(
     auto cb_output = shared_variables.cb_output;
     auto cores = shared_variables.cores;
 
-    auto* src_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_buffer_b = tensor_args.input_tensor_b.buffer();
-    const auto& bias_tensor = tensor_args.bias;
-    auto* dst_buffer = output_tensor.buffer();
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
 
-    bool src0_sharded = tensor_args.input_tensor_a.is_sharded();
-    bool out_sharded = output_tensor.is_sharded();
+    TT_FATAL(
+        input_tensors.size() + optional_input_tensors.size() == 3,
+        "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+        input_tensors.size(),
+        optional_input_tensors.size(),
+        input_tensors.size() + optional_input_tensors.size());
+    TT_FATAL(output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
+
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
+    const auto& bias_tensor = optional_input_tensors.at(0);
+
+    auto* dst_buffer = output_tensors.at(0).buffer();
+
+    bool src0_sharded = input_tensors[0].memory_config().is_sharded();
+    bool out_sharded = output_tensors[0].memory_config().is_sharded();
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {
@@ -1421,10 +1433,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuse
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    const auto& bias = tensor_args.bias;
-    const auto& output = tensor_return_value;
+    const auto& a = tensor_args.input_tensors.at(0);
+    const auto& b = tensor_args.input_tensors.at(1);
+    const auto& bias = tensor_args.optional_input_tensors.at(0);
+    const auto& output = tensor_return_value.at(0);
 
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     TT_FATAL(operation_attributes.program_config.has_value(), "Error: program_config field should have been populated");

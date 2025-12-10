@@ -186,10 +186,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     using namespace tt::constants;
 
-    const auto& input_tensor_a = args.input_tensor_a;
-    const auto& input_tensor_b = args.input_tensor_b;
-    const auto& output_tensor = args.output_tensor;
-    const auto& optional_bias = args.bias;
+    const auto& input_tensors = args.input_tensors;
+    const auto& input_tensor_a = args.input_tensors.at(0);
+    const auto& input_tensor_b = args.input_tensors.at(1);
+    const auto& optional_output_tensors = args.optional_output_tensors;
+    const auto& optional_input_tensors = args.optional_input_tensors;
 
     const auto& a_shape = input_tensor_a.logical_shape();
     const auto& b_shape = input_tensor_b.logical_shape();
@@ -213,27 +214,33 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         a_shape[-1],
         b_shape[-2]);
 
-    const bool is_optional_output_tensor = output_tensor.has_value();
+    const bool is_optional_output_tensor =
+        !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
 
-    const auto output_tensor_spec = compute_output_specs(attributes, args);
+    TT_FATAL(
+        optional_input_tensors.size() == 1,
+        "Must have exactly 1 optional input tensor, got: {}",
+        optional_input_tensors.size());
+
+    const auto output_tensor_spec = compute_output_specs(attributes, args).at(0);
     if (is_optional_output_tensor) {
-        const auto& optional_output_tensor_c = output_tensor.value();
-        const auto& optional_output_tensor_shape = optional_output_tensor_c.logical_shape();
+        const auto& optional_output_tensor_c = optional_output_tensors.at(0);
+        const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
             optional_output_tensor_shape,
             output_tensor_spec.logical_shape());
         TT_FATAL(
-            optional_output_tensor_c.dtype() == attributes.output_dtype.value(),
+            optional_output_tensor_c->dtype() == attributes.output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
-            optional_output_tensor_c.dtype(),
+            optional_output_tensor_c->dtype(),
             attributes.output_dtype.value());
         TT_FATAL(
-            optional_output_tensor_c.memory_config() == attributes.output_mem_config,
+            optional_output_tensor_c->memory_config() == attributes.output_mem_config,
             "Memory config mismatch between optional output tensor {} & output "
             "tensor {}",
-            optional_output_tensor_c.memory_config(),
+            optional_output_tensor_c->memory_config(),
             attributes.output_mem_config);
     } else {
         TT_FATAL(
@@ -285,6 +292,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
+    const auto& optional_bias = optional_input_tensors.at(0);
     uint32_t bias_single_tile_size = 0;
     if (optional_bias.has_value()) {
         auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
@@ -295,33 +303,35 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) &&
         attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
-        for (uint32_t i = 0; i < args.batched_weights.size(); ++i) {
+        for (uint32_t i = 1; i < input_tensors.size(); ++i) {
             TT_FATAL(
-                input_tensor_b.logical_shape() == args.batched_weights[i].logical_shape(),
+                input_tensor_b.logical_shape() == input_tensors[i].logical_shape(),
                 "for multi-tensor matmul, all weight tensors must have the same logical_shape, {} is not equal to {}",
                 input_tensor_b.logical_shape(),
-                args.batched_weights[i].logical_shape());
+                input_tensors[i].logical_shape());
             TT_FATAL(
-                input_tensor_b.padded_shape() == args.batched_weights[i].padded_shape(),
+                input_tensor_b.padded_shape() == input_tensors[i].padded_shape(),
                 "for multi-tensor matmul, all weight tensors must have the same padded_shape {} is not equal to {}",
                 input_tensor_b.padded_shape(),
-                args.batched_weights[i].padded_shape());
+                input_tensors[i].padded_shape());
             TT_FATAL(
-                input_tensor_b.tensor_spec() == args.batched_weights[i].tensor_spec(),
+                input_tensor_b.tensor_spec() == input_tensors[i].tensor_spec(),
                 "for multi-tensor matmul, all weight tensors must have the same tensor_spec {} is not equal to {}",
                 input_tensor_b.tensor_spec(),
-                args.batched_weights[i].tensor_spec());
+                input_tensors[i].tensor_spec());
             TT_FATAL(
-                input_tensor_b.layout() == args.batched_weights[i].layout(),
+                input_tensor_b.layout() == input_tensors[i].layout(),
                 "for multi-tensor matmul, all weight tensors must have the same layout {} is not equal to {}",
                 input_tensor_b.layout(),
-                args.batched_weights[i].layout());
+                input_tensors[i].layout());
             TT_FATAL(
-                input_tensor_b.dtype() == args.batched_weights[i].dtype(),
+                input_tensor_b.dtype() == input_tensors[i].dtype(),
                 "for multi-tensor matmul, all weight tensors must have the same _dtype {} is not equal to {}",
                 input_tensor_b.dtype(),
-                args.batched_weights[i].dtype());
+                input_tensors[i].dtype());
         }
+    } else {
+        TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
     }
 
     if (optional_bias.has_value()) {
@@ -984,12 +994,24 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     using namespace tt::tt_metal;
     using namespace tt::constants;
-    if (args.output_tensor.has_value()) {
-        return args.output_tensor.value().tensor_spec();
+    const auto& optional_output_tensors = args.optional_output_tensors;
+    const auto& input_tensors = args.input_tensors;
+    const auto& optional_input_tensors = args.optional_input_tensors;
+
+    TT_FATAL(
+        optional_output_tensors.size() <= 1,
+        "None or One Optional output tensor can be passed when accessing it "
+        "for computing Matmul's output specs");
+
+    const bool is_optional_output_tensor =
+        !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+
+    if (is_optional_output_tensor) {
+        return {optional_output_tensors.at(0)->tensor_spec()};
     }
 
-    const auto& input_tensor_a = args.input_tensor_a;
-    const auto& input_tensor_b = args.input_tensor_b;
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
 
     // Use the compute_matmul_output_shape function to get the output shape
     const auto output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
@@ -1002,7 +1024,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
     TT_FATAL(attributes.output_dtype.has_value(), "Error: output_dtype field should have been populated");
     if (attributes.output_mem_config.is_sharded()) {
-        const auto& optional_bias = args.bias;
+        const auto& optional_bias = optional_input_tensors.at(0);
         uint32_t bias_single_tile_size = 0;
         if (optional_bias.has_value()) {
             auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
@@ -1011,7 +1033,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
         MatmulProgramConfig chosen_program_config =
             get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, attributes);
         return std::visit(
-            [&](const auto& program_config) -> TensorSpec {
+            [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                     uint32_t M = (program_config.fuse_batch
@@ -1047,7 +1069,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                                     : tt::tt_metal::PageConfig(output_layout, output_tile),
                             mem_config));
 
-                    return tensor_spec;
+                    std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
+                    return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -1148,19 +1171,17 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else {
                     TT_FATAL(
-                        in0_tile_shape[0] == tt::constants::TILE_HEIGHT and
-                            in0_tile_shape[1] == tt::constants::TILE_WIDTH,
+                        in0_tile_shape[0] == TILE_HEIGHT and in0_tile_shape[1] == TILE_WIDTH,
                         "matmul with non-optimized program config does not "
                         "support tiny tile");
                     TT_FATAL(
-                        in1_tile_shape[0] == tt::constants::TILE_HEIGHT and
-                            in1_tile_shape[1] == tt::constants::TILE_WIDTH,
+                        in1_tile_shape[0] == TILE_HEIGHT and in1_tile_shape[1] == TILE_WIDTH,
                         "matmul with non-optimized program config does not "
                         "support tiny tile");
                     if (attributes.output_tile.has_value()) {
                         TT_FATAL(
-                            attributes.output_tile.value().get_tile_shape()[0] == TILE_HEIGHT and
-                                attributes.output_tile.value().get_tile_shape()[1] == TILE_WIDTH,
+                            attributes.output_tile->get_tile_shape()[0] == TILE_HEIGHT and
+                                attributes.output_tile->get_tile_shape()[1] == TILE_WIDTH,
                             "matmul with non-optimized program config does not "
                             "support tiny tile");
                     }
@@ -1171,41 +1192,61 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             chosen_program_config);
     }
 
-    return TensorSpec(
+    return {TensorSpec(
         output_shape,
         TensorLayout(
             attributes.output_dtype.value(),
             PageConfig(Layout::TILE, attributes.output_tile),
-            attributes.output_mem_config));
+            attributes.output_mem_config))};
 }
 
 MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
-    if (args.output_tensor.has_value()) {
-        return args.output_tensor.value();
+    const auto& optional_output_tensors = args.optional_output_tensors;
+    const auto& input_tensors = args.input_tensors;
+    tensor_return_value_t output_tensors;
+
+    if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
+        output_tensors.reserve(optional_output_tensors.size());
+        for (const auto& optional_output_tensor : optional_output_tensors) {
+            TT_FATAL(
+                optional_output_tensor.has_value(),
+                "If using optional output tensors, all output tensors must have a value");
+            output_tensors.emplace_back(optional_output_tensor.value());
+        }
+        return output_tensors;
     }
-    return create_device_tensor(compute_output_specs(attributes, args), args.input_tensor_a.device());
+    const auto& device = input_tensors.at(0).device();
+    const auto& output_specs = compute_output_specs(attributes, args);
+    output_tensors.reserve(output_specs.size());
+    for (const auto& output_spec : output_specs) {
+        output_tensors.emplace_back(create_device_tensor(output_spec, device));
+    }
+    return output_tensors;
 }
 
 tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
-    const auto& input_tensor_a = args.input_tensor_a;
-    const auto& input_tensor_b = args.input_tensor_b;
-    const auto& bias = args.bias;
+    const auto& input_tensors = args.input_tensors;
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
 
     auto factory = select_program_factory(attributes, args);
 
     auto hash = tt::tt_metal::operation::hash_operation<MatmulDeviceOperation>(
         attributes, factory.index(), input_tensor_a, input_tensor_b);
 
-    if (bias.has_value()) {
-        hash = tt::stl::hash::hash_objects(hash, bias.value());
+    for (const auto& optional_input_tensor : args.optional_input_tensors) {
+        if (optional_input_tensor.has_value()) {
+            hash = tt::stl::hash::hash_objects(hash, optional_input_tensor.value());
+        }
     }
 
-    if (args.output_tensor.has_value()) {
-        hash = tt::stl::hash::hash_objects(hash, args.output_tensor.value());
+    for (const auto& optional_output_tensor : args.optional_output_tensors) {
+        if (optional_output_tensor.has_value()) {
+            hash = tt::stl::hash::hash_objects(hash, optional_output_tensor.value());
+        }
     }
-
     return hash;
 }
 
@@ -1276,22 +1317,22 @@ MatmulDeviceOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        tensor_args_t{input_tensor_a, input_tensor_b, bias, optional_output_tensor}};
+        tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 MatmulDeviceOperation::create_op_performance_model(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output_tensors) {
     using namespace tt::tt_metal;
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
+    const auto& input_tensor_a = tensor_args.input_tensors.at(0);
+    const auto& input_tensor_b = tensor_args.input_tensors.at(1);
 
     const auto& in_a_shape = input_tensor_a.logical_shape();
-    const auto& out_shape = output_tensor.logical_shape();
+    const auto& out_shape = output_tensors.at(0).logical_shape();
 
-    const auto& t = output_tensor;
+    const auto& t = output_tensors.at(0);
     if (t.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
@@ -1315,7 +1356,7 @@ MatmulDeviceOperation::create_op_performance_model(
         (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
 
     operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-        {input_tensor_a, input_tensor_b}, {output_tensor}, ideal_dev_clock_cycles);
+        {input_tensor_a, input_tensor_b}, output_tensors, ideal_dev_clock_cycles);
 #if 0
         log_info(tt::LogOp, "Matmul PerfModel:");
         for (auto i = 0; i < out_shape.rank() - 2; i++) {

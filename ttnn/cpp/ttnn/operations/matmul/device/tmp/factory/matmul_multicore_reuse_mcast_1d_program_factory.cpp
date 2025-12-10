@@ -2361,20 +2361,32 @@ inline void override_mcast_in1_program_parameters(
     tt_metal::Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output_tensor) {
-    auto* src_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_buffer_b = tensor_args.input_tensor_b.buffer();
-    const auto& bias_tensor = tensor_args.bias;
+    const tensor_return_value_t& output_tensors) {
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
+
+    TT_FATAL(
+        input_tensors.size() + optional_input_tensors.size() == 3,
+        "mcast in1 requires 3 input tensors, {} + {} = {} provided",
+        input_tensors.size(),
+        optional_input_tensors.size(),
+        optional_input_tensors.size() + input_tensors.size());
+    TT_FATAL(
+        output_tensors.size() == 1, "matmul mcast in1 requires 1 output tensor, {} provided", output_tensors.size());
+
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
+    const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {
         bias_buffer = bias_tensor.value().buffer();
     }
 
-    auto* dst_buffer = output_tensor.buffer();
+    auto* dst_buffer = output_tensors.at(0).buffer();
 
-    bool src0_sharded = tensor_args.input_tensor_a.is_sharded();
-    bool out_sharded = output_tensor.is_sharded();
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
 
@@ -2427,21 +2439,33 @@ static void override_mcast_in0_program_parameters(
     tt_metal::Program& program,
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output_tensor) {
-    auto* src_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_buffer_b = tensor_args.input_tensor_b.buffer();
-    const auto& bias_tensor = tensor_args.bias;
+    const tensor_return_value_t& output_tensors) {
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
+
+    TT_FATAL(
+        input_tensors.size() + optional_input_tensors.size() == 3,
+        "mcast in0 requires 3 input tensors, {} + {} = {} provided",
+        input_tensors.size(),
+        optional_input_tensors.size(),
+        optional_input_tensors.size() + input_tensors.size());
+    TT_FATAL(
+        output_tensors.size() == 1, "matmul mcast in0 requires 1 output tensor, {} provided", output_tensors.size());
+
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
+    const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {
         bias_buffer = bias_tensor.value().buffer();
     }
 
-    auto* dst_buffer = output_tensor.buffer();
+    auto* dst_buffer = output_tensors.at(0).buffer();
 
-    bool src0_sharded = tensor_args.input_tensor_a.is_sharded();
-    bool src1_sharded = tensor_args.input_tensor_b.is_sharded();
-    bool out_sharded = output_tensor.is_sharded();
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool src1_sharded = input_tensors[1].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
 
     // Manually unroll sender core
     if (src0_sharded) {
@@ -2486,13 +2510,15 @@ inline void override_gather_in0_program_parameters(
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output_tensor) {
-    auto* src_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_buffer_b = tensor_args.input_tensor_b.buffer();
+    const tensor_return_value_t& output_tensors) {
+    const auto& input_tensors = tensor_args.input_tensors;
 
-    bool src0_sharded = tensor_args.input_tensor_a.is_sharded();
-    bool src1_sharded = tensor_args.input_tensor_b.is_sharded();
-    bool out_sharded = output_tensor.is_sharded();
+    auto* src_buffer_a = input_tensors[0].buffer();
+    auto* src_buffer_b = input_tensors[1].buffer();
+
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool src1_sharded = input_tensors[1].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
 
     // Manually unroll sender core
     if (src0_sharded) {
@@ -2503,15 +2529,14 @@ inline void override_gather_in0_program_parameters(
             UpdateDynamicCircularBufferAddress(program, override_variables.cbs[1], *src_buffer_b);
         }
     }
-
     if (out_sharded) {
-        TT_ASSERT(
-            override_variables.cbs.size() == 3, "Expected 3 cbs: 2 cb for input tensors + 1 cb for output tensor");
-        // cbs 0 and 1 contain cb_src0 and cb_src1
-        // the rest contains the actual output cbs
-        const auto& cb_output = override_variables.cbs[2];
-        const auto& out_buffer = output_tensor.buffer();
-        UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
+        for (uint32_t i = 0; i < override_variables.cbs.size() - 2; ++i) {
+            // cbs 0 and 1 contain cb_src0 and cb_src1
+            // the rest contains the actual output cbs
+            const auto& cb_output = override_variables.cbs[i + 2];
+            const auto& out_buffer = output_tensors[i].buffer();
+            UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
+        }
     }
 
     if (not src1_sharded) {
@@ -2848,12 +2873,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuse
     tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
 
-    auto b_tensors = std::vector<Tensor>{tensor_args.input_tensor_b};
+    // TODO:[migrate]: Optimize
+    auto b_tensors = std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};
     auto shared_vars = matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
-        tensor_args.input_tensor_a,
+        tensor_args.input_tensors.at(0),
         b_tensors,
-        tensor_args.bias,
+        tensor_args.optional_input_tensors.at(0),
         {tensor_return_value},
         operation_attributes.bcast_batch.value_or(false),
         program_config.compute_with_storage_grid_size,

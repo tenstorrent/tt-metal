@@ -17,11 +17,13 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    TT_FATAL(!tensor_args.bias.has_value(), "Bias is not supported for matmul multi core");
+    TT_FATAL(
+        !tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors[0].has_value(),
+        "Bias is not supported for matmul multi core");
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.input_tensors.at(0);
+    const auto& b = tensor_args.input_tensors.at(1);
+    auto& output = tensor_return_value.at(0);
 
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
@@ -195,9 +197,9 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     auto num_cores = shared_variables.num_cores;
     auto num_cores_y = shared_variables.num_cores_y;
 
-    auto* src_dram_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_dram_buffer_b = tensor_args.input_tensor_b.buffer();
-    auto* dst_dram_buffer = tensor_return_value.buffer();
+    auto* src_dram_buffer_a = tensor_args.input_tensors.at(0).buffer();
+    auto* src_dram_buffer_b = tensor_args.input_tensors.at(1).buffer();
+    auto* dst_dram_buffer = tensor_return_value.at(0).buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

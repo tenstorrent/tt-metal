@@ -898,10 +898,14 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const operation_attributes_t& operation_attributes) {
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    const auto& bias = tensor_args.bias;
-    const auto& output = tensor_return_value;
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
+    const auto& output_tensors = tensor_return_value;
+
+    const auto& a = input_tensors.at(0);
+    const auto& b = input_tensors.at(1);
+    const auto& bias = optional_input_tensors.at(0);
+    const auto& output = output_tensors.at(0);
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
@@ -1078,12 +1082,24 @@ void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_ar
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto* src_buffer_a = tensor_args.input_tensor_a.buffer();
-        auto* src_buffer_b = tensor_args.input_tensor_b.buffer();
-        const auto& bias_tensor = tensor_args.bias;
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
+    const auto& output_tensors = tensor_return_value;
 
-        auto* dst_buffer = tensor_return_value.buffer();
+    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
+        TT_FATAL(
+            input_tensors.size() + optional_input_tensors.size() == 3,
+            "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+            input_tensors.size(),
+            optional_input_tensors.size(),
+            input_tensors.size() + optional_input_tensors.size());
+        TT_FATAL(output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
+
+        auto* src_buffer_a = input_tensors.at(0).buffer();
+        auto* src_buffer_b = input_tensors.at(1).buffer();
+        const auto& bias_tensor = optional_input_tensors.at(0);
+
+        auto* dst_buffer = output_tensors.at(0).buffer();
         auto shared_variables = cached_workload.shared_variables.at(mesh_coord_range);
 
         UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);

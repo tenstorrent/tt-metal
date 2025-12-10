@@ -586,9 +586,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Bcast batch should have been provided");
 
     return matmul_multi_core_reuse_optimized_(
-        tensor_args.input_tensor_a,
-        tensor_args.input_tensor_b,
-        tensor_return_value,
+        tensor_args.input_tensors.at(0),
+        tensor_args.input_tensors.at(1),
+        tensor_return_value.at(0),
         operation_attributes.bcast_batch.value(),
         program_config.compute_with_storage_grid_size,
         operation_attributes.output_dtype.value(),
@@ -616,14 +616,17 @@ void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
     auto cb_output = shared_variables.cb_output;
     auto cores = shared_variables.cores;
 
-    auto* src_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_buffer_b = tensor_args.input_tensor_b.buffer();
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& output_tensors = tensor_return_value;
 
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
 
-    const bool src0_sharded = tensor_args.input_tensor_a.memory_config().is_sharded();
-    const bool src1_sharded = tensor_args.input_tensor_b.memory_config().is_sharded();
-    const bool out_sharded = tensor_return_value.memory_config().is_sharded();
+    auto* dst_buffer = output_tensors.at(0).buffer();
+
+    const bool src0_sharded = input_tensors[0].memory_config().is_sharded();
+    const bool src1_sharded = input_tensors[1].memory_config().is_sharded();
+    const bool out_sharded = output_tensors[0].memory_config().is_sharded();
 
     const bool update_reader_args = !src0_sharded;
 

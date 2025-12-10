@@ -212,8 +212,11 @@ void MatmulMultiCoreReuseProgramFactory::override_runtime_arguments(
     constexpr uint32_t per_core_M = 16;
     constexpr uint32_t per_core_N = 16;
 
-    const auto& ashape = tensor_args.input_tensor_a.padded_shape();
-    const auto& bshape = tensor_args.input_tensor_b.padded_shape();
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& output_tensors = tensor_return_value;
+
+    const auto& ashape = input_tensors.at(0).padded_shape();
+    const auto& bshape = input_tensors.at(1).padded_shape();
     uint32_t M = ashape[-2] / TILE_HEIGHT;
     uint32_t N = bshape[-1] / TILE_WIDTH;
 
@@ -222,10 +225,10 @@ void MatmulMultiCoreReuseProgramFactory::override_runtime_arguments(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    auto* src_dram_buffer_a = tensor_args.input_tensor_a.buffer();
-    auto* src_dram_buffer_b = tensor_args.input_tensor_b.buffer();
+    auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+    auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-    auto* dst_dram_buffer = tensor_return_value.buffer();
+    auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
@@ -257,16 +260,12 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    TT_FATAL(!tensor_args.bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramFactory");
-
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
 
-    const auto& a = tensor_args.input_tensor_a;
-    std::cout << "a logical _shape: " << a.logical_shape() << std::endl;
-    std::cout << "a padded_shape: " << a.padded_shape() << std::endl;
-    const auto& b = tensor_args.input_tensor_b;
-    const auto& output = tensor_return_value;
+    const auto& a = tensor_args.input_tensors.at(0);
+    const auto& b = tensor_args.input_tensors.at(1);
+    const auto& output = tensor_return_value.at(0);
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
