@@ -57,11 +57,9 @@ inline void stochastic_round_tile(uint32_t idx_dst0) {
 
 void MAIN {
     uint32_t runtime_args_counter = 0;
-    uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t beta1 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t beta2 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t epsilon = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t step_size = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t inv_sqrt_bc2 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t one_minus_beta1 = get_arg_val<uint32_t>(runtime_args_counter++);

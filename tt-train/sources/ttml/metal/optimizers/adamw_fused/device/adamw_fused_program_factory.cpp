@@ -34,17 +34,15 @@ constexpr uint32_t kExpAvgAddrIdx = 2U;
 constexpr uint32_t kExpAvgSqAddrIdx = 3U;
 constexpr uint32_t kMaxExpAvgSqAddrIdx = 4U;
 // compute runtime args
-constexpr uint32_t kComputeLrIdx = 0U;
-constexpr uint32_t kComputeBeta1Idx = 1U;
-constexpr uint32_t kComputeBeta2Idx = 2U;
-constexpr uint32_t kComputeEpsilonIdx = 3U;
-constexpr uint32_t kComputeWeightDecayIdx = 4U;
-constexpr uint32_t kComputeStepSizeIdx = 5U;
-constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 6U;
-constexpr uint32_t kComputeOneMinusBeta1Idx = 7U;
-constexpr uint32_t kComputeOneMinusBeta2Idx = 8U;
-constexpr uint32_t kComputeDecayFactorIdx = 9U;
-constexpr uint32_t kComputeSeedIdx = 10U;
+constexpr uint32_t kComputeBeta1Idx = 0U;
+constexpr uint32_t kComputeBeta2Idx = 1U;
+constexpr uint32_t kComputeEpsilonIdx = 2U;
+constexpr uint32_t kComputeStepSizeIdx = 3U;
+constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 4U;
+constexpr uint32_t kComputeOneMinusBeta1Idx = 5U;
+constexpr uint32_t kComputeOneMinusBeta2Idx = 6U;
+constexpr uint32_t kComputeDecayFactorIdx = 7U;
+constexpr uint32_t kComputeSeedIdx = 8U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 constexpr uint32_t kExpAvgAddrIdxOut = 1U;
@@ -165,11 +163,9 @@ void assign_per_core_runtime_args(
                 program,
                 kernels.compute_group_1,
                 core,
-                {std::bit_cast<uint32_t>(lr),
-                 std::bit_cast<uint32_t>(beta1),
+                {std::bit_cast<uint32_t>(beta1),
                  std::bit_cast<uint32_t>(beta2),
                  std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(weight_decay),
                  std::bit_cast<uint32_t>(step_size),
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
@@ -181,11 +177,9 @@ void assign_per_core_runtime_args(
                 program,
                 kernels.compute_group_2,
                 core,
-                {std::bit_cast<uint32_t>(lr),
-                 std::bit_cast<uint32_t>(beta1),
+                {std::bit_cast<uint32_t>(beta1),
                  std::bit_cast<uint32_t>(beta2),
                  std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(weight_decay),
                  std::bit_cast<uint32_t>(step_size),
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
@@ -520,11 +514,9 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
         }
         if (core_group_1.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
-            runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
             runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kComputeWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
             runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
             runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
@@ -533,11 +525,9 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeSeedIdx] = seeds[i];
         } else if (core_group_2.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
-            runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
             runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kComputeWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
             runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
             runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
