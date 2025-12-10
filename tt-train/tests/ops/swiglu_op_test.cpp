@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <iostream>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -86,13 +87,16 @@ void CompareKernelVsReference(
     auto w3_kernel = autograd::create_tensor(core::from_xtensor(w3_data, &autograd::ctx().get_device()));
 
     // Forward pass - kernel implementation
+    std::cerr << "STARTING SWIGLU KERNEL FORWARD\n";
     auto result_kernel = ops::swiglu(input_kernel, w1_kernel, w2_kernel, w3_kernel);
+    std::cerr << "DONE SWIGLU KERNEL FORWARD\n";
     result_kernel->get_value();
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
     // Forward pass - reference implementation
+    std::cerr << "STARTING SWIGLU REFERENCE FORWARD\n";
     auto result_reference = swiglu_forward_reference(input_data, w1_data, w2_data, w3_data);
-
+    std::cerr << "DONE SWIGLU REFERENCE FORWARD\n";
     // Verify shapes match
     EXPECT_EQ(result_kernel_xtensor.shape(), result_reference.shape())
         << "Shape mismatch between kernel and reference results";
@@ -216,7 +220,7 @@ TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_VeryLarge_1x1x1024x1024) {
     CompareKernelVsReferenceWithShape({1, 1, 1024, 1024}, 1024);
 }
 
-// 9. NanoGPT-like shape: 32x1x256x384, hidden_dim=1024
-TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoGPT_32x1x256x384) {
-    CompareKernelVsReferenceWithShape({32, 1, 256, 384}, 1024);
+// 9. NanoLlama-like shape: 64x1x256x384, hidden_dim=1024
+TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoLlama_64x1x256x384) {
+    CompareKernelVsReferenceWithShape({64, 1, 256, 384}, 1024);
 }
