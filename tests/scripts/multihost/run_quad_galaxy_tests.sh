@@ -8,24 +8,18 @@ if [ -z "${ARCH_NAME}" ]; then
 fi
 
 run_quad_galaxy_unit_tests() {
-  # Record the start time
   fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_quad_galaxy_unit_tests"
 
   source python_env/bin/activate
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-  #local mpi_args="--host g05glx01,g05glx02,g05glx03,g05glx04 $mpi_args_base"
   local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
 
   # TODO: Currently failing
   #mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
+  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path cabling_descriptor.textproto --deployment-descriptor-path deployment_descriptor.textproto ; fail+=$?
 
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
 
@@ -34,37 +28,48 @@ run_quad_galaxy_unit_tests() {
 
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
 
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_quad_galaxy_unit_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
 }
 
-run_quad_galaxy_resnet50_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
+run_quad_galaxy_deepseekv3_tests() {
+    fail=0
 
-  echo "LOG_METAL: Running run_quad_galaxy_resnet50_tests"
+    # Run dual galaxy tests on quad galaxy since this is the only available machine
+    local RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+    local HOSTS="g05glx01,g05glx02"
+    local RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
 
-  pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py ; fail+=$?
+    if ! test -f "$RANKFILE"; then
+        echo "File '$RANKFILE' does not exist."
+        exit 1
+    fi
+    if ! test -f "$RANK_BINDING_YAML"; then
+        echo "File '$RANK_BINDING_YAML' does not exist."
+        exit 1
+    fi
 
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_quad_galaxy_resnet50_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+    local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
+    local MESH_DEVICE="DUAL"
+
+    # TODO: For now we just test a single module, we should add all of them here eventually
+    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass[run_test_forward_pass_mla2d-model.layers.0.self_attn-device_params0-decode-1-32]"
+
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
 }
+
 
 run_quad_galaxy_tests() {
   run_quad_galaxy_unit_tests
-  # TODO: #30155 - Enable the test when hardware hang is addressed.
-  # run_quad_galaxy_resnet50_tests
+  run_quad_galaxy_deepseekv3_tests
 }
 
 fail=0

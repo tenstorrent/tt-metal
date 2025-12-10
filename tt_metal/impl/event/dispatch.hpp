@@ -11,11 +11,9 @@
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
