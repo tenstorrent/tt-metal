@@ -1,6 +1,17 @@
 ---
-# Clang Analyzer is disabled as we may prefer to run a dedicated scan with a report
-# TODO: Evaluate the other checks
+# === Disabled Check Groups ===
+#
+# Irrelevant platforms/frameworks:
+#   abseil-*, altera-*, android-*, darwin-*, fuchsia-*, google-objc-*,
+#   linuxkernel-*, llvm-*, llvmlibc-*, openmp-*, zircon-*
+#
+# Alias-only groups (underlying checks remain enabled under primary names):
+#   cert-*   -> bugprone-*, misc-*, performance-*
+#   hicpp-*  -> bugprone-*, modernize-*, readability-*, cppcoreguidelines-*
+#
+# Run separately:
+#   clang-analyzer-*  (dedicated scan with report)
+#
 Checks: >
   *,
   -abseil-*,
