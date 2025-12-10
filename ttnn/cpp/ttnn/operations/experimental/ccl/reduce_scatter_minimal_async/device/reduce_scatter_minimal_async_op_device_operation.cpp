@@ -159,6 +159,9 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
+        input_tensor.logical_shape(),
+        input_tensor.padded_shape(),
+        input_tensor.tensor_spec().page_config(),
         input_tensor.dtype(),
         input_tensor.layout(),
         input_tensor.memory_config());
