@@ -38,7 +38,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     ]
     + [
         (EmbeddingClass, "prefill", seq_len)
-        for seq_len in (128, 512, 2048)
+        for seq_len in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
         for EmbeddingClass in (Embedding1D, Embedding2D)
     ],
 )
