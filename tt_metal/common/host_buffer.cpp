@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-HostBuffer::HostBuffer() {}
+HostBuffer::HostBuffer() = default;
 
 HostBuffer::HostBuffer(const HostBuffer& other) = default;
 
