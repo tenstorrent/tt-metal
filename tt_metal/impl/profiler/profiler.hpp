@@ -33,6 +33,8 @@ using RuntimeID = uint32_t;
 
 namespace tt::tt_metal {
 
+enum class ProfilerDataBufferSource { L1, DRAM, DRAM_AND_L1 };
+
 template <typename T1, typename T2>
 struct pair_hash {
     size_t operator()(const std::pair<T1, T2>& p) const {
