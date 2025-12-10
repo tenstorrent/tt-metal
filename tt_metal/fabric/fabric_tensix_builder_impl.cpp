@@ -962,6 +962,9 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
             // Router channels: topology-based fabric router stream IDs (only in Legacy MUX mode)
             const auto topology = fabric_context.get_fabric_topology();
             switch (topology) {
+                case tt::tt_fabric::Topology::NeighborExchange:
+                    TT_THROW("NeighborExchange topology has not been tested in MUX mode");
+                    break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
                     fabric_stream_ids = {tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};
