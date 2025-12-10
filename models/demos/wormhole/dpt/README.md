@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+-->
+
 ## DPT-Large (Depth Estimation) — Wormhole Demo
 
 This mirrors the ViT example layout:
@@ -32,4 +38,3 @@ python -m models.demos.wormhole.dpt.demo.demo_dpt_inference --pcc-eval
 pytest -q models/demos/wormhole/dpt/tests/test_dpt_backbone.py::test_pcc_vs_reference
 pytest -q models/demos/wormhole/dpt/tests/test_dpt_backbone.py::test_full_pipeline_smoke
 ```
-
