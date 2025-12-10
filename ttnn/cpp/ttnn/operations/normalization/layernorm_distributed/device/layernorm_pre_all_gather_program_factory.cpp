@@ -88,7 +88,7 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
     const uint32_t in1_tiles = 1;  // reduce scalar
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // xˆ2
-    uint32_t out0_tiles = is_rmsnorm ? 1 : 2;
+    uint32_t out0_tiles = 1;
 
     TT_FATAL(
         W <= TILE_WIDTH * in0_tiles,
