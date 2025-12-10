@@ -647,6 +647,10 @@ def run_script(
     if args is None:
         args = parse_arguments(scripts, script_path, argv)
 
+        # Set verbose level from -v count (controls which columns are displayed)
+        verbose_level = args["-v"]
+        set_verbose_level(verbose_level)
+
         # Setting verbosity level
         try:
             verbosity = int(args["--verbosity"])
@@ -724,6 +728,10 @@ def main():
 
     # Parse common command line arguments
     args = parse_arguments(scripts)
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
 
     # Setting verbosity level
     try:
