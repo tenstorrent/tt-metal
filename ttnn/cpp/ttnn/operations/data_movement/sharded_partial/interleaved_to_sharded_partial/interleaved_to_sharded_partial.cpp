@@ -35,11 +35,14 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
                 uint32_t total_width = input_tensor.padded_shape()[-1];
                 switch (shard_scheme) {
                     case TensorMemoryLayout::HEIGHT_SHARDED:
-                        num_cores = tt::div_up(total_height, shard_shape[0]);
+                        num_cores = ttsl::math::div_up(total_height, shard_shape[0]);
                         break;
-                    case TensorMemoryLayout::WIDTH_SHARDED: num_cores = tt::div_up(total_width, shard_shape[1]); break;
+                    case TensorMemoryLayout::WIDTH_SHARDED:
+                        num_cores = ttsl::math::div_up(total_width, shard_shape[1]);
+                        break;
                     case TensorMemoryLayout::BLOCK_SHARDED:
-                        num_cores = tt::div_up(total_height, shard_shape[0]) * tt::div_up(total_width, shard_shape[1]);
+                        num_cores = ttsl::math::div_up(total_height, shard_shape[0]) *
+                                    ttsl::math::div_up(total_width, shard_shape[1]);
                         break;
                     default: TT_ASSERT(false, "Unsupported sharding scheme");
                 }

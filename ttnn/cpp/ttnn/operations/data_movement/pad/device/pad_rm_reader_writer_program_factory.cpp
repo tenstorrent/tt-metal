@@ -49,7 +49,7 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
     uint32_t cb_id = tt::CBIndex::c_0;
     uint32_t cb_npages = 16;  // multibuffering
     uint32_t cb_pagesize =
-        tt::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
+        ttsl::math::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);

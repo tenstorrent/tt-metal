@@ -242,7 +242,7 @@ uint32_t calculate_L1_usage(
         }
     }
 
-    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
+    uint32_t in_cb_page_padded = ttsl::math::round_up(in_cb_sz, tt::constants::TILE_HW);
     uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = params.multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
@@ -321,7 +321,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
         uint32_t nhw = batch_size * output_shape[1] * output_shape[2];
-        uint32_t out_channel_padded = tt::round_up(
+        uint32_t out_channel_padded = ttsl::math::round_up(
             channels, conv::get_num_cores_channels_from_parallel_config(parallel_config) * tt::constants::TILE_WIDTH);
         return conv::create_sharded_memory_config_from_parallel_config(
             ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
@@ -440,8 +440,8 @@ void validate_input_params(
         channels);
 
     if (is_in_tiled && is_flattened_format) {
-        const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
-        const uint32_t padded_nhw = tt::round_up(nhw, tt::constants::TILE_HEIGHT);
+        const uint32_t padded_channels = ttsl::math::round_up(channels, tt::constants::TILE_WIDTH);
+        const uint32_t padded_nhw = ttsl::math::round_up(nhw, tt::constants::TILE_HEIGHT);
         const auto& padded_input_shape = input_tensor.padded_shape();
         TT_FATAL(
             padded_input_shape[0] == 1 && padded_input_shape[1] == 1 && padded_input_shape[2] == padded_nhw &&

@@ -67,7 +67,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                     input_tensor_a.memory_config().memory_layout());
                 TT_FATAL(
                     input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
-                        (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
+                        (ttsl::math::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
                          input_tensor_a.shard_spec().value().grid.num_cores()),
                     "Input tensor width ({}) must equal output width ({}) or output width / shard width must equal num "
                     "cores",
@@ -131,7 +131,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto tile = input_tensor_a.tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
-            uint32_t shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+            uint32_t shard_idx0 = ttsl::math::round_up(ttsl::math::div_up(fused_height, num_cores), tile_height);
             shard_shape = {shard_idx0, output_shape[-1]};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};

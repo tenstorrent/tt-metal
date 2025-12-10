@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -732,7 +732,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     config(config),
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
-    handshake_address(tt::round_up(
+    handshake_address(ttsl::math::round_up(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
     local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),

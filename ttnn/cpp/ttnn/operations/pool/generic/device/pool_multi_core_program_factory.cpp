@@ -203,7 +203,8 @@ static Tensor create_scalar_config_tensor(
         config_vector.size(),
         entries_per_core);
 
-    ttnn::Shape config_shape = ttnn::Shape({tt::div_up(config_vector.size(), entries_per_core), entries_per_core});
+    ttnn::Shape config_shape =
+        ttnn::Shape({ttsl::math::div_up(config_vector.size(), entries_per_core), entries_per_core});
     tt::tt_metal::HostBuffer buffer(std::move(config_vector));
     return Tensor(std::move(buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
@@ -324,11 +325,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_nbytes_leftover =
         params.is_wide_reduction &&
                 (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
-            ? tt::round_up(
+            ? ttsl::math::round_up(
                   (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
                   tt::constants::TILE_WIDTH) *
                   params.nbytes
-            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * params.nbytes;
+            : ttsl::math::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * params.nbytes;
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
@@ -365,7 +366,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // reader indices
     const uint32_t in_reader_indices_cb_id = next_cb_index++;
     const uint32_t in_reader_indices_cb_pagesize =
-        tt::round_up(reader_indices_size, 4);  // pagesize needs to be multiple of 4
+        ttsl::math::round_up(reader_indices_size, 4);  // pagesize needs to be multiple of 4
     constexpr uint32_t in_reader_indices_cb_npages = 1;
 
     tt::tt_metal::create_cb(
@@ -401,7 +402,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // reader output == input to tilize
     const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_id_1 = 32;                     // input rows for "multiple (out_nelems)" output pixels
-    const uint32_t in_cb_page_padded = tt::round_up(
+    const uint32_t in_cb_page_padded = ttsl::math::round_up(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;

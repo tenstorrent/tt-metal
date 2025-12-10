@@ -101,10 +101,10 @@ ConcatS2SRMProgramFactory::cached_program_t ConcatS2SRMProgramFactory::create(
     const uint32_t input_0_stride = output_stick_size - input_0_stick_size;
     const uint32_t input_1_stride = output_stick_size - input_1_stick_size;
     const uint32_t num_output_rows_per_core = input_tensors[0].shard_spec().value().shape[0];
-    const uint32_t num_pages_per_risc = tt::div_up(num_output_rows_per_core, 2);
+    const uint32_t num_pages_per_risc = ttsl::math::div_up(num_output_rows_per_core, 2);
 
     const uint32_t num_output_rows_per_core_last = num_output_rows % num_output_rows_per_core;
-    const uint32_t num_pages_per_risc_last = tt::div_up(num_output_rows_per_core_last, 2);
+    const uint32_t num_pages_per_risc_last = ttsl::math::div_up(num_output_rows_per_core_last, 2);
 
     std::vector<uint32_t> compile_time_args_0 = {
         cb_dst_id,

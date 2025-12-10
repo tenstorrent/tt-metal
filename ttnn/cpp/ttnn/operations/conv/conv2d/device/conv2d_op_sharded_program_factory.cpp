@@ -72,7 +72,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     ActivationReuseConfig config;
 
     // Calculate compile time args needed for activation reuse feature
-    config.image_width_tiles = tt::div_up(output_image_width, tt::constants::TILE_HEIGHT);
+    config.image_width_tiles = ttsl::math::div_up(output_image_width, tt::constants::TILE_HEIGHT);
     config.image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
     const uint32_t image_width_tile_leftover =
         config.image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - config.image_width_mod_tile;
@@ -113,7 +113,8 @@ ActivationReuseConfig calculate_activation_reuse_params(
     // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
     uint32_t total_remaining_tiles_to_push = padded_total_output_height_ntiles - total_output_height_ntiles;
 
-    config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
+    config.num_cores_with_non_meaningful_work =
+        ttsl::math::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
     std::vector<CoreCoord> all_input_cores;
     for (const CoreRange& range : input_cores.ranges()) {
@@ -431,7 +432,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
-    uint32_t output_channels_padded_to_tile_width = tt::round_up(output_channels, tt::constants::TILE_WIDTH);
+    uint32_t output_channels_padded_to_tile_width = ttsl::math::round_up(output_channels, tt::constants::TILE_WIDTH);
     TT_FATAL(
         output_channels_padded_to_tile_width <= weight_matrix_width,
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",
@@ -594,12 +595,12 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     uint32_t act_block_w_extra_align_bytes =
-        !slice_inner_dim
-            ? (tt::round_up(shard_shape[1] * filter_h * filter_w, tt::constants::TILE_WIDTH) -
-               (shard_shape[1] * filter_h * filter_w)) *
-                  a.element_size()
-            : (tt::round_up(shard_shape[1] * filter_w, tt::constants::TILE_WIDTH) - (shard_shape[1] * filter_w)) *
-                  a.element_size();
+        !slice_inner_dim ? (ttsl::math::round_up(shard_shape[1] * filter_h * filter_w, tt::constants::TILE_WIDTH) -
+                            (shard_shape[1] * filter_h * filter_w)) *
+                               a.element_size()
+                         : (ttsl::math::round_up(shard_shape[1] * filter_w, tt::constants::TILE_WIDTH) -
+                            (shard_shape[1] * filter_w)) *
+                               a.element_size();
     const uint32_t act_block_w_extra_align_scalars = act_block_w_extra_align_bytes / a.element_size();
     // When using block float format, we must handle cases where the data doesn't align to 16-scalar boundaries.
     // If act_block_w_extra_align_bytes contains a number of scalars that isn't a multiple of 16,

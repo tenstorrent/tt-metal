@@ -336,7 +336,7 @@ Tensor concat_impl(
     if (input_tensors.size() > max_tensors_per_concat) {
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;
-        const size_t num_batches = tt::div_up(input_tensors.size(), max_tensors_per_concat);
+        const size_t num_batches = ttsl::math::div_up(input_tensors.size(), max_tensors_per_concat);
         intermediate_results.reserve(num_batches);
 
         log_debug(

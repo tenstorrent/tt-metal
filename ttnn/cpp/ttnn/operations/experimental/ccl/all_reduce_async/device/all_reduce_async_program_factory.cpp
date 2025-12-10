@@ -8,7 +8,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -226,7 +226,8 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages = tt::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
+    uint32_t cb_num_pages =
+        ttsl::math::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
@@ -253,7 +254,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     // TODO: Currently does not support output shards being split across multiple links
     std::vector<CoreRangeSet> output_corerangeset_per_link;
     std::vector<uint32_t> num_output_cores_in_link(num_links, 0);
-    uint32_t output_cores_per_link = tt::div_up(output_tensor_cores.num_cores(), num_links);
+    uint32_t output_cores_per_link = ttsl::math::div_up(output_tensor_cores.num_cores(), num_links);
     uint32_t num_assigned_cores = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t num_cores_this_link = std::min(output_cores_per_link, num_output_cores - num_assigned_cores);
@@ -308,7 +309,8 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         input_tensor_tile_offset_per_link[link] = input_tensor_tile_offset;
 
         uint32_t end_core_idx = std::min(
-            start_core_idx + tt::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
+            start_core_idx +
+                ttsl::math::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
             num_input_cores);
 
         // Num pages allocated based on number of input cores selected for this link

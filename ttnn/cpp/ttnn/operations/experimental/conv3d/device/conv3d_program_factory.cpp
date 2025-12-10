@@ -4,7 +4,7 @@
 
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -75,20 +75,20 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t patch_size = config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * C_in_block;
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
-    uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
+    uint32_t C_in_num_blocks = ttsl::math::div_up(C_in, C_in_block);
     TT_FATAL(C_in_num_blocks * C_in_block == C_in, "C_in_num_blocks * C_in_block must equal C_in");
-    uint32_t C_out_num_blocks = tt::div_up(C_out, C_out_block);
+    uint32_t C_out_num_blocks = ttsl::math::div_up(C_out, C_out_block);
     TT_FATAL(C_out_num_blocks * C_out_block == C_out, "C_out_num_blocks * C_out_block must equal C_out");
 
-    uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
-    uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
-    uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
+    uint32_t matmul_M_t = ttsl::math::div_up(num_patches, tt::constants::TILE_HEIGHT);
+    uint32_t matmul_K_t = ttsl::math::div_up(patch_size, tt::constants::TILE_WIDTH);
+    uint32_t matmul_N_t = ttsl::math::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
-    uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
+    uint32_t num_patches_tile_padded = ttsl::math::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
     // NOTE: Should this be padded up to tile_size for tilize_block?
     uint32_t patch_size_bytes =
-        tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;  // bytes per patch row
+        ttsl::math::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;  // bytes per patch row
     // NOTE: Also padded up to tile size
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
@@ -340,9 +340,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
      */
 
     // Calculate number of blocks along each dimension
-    uint32_t T_out_blocks = tt::div_up(T_out, config.T_out_block);
-    uint32_t H_out_blocks = tt::div_up(H_out, config.H_out_block);
-    uint32_t W_out_blocks = tt::div_up(W_out, config.W_out_block);
+    uint32_t T_out_blocks = ttsl::math::div_up(T_out, config.T_out_block);
+    uint32_t H_out_blocks = ttsl::math::div_up(H_out, config.H_out_block);
+    uint32_t W_out_blocks = ttsl::math::div_up(W_out, config.W_out_block);
 
     // Define parallelization factors for each dimension
     // C_in is the outermost parallelization dimension
@@ -383,11 +383,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     log_debug(tt::LogOp, "Total output parallel blocks: {}", total_output_parallel);
 
     // Calculate blocks per core using ceiling division
-    const uint32_t c_in_per_core = tt::div_up(C_in_num_blocks, c_in_parallel_factor);
-    const uint32_t c_out_per_core = tt::div_up(C_out_num_blocks, c_out_parallel_factor);
-    const uint32_t t_out_per_core = tt::div_up(T_out_blocks, t_out_parallel_factor);
-    const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
-    const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
+    const uint32_t c_in_per_core = ttsl::math::div_up(C_in_num_blocks, c_in_parallel_factor);
+    const uint32_t c_out_per_core = ttsl::math::div_up(C_out_num_blocks, c_out_parallel_factor);
+    const uint32_t t_out_per_core = ttsl::math::div_up(T_out_blocks, t_out_parallel_factor);
+    const uint32_t h_out_per_core = ttsl::math::div_up(H_out_blocks, h_out_parallel_factor);
+    const uint32_t w_out_per_core = ttsl::math::div_up(W_out_blocks, w_out_parallel_factor);
 
     // Track cores that need to perform reduction together
     std::vector<std::vector<uint32_t>> reduction_groups(total_output_parallel);

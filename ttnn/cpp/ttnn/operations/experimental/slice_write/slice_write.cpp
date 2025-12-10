@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -44,9 +44,9 @@ ttnn::Tensor SliceWriteOperation::invoke(
         // Only pad the last two dimensions for tiled layout
         size_t rank = ends.size();
         padded_ends[rank - 2] =
-            std::max(tt::round_up(ends[rank - 2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
+            std::max(ttsl::math::round_up(ends[rank - 2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
         padded_ends[rank - 1] =
-            std::max(tt::round_up(ends[rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
+            std::max(ttsl::math::round_up(ends[rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
     }
     ttnn::SmallVector<uint32_t> actual_shape_vec;
     ttnn::SmallVector<uint32_t> padded_shape_vec;
@@ -102,8 +102,8 @@ ttnn::Tensor SliceWriteOperation::invoke(
                 in_place_unpad &= begins[i] == 0 && ends[i] == 1 && padded_output_shape[i] == 1;
             }
             in_place_unpad &=
-                begins[2] == 0 && tt::div_up(ends[2], input.shard_spec().value().shape[0]) ==
-                                      tt::div_up(padded_output_shape[2], input.shard_spec().value().shape[0]);
+                begins[2] == 0 && ttsl::math::div_up(ends[2], input.shard_spec().value().shape[0]) ==
+                                      ttsl::math::div_up(padded_output_shape[2], input.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
                 log_info(tt::LogOp, "In-place unpad optimization via copy");

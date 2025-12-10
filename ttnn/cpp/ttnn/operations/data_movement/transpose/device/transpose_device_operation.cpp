@@ -206,7 +206,7 @@ TransposeDeviceOperation::spec_return_value_t TransposeDeviceOperation::compute_
                 std::swap(output_padded_shape[1], output_padded_shape[2]);
             } else {
                 uint32_t C = output_shape[1];
-                uint32_t C_p = tt::round_up(C, input_tensor.tensor_spec().tile().get_height());
+                uint32_t C_p = ttsl::math::round_up(C, input_tensor.tensor_spec().tile().get_height());
                 uint32_t H = output_shape[2];
                 output_shape[1] = H;
                 output_shape[2] = C;

@@ -222,7 +222,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     uint32_t core_h = grid.y;
 
     // copy FACE_WIDTH per core
-    uint32_t units_to_divide = origin_N * div_up(origin_W, tt::constants::FACE_WIDTH);
+    uint32_t units_to_divide = origin_N * ttsl::math::div_up(origin_W, tt::constants::FACE_WIDTH);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
@@ -430,7 +430,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    uint32_t weight_num_tile = div_up(channel_size, tt::constants::TILE_WIDTH);
+    uint32_t weight_num_tile = ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH);
     CreateCircularBuffer(
         program,
         all_cores,

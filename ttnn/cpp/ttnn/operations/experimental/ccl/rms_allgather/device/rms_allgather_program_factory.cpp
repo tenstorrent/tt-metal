@@ -114,7 +114,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
-        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_forward = ttsl::math::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
         if (device_index % 2 == 0) {
             std::swap(num_targets_forward, num_targets_backward);
@@ -266,7 +266,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
+    uint32_t ex_external_CB_size = ttsl::math::div_up(Kt, block_wt) * single_tile_size;
     uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
     uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size

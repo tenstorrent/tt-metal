@@ -724,14 +724,14 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 0,
                 input.buffer()->address(),
                 0,
-                tt::div_up(page_stride_vector.size(), 2));
+                ttsl::math::div_up(page_stride_vector.size(), 2));
             auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
             runtime_args_1 = detail::get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
                 input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
+                ttsl::math::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         } else {
             auto output_core_to_page_range_pair = detail::get_core_page_ranges(input.buffer(), output.buffer());
@@ -742,7 +742,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 0,
                 input.buffer()->address(),
                 0,
-                tt::div_up(page_stride_vector.size(), 2));
+                ttsl::math::div_up(page_stride_vector.size(), 2));
             auto output_page_offset =
                 runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output in
                                                                   // previous risc core
@@ -751,7 +751,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 page_stride_vector,
                 output_page_offset,
                 input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
+                ttsl::math::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         };
 

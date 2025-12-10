@@ -20,7 +20,7 @@ uint32_t page_size(const ttnn::Tensor& input_tensor) {
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
-    return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
+    return ttsl::math::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
 
 std::vector<uint32_t> get_row_strides(const ttnn::Shape& shape) {
@@ -210,8 +210,8 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
     // treat the input tensor as 3D with rows * x_blocks * w_blocks
-    uint32_t x_blocks = tt::div_up(X, x_block_size);
-    uint32_t w_blocks = tt::div_up(W, w_block_size);
+    uint32_t x_blocks = ttsl::math::div_up(X, x_block_size);
+    uint32_t w_blocks = ttsl::math::div_up(W, w_block_size);
     uint32_t num_blocks_total = (num_rows / X) * x_blocks * w_blocks;
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();

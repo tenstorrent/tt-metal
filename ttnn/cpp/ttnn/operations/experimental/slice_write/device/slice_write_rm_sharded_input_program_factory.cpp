@@ -12,7 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -102,7 +102,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t input_row_size_bytes_offset = ttsl::math::round_up(input_row_size_bytes, src_buffer_alignment);
     TT_FATAL(
         output_tensor_start[-1] == 0,
         "slice_write expects output start for the last dimension to be 0. Got {}",
@@ -231,7 +231,7 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t input_row_size_bytes_offset = ttsl::math::round_up(input_row_size_bytes, src_buffer_alignment);
 
     uint32_t max_read_size = 4096;
 

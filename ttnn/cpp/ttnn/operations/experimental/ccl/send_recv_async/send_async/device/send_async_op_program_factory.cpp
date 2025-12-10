@@ -104,7 +104,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;
 
-    auto fabric_max_payload_size = tt::round_down(
+    auto fabric_max_payload_size = ttsl::math::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),

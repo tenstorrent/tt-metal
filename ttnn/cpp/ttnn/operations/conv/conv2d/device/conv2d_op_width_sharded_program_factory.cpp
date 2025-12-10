@@ -34,9 +34,10 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
     // pad height
     uint32_t num_rows = (uint32_t)batch_size * conv_output_h * conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
-    uint32_t num_rows_padded = tt::round_up(num_rows, num_cores_nhw * act_block_h_datums);
+    uint32_t num_rows_padded = ttsl::math::round_up(num_rows, num_cores_nhw * act_block_h_datums);
     uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
-    uint32_t num_cols_padded = tt::round_up(conv_activation_shape[3] * filter_w, tt::constants::TILE_WIDTH) * filter_h;
+    uint32_t num_cols_padded =
+        ttsl::math::round_up(conv_activation_shape[3] * filter_w, tt::constants::TILE_WIDTH) * filter_h;
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
 }
 
@@ -264,7 +265,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
     uint32_t output_channels_padded_to_tile_width =
-        tt::round_up(output_channels, output_num_cores * tt::constants::TILE_WIDTH);
+        ttsl::math::round_up(output_channels, output_num_cores * tt::constants::TILE_WIDTH);
     TT_FATAL(
         output_channels_padded_to_tile_width <= weight_matrix_width,
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",

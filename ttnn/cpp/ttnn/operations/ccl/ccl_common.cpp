@@ -1057,8 +1057,8 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
         largest_worker_slice_shape.x,
         largest_worker_slice_shape.y);
     log_trace(tt::LogOp, "max_slice_size_in_tiles={}", max_slice_size_in_tiles);
-    auto get_padded_worker_slice_size_in_tiles = [](tt_xy_pair const& worker_slice_shape, uint32_t half_cb_n_pages) {
-        return tt::round_up(worker_slice_shape.x * worker_slice_shape.y, half_cb_n_pages);
+    auto get_padded_worker_slice_size_in_tiles = [](const tt_xy_pair& worker_slice_shape, uint32_t half_cb_n_pages) {
+        return ttsl::math::round_up(worker_slice_shape.x * worker_slice_shape.y, half_cb_n_pages);
     };
 
     while (get_padded_worker_slice_size_in_tiles(largest_worker_slice_shape, half_cb_n_pages) >
@@ -1763,7 +1763,7 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
-        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_forward = ttsl::math::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
         constexpr bool static_alternate = true;
         if constexpr (static_alternate) {
@@ -1826,7 +1826,7 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
-        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_forward = ttsl::math::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
         if (static_alternate) {
             if (ring_index % 2 == 0) {

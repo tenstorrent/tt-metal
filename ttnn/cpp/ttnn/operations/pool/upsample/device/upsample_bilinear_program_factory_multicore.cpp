@@ -9,7 +9,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 #include <tt_stl/reflection.hpp>
@@ -125,8 +125,8 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         TT_FATAL(false, "Unsupported sharding layout");
     }
 
-    uint32_t input_nsticks_per_core = div_up(input_nsticks, ncores_nhw);
-    uint32_t output_nsticks_per_core = div_up(output_nsticks, ncores_nhw);
+    uint32_t input_nsticks_per_core = ttsl::math::div_up(input_nsticks, ncores_nhw);
+    uint32_t output_nsticks_per_core = ttsl::math::div_up(output_nsticks, ncores_nhw);
 
     TT_FATAL(
         in_nsticks_per_core == input_nsticks_per_core,
@@ -311,7 +311,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
             // Note: the first row of the input shard corresponds to the second row (index 1) in the halo shard
     reader_rt_args[7] = in_h;
 
-    uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
+    uint32_t num_rows_per_core = ttsl::math::div_up(batch_size * in_h, ncores_nhw);
 
     uint32_t start_input_row_in_image_id = 0;
 

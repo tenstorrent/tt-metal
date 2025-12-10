@@ -62,7 +62,7 @@ PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
 
     // One chunk is a row of 32 tiles where an untilize call will move each row into a separate tile
     constexpr uint32_t num_tiles_in_chunk = 32;
-    const uint32_t num_chunks_per_row = tt::div_up(total_tiles_per_row, num_tiles_in_chunk);
+    const uint32_t num_chunks_per_row = ttsl::math::div_up(total_tiles_per_row, num_tiles_in_chunk);
 
     const uint32_t cb_a_in_id = tt::CBIndex::c_0;
     const auto cb_a_in = create_circular_buffer(cb_a_in_id, total_tiles, input_tile_size, input_format, a_buffer);

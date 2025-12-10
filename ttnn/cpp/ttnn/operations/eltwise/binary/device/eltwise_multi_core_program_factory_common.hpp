@@ -123,8 +123,9 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             end_core = (*shard_spec.value().grid.ranges().begin()).end_coord;
             output_width = output.padded_shape()[-1] / TILE_WIDTH;
             uint32_t output_height = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT;
-            last_unpadded_block_height = block_height - (round_up(output_height, block_height) - output_height);
-            last_unpadded_block_width = block_width - (round_up(output_width, block_width) - output_width);
+            last_unpadded_block_height =
+                block_height - (ttsl::math::round_up(output_height, block_height) - output_height);
+            last_unpadded_block_width = block_width - (ttsl::math::round_up(output_width, block_width) - output_width);
         }
         if (zero_start_grid) {
             auto bbox = core_group_1.bounding_box();

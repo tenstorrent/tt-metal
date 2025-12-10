@@ -55,14 +55,15 @@ uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shap
     using namespace tt::constants;
     uint32_t num_input_pages = input_shape.volume() / (TILE_HW);
     uint32_t upper_dims_compressed = get_upper_dims_compressed(input_shape);
-    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * tt::div_up(input_shape[-2], TILE_HEIGHT));
+    uint32_t num_pages_width =
+        num_input_pages / (upper_dims_compressed * ttsl::math::div_up(input_shape[-2], TILE_HEIGHT));
 
     // offset for every dim except last 2
     uint32_t start_offset = get_upper_start_offset(input_shape, Layout::TILE, slice_start);
 
     if (round_up) {
-        start_offset +=
-            tt::div_up(slice_start[-2], TILE_HEIGHT) * num_pages_width + tt::div_up(slice_start[-1], TILE_WIDTH);
+        start_offset += ttsl::math::div_up(slice_start[-2], TILE_HEIGHT) * num_pages_width +
+                        ttsl::math::div_up(slice_start[-1], TILE_WIDTH);
     } else {
         start_offset += slice_start[-2] / TILE_HEIGHT * num_pages_width + slice_start[-1] / TILE_WIDTH;
     }

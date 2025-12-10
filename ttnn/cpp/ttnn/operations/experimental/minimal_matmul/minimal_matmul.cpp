@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "minimal_matmul.hpp"
 #include "device/minimal_matmul_device_operation.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"

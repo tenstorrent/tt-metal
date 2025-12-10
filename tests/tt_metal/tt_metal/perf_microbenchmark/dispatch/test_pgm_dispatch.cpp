@@ -41,7 +41,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -600,7 +600,7 @@ std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32
     uint32_t num_kernels = get_num_kernels(info);
     uint32_t estimated_program_size =
         tt::align(info.kernel_size * num_kernels, tt::tt_metal::HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
-    uint32_t num_programs = tt::div_up(target_total_size, estimated_program_size);
+    uint32_t num_programs = ttsl::math::div_up(target_total_size, estimated_program_size);
 
     log_info(LogTest, "Prefetcher cache load test: prefetcher cache size = {} bytes", prefetcher_cache_size);
     log_info(

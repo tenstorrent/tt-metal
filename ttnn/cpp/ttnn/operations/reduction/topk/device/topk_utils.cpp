@@ -79,7 +79,7 @@ bool verify_multi_core_cost(
 bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output) {
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
-    uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
+    uint32_t Ktiles = ttsl::math::div_up(k, tt::constants::TILE_WIDTH);
     uint32_t input_cb_tile_count = cb_in_units;
     uint32_t transposed_cb_tile_count = 4;
     uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // intermediate output

@@ -163,10 +163,10 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1], "Expected input and output shard widths to match");
 
     const uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
-    const uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
+    const uint32_t remapped_input_shard_shape_for_output_grid = ttsl::math::div_up(input_nhw_height, ncores_nhw);
 
-    uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
-    uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
+    uint32_t ntiles_per_block = ttsl::math::div_up(input_shard_shape[1], TILE_WIDTH);
+    uint32_t input_nblocks_per_core = ttsl::math::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t in_page_size = tt::tile_size(in_df);
@@ -180,7 +180,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const uint32_t stick_nbytes = output_shard_shape[1] * out_nbytes;
     uint32_t aligned_stick_nbytes = stick_nbytes;
     if (stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.buffer()->alignment());
+        aligned_stick_nbytes = ttsl::math::round_up(stick_nbytes, input_tensor.buffer()->alignment());
     }
     const uint32_t out_tile_size = tt::tile_size(out_df);
 

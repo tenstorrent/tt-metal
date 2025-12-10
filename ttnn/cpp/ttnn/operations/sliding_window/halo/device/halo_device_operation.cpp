@@ -94,7 +94,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     }
 
     std::array<uint32_t, 2> shard_shape = {
-        tt::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
+        ttsl::math::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
 
     auto out_mem_config = args.output_memory_config.with_shard_spec(ShardSpec{
@@ -102,8 +102,8 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
         shard_shape,
         args.output_memory_config.shard_spec()->orientation});
     auto padded_output_shape = output_shape;
-    padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
-    padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
+    padded_output_shape[-2] = ttsl::math::round_up(padded_output_shape[-2], shard_shape[0]);
+    padded_output_shape[-1] = ttsl::math::round_up(padded_output_shape[-1], shard_shape[1]);
     return TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(

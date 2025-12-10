@@ -13,7 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
@@ -63,12 +63,12 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     std::vector<uint32_t> id_per_dim(num_dims);
     std::vector<uint32_t> size_till_end(num_dims);
 
-    num_input_tiles_per_dim[0] = tt::div_up(actual_input_shape[-1], (TILE_WIDTH * num_cores_channels));
-    num_input_tiles_per_dim[1] = tt::div_up(actual_input_shape[-2], TILE_HEIGHT);
+    num_input_tiles_per_dim[0] = ttsl::math::div_up(actual_input_shape[-1], (TILE_WIDTH * num_cores_channels));
+    num_input_tiles_per_dim[1] = ttsl::math::div_up(actual_input_shape[-2], TILE_HEIGHT);
 
-    num_output_tiles_per_dim[0] = tt::div_up(output_shape[-1], TILE_WIDTH) - num_input_tiles_per_dim[0];
-    num_output_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) - num_input_tiles_per_dim[1];
-    num_output_tiles_per_dim[1] *= tt::div_up(output_shape[-1], TILE_WIDTH);
+    num_output_tiles_per_dim[0] = ttsl::math::div_up(output_shape[-1], TILE_WIDTH) - num_input_tiles_per_dim[0];
+    num_output_tiles_per_dim[1] = ttsl::math::div_up(output_shape[-2], TILE_HEIGHT) - num_input_tiles_per_dim[1];
+    num_output_tiles_per_dim[1] *= ttsl::math::div_up(output_shape[-1], TILE_WIDTH);
 
     uint32_t num_tiles_per_channel = num_input_tiles_per_dim[0];
 
@@ -81,8 +81,9 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         input_shape,
         output_shape);
 
-    accumulated_total_tiles_per_dim[0] = tt::div_up(output_shape[-1], TILE_WIDTH);
-    accumulated_total_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
+    accumulated_total_tiles_per_dim[0] = ttsl::math::div_up(output_shape[-1], TILE_WIDTH);
+    accumulated_total_tiles_per_dim[1] =
+        ttsl::math::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
     uint32_t output_channel_tiles = accumulated_total_tiles_per_dim[0];
     accumulated_input_total_tiles_per_dim[0] = num_input_tiles_per_dim[0];

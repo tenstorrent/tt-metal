@@ -13,7 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
 namespace ttnn::operations::pool::grid_sample::program {

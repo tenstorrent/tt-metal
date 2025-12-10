@@ -25,7 +25,7 @@
 #include "device.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
@@ -154,7 +154,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
-    size_t padded_size = round_up(unpadded_size, page_size);
+    size_t padded_size = ttsl::math::round_up(unpadded_size, page_size);
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
@@ -186,7 +186,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
         }
         std::vector<uint32_t> write_data = mesh_trace_data.data;
         auto unpadded_data_size = write_data.size() * sizeof(uint32_t);
-        auto padded_data_size = round_up(unpadded_data_size, page_size);
+        auto padded_data_size = ttsl::math::round_up(unpadded_data_size, page_size);
         size_t numel_padding = (padded_data_size - unpadded_data_size) / sizeof(uint32_t);
         if (numel_padding > 0) {
             write_data.resize(write_data.size() + numel_padding, 0);

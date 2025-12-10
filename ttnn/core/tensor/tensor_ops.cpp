@@ -15,7 +15,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 
@@ -100,8 +100,8 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
     uint32_t height = input_tensor.padded_shape()[-2];
     uint32_t width = input_tensor.padded_shape()[-1];
-    uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
-    uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
+    uint32_t padded_height = ttsl::math::round_up(height, constants::TILE_HEIGHT);
+    uint32_t padded_width = ttsl::math::round_up(width, constants::TILE_WIDTH);
 
     ttsl::SmallVector<uint32_t> padded_shape;
     ttsl::SmallVector<uint32_t> input_tensor_start;

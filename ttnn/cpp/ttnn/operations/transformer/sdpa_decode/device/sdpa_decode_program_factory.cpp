@@ -71,7 +71,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     auto q_shape = input_tensor_q.padded_shape();
     const bool tilize_q = input_tensor_q.layout() == Layout::ROW_MAJOR;
-    q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
+    q_shape[2] = ttsl::math::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
     const auto& q_shape_unpadded = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.padded_shape();
     // Use k_shape for S and DH since Q might be different for decode

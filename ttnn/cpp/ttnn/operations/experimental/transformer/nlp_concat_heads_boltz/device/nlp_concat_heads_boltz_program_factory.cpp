@@ -150,7 +150,7 @@ NLPConcatHeadsBoltzProgramFactory::cached_program_t NLPConcatHeadsBoltzProgramFa
 
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
     if (in_sharded) {
-        uint32_t nheads_first_risc = div_up(num_blocks_per_core_group_1, 2);
+        uint32_t nheads_first_risc = ttsl::math::div_up(num_blocks_per_core_group_1, 2);
         uint32_t nheads_second_risc = num_blocks_per_core_group_1 - nheads_first_risc;
         std::vector<uint32_t> reader_runtime_args = {
             (std::uint32_t)nheads_first_risc,

@@ -117,7 +117,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
     for (const auto& core : local_cores) {
         uint32_t local_units_per_core = std::min(local_units_left, local_units_per_shard);
         local_units_left -= local_units_per_core;
-        uint32_t local_units_per_kernel = tt::div_up(local_units_per_core, kernels.size());
+        uint32_t local_units_per_kernel = ttsl::math::div_up(local_units_per_core, kernels.size());
         uint32_t local_start_offset = 0;
         for (const auto& kernel_id : kernels) {
             std::vector<uint32_t> kernel_args = {remote_address, 0, 0};

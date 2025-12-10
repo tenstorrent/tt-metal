@@ -21,7 +21,7 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
         num_dims > dim, "... Invalid dimension for chunk operation, {} needs to be greater than {}", num_dims, dim);
 
     int size_along_dim = size[dim];
-    int chunk_size = tt::div_up(size_along_dim, num_chunks);
+    int chunk_size = ttsl::math::div_up(size_along_dim, num_chunks);
 
     std::vector<ttnn::Tensor> chunks;
     int start = 0;

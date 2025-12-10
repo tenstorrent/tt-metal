@@ -22,7 +22,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/host_api.hpp>

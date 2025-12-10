@@ -74,10 +74,10 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
         uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height -
-            (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            (ttsl::math::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             num_units_per_shard_width -
-            (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
+            (ttsl::math::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
         input_unit_size = shard_spec.shape[1] * input.element_size();
@@ -90,10 +90,10 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
         uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height -
-            (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            (ttsl::math::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
-            input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
+            input_unit_size - (ttsl::math::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
         // Adjust accordingly to l1 alignment, do it for all archs
         if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
@@ -312,12 +312,12 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
             if (!aligned) {
                 // TODO: is this right, leaving non BH case the same for now, should investigate
                 if (!is_blackhole) {
-                    aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
+                    aligned_width_offset = ttsl::math::round_down(curr_idx_w, dram_alignment);
                 } else {
                     if (src_is_dram) {
-                        aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
+                        aligned_width_offset = ttsl::math::round_down(curr_idx_w, dram_alignment);
                     } else {
-                        aligned_width_offset = tt::round_down(curr_idx_w, l1_alignment);
+                        aligned_width_offset = ttsl::math::round_down(curr_idx_w, l1_alignment);
                     }
                 }
                 aligned_offset = curr_idx_w - aligned_width_offset;
@@ -346,7 +346,7 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
             std::vector<uint32_t> writer_run_time_args;
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
-                uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
+                uint32_t output_width_in_pages = ttsl::math::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
                 writer_run_time_args = {
                     dst_buffer->address(),

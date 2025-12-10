@@ -39,7 +39,7 @@
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
@@ -426,8 +426,8 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
 
-    auto kernel1_l1_address = l1_unreserved_base + (tt::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
-                              (tt::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
+    auto kernel1_l1_address = l1_unreserved_base + (ttsl::math::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
+                              (ttsl::math::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
     tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",

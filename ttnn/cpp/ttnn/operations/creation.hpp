@@ -51,7 +51,7 @@ Tensor arange_impl(
         !((step > 0 && start > stop) || (step < 0 && start < stop)),
         "Invalid range: Step direction does not match range bounds");
 
-    auto size = std::max<int64_t>(0, tt::div_up(std::abs(stop - start), std::abs(step)));
+    auto size = std::max<int64_t>(0, ttsl::math::div_up(std::abs(stop - start), std::abs(step)));
     auto owned_buffer = std::vector<T>(size);
 
     auto index = 0;

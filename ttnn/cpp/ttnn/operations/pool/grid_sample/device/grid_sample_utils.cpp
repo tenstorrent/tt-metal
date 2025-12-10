@@ -5,7 +5,7 @@
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace ttnn::operations::pool::grid_sample {
 
@@ -70,7 +70,7 @@ uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) 
     const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                    ? tt::tt_metal::hal::get_dram_alignment()
                                    : tt::tt_metal::hal::get_l1_alignment();
-    return tt::round_up(stick_nbytes, alignment);
+    return ttsl::math::round_up(stick_nbytes, alignment);
 }
 
 }  // namespace ttnn::operations::pool::grid_sample

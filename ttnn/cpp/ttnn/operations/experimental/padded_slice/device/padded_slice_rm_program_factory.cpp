@@ -9,7 +9,7 @@
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
@@ -49,7 +49,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     [[maybe_unused]] uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
     [[maybe_unused]] uint32_t input_row_size_bytes =
-        tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
+        ttsl::math::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -103,7 +103,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
-    uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
+    uint32_t output_row_size_bytes_offset = ttsl::math::round_up(output_row_size_bytes, dst_buffer_alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address

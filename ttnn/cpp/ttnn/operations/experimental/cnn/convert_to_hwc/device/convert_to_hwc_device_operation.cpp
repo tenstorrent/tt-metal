@@ -54,7 +54,7 @@ spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
 
     // Output needs to be multiple of alignment requirement to guarantee aligned copies
     const auto alignment_elements = detail::compute_alignment_requirement_in_elements(tensor_args.input);
-    const auto output_channels = tt::round_up(C, alignment_elements);
+    const auto output_channels = ttsl::math::round_up(C, alignment_elements);
 
     return TensorSpec(
         Shape({1, 1, B * HW, output_channels}),

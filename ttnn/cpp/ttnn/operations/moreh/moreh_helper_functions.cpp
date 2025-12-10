@@ -305,7 +305,7 @@ uint32_t compute_inner(const ttnn::Shape& shape, uint32_t dim) {
     for (uint32_t i = rank - dim; i < rank; i++) {
         auto size = shape[i];
         if (is_hw_dim(i, rank)) {
-            size = tt::div_up(size, constants::TILE_WIDTH);
+            size = ttsl::math::div_up(size, constants::TILE_WIDTH);
         }
         num_inner *= size;
     }
@@ -320,7 +320,7 @@ uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim) {
     for (uint32_t i = 0; i < rank - dim; i++) {
         auto size = shape[i];
         if (is_hw_dim(i, rank)) {
-            size = tt::div_up(size, constants::TILE_WIDTH);
+            size = ttsl::math::div_up(size, constants::TILE_WIDTH);
         }
         num_outer *= size;
     }

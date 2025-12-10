@@ -55,8 +55,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto stick_nbytes =
         output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.dtype()));
     uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
-    uint32_t tiles_per_channel_dim = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
-    uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
+    uint32_t tiles_per_channel_dim = ttsl::math::div_up(input_padded_shape[-1], TILE_WIDTH);
+    uint32_t tiles_per_width_dim = ttsl::math::div_up(input_padded_shape[-2], TILE_HEIGHT);
     uint32_t tiles_per_complete_row = tiles_per_width_dim * tiles_per_channel_dim;
     uint32_t num_blocks =
         std::ceil(static_cast<float>(ntiles) / (tiles_per_complete_row));  // Total number of blocks for batch * height
@@ -276,7 +276,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     // Calculate work per core based on input dimensions
-    uint32_t patches_per_core = tt::div_up(total_patches, num_cores_total);
+    uint32_t patches_per_core = ttsl::math::div_up(total_patches, num_cores_total);
 
     log_debug(
         tt::LogOp,

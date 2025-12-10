@@ -99,7 +99,7 @@ spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.padded_shape();
     if (!args.token_idx.has_value()) {
-        shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
+        shape[-2] = ttsl::math::round_up(args.seq_len, TILE_HEIGHT);
     }
 
     if (args.output_mem_config.is_sharded()) {
@@ -117,7 +117,7 @@ spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
                     break;
                 }
             }
-            uint32_t Ht = tt::div_up(num_blocks, num_cores);
+            uint32_t Ht = ttsl::math::div_up(num_blocks, num_cores);
             shard_spec.grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, core_grid, true);
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;

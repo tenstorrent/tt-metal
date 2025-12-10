@@ -246,10 +246,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 if (mcast_1d) {
                     TT_FATAL(
-                        tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
+                        ttsl::math::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                         "block_w ({}) must equal to K (in tiles) / num_cores ({})",
                         program_config.block_w,
-                        tt::div_up(Kt, shard_spec.num_cores()));
+                        ttsl::math::div_up(Kt, shard_spec.num_cores()));
                     TT_FATAL(
                         Mt == program_config.block_h,
                         "block_h ({}) must equal to M (in tiles) ({})",
@@ -262,10 +262,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 } else {
                     if (row_wise) {
                         TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
+                            ttsl::math::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
                             "block_w ({}) must equal to K (in tiles) / num_cores_c ({})",
                             program_config.block_w,
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)));
+                            ttsl::math::div_up(Kt, (bbox.end_coord.x + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.y + 1) == program_config.block_h,
                             "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
@@ -273,10 +273,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                             Mt / (bbox.end_coord.y + 1));
                     } else {
                         TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
+                            ttsl::math::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
                             "block_w ({}) must equal to K (in tiles) / num_cores_r ({})",
                             program_config.block_w,
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)));
+                            ttsl::math::div_up(Kt, (bbox.end_coord.y + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.x + 1) == program_config.block_h,
                             "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",

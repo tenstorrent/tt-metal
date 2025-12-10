@@ -25,7 +25,7 @@ NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::cre
     uint32_t alignment_base = 32 / input.element_size();
     // we want per core to be aligned to aligment_base per core
 
-    uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
+    uint32_t aligned_elements = ttsl::math::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
     uint32_t actual_elements = input.padded_shape()[-1];
 
     CoreCoord core = {0, 0};
@@ -104,7 +104,7 @@ void NonZeroIndicesProgramFactory::override_runtime_arguments(
     const auto& out_indices = std::get<1>(output_tensors);
 
     uint32_t alignment_base = 32 / input.element_size();
-    uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
+    uint32_t aligned_elements = ttsl::math::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
     uint32_t actual_elements = input.padded_shape()[-1];
     auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_id, core);
     runtime_args[0] = input.buffer()->address();

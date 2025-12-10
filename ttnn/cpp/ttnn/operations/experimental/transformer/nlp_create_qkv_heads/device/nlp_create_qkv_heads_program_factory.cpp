@@ -344,7 +344,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
 
     uint32_t per_core_out_q_heads = num_q_heads / q_cores.num_cores();
-    uint32_t per_risc0_out_q_heads = div_up(per_core_out_q_heads, 2);
+    uint32_t per_risc0_out_q_heads = ttsl::math::div_up(per_core_out_q_heads, 2);
     uint32_t per_risc1_out_q_heads = per_core_out_q_heads / 2;
     uint32_t per_core_in_q_heads = num_q_heads / input_tensor.shard_spec().value().num_cores();
 

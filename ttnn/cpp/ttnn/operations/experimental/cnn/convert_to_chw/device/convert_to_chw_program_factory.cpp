@@ -57,11 +57,11 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
 
     TT_FATAL(C <= TILE_HEIGHT, "C must not exceed 32");
     TT_FATAL(
-        tt::div_up(HW, a.shard_spec()->shape[0]) == input_cores.size(),
+        ttsl::math::div_up(HW, a.shard_spec()->shape[0]) == input_cores.size(),
         "Mismatch between core grid and input/shard shapes");
 
     const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume C < 32
-    const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
+    const uint32_t total_tiles_per_core = ttsl::math::div_up(total_tiles, input_cores.size());
 
     log_debug(tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
 

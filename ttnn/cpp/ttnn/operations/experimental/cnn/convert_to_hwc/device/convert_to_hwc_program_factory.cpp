@@ -37,9 +37,9 @@ struct GroupingResult {
 
 inline BlockTilingParams compute_block_tiling_params(
     const ConvertToHwcConfig& config, uint32_t block_size_width, uint32_t num_blocks) {
-    const uint32_t total_tiles_per_block = tt::div_up(block_size_width, TILE_HEIGHT);
+    const uint32_t total_tiles_per_block = ttsl::math::div_up(block_size_width, TILE_HEIGHT);
     const uint32_t total_tiles_per_core = total_tiles_per_block * num_blocks;
-    const uint32_t tiles_per_block_writer0 = tt::div_up(total_tiles_per_block, 2);
+    const uint32_t tiles_per_block_writer0 = ttsl::math::div_up(total_tiles_per_block, 2);
     const uint32_t tiles_per_block_writer1 = total_tiles_per_block - tiles_per_block_writer0;
     const uint32_t output_stride_sticks = TILE_WIDTH;
     // Inter-writer L1 output stride (bytes) between consecutive tiles written by a single writer.
@@ -348,13 +348,14 @@ CircularBufferHandles setup_circular_buffers(
 
     // CB_IN_TILED: intermediate tiles
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
-    const uint32_t cb_in_tiled_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_tiled_total_size = ttsl::math::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     create_circular_buffer(
         program, core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
     // CB_IN_TRANSPOSE_[0/1]
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size =
+        ttsl::math::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
     create_circular_buffer(
         program,
         core_grid,

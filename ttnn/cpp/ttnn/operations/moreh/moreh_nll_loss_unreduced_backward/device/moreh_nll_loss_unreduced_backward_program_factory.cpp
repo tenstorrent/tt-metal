@@ -7,7 +7,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -47,8 +47,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     // create circular buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
 
-    auto Ct = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    auto Nt = tt::div_up(N, tt::constants::TILE_WIDTH);
+    auto Ct = ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH);
+    auto Nt = ttsl::math::div_up(N, tt::constants::TILE_WIDTH);
     CreateCircularBuffer(
         program,
         all_cores,
@@ -273,7 +273,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
-    auto Ct = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
+    auto Ct = ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH);
 
     auto H = input_grad_shape[-2];
     auto W = input_grad_shape[-1];

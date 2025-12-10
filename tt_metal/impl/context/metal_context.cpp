@@ -1037,7 +1037,7 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
         worker_logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);
     const uint8_t firmware_grid_size_x =
-        tt::round_up(soc_desc.grid_size.x, 4);  // Ensure multiple of 4 for uint32_t alignment
+        ttsl::math::round_up(soc_desc.grid_size.x, 4);  // Ensure multiple of 4 for uint32_t alignment
     const uint32_t logical_row_to_virtual_row_sz_in_bytes =
         worker_logical_row_to_virtual_row_[device_id].size() * sizeof(uint8_t);
     const uint64_t logical_to_virtual_map_addr =

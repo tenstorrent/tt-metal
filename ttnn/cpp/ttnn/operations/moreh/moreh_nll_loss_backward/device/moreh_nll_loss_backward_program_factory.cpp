@@ -7,7 +7,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_backward_device_operation.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -51,7 +51,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
+    uint32_t weight_num_tile = ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH);
     CreateCircularBuffer(
         program,
         all_cores,
@@ -231,7 +231,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
+    uint32_t weight_num_tile = ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH);
     CreateCircularBuffer(
         program,
         all_cores,
@@ -412,7 +412,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
+    uint32_t weight_num_tile = ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH);
     CreateCircularBuffer(
         program,
         all_cores,

@@ -85,8 +85,8 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
     uint32_t curr_input_write_offset = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto shard_spec = input_tensors[input_id].shard_spec().value();
-        input_num_pages_per_stick[input_id] = tt::div_up(shard_spec.shape[1], elements_per_page_width);
-        input_num_sticks[input_id] = tt::div_up(shard_spec.shape[0], elements_per_page_height);
+        input_num_pages_per_stick[input_id] = ttsl::math::div_up(shard_spec.shape[1], elements_per_page_width);
+        input_num_sticks[input_id] = ttsl::math::div_up(shard_spec.shape[0], elements_per_page_height);
         input_write_offsets[input_id] = curr_input_write_offset;
 
         const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
@@ -102,8 +102,8 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
 
     // Output CB
     const auto output_shard_spec = output.shard_spec().value();
-    const uint32_t output_num_pages_per_stick = tt::div_up(output_shard_spec.shape[1], elements_per_page_width);
-    const uint32_t output_num_sticks = tt::div_up(output_shard_spec.shape[0], elements_per_page_height);
+    const uint32_t output_num_pages_per_stick = ttsl::math::div_up(output_shard_spec.shape[1], elements_per_page_width);
+    const uint32_t output_num_sticks = ttsl::math::div_up(output_shard_spec.shape[0], elements_per_page_height);
     const CircularBufferConfig output_cb_config =
         CircularBufferConfig(page_size * output_num_sticks * output_num_pages_per_stick, {{cb_dst_id, cb_data_format}})
             .set_page_size(cb_dst_id, page_size)
@@ -116,7 +116,7 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        const auto input_num_sticks_per_risc = tt::div_up(input_num_sticks[input_id], 2);
+        const auto input_num_sticks_per_risc = ttsl::math::div_up(input_num_sticks[input_id], 2);
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);
         runtime_args_0.push_back(input_num_sticks_per_risc);
         runtime_args_0.push_back(input_write_offsets[input_id]);

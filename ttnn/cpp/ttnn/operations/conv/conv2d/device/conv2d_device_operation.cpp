@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer.hpp>
@@ -52,7 +52,7 @@ spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
     auto shape_c = args.output_channels;
     auto padded_shape_w = args.parallelization_config.num_cores_nhw *
                           args.parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
-    auto padded_shape_c = tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
+    auto padded_shape_c = ttsl::math::round_up(args.output_channels, tt::constants::TILE_WIDTH);
     ttnn::Shape output_shape({1, 1, shape_w, shape_c});
     ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
 
@@ -123,9 +123,9 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
             if (args.memory_config.shard_spec().value().orientation == ShardOrientation::COL_MAJOR) {
-                out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.y);
+                out_width_ntiles = ttsl::math::div_up(out_width_ntiles, args.parallelization_config.grid_size.y);
             } else {
-                out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
+                out_width_ntiles = ttsl::math::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
         }
         TT_FATAL(

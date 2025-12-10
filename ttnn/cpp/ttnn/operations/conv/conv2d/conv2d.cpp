@@ -12,7 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -147,7 +147,7 @@ Result conv2d_L1(
         false,
         mm_conv,
         input_tensor_post_tm.memory_config());
-    const uint32_t in_channels_padded = tt::round_up(
+    const uint32_t in_channels_padded = ttsl::math::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
