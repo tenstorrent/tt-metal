@@ -13,8 +13,7 @@
 #include "indexed_fill.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 
-namespace ttnn::operations::data_movement {
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 void bind_indexed_fill(nb::module_& mod) {
     auto doc = fmt::format(
@@ -55,6 +54,4 @@ void bind_indexed_fill(nb::module_& mod) {
             nb::arg("dim") = 0});
 }
 
-}  // namespace detail
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::detail

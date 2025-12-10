@@ -347,7 +347,7 @@ void bind_conv2d(nb::module_& mod) {
         If true, then core_grid must also be specified.
         )doc");
 
-    // nanobind note: bug prevents assigning property to None
+    // TODO_NANOBIND: May need to change to prop_rw and add explicit none setter arg
     py_conv_config.def_rw(
         "shard_layout",
         &Conv2dConfig::shard_layout,

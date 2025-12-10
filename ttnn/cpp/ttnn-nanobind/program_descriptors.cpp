@@ -24,12 +24,49 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
 
 namespace ttnn::program_descriptors {
 
 void py_module_types(nb::module_& mod) {
+    // Bind TileDescriptor first
+    nb::class_<tt::tt_metal::TileDescriptor>(mod, "TileDescriptor", R"pbdoc(
+        Descriptor for tile dimensions.
+
+        Defines the height and width of a tile, which can be standard (32x32)
+        or tiny tiles (e.g., 16x32 for certain operations).
+    )pbdoc")
+        .def(nb::init<>(), R"pbdoc(
+            Default constructor for TileDescriptor (32x32 tile).
+        )pbdoc")
+        .def(
+            nb::init<uint32_t, uint32_t, bool>(),
+            nb::arg("height"),
+            nb::arg("width"),
+            nb::arg("transpose") = false,
+            R"pbdoc(
+                Initialize a TileDescriptor with custom dimensions.
+
+                Args:
+                    height: Height of the tile in elements
+                    width: Width of the tile in elements
+                    transpose: Whether the tile is transposed
+            )pbdoc")
+        .def(
+            nb::init<const tt::tt_metal::Tile&>(),
+            nb::arg("tile"),
+            R"pbdoc(
+                Initialize a TileDescriptor from a Tile object.
+
+                Args:
+                    tile: Tile object to create descriptor from
+            )pbdoc")
+        .def_rw("height", &tt::tt_metal::TileDescriptor::height, "Height of the tile in elements")
+        .def_rw("width", &tt::tt_metal::TileDescriptor::width, "Width of the tile in elements")
+        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed");
+
     // Bind CBDescriptor and related types
     nb::class_<tt::tt_metal::CBFormatDescriptor>(mod, "CBFormatDescriptor", R"pbdoc(
         Descriptor for command buffer format configuration.
@@ -41,10 +78,11 @@ void py_module_types(nb::module_& mod) {
             Default constructor for CBFormatDescriptor.
         )pbdoc")
         .def(
-            nb::init<uint8_t, tt::DataFormat, uint32_t>(),
+            nb::init<uint8_t, tt::DataFormat, uint32_t, std::optional<tt::tt_metal::TileDescriptor>>(),
             nb::arg("buffer_index"),
             nb::arg("data_format"),
             nb::arg("page_size"),
+            nb::arg("tile") = nb::none(),
             R"pbdoc(
                 Initialize a CBFormatDescriptor with buffer index, data format and page size.
 
@@ -52,22 +90,25 @@ void py_module_types(nb::module_& mod) {
                     buffer_index: Index of the buffer within the command buffer
                     data_format: Format of the data in the buffer
                     page_size: Size of a page in bytes
+                    tile: Optional tile descriptor for custom tile dimensions (defaults to None)
             )pbdoc")
         .def(
             "__init__",
             [](tt::tt_metal::CBFormatDescriptor* t,
                uint8_t buffer_index,
                ttnn::DataType data_type,
-               uint32_t page_size) {
+               uint32_t page_size,
+               std::optional<tt::tt_metal::TileDescriptor> tile) {
                 // DataType to DataFormat conversion
                 tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(data_type);
-                new (t) tt::tt_metal::CBFormatDescriptor(buffer_index, data_format, page_size);
+                new (t) tt::tt_metal::CBFormatDescriptor(buffer_index, data_format, page_size, tile);
             },
             nb::arg("buffer_index"),
             nb::arg("data_format"),
             nb::arg("page_size"),
+            nb::arg("tile") = nb::none(),
             R"pbdoc(
-                Initialize a CBFormatDescriptor with buffer index, TTNN data type and page size.
+                Initialize a CBFormatDescriptor with buffer index, TTNN data type, page size, and optional tile descriptor.
 
                 This constructor automatically converts TTNN DataType to TT-Metal DataFormat.
 
@@ -75,16 +116,18 @@ void py_module_types(nb::module_& mod) {
                     buffer_index: Index of the buffer within the command buffer
                     data_format: TTNN data type to be converted to TT-Metal data format
                     page_size: Size of a page in bytes
+                    tile: Optional tile descriptor for custom tile dimensions (defaults to None)
             )pbdoc")
         .def_rw(
             "buffer_index",
             &tt::tt_metal::CBFormatDescriptor::buffer_index,
             "Index of the buffer within the command buffer")
         .def_rw("data_format", &tt::tt_metal::CBFormatDescriptor::data_format, "Format of the data in the buffer")
-        .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes");
+        .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")
+        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions");
 
     nb::class_<tt::tt_metal::CBDescriptor>(mod, "CBDescriptor", R"pbdoc(
-        Command Buffer Descriptor.
+        Circular Buffer Descriptor.
 
         Describes the structure and configuration of a command buffer,
         including its size, core ranges, and format descriptors.
@@ -115,6 +158,40 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::format_descriptors,
             "Collection of format descriptors for different sections of the buffer");
 
+    // Helper function for creating CBDescriptor from sharded tensor
+    mod.def(
+        "cb_descriptor_from_sharded_tensor",
+        &tt::tt_metal::cb_descriptor_from_sharded_tensor,
+        nb::arg("cb_index"),
+        nb::arg("tensor"),
+        R"pbdoc(
+            Create a CBDescriptor from a sharded tensor.
+
+            This function simplifies CB creation for sharded tensors by automatically deriving
+            all CB configuration fields from the tensor's shard specification.
+
+            Args:
+                cb_index: The circular buffer index (CB ID)
+                tensor: A sharded tensor to derive CB configuration from
+
+            Returns:
+                CBDescriptor with all fields (total_size, core_ranges, format_descriptors, buffer)
+                automatically populated from the tensor
+
+            Example:
+                >>> # Assuming device_input_tensor is a sharded tensor
+                >>> cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                ...     0,
+                ...     device_input_tensor
+                ... )
+                >>> # Use cb_desc in ProgramDescriptor
+                >>> program_desc = ttnn.ProgramDescriptor()
+                >>> program_desc.cbs = [cb_desc]
+
+            Note:
+                The tensor must be sharded (have a shard specification), otherwise this will raise an error.
+        )pbdoc");
+
     // Bind KernelDescriptor related types
     nb::class_<tt::tt_metal::ReaderConfigDescriptor>(mod, "ReaderConfigDescriptor", R"pbdoc(
         Configuration descriptor for reader components in a kernel.
@@ -134,6 +211,31 @@ void py_module_types(nb::module_& mod) {
         Default constructor for WriterConfigDescriptor.
     )pbdoc");
 
+    nb::class_<tt::tt_metal::DataMovementConfigDescriptor>(mod, "DataMovementConfigDescriptor", R"pbdoc(
+        Configuration descriptor for data movement operations.
+
+        Controls processor selection, NOC routing, and NOC mode for data movement kernels.
+    )pbdoc")
+        .def(nb::init<>(), R"pbdoc(
+            Default constructor for DataMovementConfigDescriptor.
+        )pbdoc")
+        .def(
+            nb::init<tt::tt_metal::DataMovementProcessor, tt::tt_metal::NOC, tt::tt_metal::NOC_MODE>(),
+            nb::arg("processor") = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
+            nb::arg("noc_mode") = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            R"pbdoc(
+                Constructor for DataMovementConfigDescriptor with parameters.
+
+                Args:
+                    processor: Data movement processor to use (default: RISCV_0)
+                    noc: Network-on-chip to use (default: RISCV_0_default)
+                    noc_mode: NOC mode for data movement (default: DM_DEDICATED_NOC)
+            )pbdoc")
+        .def_rw("processor", &tt::tt_metal::DataMovementConfigDescriptor::processor, "Data movement processor to use")
+        .def_rw("noc", &tt::tt_metal::DataMovementConfigDescriptor::noc, "Network-on-chip to use")
+        .def_rw("noc_mode", &tt::tt_metal::DataMovementConfigDescriptor::noc_mode, "NOC mode for data movement");
+
     export_enum<UnpackToDestMode>(mod, "UnpackToDestMode");
 
     // nanobind bind_vector docs:
@@ -150,6 +252,36 @@ void py_module_types(nb::module_& mod) {
         .def(nb::init<>(), R"pbdoc(
             Default constructor for ComputeConfigDescriptor.
         )pbdoc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::ComputeConfigDescriptor* t,
+               MathFidelity math_fidelity,
+               bool math_approx_mode,
+               bool fp32_dest_acc_en,
+               bool dst_full_sync_en,
+               bool bfp8_pack_precise) {
+                new (t) tt::tt_metal::ComputeConfigDescriptor{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .bfp8_pack_precise = bfp8_pack_precise,
+                    .math_approx_mode = math_approx_mode};
+            },
+            nb::arg("math_fidelity") = nb::cast(MathFidelity::HiFi4),
+            nb::arg("math_approx_mode") = false,
+            nb::arg("fp32_dest_acc_en") = false,
+            nb::arg("dst_full_sync_en") = false,
+            nb::arg("bfp8_pack_precise") = false,
+            R"pbdoc(
+                Constructor for ComputeConfigDescriptor with parameters.
+
+                Args:
+                    math_fidelity: Mathematical precision level (default: HiFi4)
+                    math_approx_mode: Enable approximation mode (default: False)
+                    fp32_dest_acc_en: Enable FP32 destination accumulation (default: False)
+                    dst_full_sync_en: Enable full destination synchronization (default: False)
+                    bfp8_pack_precise: Enable precise BFP8 packing (default: False)
+            )pbdoc")
         .def_rw(
             "math_fidelity",
             &tt::tt_metal::ComputeConfigDescriptor::math_fidelity,
@@ -204,17 +336,19 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::KernelDescriptor::SourceType,
                 CoreRangeSet,
                 tt::tt_metal::KernelDescriptor::CompileTimeArgs,
+                tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs,
                 tt::tt_metal::KernelDescriptor::Defines,
                 tt::tt_metal::KernelDescriptor::RuntimeArgs,
                 tt::tt_metal::KernelDescriptor::CommonRuntimeArgs,
                 std::optional<tt::tt_metal::KernelBuildOptLevel>,
                 tt::tt_metal::KernelDescriptor::ConfigDescriptor>(),
             nb::arg("kernel_source"),
-            nb::arg("source_type") = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
+            nb::arg("source_type") = nb::cast(tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH),
             nb::arg("core_ranges"),
-            nb::arg("compile_time_args"),
-            nb::arg("defines") = tt::tt_metal::KernelDescriptor::Defines(),
-            nb::arg("runtime_args"),
+            nb::arg("compile_time_args") = nb::cast(tt::tt_metal::KernelDescriptor::CompileTimeArgs()),
+            nb::arg("named_compile_time_args") = nb::cast(tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs()),
+            nb::arg("defines") = nb::cast(tt::tt_metal::KernelDescriptor::Defines()),
+            nb::arg("runtime_args") = nb::cast(tt::tt_metal::KernelDescriptor::RuntimeArgs()),
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
@@ -226,6 +360,7 @@ void py_module_types(nb::module_& mod) {
                     source_type: Type of source (FILE_PATH or INLINE)
                     core_ranges: Set of core ranges where the kernel will execute
                     compile_time_args: Arguments provided at compile time
+                    named_compile_time_args: Named arguments provided at compile time
                     defines: Preprocessor definitions for kernel compilation
                     runtime_args: Arguments provided at runtime
                     common_runtime_args: Common runtime arguments shared across kernels
@@ -245,16 +380,13 @@ void py_module_types(nb::module_& mod) {
             "compile_time_args",
             &tt::tt_metal::KernelDescriptor::compile_time_args,
             "Arguments provided at compile time")
+        .def_rw(
+            "named_compile_time_args",
+            &tt::tt_metal::KernelDescriptor::named_compile_time_args,
+            "Named arguments provided at compile time")
         .def_rw("defines", &tt::tt_metal::KernelDescriptor::defines, "Preprocessor definitions for kernel compilation")
         .def_rw("runtime_args", &tt::tt_metal::KernelDescriptor::runtime_args, "Arguments provided at runtime")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
-
-    // needed to set SemaphoreDescriptor CoreType default
-    // nb::module_::import_("types");
-    // nb::module_::import_("ttnn.types");
-
-    // in ttnn-nanobind/types.cpp
-    // export_enum<tt::CoreType>(mod, "CoreType");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
@@ -267,7 +399,7 @@ void py_module_types(nb::module_& mod) {
     )pbdoc")
         .def(
             nb::init<tt::CoreType, CoreRangeSet, uint32_t>(),
-            nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),  // TODO_NANOBIND causes segfault when import ttnn???
+            nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
             nb::arg("core_ranges"),
             nb::arg("initial_value"),
             R"pbdoc(
@@ -291,9 +423,9 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::ProgramDescriptor::KernelDescriptors,
                 tt::tt_metal::ProgramDescriptor::SemaphoreDescriptors,
                 tt::tt_metal::ProgramDescriptor::CBDescriptors>(),
-            nb::arg("kernels"),
-            nb::arg("semaphores"),
-            nb::arg("cbs"),
+            nb::arg("kernels") = nb::cast(tt::tt_metal::ProgramDescriptor::KernelDescriptors()),
+            nb::arg("semaphores") = nb::cast(tt::tt_metal::ProgramDescriptor::SemaphoreDescriptors()),
+            nb::arg("cbs") = nb::cast(tt::tt_metal::ProgramDescriptor::CBDescriptors()),
             R"pbdoc(
                 Initialize a ProgramDescriptor with kernels, semaphores, and command buffers.
 

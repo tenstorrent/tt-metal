@@ -138,7 +138,7 @@ void bind_binary_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Supports broadcasting.
+        {7}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -199,9 +199,9 @@ void bind_binary_operation(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()},
 
@@ -236,9 +236,9 @@ void bind_binary_operation(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()});
 }
@@ -338,9 +338,9 @@ void bind_binary_gcd_lcm_operation(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none()});
 }
 
@@ -426,9 +426,9 @@ void bind_binary_unary_max_operation(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
         },
 
@@ -461,9 +461,9 @@ void bind_binary_unary_max_operation(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none()});
 }
 
@@ -556,9 +556,9 @@ void bind_binary_unary_operation(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none()},
 
         // tensor and tensor
@@ -754,9 +754,9 @@ void bind_bitwise_binary_ops_operation(
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none()},
 
         // tensor and tensor
@@ -785,9 +785,9 @@ void bind_bitwise_binary_ops_operation(
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
         });
 }
@@ -1296,9 +1296,9 @@ void bind_div(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         },
@@ -1339,9 +1339,9 @@ void bind_div(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         });
@@ -1436,9 +1436,9 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         },
@@ -1476,9 +1476,9 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()});
 }
@@ -1713,9 +1713,9 @@ void bind_inplace_operation(
             },
             nb::arg("input_a"),
             nb::arg("input_b"),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         },
@@ -1742,9 +1742,9 @@ void bind_inplace_operation(
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         });
@@ -1830,9 +1830,9 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("input_b"),
             nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         },
@@ -1862,9 +1862,9 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         });
@@ -1942,9 +1942,9 @@ void bind_logical_inplace_operation(
             },
             nb::arg("input_a"),
             nb::arg("input_b"),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         });
@@ -1997,9 +1997,9 @@ void bind_binary_inplace_operation(
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         },
@@ -2026,9 +2026,9 @@ void bind_binary_inplace_operation(
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
         });
@@ -2141,9 +2141,9 @@ void bind_power(nb::module_& mod, const binary_operation_t& operation, const std
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
         },
 
@@ -2176,9 +2176,9 @@ void bind_power(nb::module_& mod, const binary_operation_t& operation, const std
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none()});
 }
 }  // namespace detail

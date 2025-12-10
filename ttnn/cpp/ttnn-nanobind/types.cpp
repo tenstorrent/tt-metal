@@ -22,6 +22,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
+#include <tt-metalium/data_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 // NOLINTBEGIN(bugprone-unused-raii)
@@ -56,8 +57,17 @@ void py_module_types(nb::module_& mod) {
     export_enum<ttnn::BcastOpDim>(mod, "BcastOpDim");
     auto ct_enum = export_enum<tt::CoreType>(mod, "CoreType");
 
-    // manually do the int cast instead of trying to allow implicit conversion
-    ct_enum.def("__int__", [](const tt::CoreType& self) { return nb::int_{static_cast<int>(self)}; });
+    // Bind tt_metal data types
+    export_enum<tt::tt_metal::DataMovementProcessor>(mod, "DataMovementProcessor");
+
+    // Manually bind NOC enum to ensure all aliases are exported
+    nb::enum_<tt::tt_metal::NOC>(mod, "NOC")
+        .value("RISCV_0_default", tt::tt_metal::NOC::RISCV_0_default)
+        .value("RISCV_1_default", tt::tt_metal::NOC::RISCV_1_default)
+        .value("NOC_0", tt::tt_metal::NOC::NOC_0)
+        .value("NOC_1", tt::tt_metal::NOC::NOC_1);
+
+    export_enum<tt::tt_metal::NOC_MODE>(mod, "NOC_MODE");
 
     nb::implicitly_convertible<nb::int_, ttnn::QueueId>();
     nb::implicitly_convertible<unsigned char, ttnn::QueueId>();
@@ -88,7 +98,7 @@ void py_module(nb::module_& mod) {
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
         .def(
-            "__iter__",  // TODO_NANOBIND: make sure there doesn't need to be an additional cast to SmallVector
+            "__iter__",
             [](const Shape& self) {
                 return nb::make_iterator<nb::rv_policy::reference_internal>(
                     nb::type<ttnn::Shape>(), "iterator", self.cbegin(), self.cend());

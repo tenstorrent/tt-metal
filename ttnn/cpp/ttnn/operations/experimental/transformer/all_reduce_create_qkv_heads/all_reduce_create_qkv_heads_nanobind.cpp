@@ -13,7 +13,7 @@
 #include <nanobind/stl/tuple.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.hpp"
+#include "all_reduce_create_qkv_heads.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 

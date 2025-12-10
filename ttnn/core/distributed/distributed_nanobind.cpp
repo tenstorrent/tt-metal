@@ -19,6 +19,7 @@
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -424,7 +425,55 @@ void py_module(nb::module_& mod) {
         .def(
             "sfpu_inf",
             [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
-            R"doc(Returns Infinity value for current architecture.)doc");
+            R"doc(Returns Infinity value for current architecture.)doc")
+        .def(
+            "worker_core_from_logical_core",
+            &MeshDevice::worker_core_from_logical_core,
+            nb::arg("logical_core"),
+            R"doc(
+                Convert a logical coordinate to a virtual coordinate for a worker core.
+
+                Args:
+                    logical_core (CoreCoord): The logical coordinate to convert.
+
+                Returns:
+                    CoreCoord: The virtual coordinate of the worker core.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> logical_core = ttnn.CoreCoord(0, 0)
+                    >>> worker_core = device.worker_core_from_logical_core(logical_core)
+                    >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc")
+        .def(
+            "get_worker_noc_hop_distance",
+            [](MeshDevice& self, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
+                return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                    &self, logical_src, logical_dst, noc);
+            },
+            nb::arg("logical_src"),
+            nb::arg("logical_dst"),
+            nb::arg("noc"),
+            R"doc(
+                Returns the hop distance between two logical worker coordinates on a given NOC.
+
+                This API is experimental and may evolve into a stable Device API in the future.
+
+                Args:
+                    logical_src (CoreCoord): The source logical coordinate.
+                    logical_dst (CoreCoord): The destination logical coordinate.
+                    noc (NOC): The NOC to use (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
+
+                Returns:
+                    int: The hop distance between the two coordinates on the given NOC.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> src = ttnn.CoreCoord(0, 0)
+                    >>> dst = ttnn.CoreCoord(2, 3)
+                    >>> noc0_distance = device.get_worker_noc_hop_distance(src, dst, ttnn.NOC.NOC_0)
+                    >>> noc1_distance = device.get_worker_noc_hop_distance(src, dst, ttnn.NOC.NOC_1)
+            )doc");
 
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
@@ -624,7 +673,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> nbh::unique_ptr<TensorToMesh> {
-            return nbh::unique_ptr<TensorToMesh>(replicate_tensor_to_mesh_mapper(mesh_device).release());
+            return nbh::steal_rewrap_unique<TensorToMesh>(replicate_tensor_to_mesh_mapper(mesh_device));
         },
         nb::arg("mesh_device"),
         R"doc(
@@ -640,7 +689,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "shard_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device, int dim) -> nbh::unique_ptr<TensorToMesh> {
-            return nbh::unique_ptr<TensorToMesh>(shard_tensor_to_mesh_mapper(mesh_device, dim).release());
+            return nbh::steal_rewrap_unique<TensorToMesh>(shard_tensor_to_mesh_mapper(mesh_device, dim));
         },
         nb::arg("mesh_device"),
         nb::arg("dim"),
@@ -657,7 +706,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "create_mesh_mapper",
         [](MeshDevice& mesh_device, const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
-            return nbh::unique_ptr<TensorToMesh>(create_mesh_mapper(mesh_device, config).release());
+            return nbh::steal_rewrap_unique<TensorToMesh>(create_mesh_mapper(mesh_device, config));
         },
         nb::arg("mesh_device"),
         nb::arg("config"),
@@ -697,14 +746,14 @@ void py_module(nb::module_& mod) {
     mod.def(
         "concat_mesh_to_tensor_composer",
         [](MeshDevice& mesh_device, int dim) -> nbh::unique_ptr<MeshToTensor> {
-            return nbh::unique_ptr<MeshToTensor>(concat_mesh_to_tensor_composer(mesh_device, dim).release());
+            return nbh::steal_rewrap_unique<MeshToTensor>(concat_mesh_to_tensor_composer(mesh_device, dim));
         },
         nb::arg("mesh_device"),
         nb::arg("dim"));
     mod.def(
         "create_mesh_composer",
         [](MeshDevice& mesh_device, const MeshComposerConfig& config) -> nbh::unique_ptr<MeshToTensor> {
-            return nbh::unique_ptr<MeshToTensor>(create_mesh_composer(mesh_device, config).release());
+            return nbh::steal_rewrap_unique<MeshToTensor>(create_mesh_composer(mesh_device, config));
         },
         nb::arg("mesh_device"),
         nb::arg("config"),

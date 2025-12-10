@@ -219,7 +219,14 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def_prop_ro("partial_face", &Tile::get_partial_face)
         .def_prop_ro("narrow_tile", &Tile::get_narrow_tile)
         .def_prop_ro("transpose_within_face", &Tile::get_transpose_within_face)
-        .def_prop_ro("transpose_of_faces", &Tile::get_transpose_of_faces);
+        .def_prop_ro("transpose_of_faces", &Tile::get_transpose_of_faces)
+        .def(
+            "get_tile_size",
+            [](const Tile& self, DataType dtype) {
+                return self.get_tile_size(datatype_to_dataformat_converter(dtype));
+            },
+            nb::arg("dtype"),
+            "Get tile size in bytes for the given data type");
 
     auto pyTensorSpec = static_cast<nb::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
@@ -499,8 +506,28 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             &CoreRangeSet::bounding_box,
             "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
         .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet")
+        .def("size", &CoreRangeSet::size, "Returns number of core ranges in the CoreRangeSet")
+        .def("empty", &CoreRangeSet::empty, "Returns true if the CoreRangeSet has no core ranges")
         .def("subtract", &CoreRangeSet::subtract, "Subtract common CoreRanges from current i.e. it returns A - (AnB)")
-        .def("ranges", &CoreRangeSet::ranges, "Returns the core ranges in the CoreRangeSet");
+        .def("ranges", &CoreRangeSet::ranges, "Returns the core ranges in the CoreRangeSet")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreCoord&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core"),
+            "Check if a core coordinate is contained in this CoreRangeSet")
+        .def(
+            "merge",
+            &CoreRangeSet::merge<CoreRangeSet>,
+            nb::arg("other"),
+            "Merge this CoreRangeSet with another CoreRangeSet and return the result");
+
+    m_tensor.def(
+        "corerange_to_cores",
+        &tt::tt_metal::corerange_to_cores,
+        nb::arg("core_range_set"),
+        nb::arg("max_cores") = nb::none(),
+        nb::arg("row_wise") = false,
+        "Convert a CoreRangeSet to a vector of CoreCoords");
 
     auto pyShardSpec = static_cast<nb::class_<ShardSpec>>(m_tensor.attr("ShardSpec"));
     pyShardSpec
