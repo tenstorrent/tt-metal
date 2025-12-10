@@ -7,9 +7,9 @@
 #include <string>
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 
-struct ImageRotateDeviceOperation {
+struct RotateDeviceOperation {
     struct operation_attributes_t {
         const float angle;
         const std::optional<std::tuple<float, float>> center;
@@ -52,7 +52,7 @@ struct ImageRotateDeviceOperation {
     struct NearestProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};  // No compute kernel needed for nearest
+            tt::tt_metal::KernelHandle writer_kernel_id{};   // No compute kernel needed for nearest
             tt::tt_metal::KernelHandle reader1_kernel_id{};  // Second reader for split mode
             std::size_t num_cores{};
             std::size_t num_cores_y{};
@@ -94,9 +94,9 @@ struct ImageRotateDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate
 
 namespace ttnn::prim {
-constexpr auto image_rotate =
-    ttnn::register_operation<"ttnn::prim::image_rotate", ttnn::operations::image_rotate::ImageRotateDeviceOperation>();
+constexpr auto rotate =
+    ttnn::register_operation<"ttnn::prim::rotate", ttnn::operations::rotate::RotateDeviceOperation>();
 }  // namespace ttnn::prim

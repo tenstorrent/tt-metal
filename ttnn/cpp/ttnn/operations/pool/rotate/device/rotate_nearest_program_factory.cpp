@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_rotate_device_operation.hpp"
+#include "rotate_device_operation.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -15,7 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -27,8 +27,7 @@ static uint16_t nearest_float_to_bfloat16(float value) {
     return static_cast<uint16_t>(std::bit_cast<uint32_t>(value) >> 16);
 }
 
-ImageRotateDeviceOperation::NearestProgramFactory::cached_program_t
-ImageRotateDeviceOperation::NearestProgramFactory::create(
+RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOperation::NearestProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -119,8 +118,8 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
     // Create reader kernel (RISCV_0)
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/pool/image_rotate/device/kernels/dataflow/"
-        "reader_image_rotate_nearest_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
+        "reader_rotate_nearest_interleaved.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -130,8 +129,8 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
     // Create writer kernel (RISCV_1)
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/pool/image_rotate/device/kernels/dataflow/"
-        "writer_image_rotate_nearest_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
+        "writer_rotate_nearest_interleaved.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -179,7 +178,7 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
          .enable_split_reader = false}};
 }
 
-void ImageRotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
+void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -243,4 +242,4 @@ void ImageRotateDeviceOperation::NearestProgramFactory::override_runtime_argumen
     }
 }
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate

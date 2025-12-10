@@ -1,7 +1,7 @@
-# Image Rotate Functional Specification
+# Rotate Functional Specification
 
 ## Overview
-- **Operation Name**: image_rotate
+- **Operation Name**: rotate
 - **Category**: pool (spatial transformation)
 - **Reference Operation**: grid_sample_bilinear
 - **Reference Analysis**: `/localdev/dnijemcevic/tt-metal/ttnn/cpp/ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_analysis.md`
@@ -49,7 +49,7 @@ output = weight_nw * input[h0,w0] + weight_ne * input[h0,w1] +
 ```
 
 ### Semantic Description
-The image_rotate operation rotates an image tensor by an arbitrary angle around a specified center point using configurable interpolation (bilinear or nearest). Positive angles rotate counter-clockwise. Areas outside the rotated image are filled with a configurable fill value (default 0.0). The output tensor has the same dimensions as the input (no expansion mode).
+The rotate operation rotates a tensor by an arbitrary angle around a specified center point using configurable interpolation (bilinear or nearest). Positive angles rotate counter-clockwise. Areas outside the rotated tensor are filled with a configurable fill value (default 0.0). The output tensor has the same dimensions as the input (no expansion mode).
 
 ### Interpolation Modes
 | Mode | Description | Performance | Quality | Use Cases |
@@ -119,7 +119,7 @@ The image_rotate operation rotates an image tensor by an arbitrary angle around 
    - Same core group 1 / core group 2 handling
 
 ### Key Differences
-| Aspect | grid_sample | image_rotate | Implementation Impact |
+| Aspect | grid_sample | rotate | Implementation Impact |
 |--------|-------------|--------------|----------------------|
 | Grid tensor | Required input tensor | None - computed on device | No grid CB needed, no grid tensor accessor |
 | Coordinate source | Read from grid tensor | Computed from angle/center | Reader computes rotation math instead of reading |
@@ -138,7 +138,7 @@ The image_rotate operation rotates an image tensor by an arbitrary angle around 
 | Aspect | Bilinear Mode | Nearest Mode | Impact |
 |--------|---------------|--------------|--------|
 | **Program Factory** | `BilinearProgramFactory` | `NearestProgramFactory` | Different kernel orchestration |
-| **Reader Kernel** | `reader_image_rotate_interleaved.cpp` | `reader_writer_image_rotate_nearest_interleaved.cpp` | Nearest combines reader+writer |
+| **Reader Kernel** | `reader_rotate_interleaved.cpp` | `reader_writer_rotate_nearest_interleaved.cpp` | Nearest combines reader+writer |
 | **Compute Kernel** | `compute_pool_2d.cpp` (reduction) | None | Nearest has no interpolation computation |
 | **Writer Kernel** | `writer_grid_sample_interleaved.cpp` | Combined with reader | Simpler data flow for nearest |
 | **Circular Buffers** | 3 CBs (input, scalar, output) | 1 CB (output only) | Reduced memory usage for nearest |
@@ -227,7 +227,7 @@ The image_rotate operation rotates an image tensor by an arbitrary angle around 
   - Con: Not full PyTorch parity (can add later)
 
 ### Decision 6: New Reader Kernel (Not Refactor Common)
-- **Choice**: Create a new reader kernel `reader_image_rotate_interleaved.cpp` rather than extending grid_sample_reader_common.hpp
+- **Choice**: Create a new reader kernel `reader_rotate_interleaved.cpp` rather than extending grid_sample_reader_common.hpp
 - **Rationale**:
   - Rotation coordinate computation is fundamentally different from grid reading
   - No grid tensor accessor needed
@@ -303,7 +303,7 @@ Input Tensor -----> RISCV_0 (reader/NOC0) -----> CB_input (4 sticks)
 ### Kernel Data Movement
 | Kernel | Core | NOC | Actual Function |
 |--------|------|-----|-----------------|
-| reader_image_rotate_interleaved | RISCV_0 (BRISC) | NOC0 | Computes rotation coordinates, reads 4 input corners, writes weights to scalar CB |
+| reader_rotate_interleaved | RISCV_0 (BRISC) | NOC0 | Computes rotation coordinates, reads 4 input corners, writes weights to scalar CB |
 | writer_grid_sample_interleaved | RISCV_1 (NCRISC) | NOC1 | Reads output sticks from CB, writes to DRAM |
 
 Note: The writer kernel from grid_sample can be reused unchanged since it simply writes output sticks to DRAM.
@@ -423,7 +423,7 @@ for stick_id in range(start_stick_id, end_stick_id):
 
 ## Compile-Time Arguments
 
-### Reader Kernel: `reader_image_rotate_interleaved.cpp`
+### Reader Kernel: `reader_rotate_interleaved.cpp`
 
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
@@ -446,7 +446,7 @@ for stick_id in range(start_stick_id, end_stick_id):
 |-------|------|------|-------------|
 | 0 | `in_ntiles_c` | uint32_t | Number of tiles in channel dimension |
 | 1 | `REDUCTION_SIZE` | uint32_t | Window size for reduction = 4 (bilinear) |
-| 2 | `enable_split_reader` | uint32_t | 0 (no split reader for image_rotate) |
+| 2 | `enable_split_reader` | uint32_t | 0 (no split reader for rotate) |
 | 3 | `total_interpolations` | uint32_t | Total output pixels to process on this core |
 | 4 | `channels_per_shard` | uint32_t | Channel dimension size C |
 | 5 | `in_nblocks_c` | uint32_t | Number of channel blocks |
@@ -621,12 +621,12 @@ The agents know HOW to implement; this spec defines WHAT to implement.
 
 | File | Purpose | Based On |
 |------|---------|----------|
-| `image_rotate/device/image_rotate_op.hpp` | Operation struct declaration | grid_sample_op.hpp |
-| `image_rotate/device/image_rotate_op.cpp` | validate, compute_output_specs, create_program | grid_sample_op.cpp |
-| `image_rotate/device/image_rotate_program_factory.cpp` | Program factory with CB setup, kernel creation | grid_sample_bilinear_program_factory.cpp |
-| `image_rotate/device/kernels/dataflow/reader_image_rotate_interleaved.cpp` | Reader kernel with rotation math | reader_grid_sample_interleaved_start_id.cpp |
-| `image_rotate/image_rotate.hpp` | TTNN API declaration | grid_sample/grid_sample.hpp |
-| `image_rotate/image_rotate.cpp` | TTNN API implementation | grid_sample/grid_sample.cpp |
+| `rotate/device/rotate_op.hpp` | Operation struct declaration | grid_sample_op.hpp |
+| `rotate/device/rotate_op.cpp` | validate, compute_output_specs, create_program | grid_sample_op.cpp |
+| `rotate/device/rotate_program_factory.cpp` | Program factory with CB setup, kernel creation | grid_sample_bilinear_program_factory.cpp |
+| `rotate/device/kernels/dataflow/reader_rotate_interleaved.cpp` | Reader kernel with rotation math | reader_grid_sample_interleaved_start_id.cpp |
+| `rotate/rotate.hpp` | TTNN API declaration | grid_sample/grid_sample.hpp |
+| `rotate/rotate.cpp` | TTNN API implementation | grid_sample/grid_sample.cpp |
 
 **Reused unchanged**:
 - `pool/generic/device/kernels/compute/compute_pool_2d.cpp`
@@ -640,7 +640,7 @@ The agents know HOW to implement; this spec defines WHAT to implement.
 
    **Recommendation**: Pre-fill with fill_value in reader kernel.
 
-2. **Float32 grid dtype equivalent**: grid_sample supports float32 grids. For image_rotate, the source coordinates are computed as float32 internally. Should we support float32 input tensors with full precision coordinate computation?
+2. **Float32 grid dtype equivalent**: grid_sample supports float32 grids. For rotate, the source coordinates are computed as float32 internally. Should we support float32 input tensors with full precision coordinate computation?
 
    **Recommendation**: Support both bfloat16 and float32 input tensors. Coordinate computation is always float32 internally.
 

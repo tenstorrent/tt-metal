@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "image_rotate_device_operation.hpp"
+#include "rotate_device_operation.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -17,7 +17,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn::operations::image_rotate {
+namespace ttnn::operations::rotate {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -33,8 +33,7 @@ constexpr uint32_t DUMMY_CB_ID = 32;
 // Helper to convert float to bfloat16 representation
 static uint16_t float_to_bfloat16(float value) { return static_cast<uint16_t>(std::bit_cast<uint32_t>(value) >> 16); }
 
-ImageRotateDeviceOperation::BilinearProgramFactory::cached_program_t
-ImageRotateDeviceOperation::BilinearProgramFactory::create(
+RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOperation::BilinearProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -145,7 +144,7 @@ ImageRotateDeviceOperation::BilinearProgramFactory::create(
     // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/pool/image_rotate/device/kernels/dataflow/reader_image_rotate_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/reader_rotate_interleaved.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -265,7 +264,7 @@ ImageRotateDeviceOperation::BilinearProgramFactory::create(
          .num_cores_y = num_cores_y}};
 }
 
-void ImageRotateDeviceOperation::BilinearProgramFactory::override_runtime_arguments(
+void RotateDeviceOperation::BilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -324,4 +323,4 @@ void ImageRotateDeviceOperation::BilinearProgramFactory::override_runtime_argume
     }
 }
 
-}  // namespace ttnn::operations::image_rotate
+}  // namespace ttnn::operations::rotate
