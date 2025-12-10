@@ -61,10 +61,9 @@ constexpr uint RESET_VAL          = 0;
 constexpr uint KERNEL_IN_PROGRESS = 15;
 constexpr uint KERNEL_COMPLETE    = 1;
 
-#define __PTR_CONST 1 // Transition shim
-extern volatile uint tt_reg_ptr *const reg_base;
-extern volatile uint tt_reg_ptr *const pc_buf_base;
-extern volatile uint tt_reg_ptr *const regfile;
+extern volatile uint tt_reg_ptr *reg_base;
+extern volatile uint tt_reg_ptr *pc_buf_base;
+extern volatile uint tt_reg_ptr *regfile;
 } // namespace ckernel
 
 extern volatile uint32_t __instrn_buffer[];
@@ -72,7 +71,7 @@ extern volatile uint32_t __instrn_buffer[];
 namespace ckernel
 {
 constexpr inline volatile uint32_t(tt_reg_ptr &instrn_buffer)[] = __instrn_buffer;
-extern volatile uint tt_reg_ptr *const mailbox_base[4];
+extern volatile uint tt_reg_ptr *mailbox_base[4];
 
 extern uint32_t cfg_state_id;
 extern uint32_t dest_offset_id;
