@@ -24,6 +24,7 @@ The following models have been traced and their configurations are available in 
 **T3K Machine:**
 - **deepseek-ai/DeepSeek-R1-Distill-Qwen-32B** - Distilled reasoning model
 - **Qwen/Qwen2.5-Coder-32B** - Large code generation model
+- **google/gemma-3-27b-it** - Instruction-tuned model
 
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
 
