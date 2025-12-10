@@ -32,7 +32,7 @@ struct ExecuteMatmulReduceScatterAsync {
         bool transpose_a = false,
         bool transpose_b = false,
         std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+        const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);

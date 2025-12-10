@@ -22,7 +22,7 @@
 
 /* Fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
@@ -32,7 +32,8 @@ struct MatmulReduceScatterAsync {
     const ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct;
 
     /* Matmul Params */
-    const operations::matmul::Matmul matmul_struct;
+    using matmul_device_t = operations::matmul::MatmulDeviceOperation;
+    const matmul_device_t::operation_attributes_t matmul_struct;
 
     /* Fusion Params */
     const CoreCoord reduce_scatter_core_grid_offset;
@@ -75,7 +76,7 @@ namespace ccl {
 namespace matmul_reduce_scatter_async_detail {
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
-    const operations::matmul::Matmul& matmul_struct_input,
+    const operations::matmul::MatmulDeviceOperation::operation_attributes_t& matmul_struct_input,
     CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices);
 }  // namespace matmul_reduce_scatter_async_detail
@@ -106,7 +107,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     const std::optional<const Tensor>& bias,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config,
+    const operations::matmul::config::MatmulProgramConfig& program_config,
     bool untilize_out);
 
 namespace operations {
@@ -132,7 +133,7 @@ std::vector<Tensor> matmul_reduce_scatter_async(
     bool transpose_a = false,
     bool transpose_b = false,
     std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);

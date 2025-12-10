@@ -38,9 +38,9 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    std::vector<Tensor> input_tensors;                           // a,b, weights
-    std::vector<std::optional<Tensor>> optional_input_tensors;   // bias
-    std::vector<std::optional<Tensor>> optional_output_tensors;  // output
+    std::vector<Tensor> input_tensors;                                // a,b, weights
+    std::vector<std::optional<const Tensor>> optional_input_tensors;  // bias
+    std::vector<std::optional<Tensor>> optional_output_tensors;       // output
 };
 
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
