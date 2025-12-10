@@ -80,6 +80,8 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+      tracy: true
+      skip-tt-train: true
 
   generate-fabric-matrix:
     runs-on: ubuntu-latest
