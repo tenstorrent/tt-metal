@@ -133,6 +133,7 @@ void MAIN {
             out_chunk_tiles,
             mask_chunk_0,
             mask_chunk_1,
+            ring_iter,
             ring_id,
             N_mask_ring_id,
             L_mask_ring_id,

@@ -741,6 +741,7 @@ void sdpa_inner_loop(
     const uint32_t out_chunk_tiles,
     const uint32_t mask_chunk_0,
     const uint32_t mask_chunk_1,
+    const uint32_t ring_iter,
     const uint32_t ring_id,
     const uint32_t N_mask_ring_id,
     const uint32_t L_mask_ring_id,
@@ -1013,7 +1014,7 @@ void sdpa_inner_loop(
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
             /* cb_out_accumulate_im *= cb_cur_sum */
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum);
-            if (ring_id > 0) {
+            if (ring_iter > 0) {
                 // Update output according to previous and current LSE
                 /**
                  * sig = torch.sigmoid(cur_lse - prev_lse)
