@@ -236,7 +236,12 @@ jobs:
         run: |
           MODEL_NAME="${{ matrix.test-group.name }}"
           RUNNER_LABEL="${{ matrix.test-group.runner-label }}"
-          REPORTS_DIR="/work/generated/profiler/reports"
+          PROFILER_DIR="/work/generated/profiler"
+          REPORTS_DIR="${PROFILER_DIR}/reports"
+
+          # Clean up large intermediate files
+          find "$PROFILER_DIR" -name "profile_log_device.csv" -type f -delete 2>/dev/null || true
+          find "$PROFILER_DIR" -name "tracy_profile_log_host.tracy" -type f -delete 2>/dev/null || true
 
           if [[ -d "$REPORTS_DIR" ]]; then
             for csv in $(find "$REPORTS_DIR" -name "ops_perf_results_*.csv" -type f); do
