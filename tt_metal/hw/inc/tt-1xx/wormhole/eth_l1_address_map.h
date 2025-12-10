@@ -90,6 +90,13 @@ struct address_map {
     static constexpr std::int32_t FABRIC_ROUTER_RESERVED_SIZE = MEM_ERISC_FABRIC_ROUTER_RESERVED_SIZE;
 
     static constexpr std::int32_t AERISC_FABRIC_TELEMETRY_ADDR = MEM_AERISC_FABRIC_TELEMETRY_BASE;
+
+    // Lightweight fabric postcode region - 8 bytes for postcodes (power of 2), 24 bytes for scratch
+    static constexpr std::int32_t AERISC_FABRIC_POSTCODES_BASE = MEM_AERISC_FABRIC_POSTCODES_BASE;
+    static constexpr std::int32_t AERISC_FABRIC_POSTCODES_SIZE = MEM_AERISC_FABRIC_POSTCODES_SIZE;
+    static constexpr std::int32_t AERISC_FABRIC_SCRATCH_BASE = MEM_AERISC_FABRIC_SCRATCH_BASE;
+    static constexpr std::int32_t AERISC_FABRIC_SCRATCH_SIZE = MEM_AERISC_FABRIC_SCRATCH_SIZE;
+
     static constexpr std::int32_t AERISC_ROUTING_TABLE_BASE = MEM_AERISC_ROUTING_TABLE_BASE;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = COMPRESSED_ROUTING_PATH_SIZE_1D;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = COMPRESSED_ROUTING_PATH_SIZE_2D;

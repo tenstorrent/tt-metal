@@ -72,10 +72,7 @@ enum EDMStatus : uint32_t {
     DOWNSTREAM_EDM_SETUP_STARTED = 0xB3C3D3E3,
 
     // EDM VC0 setup complete
-    EDM_VC0_SETUP_COMPLETE = 0xB4C4D4E4,
-
-    // EDM VC1 setup complete
-    EDM_VC1_SETUP_COMPLETE = 0xB5C5D5E5,
+    EDM_VCS_SETUP_COMPLETE = 0xB4C4D4E4,
 
     // Worker interfaces initialized
     WORKER_INTERFACES_INITIALIZED = 0xB6C6D6E6,

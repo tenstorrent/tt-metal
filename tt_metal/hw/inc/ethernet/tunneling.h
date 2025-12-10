@@ -17,6 +17,15 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 
+// Ultra-fast postcode implementation: direct memory write with zero function call overhead
+// Pre-calculated pointer to postcode memory region
+static volatile uint8_t* const fabric_postcodes =
+    reinterpret_cast<volatile uint8_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
+
+// Macro for maximum speed - no function call, just direct memory write
+// Compiles to: load address, mask index, write byte (3 instructions)
+#define POSTCODE(status) (fabric_postcodes[(status) & 0x7] = static_cast<uint8_t>(status))
+
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
     // any of them
