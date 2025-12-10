@@ -186,13 +186,205 @@ If numbers match = changes are identical! ✅
 
 ---
 
+---
+
+## ✅ FILE 6: tt_metal/impl/buffers/dispatch.cpp
+
+### Change 6a: Guard write_to_device_buffer (~Line 28)
+```cpp
+void write_to_device_buffer(
+    const void* src,
+    Buffer& buffer,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    CoreType dispatch_core_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    // Mock devices don't have system memory managers or command queues
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+### Change 6b: Guard issue_read_buffer_dispatch_command_sequence (~Line 84)
+```cpp
+void issue_read_buffer_dispatch_command_sequence(...) {
+    // Mock devices don't have system memory managers or command queues
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+---
+
+## ✅ FILE 7: tt_metal/distributed/fd_mesh_command_queue.cpp
+
+### Change 7a: Guard clear_expected_num_workers_completed (~Line 222)
+```cpp
+void FDMeshCommandQueue::clear_expected_num_workers_completed() {
+    // Mock devices don't have system memory managers or command queues
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+### Change 7b: Guard enqueue_read_shard_from_core (~Line 535)
+```cpp
+void FDMeshCommandQueue::enqueue_read_shard_from_core(...) {
+    // Mock devices don't have system memory managers or command queues
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+### Change 7c: Guard finish_nolock (~Line 569)
+```cpp
+void FDMeshCommandQueue::finish_nolock(...) {
+    // Mock devices don't have events or hardware to wait for
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+### Change 7d: Guard read_completion_queue (~Line 741)
+```cpp
+void FDMeshCommandQueue::read_completion_queue() {
+    // Mock devices don't have completion queues
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+### Change 7e: Skip assertions in destructor (~Line 129)
+```cpp
+FDMeshCommandQueue::~FDMeshCommandQueue() {
+    // Mock devices don't have actual completion queues, skip validation
+    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+
+    if (in_use_) {
+        this->clear_expected_num_workers_completed();
+    }
+
+    if (!is_mock) {
+        TT_FATAL(completion_queue_reads_.empty(), "...");
+        // ... other assertions
+    }
+    // ... rest of function
+}
+```
+
+---
+
+## ✅ FILE 8: tt_metal/impl/program/program.cpp
+
+### Change 8a: Guard register_kernel_elf_paths_with_watcher (~Line 1422)
+```cpp
+// Mock devices don't have real binaries, skip watcher registration
+if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    register_kernel_elf_paths_with_watcher(kernel);
+}
+```
+
+### Change 8b: Guard GenerateBinaries (~Line 1433)
+```cpp
+if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    GenerateBinaries(device, build_options, kernel);
+} else {
+    // For mock devices, set empty binaries
+    KernelImpl::from(*kernel).set_binaries(build_env.build_key, {});
+}
+```
+
+### Change 8c: Guard read_binaries (~Line 1452)
+```cpp
+// Mock devices don't have binaries on disk, skip reading
+if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    read_binaries(device, kernel);
+}
+```
+
+### Change 8d: Guard populate_dispatch_data (~Line 1052)
+```cpp
+void Program::populate_dispatch_data(Device* device) {
+    // Mock devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+---
+
+## ✅ FILE 9: tt_metal/impl/program/dispatch.cpp
+
+### Change 9: Guard finalize_kernel_bins (~Line 310)
+```cpp
+uint32_t finalize_kernel_bins(...) {
+    // Mock devices don't have real binaries, skip finalization
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        kernel_text_offset = base_offset;
+        kernel_text_size = 0;
+        return base_offset;
+    }
+    // ... rest of function
+}
+```
+
+---
+
+## ✅ FILE 10: tt_metal/distributed/distributed.cpp
+
+### Change 10: Guard EnqueueMeshWorkload (~Line 142)
+```cpp
+void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
+    // Mock devices don't execute programs, so skip enqueueing the workload
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // ... rest of function
+}
+```
+
+---
+
 ## 📝 Summary
 
-**5 files modified:**
+**10 files modified:**
 1. cluster_descriptor.cpp (UMD) - 2 changes
 2. device.cpp - 2 changes
 3. device_pool.cpp - 3 changes
-4. dispatch.cpp - 1 change
+4. dispatch.cpp (impl/device) - 1 change
 5. prefetch.cpp - 2 changes
+6. dispatch.cpp (impl/buffers) - 2 changes
+7. fd_mesh_command_queue.cpp - 5 changes
+8. program.cpp - 4 changes
+9. dispatch.cpp (impl/program) - 1 change
+10. distributed.cpp - 1 change
 
-**Total: 10 mock device guards added**
+**Total: 23 mock device guards added**
+
+## 🎯 Test Status
+
+### Allocator Tests (PRIMARY GOAL) ✅
+- **24/24 tests passing** - All allocator tests work seamlessly with mock devices
+
+### unit_tests_api - MeshDispatchFixture
+- Most tests pass or fail gracefully (no crashes)
+- Tests that verify data correctness fail (expected without mock memory implementation)
+
+### unit_tests_dispatch
+- Tests compile and run
+- Data verification tests fail (expected)
+- Some SubDevice tests still crash (additional guards needed)

@@ -265,6 +265,11 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::init_command_queue_host() {
+    // Mock devices don't have system memory managers or real command queues, skip initialization
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
