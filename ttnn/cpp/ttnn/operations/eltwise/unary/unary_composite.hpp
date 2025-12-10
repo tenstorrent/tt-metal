@@ -9,8 +9,8 @@
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace unary {
+
+namespace operations::unary {
 
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOp {
@@ -91,17 +91,7 @@ struct ExecuteUnaryCompositeOpWithInt {
     }
 };
 
-struct ExecuteRdiv {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float value,
-        const std::optional<std::string>& round_mode = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-};
-
-}  // namespace unary
-}  // namespace operations
+}  // namespace operations::unary
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 
@@ -146,7 +136,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
             original_shape);                                                                           \
     })
 
-constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();

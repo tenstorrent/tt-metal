@@ -7,7 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "all_reduce_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -66,7 +66,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     tt::tt_metal::NOC writer_noc = use_noc1_only ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     tt::tt_metal::Program program{};
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -98,7 +98,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
     const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
+    // Get only cores that have actual data
+    const auto& cores_with_data = output_tensor.buffer()->buffer_distribution_spec()->cores_with_data();
+    const auto output_tensor_cores = CoreRangeSet(cores_with_data);
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();

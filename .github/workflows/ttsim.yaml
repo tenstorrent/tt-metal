@@ -91,7 +91,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
@@ -173,8 +173,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -182,7 +187,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
@@ -314,8 +319,13 @@ jobs:
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -324,7 +334,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
@@ -344,7 +354,10 @@ jobs:
         timeout-minutes: 5
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            ./build/test/tt_metal/test_single_dm_l1_write
+            # ToDo: Re-enable this test once tt-sim supports NOC
+            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim-private/issues/24
+            # ./build/test/tt_metal/test_single_dm_l1_write
+            :
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
@@ -394,8 +407,13 @@ jobs:
       TT_METAL_SLOW_DISPATCH_MODE: 1
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -404,7 +422,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}

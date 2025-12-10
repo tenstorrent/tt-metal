@@ -41,12 +41,26 @@ struct TensorShape2D {
  * Since this is for matmul, no need to read when M >= logical_M
  * Otherwise, if K >= logical_K, fill with zeros.
  */
-template <uint32_t M_block_tiles, uint32_t K_block_tiles, typename TensorAccessorType>
+template <
+    uint32_t M_block_tiles,
+    uint32_t K_block_tiles,
+    typename TensorAccessorType
+#ifdef READ_FROM_LOCAL_INPUT
+    ,
+    typename LocalTensorAccessorType
+#endif
+    >
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
     uint32_t tile_size_bytes,
+#ifdef READ_FROM_LOCAL_INPUT
+    const LocalTensorAccessorType& in3_accessor,
+    uint32_t local_k_start,
+    uint32_t local_k_end,
+    uint32_t input_tensor_Wt,
+#endif
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
@@ -60,8 +74,18 @@ void read_in0_block_sync(
         }
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j < shape.logical_d1) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+#ifdef READ_FROM_LOCAL_INPUT
+                if (local_k_start <= j && j <= local_k_end) {
+                    // read from self_tensor_accessor
+                    uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
+                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
+                } else {
+#endif
+                    uint32_t tile_id = i * shape.logical_d1 + j;
+                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+#ifdef READ_FROM_LOCAL_INPUT
+                }
+#endif
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }

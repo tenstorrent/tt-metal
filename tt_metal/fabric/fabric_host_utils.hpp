@@ -5,9 +5,9 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>                   // FabricType
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"

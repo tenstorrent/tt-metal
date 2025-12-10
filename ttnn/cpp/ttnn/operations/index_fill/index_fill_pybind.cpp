@@ -15,7 +15,7 @@
 namespace ttnn::operations::index_fill {
 
 void bind_index_fill_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(index_fill(input: Tensor, dim: uint32, index: Tensor, value: int or float, memory_config: MemoryConfig) -> Tensor
     Create or fill a tensor with the given value, with the specified `memory_config`.
     This operation only supports ROW_MAJOR_LAYOUT for now.

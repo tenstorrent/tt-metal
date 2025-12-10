@@ -17,7 +17,6 @@
 #include <tracy/TracyC.h>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -25,11 +24,7 @@
 
 using json = nlohmann::json;
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace op_profiler {
+namespace tt::tt_metal::op_profiler {
 
 enum class OpType { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };
 
@@ -236,10 +231,7 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
-    IDevice* device = nullptr;
-    if (tt::DevicePool::instance().is_device_active(device_id)) {
-        device = tt::DevicePool::instance().get_active_device(device_id);
-    }
+    IDevice* device = tt::tt_metal::detail::GetActiveDevice(device_id);
 
     json kernelSizes;
     // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
@@ -274,7 +266,7 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
         auto core_type_name = enchantum::to_string(core_type);
         auto processor_class_name = enchantum::to_string(kernel.processor_class);
 
-        for (auto const& binary_meta : kernel.binary_meta) {
+        for (const auto& binary_meta : kernel.binary_meta) {
             auto key = fmt::format(
                 "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, binary_meta.processor_type);
             if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
@@ -292,7 +284,6 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
 
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
-    std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =
@@ -328,7 +319,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
     ZoneScoped;
     std::vector<json> ret;
     ret.reserve(tensors.size());
-    for (auto& tensor : tensors) {
+    for (const auto& tensor : tensors) {
         ret.push_back(get_tensor_json(tensor));
     }
     return ret;
@@ -337,7 +328,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
-    for (auto& tensor : tensors) {
+    for (const auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
         }
@@ -348,7 +339,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<std::optional
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
-    for (auto& tensor : tensors) {
+    for (const auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
         }
@@ -589,6 +580,4 @@ inline std::string op_meta_data_serialized_json(
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)
 
 #endif
-}  // namespace op_profiler
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::op_profiler

@@ -9,7 +9,8 @@
 #include "dataflow_api.h"
 #include "cq_helpers.hpp"
 
-#include "debug/sanitize_noc.h"
+#include "debug/sanitize.h"
+#include "debug/assert.h"
 #include <limits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
@@ -258,7 +259,14 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
-template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
+template <
+    uint32_t my_sem_id,
+    uint8_t noc_idx,
+    uint32_t downstream_noc_xy,
+    uint32_t downstream_sem_id,
+    uint32_t buffer_base = 0,
+    uint32_t buffer_end = 0,
+    uint32_t buffer_page_size = 0>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
@@ -298,12 +306,40 @@ public:
     }
 
     // Inform the consumer that n pages are available.
-    FORCE_INLINE void release_pages(uint32_t n) {
+    FORCE_INLINE void release_pages(uint32_t n, uint32_t writer_ptr = 0, bool round_to_page_size = false) {
+#if ASSERT_ENABLED
+        if constexpr (buffer_page_size != 0) {
+            constexpr uint32_t buffer_size = buffer_end - buffer_base;
+            if constexpr (buffer_size != 0) {
+                if (n != 0) {
+                    // In the middle of writing a command, the writer pointer may not be aligned to the page size, but
+                    // must always be past the number of pages released.
+                    uint32_t adjusted_writer_ptr =
+                        round_to_page_size ? (writer_ptr - (writer_ptr - buffer_base) % buffer_page_size) : writer_ptr;
+                    uint64_t bytes = n * buffer_page_size;
+                    uint32_t expected = watch_released_ptr_ + bytes;
+                    if (expected > buffer_end) {
+                        expected -= buffer_size;
+                    }
+                    // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so
+                    // it hasn't wrapped yet.
+                    ASSERT((adjusted_writer_ptr == expected) || ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)));
+                    watch_released_ptr_ = expected;
+                }
+            }
+        }
+#endif
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
     uint32_t additional_count{0};
+
+#if ASSERT_ENABLED
+private:
+    // Pointer to the end of the last released page. Used for watcher assertions.
+    uint32_t watch_released_ptr_{buffer_base};
+#endif
 };
 
 // CBReader

@@ -89,9 +89,9 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
-            os.environ["TT_MM_THROTTLE_PERF"] = "5"
             assert (
                 os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] == "7,7"
             ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
@@ -134,21 +134,6 @@ class TtSDXLPipeline(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
-        )
-
-        compute_grid_size = self.ttnn_device.compute_with_storage_grid_size()
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-        )
-        self.ag_semaphores = [ttnn.create_global_semaphore(ttnn_device, ccl_sub_device_crs, 0) for _ in range(2)]
-
-        self.ag_persistent_buffer = ttnn.from_torch(
-            torch.zeros((2, 1, 16384, 32)),
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-            dtype=ttnn.bfloat16,
         )
 
         self.num_in_channels_unet = 4
@@ -346,8 +331,6 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_latents_shape,
                 self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
                 self.batch_size,
-                self.ag_persistent_buffer,
-                self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 guidance_rescale=self.guidance_rescale,
@@ -615,8 +598,6 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
             tid=self.tid if hasattr(self, "tid") else None,
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
@@ -810,8 +791,6 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
             capture_trace=True,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,

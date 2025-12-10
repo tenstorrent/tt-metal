@@ -15,6 +15,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
@@ -25,10 +26,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "common_test_utils.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace conv::conv2d {
-namespace test {
+namespace ttnn::operations::conv::conv2d::test {
 
 struct Conv2DParam {
     uint32_t input_channels;
@@ -159,28 +157,29 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ResultType::OUTPUT_DIM)>(ttnn::conv2d(
-            input_tensor,
-            weight_tensor,
-            device.get(),
-            param.input_channels,
-            param.output_channels,
-            param.batch_size,
-            param.input_height,
-            param.input_width,
-            param.kernel_size,
-            param.stride,
-            param.padding,
-            std::array<uint32_t, 2>{1, 1},  // dilation
-            1,                              // groups
-            std::nullopt,                   // dtype
-            std::nullopt,                   // bias tensor
-            std::nullopt,                   // conv config
-            std::nullopt,                   // compute config
-            std::nullopt,                   // memory config
-            std::nullopt,                   // slice config
-            true                            // return_output_dim
-            ));
+        auto [output_tensor, output_dimensions] =
+            std::get<static_cast<int>(ttnn::operations::conv::ResultType::OUTPUT_DIM)>(ttnn::conv2d(
+                input_tensor,
+                weight_tensor,
+                device.get(),
+                param.input_channels,
+                param.output_channels,
+                param.batch_size,
+                param.input_height,
+                param.input_width,
+                param.kernel_size,
+                param.stride,
+                param.padding,
+                std::array<uint32_t, 2>{1, 1},  // dilation
+                1,                              // groups
+                std::nullopt,                   // dtype
+                std::nullopt,                   // bias tensor
+                std::nullopt,                   // conv config
+                std::nullopt,                   // compute config
+                std::nullopt,                   // memory config
+                std::nullopt,                   // slice config
+                true                            // return_output_dim
+                ));
 
         // move output tensor to dram
         output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
@@ -257,7 +256,4 @@ INSTANTIATE_TEST_SUITE_P(
             .padding = {1, 1},
         }));
 
-}  // namespace test
-}  // namespace conv::conv2d
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv2d::test

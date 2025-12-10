@@ -227,14 +227,21 @@ class Model:
         return logits
 
     def ttnn_decode_forward(
-        self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, sampling_on_device=False
+        self,
+        tokens,
+        current_pos,
+        rot_mat_idxs=None,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        capture_sampling_trace=False,
     ):
         """
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
         # Embed tokens
-        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
+        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
         # Ensure proper shape for decoder layers
         if len(input_embeds.shape) == 4:
