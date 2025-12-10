@@ -12,7 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "adamw_fused_device_operation_types.hpp"
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
