@@ -150,7 +150,6 @@ Rounding and ceiling functions
 
 .. toctree::
 
-  ceil_tile
   round_tile
   clamp_tile
   threshold_tile
