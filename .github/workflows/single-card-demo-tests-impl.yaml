@@ -324,8 +324,9 @@ jobs:
           import json
           import re
           from pathlib import Path
+          from collections import defaultdict
 
-          model_ops = {}  # model_runner -> set of ops
+          op_models = defaultdict(set)  # operation -> set of models
 
           for csv_path in Path("all_tracy_reports").rglob("ops_perf_results_*.csv"):
               # Extract model name from filename: ops_perf_results_<model>_<runner>.csv
@@ -338,29 +339,28 @@ jobs:
                       reader = csv.DictReader(f)
                       ops_data = list(reader)
 
-                  ops_in_model = set()
                   for op in ops_data:
                       op_name = op.get("OP CODE", op.get("op_code", "unknown"))
-                      ops_in_model.add(op_name)
+                      op_models[op_name].add(model_name)
 
-                  model_ops[model_name] = sorted(ops_in_model)
-                  print(f"{model_name}: {len(ops_in_model)} unique operations")
+                  print(f"{model_name}: {len(set(op.get('OP CODE', '') for op in ops_data))} unique operations")
               except Exception as e:
                   print(f"{model_name}: Error - {e}")
+
           # Write aggregated report
           with open("aggregated_ops/aggregated_operations.txt", "w") as f:
-              f.write("\n" + "=" * 60 + "\n")
-              f.write("Operations by Model\n")
               f.write("=" * 60 + "\n")
-              for model, ops in sorted(model_ops.items()):
-                  f.write(f"\n{model}:\n")
-                  for op in ops:
-                      f.write(f"  {op}\n")
-          
+              f.write("Models by Operation\n")
+              f.write("=" * 60 + "\n")
+              for op_name, models in sorted(op_models.items()):
+                  f.write(f"\n{op_name}:\n")
+                  for model in sorted(models):
+                      f.write(f"  {model}\n")
+
           # Write JSON
           with open("aggregated_ops/aggregated_operations.json", "w") as f:
               json.dump({
-                  "by_model": model_ops
+                  "by_operation": {op: sorted(models) for op, models in op_models.items()}
               }, f, indent=2)
 
           EOF
