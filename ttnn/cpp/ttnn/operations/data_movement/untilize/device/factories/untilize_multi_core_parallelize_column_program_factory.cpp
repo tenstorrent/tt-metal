@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -12,17 +13,18 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "untilize_multi_core_sub_core_grids_program_factory.hpp"
+#include "untilize_multi_core_parallelize_column_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreSubCoreGridsProgramFactory::create(
-    const untilize::operation_attributes_t& operation_attributes,
-    const untilize::tensor_args_t& tensor_args,
-    const untilize::tensor_return_value_t& tensor_return_value) {
+UntilizeMultiCoreParallelizeColumnProgramFactory::cached_program_t
+UntilizeMultiCoreParallelizeColumnProgramFactory::create(
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -31,7 +33,7 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     TT_FATAL(
         operation_attributes.sub_core_grids.has_value(),
-        "Sub core grids must be provided for multi core sub core grids");
+        "Sub core grids must be provided for multi core parallelize column");
     const auto& sub_core_grids = operation_attributes.sub_core_grids.value();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -61,7 +63,8 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     if (ntiles_per_row > max_tiles) {
         starting_tile = max_tiles;
     }
-    ntiles_per_block = untilize::get_largest_divisor(ntiles_per_row, starting_tile);
+    ntiles_per_block =
+        ttnn::operations::data_movement::untilize_types::get_largest_divisor(ntiles_per_row, starting_tile);
     TT_ASSERT(
         ntiles_per_row % ntiles_per_block == 0 and ntiles_per_block >= 1 and ntiles_per_block <= ntiles_per_row and
         ntiles % ntiles_per_block == 0);
@@ -112,10 +115,10 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     /** compute
      */
     std::vector<uint32_t> compute_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        static_cast<uint32_t>(nblocks_per_core),  // per_core_block_cnt
+        static_cast<uint32_t>(ntiles_per_block),  // per_block_ntiles
+        static_cast<uint32_t>(src0_cb_index),
+        static_cast<uint32_t>(output_cb_index)};
     std::map<std::string, std::string> compute_kernel_defines;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
@@ -169,20 +172,19 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
         offset_within_stick += ntiles_per_core * TILE_WIDTH * output.element_size();
     }
 
-    return UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t{
+    return UntilizeMultiCoreParallelizeColumnProgramFactory::cached_program_t{
         std::move(program), {reader_kernel_id, writer_kernel_id, cb_src0, cb_output, cores_with_rtargs}};
 }
 
-void UntilizeMultiCoreSubCoreGridsProgramFactory::override_runtime_arguments(
-    UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t& cached_program,
-    const untilize::operation_attributes_t& operation_attributes,
-    const untilize::tensor_args_t& tensor_args,
-    const untilize::tensor_return_value_t& tensor_return_value) {
+void UntilizeMultiCoreParallelizeColumnProgramFactory::override_runtime_arguments(
+    UntilizeMultiCoreParallelizeColumnProgramFactory::cached_program_t& cached_program,
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& cores_with_rtargs = cached_program.shared_variables.cores_with_rtargs;
-
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto& cores_with_rtargs = cached_program.shared_variables.cores_with_runtime_args;
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     {
@@ -201,4 +203,5 @@ void UntilizeMultiCoreSubCoreGridsProgramFactory::override_runtime_arguments(
         }
     }
 }
+
 }  // namespace ttnn::operations::data_movement::program

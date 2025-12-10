@@ -8,12 +8,12 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-#include "untilize_single_core_program_factory.hpp"
-#include "untilize_multi_core_sub_core_grids_program_factory.hpp"
-#include "untilize_multi_core_block_program_factory.hpp"
-#include "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
-#include "untilize_multi_core_parallelize_column_program_factory.hpp"
-#include "untilize_multi_core_program_factory.hpp"
+#include "factories/untilize_single_core_program_factory.hpp"
+#include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
+#include "factories/untilize_multi_core_block_program_factory.hpp"
+#include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
+#include "factories/untilize_multi_core_program_factory.hpp"
 #include "untilize_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -27,11 +27,11 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);
 }  // namespace untilize_helpers
 
 struct UntilizeDeviceOperation {
-    using operation_attributes_t = untilize::operation_attributes_t;
-    using tensor_args_t = untilize::tensor_args_t;
-    using shape_return_value_t = untilize::shape_return_value_t;
-    using tensor_return_value_t = untilize::tensor_return_value_t;
-    using spec_return_value_t = untilize::spec_return_value_t;
+    using operation_attributes_t = ttnn::operations::data_movement::untilize_types::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::data_movement::untilize_types::tensor_args_t;
+    using shape_return_value_t = ttnn::operations::data_movement::untilize_types::shape_return_value_t;
+    using tensor_return_value_t = ttnn::operations::data_movement::untilize_types::tensor_return_value_t;
+    using spec_return_value_t = ttnn::operations::data_movement::untilize_types::spec_return_value_t;
     using program_factory_t = std::variant<
         program::UntilizeSingleCoreProgramFactory,
         program::UntilizeMultiCoreSubCoreGridsProgramFactory,

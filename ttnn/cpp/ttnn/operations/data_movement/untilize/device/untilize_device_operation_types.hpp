@@ -5,7 +5,7 @@
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::untilize {
+namespace ttnn::operations::data_movement::untilize_types {
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config{};
     bool use_multicore{};
@@ -37,4 +37,4 @@ struct untilize_shared_variables_t {
     std::vector<CoreCoord> cores_with_runtime_args{};
 };
 }  // namespace program
-}  // namespace ttnn::operations::data_movement::untilize
+}  // namespace ttnn::operations::data_movement::untilize_types

@@ -21,9 +21,9 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::program {
 UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cached_program_t
 UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::create(
-    const untilize::operation_attributes_t& operation_attributes,
-    const untilize::tensor_args_t& tensor_args,
-    const untilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -73,7 +73,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         dst_buffer);
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
 
     // Reader kernel
     KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -83,7 +83,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
 
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -94,10 +94,10 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
 
     // Compute compile-time args
     std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_blocks_per_core,
-        (uint32_t)num_tiles_per_block,
-        (uint32_t)src0_cb_index,
-        (uint32_t)output_cb_index};
+        static_cast<uint32_t>(num_blocks_per_core),
+        static_cast<uint32_t>(num_tiles_per_block),
+        static_cast<uint32_t>(src0_cb_index),
+        static_cast<uint32_t>(output_cb_index)};
 
     // Compute kernel
     std::map<std::string, std::string> compute_kernel_defines;
@@ -148,9 +148,9 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
 
 void UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cached_program_t& cached_program,
-    const untilize::operation_attributes_t& operation_attributes,
-    const untilize::tensor_args_t& tensor_args,
-    const untilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cb_output = cached_program.shared_variables.cb_output;

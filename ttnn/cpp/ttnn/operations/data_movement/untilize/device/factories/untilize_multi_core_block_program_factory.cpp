@@ -21,9 +21,9 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::program {
 
 UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockProgramFactory::create(
-    const untilize::operation_attributes_t& operation_attributes,
-    const untilize::tensor_args_t& tensor_args,
-    const untilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
@@ -299,9 +299,9 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
 
 void UntilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const untilize::operation_attributes_t& operation_attributes,
-    const untilize::tensor_args_t& tensor_args,
-    const untilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
+    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores_with_runtime_args;
