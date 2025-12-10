@@ -312,7 +312,7 @@ void FlatBufferFile::serialize(std::string_view file_path) {
     }
 
     auto data = m_builder.GetBufferSpan();
-    file.write(std::bit_cast<const char*>(data.data()), data.size());
+    file.write(reinterpret_cast<const char*>(data.data()), data.size());
 
     if (!file.good()) {
         throw std::runtime_error(fmt::format("Failed to write flatbuffer data to file: {}", metadata_file.string()));
