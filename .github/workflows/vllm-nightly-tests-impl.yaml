@@ -118,7 +118,7 @@ jobs:
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
-            },
+            }
           ]'
 
           # Filter matrix based on model selection
