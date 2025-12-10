@@ -395,3 +395,154 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
     }
     DPRINT << "++++++" << ENDL();
 }
+
+// ----- Multicast synchronization helper functions -----
+
+/**
+ * Sender side: Wait for N receivers to signal ready, then reset sender semaphore
+ *
+ * @param sender_sem_ptr Local pointer to sender's semaphore
+ * @param num_receivers Number of receiver cores to wait for
+ */
+inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_sem_ptr, uint32_t num_receivers) {
+    noc_semaphore_wait(sender_sem_ptr, num_receivers);
+    noc_semaphore_set(sender_sem_ptr, 0);
+}
+
+/**
+ * Sender side: Multicast data from L1 to multiple receiver cores
+ *
+ * @param l1_addr Local L1 address of data to multicast
+ * @param noc_start_x Start X coordinate in NOC space
+ * @param noc_start_y Start Y coordinate in NOC space
+ * @param noc_end_x End X coordinate in NOC space
+ * @param noc_end_y End Y coordinate in NOC space
+ * @param num_bytes Number of bytes to multicast
+ * @param num_dests Number of destination cores
+ */
+inline void mcast_sender_send_data(
+    uint32_t l1_addr,
+    uint32_t noc_start_x,
+    uint32_t noc_start_y,
+    uint32_t noc_end_x,
+    uint32_t noc_end_y,
+    uint32_t num_bytes,
+    uint32_t num_dests) {
+    uint64_t multicast_noc_addr = get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, l1_addr);
+    noc_async_write_multicast(l1_addr, multicast_noc_addr, num_bytes, num_dests);
+    noc_async_write_barrier();
+}
+
+/**
+ * Sender side: Signal all receivers that data is ready
+ *
+ * @param receiver_sem_ptr Local pointer to receiver semaphore
+ * @param receiver_sem_addr L1 address of receiver semaphore (same on all receivers)
+ * @param noc_start_x Start X coordinate in NOC space
+ * @param noc_start_y Start Y coordinate in NOC space
+ * @param noc_end_x End X coordinate in NOC space
+ * @param noc_end_y End Y coordinate in NOC space
+ * @param num_dests Number of destination cores
+ */
+inline void mcast_sender_signal_receivers(
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    uint32_t receiver_sem_addr,
+    uint32_t noc_start_x,
+    uint32_t noc_start_y,
+    uint32_t noc_end_x,
+    uint32_t noc_end_y,
+    uint32_t num_dests) {
+    noc_semaphore_set(receiver_sem_ptr, 1);
+    uint64_t receiver_sem_noc_addr =
+        get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_sem_addr);
+    noc_semaphore_set_multicast(receiver_sem_addr, receiver_sem_noc_addr, num_dests);
+    noc_async_write_barrier();
+}
+
+/**
+ * Receiver side: Signal sender ready and wait for data
+ *
+ * @param receiver_sem_ptr Local pointer to receiver's semaphore
+ * @param sender_sem_noc_addr NOC address of sender's semaphore
+ */
+inline void mcast_receiver_wait_for_data(volatile tt_l1_ptr uint32_t* receiver_sem_ptr, uint64_t sender_sem_noc_addr) {
+    noc_semaphore_set(receiver_sem_ptr, 0);
+    noc_semaphore_inc(sender_sem_noc_addr, 1);
+    noc_async_write_barrier();
+    noc_semaphore_wait(receiver_sem_ptr, 1);
+}
+
+/**
+ * Complete sender-side multicast operation: read from DRAM, multicast, and signal
+ *
+ * @tparam AddrGen Address generator type
+ * @param cb_idx Circular buffer index
+ * @param addr_gen Address generator for DRAM reads
+ * @param tile_start Starting tile index
+ * @param num_tiles Number of tiles to read
+ * @param tile_bytes Bytes per tile
+ * @param block_size Block size for CB operations
+ * @param sender_sem_ptr Sender semaphore pointer
+ * @param receiver_sem_ptr Receiver semaphore pointer (local)
+ * @param receiver_sem_addr Receiver semaphore L1 address
+ * @param noc_start_x NOC start X coordinate
+ * @param noc_start_y NOC start Y coordinate
+ * @param noc_end_x NOC end X coordinate
+ * @param noc_end_y NOC end Y coordinate
+ * @param num_dests Number of receiver cores
+ */
+template <typename AddrGen>
+inline void mcast_sender_read_and_send(
+    uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    uint32_t tile_start,
+    uint32_t num_tiles,
+    uint32_t tile_bytes,
+    uint32_t block_size,
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr,
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    uint32_t receiver_sem_addr,
+    uint32_t noc_start_x,
+    uint32_t noc_start_y,
+    uint32_t noc_end_x,
+    uint32_t noc_end_y,
+    uint32_t num_dests) {
+    // 1. Wait for receivers to be ready
+    mcast_sender_wait_for_receivers(sender_sem_ptr, num_dests);
+
+    // 2. Read from DRAM into CB (don't push yet)
+    read_tiles_by_row<false>(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, block_size);
+    uint32_t l1_write_addr = get_write_ptr(cb_idx);
+    noc_async_read_barrier();
+
+    // 3. Multicast data to receivers
+    mcast_sender_send_data(
+        l1_write_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_tiles * tile_bytes, num_dests);
+
+    // 4. Signal receivers that data is ready
+    mcast_sender_signal_receivers(
+        receiver_sem_ptr, receiver_sem_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
+
+    // 5. Push to CB for local compute
+    cb_push_back(cb_idx, block_size);
+}
+
+/**
+ * Complete receiver-side multicast operation: signal ready, wait, and receive
+ *
+ * @param cb_idx Circular buffer index
+ * @param block_size Block size for CB operations
+ * @param receiver_sem_ptr Receiver semaphore pointer
+ * @param sender_sem_noc_addr NOC address of sender's semaphore
+ */
+inline void mcast_receiver_reserve_and_receive(
+    uint32_t cb_idx, uint32_t block_size, volatile tt_l1_ptr uint32_t* receiver_sem_ptr, uint64_t sender_sem_noc_addr) {
+    // 1. Reserve CB space
+    cb_reserve_back(cb_idx, block_size);
+
+    // 2. Signal ready and wait for data
+    mcast_receiver_wait_for_data(receiver_sem_ptr, sender_sem_noc_addr);
+
+    // 3. Push to CB (multicast already wrote to L1)
+    cb_push_back(cb_idx, block_size);
+}

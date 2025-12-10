@@ -35,11 +35,11 @@ void kernel_main() {
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
     uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
-    // NEW: Multicast-related runtime args for W1
-    uint32_t w1_mcast_sender_noc_x = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_sender_noc_y = get_arg_val<uint32_t>(ra++);
-    uint32_t w1_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
-    uint32_t w1_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
+    // Shared multicast runtime args (same sender and semaphores for W1/W2/W3)
+    uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(ra++);
+    uint32_t mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
+    uint32_t mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
 
@@ -56,11 +56,11 @@ void kernel_main() {
     // DPRINT << "RECEIVER kernel starting: start_row=" << start_row << ", num_rows=" << num_rows_to_process
     //        << ", sender_noc=(" << w1_mcast_sender_noc_x << "," << w1_mcast_sender_noc_y << ")\n";
 
-    // Semaphore pointers for synchronization
-    volatile tt_l1_ptr uint32_t* w1_mcast_receiver_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w1_mcast_receiver_semaphore_addr);
-    uint64_t w1_sender_semaphore_noc_addr =
-        get_noc_addr(w1_mcast_sender_noc_x, w1_mcast_sender_noc_y, w1_mcast_sender_semaphore_addr);
+    // Shared semaphore pointers for synchronization (reused by W1/W2/W3)
+    volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
+    uint64_t sender_semaphore_noc_addr =
+        get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, mcast_sender_semaphore_addr);
 
 #define ROW_OF_M_FITS_IN_L1 1
 
@@ -104,33 +104,13 @@ void kernel_main() {
                 // First, receive all W1 data for this k_block (compute processes W1 first)
                 // DPRINT << "Receiver waiting for W1, p_block_size=" << p_block_size << "\n";
                 for (uint32_t p = 0; p < p_block_size; ++p) {
-                    // DPRINT << "Receiver iteration p=" << p << ", resetting semaphore\n";
-                    // 1. Reset receiver semaphore to INVALID (clear previous iteration's VALID)
-                    noc_semaphore_set(w1_mcast_receiver_sem_ptr, 0);
-
-                    // 2. Reserve CB space for incoming multicast data
-                    cb_reserve_back(cb_w1_idx, block_size);
-
-                    // DPRINT << "Receiver signaling sender ready\n";
-                    // 3. Signal to sender that we're ready to receive
-                    noc_semaphore_inc(w1_sender_semaphore_noc_addr, 1);
-                    noc_async_write_barrier();  // CRITICAL: Wait for semaphore increment to reach sender!
-
-                    // DPRINT << "Receiver waiting for data from sender\n";
-                    // 4. Wait for sender to multicast data (writes to our reserved CB write pointer)
-                    noc_semaphore_wait(w1_mcast_receiver_sem_ptr, 1);
-
-                    // DPRINT << "Receiver received data, pushing to CB\n";
-                    // 5. Push to CB (multicast already wrote to our L1 at CB write address)
-                    cb_push_back(cb_w1_idx, block_size);
+                    mcast_receiver_reserve_and_receive(
+                        cb_w1_idx, block_size, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
                 }
-                // DPRINT << "Receiver finished receiving W1\n";  // Then, read all W3 data for this k_block (compute
-                // processes W3 second)
-                // NOTE: W3 is NOT multicast in Phase 1 - each core still reads independently
+                // Then, receive all W3 data for this k_block (compute processes W3 second)
                 for (uint32_t p = 0; p < p_block_size; ++p) {
-                    uint32_t w3_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
-                    read_tiles_by_row(
-                        cb_w3_idx, w3_address_generator, w3_tile_start, k_block_size, tile_bytes, block_size);
+                    mcast_receiver_reserve_and_receive(
+                        cb_w3_idx, block_size, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
                 }
             }
         }
@@ -139,17 +119,16 @@ void kernel_main() {
         // No reading required to compute M[r, :]
 
         // ---- Phase C: Use M[r, :] for all c_blocks ----
-        // NOTE: W2 is NOT multicast in Phase 1 - each core still reads independently
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+
+                // Receive W2 via multicast for each column in c_block
                 for (uint32_t c = 0; c < c_block_size; ++c) {
-                    const uint32_t c_global = c_block_start + c;
-                    uint32_t w2_tile_start = k_block_start * Wt + c_global;
-                    read_tiles_by_col(
-                        cb_w2_idx, w2_address_generator, w2_tile_start, k_block_size, tile_bytes, Wt, block_size);
+                    mcast_receiver_reserve_and_receive(
+                        cb_w2_idx, block_size, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
                 }
             }
         }

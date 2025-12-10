@@ -88,8 +88,8 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2,
     ttnn::IDevice* device,
-    uint32_t w1_mcast_sender_semaphore_id,
-    uint32_t w1_mcast_receiver_semaphore_id) {
+    uint32_t mcast_sender_semaphore_id,
+    uint32_t mcast_receiver_semaphore_id) {
     uint32_t num_senders = 0;
     uint32_t num_receivers = 0;
 
@@ -166,14 +166,14 @@ void assign_per_core_runtime_args(
                  w3->address(),
                  num_rows_per_core,
                  num_rows_written,
-                 // W1 multicast args (dummy values when mcast_num_dests=0)
+                 // Shared multicast args for W1/W2/W3 (all use same topology)
                  mcast_start_physical_x,
                  mcast_start_physical_y,
                  mcast_end_physical_x,
                  mcast_end_physical_y,
                  mcast_num_dests,
-                 w1_mcast_sender_semaphore_id,
-                 w1_mcast_receiver_semaphore_id});
+                 mcast_sender_semaphore_id,
+                 mcast_receiver_semaphore_id});
         } else if (num_cores > 1) {
             // Receiver core: receives W1 via multicast, still reads X, W2, W3 from DRAM
             num_receivers++;
@@ -190,11 +190,11 @@ void assign_per_core_runtime_args(
                  w3->address(),
                  num_rows_per_core,
                  num_rows_written,
-                 // W1 multicast args
+                 // Shared multicast args for W1/W2/W3 (all use same sender)
                  static_cast<uint32_t>(sender_physical.x),
                  static_cast<uint32_t>(sender_physical.y),
-                 w1_mcast_sender_semaphore_id,
-                 w1_mcast_receiver_semaphore_id});
+                 mcast_sender_semaphore_id,
+                 mcast_receiver_semaphore_id});
         }
 
         // Writer kernel: (swiglu_addr, num_rows, offset)
@@ -439,11 +439,12 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     }
 
     // -------------------------------------------------------------------------
-    // 3.2) Create semaphores for W1 multicast
+    // 3.2) Create shared semaphores for W1/W2/W3 multicast
+    // NOTE: W1, W3, W2 execute sequentially (W1→W3 in Phase A, W2 in Phase C)
+    // and share the same multicast topology, so they can reuse the same semaphores.
     // -------------------------------------------------------------------------
-    uint32_t w1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    // std::cout << all_cores.str() << "\n";
-    uint32_t w1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // -------------------------------------------------------------------------
     // 3.3) Create sender and receiver reader kernels for W1 multicast
@@ -527,8 +528,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         core_group_1,
         core_group_2,
         device,
-        w1_mcast_sender_semaphore_id,
-        w1_mcast_receiver_semaphore_id);
+        mcast_sender_semaphore_id,
+        mcast_receiver_semaphore_id);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
