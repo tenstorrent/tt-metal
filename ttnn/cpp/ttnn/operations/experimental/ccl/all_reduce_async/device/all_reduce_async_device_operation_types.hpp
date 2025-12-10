@@ -15,9 +15,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn {
-
-namespace operations::experimental::ccl::all_reduce_async {
+namespace ttnn::operations::experimental::ccl::all_reduce_async {
 
 struct operation_attributes_t {
     uint32_t num_links = 0;
@@ -83,6 +81,4 @@ using spec_return_value_t = TensorSpec;
 
 using tensor_return_value_t = Tensor;
 
-}  // namespace operations::experimental::ccl::all_reduce_async
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
