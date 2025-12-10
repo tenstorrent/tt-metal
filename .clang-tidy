@@ -130,7 +130,6 @@ Checks: >
   -modernize-return-braced-init-list,
   -modernize-type-traits,
   -modernize-use-auto,
-  -modernize-use-bool-literals,
   -modernize-use-constraints,
   -modernize-use-default-member-init,
   -modernize-use-designated-initializers,
