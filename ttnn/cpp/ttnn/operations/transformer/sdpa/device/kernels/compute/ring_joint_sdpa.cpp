@@ -123,7 +123,7 @@ void MAIN {
             global_q_end,
             q_num_chunks,
             local_q_start,
-            chunked_q_chunk_offset,
+            0,
             iter_k_chunk_start,
             iter_k_chunk_end,
             q_chunk_tiles,
