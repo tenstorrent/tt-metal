@@ -62,8 +62,7 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(scores_cb_index, 1);
         if (width_tile == 0) {
-            UNPACK(DPRINT << "Scores cb rd ptr: " << get_local_cb_interface(scores_cb_index).fifo_rd_ptr << 4
-                          << ENDL();)
+            UNPACK(DPRINT << "Scores cb rd ptr: " << get_local_cb_interface(scores_cb_index).fifo_rd_ptr << ENDL();)
             UNPACK(print_tile(scores_cb_index, 0, true, 0, 1, 0, 32));
         }
         tile_regs_acquire();
@@ -94,7 +93,7 @@ void add_bias(
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(bias_cb_index, 1);
         if (width_tile == 0) {
-            UNPACK(DPRINT << "Bias cb rd ptr: " << get_local_cb_interface(bias_cb_index).fifo_rd_ptr << 4 << ENDL();)
+            UNPACK(DPRINT << "Bias cb rd ptr: " << get_local_cb_interface(bias_cb_index).fifo_rd_ptr << ENDL();)
             UNPACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1, 0, 32));
             UNPACK(print_tile(bias_cb_index, 0, true, 0, 1, 0, 32));
         }
@@ -133,7 +132,7 @@ void process_and_sort_tiles(
         // transpose and unpack into dest regs
         reconfig_data_format_srca(input_cb_index);
         if (wt == 0) {
-            UNPACK(DPRINT << "Input cb rd ptr: " << get_local_cb_interface(input_cb_index).fifo_rd_ptr << 4 << ENDL();)
+            UNPACK(DPRINT << "Input cb rd ptr: " << get_local_cb_interface(input_cb_index).fifo_rd_ptr << ENDL();)
             UNPACK(print_tile(input_cb_index, 0, true, 0, 1, 0, 32));
         }
         transpose_wh_init_short(input_cb_index);

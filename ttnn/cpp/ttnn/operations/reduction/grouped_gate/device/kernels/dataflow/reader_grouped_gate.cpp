@@ -60,6 +60,9 @@ void kernel_main() {
             DPRINT << "Page: " << page << ENDL();
             cb_reserve_back(scores_cb_index, 1);
             cb_reserve_back(bias_cb_index, 1);
+            if (width_tile == 0) {
+                DPRINT << "Scores cb wr ptr: " << get_write_ptr(scores_cb_index) << ENDL();
+            }
             noc_async_read_page(page, scores_accessor, get_write_ptr(scores_cb_index));
             noc_async_read_page(page, bias_accessor, get_write_ptr(bias_cb_index));
             noc_async_read_barrier();
