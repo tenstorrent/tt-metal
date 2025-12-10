@@ -55,7 +55,7 @@ class StableDiffusion3Pipeline:
         num_links: int,
         height: int,
         width: int,
-        model_checkpoint_path: str,
+        checkpoint_name: str,
         use_cache=False,
     ) -> None:
         self._mesh_device = mesh_device
@@ -112,22 +112,18 @@ class StableDiffusion3Pipeline:
         self.vae_submesh_idx = vae_submesh_idx
 
         logger.info("loading models...")
-        self._tokenizer_1 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer")
-        self._tokenizer_2 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer_2")
-        self._tokenizer_3 = T5TokenizerFast.from_pretrained(model_checkpoint_path, subfolder="tokenizer_3")
-        self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(
-            model_checkpoint_path, subfolder="text_encoder"
-        )
-        self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-            model_checkpoint_path, subfolder="text_encoder_2"
-        )
+        self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
+        self._tokenizer_2 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer_2")
+        self._tokenizer_3 = T5TokenizerFast.from_pretrained(checkpoint_name, subfolder="tokenizer_3")
+        self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(checkpoint_name, subfolder="text_encoder")
+        self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(checkpoint_name, subfolder="text_encoder_2")
         if enable_t5_text_encoder:
-            torch_text_encoder_3 = T5EncoderModel.from_pretrained(model_checkpoint_path, subfolder="text_encoder_3")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_checkpoint_path, subfolder="scheduler")
-        self._torch_vae = AutoencoderKL.from_pretrained(model_checkpoint_path, subfolder="vae")
+            torch_text_encoder_3 = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_3")
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        self._torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
 
         torch_transformer = TorchSD3Transformer2DModel.from_pretrained(
-            model_checkpoint_path,
+            checkpoint_name,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
@@ -144,7 +140,7 @@ class StableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        assert "stabilityai/stable-diffusion-3.5-large" in str(model_checkpoint_path)
+        assert "stabilityai/stable-diffusion-3.5-large" in str(checkpoint_name)
 
         if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -348,7 +344,7 @@ class StableDiffusion3Pipeline:
         sp_config=None,
         tp_config=None,
         num_links=None,
-        model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
+        checkpoint_name=f"stabilityai/stable-diffusion-3.5-large",
         use_cache=False,
     ):
         # defatult config per mesh shape
@@ -391,7 +387,7 @@ class StableDiffusion3Pipeline:
             num_links=num_links,
             height=image_h,
             width=image_w,
-            model_checkpoint_path=model_checkpoint_path,
+            checkpoint_name=checkpoint_name,
             use_cache=use_cache,
         )
 
