@@ -4,13 +4,12 @@
 
 #pragma once
 
-#include <optional>
-#include <vector>
-
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation_types.hpp"
+#include <optional>
+#include <vector>
 
 namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program {
 

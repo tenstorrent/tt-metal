@@ -4,6 +4,12 @@
 
 #pragma once
 
+#include "ttnn/tensor/tensor.hpp"
+
+/* All Gather Matmul fusion includes */
+#include "ttnn/operations/matmul/device/matmul_op.hpp"  //TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
+
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -11,17 +17,16 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
-
 namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
 
 struct operation_attributes_t {
+    /* All Gather Params */
     ttnn::AllGatherAsync all_gather_async;  // TODO: migrate this code to use new all_gather_async API. This code relies
                                             // on the old all_gather_async struct
+    /* Matmul Params */
     operations::matmul::Matmul
         matmul{};  // TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+    /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 
     operation_attributes_t() :
