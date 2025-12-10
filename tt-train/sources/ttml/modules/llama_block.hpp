@@ -43,6 +43,15 @@ public:
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+
+    // Forward with KV cache for inference
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input,
+        const autograd::TensorPtr& mask,
+        const autograd::TensorPtr& k_cache,
+        const autograd::TensorPtr& v_cache,
+        const modules::InferenceMode mode,
+        const uint32_t cache_position);
 };
 
 }  // namespace ttml::modules

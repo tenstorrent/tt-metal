@@ -196,7 +196,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
-        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"));
+        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
