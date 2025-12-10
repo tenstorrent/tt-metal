@@ -139,6 +139,7 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("slice_config") = nb::none(),
             nb::arg("return_output_dim") = false,
             nb::arg("return_weights_and_bias") = false});
+
     mod.def(
         "prepare_conv_weights",
         prepare_conv_weights,

@@ -99,7 +99,7 @@ void py_module_types(nb::module_& mod) {
 void py_module(nb::module_& mod) {
     static_cast<nb::class_<MeshShape>>(mod.attr("MeshShape"))
         .def(
-            nb::init<uint32_t, uint32_t>(),  // pybind forwards size_t. Validate this.
+            nb::init<uint32_t, uint32_t>(),  // uint32, not size_t!
             "Constructor with the specified 2D shape. The value s0 is assumed to be the outer dimension.",
             nb::arg("s0"),
             nb::arg("s1"))
