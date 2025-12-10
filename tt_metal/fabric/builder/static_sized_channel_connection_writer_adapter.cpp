@@ -85,8 +85,6 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
     if (is_2D_routing) {
-        // For 2D: Temporary, until support for VC1 is added
-        TT_FATAL(vc_idx == 0, "VC1 is not supported for 2D routing");
         // Get the appropriate downstream EDM count based on VC index
         uint32_t num_downstream_edms = (vc_idx == 0) ? builder_config::get_vc0_downstream_edm_count(is_2D_routing)
                                                      : builder_config::get_vc1_downstream_edm_count(is_2D_routing);

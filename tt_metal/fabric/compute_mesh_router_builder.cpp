@@ -204,6 +204,7 @@ void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(ComputeMesh
 
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+
     if (vc == 0) {
         TT_FATAL(
             !erisc_builder_->build_in_worker_connection_mode,
@@ -213,6 +214,44 @@ void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(ComputeMesh
         uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_eth_direction());
         // Connect VC0
         connect_vc(0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
+    } else if (vc == 1) {
+        // VC1 is only needed for 2D routing AND if the data mover is NOT an inter-mesh router
+        TT_FATAL(is_2D_routing, "VC1 connections are only supported for 2D routing. Got vc: {}", vc);
+
+        // VC1 connections are only made for intra-mesh routers (not inter-mesh routers)
+        if (erisc_builder_->isInterMesh) {
+            log_debug(tt::LogFabric, "VC1 not needed (inter-mesh router), skipping VC1 connection setup");
+            return;
+        }
+
+        // Check if VC1 is actually configured (multi-mesh topology)
+        bool needs_vc1 = erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0;
+        if (!needs_vc1) {
+            log_debug(tt::LogFabric, "VC1 not configured (single-mesh topology), skipping VC1 connection setup");
+            return;
+        }
+
+        TT_FATAL(
+            !erisc_builder_->build_in_worker_connection_mode,
+            "Tried to connect router to downstream in worker connection mode");
+
+        // For VC1, use the same logical channel mapping as VC0
+        // VC1 uses logical channels 0-2 (which map to physical channels 4-6) for inter-mesh routing
+        // The channel mapping uses logical indices within each VC, so we use the same relative index
+        // as VC0 (1-3) but map to VC1 logical channels (0-2)
+        // VC0 channel 1-3 correspond to VC1 channels 0-2 for inter-mesh
+        uint32_t vc0_sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_eth_direction());
+        // VC0 channels 1-3 map to VC1 logical channels 0-2 (subtract 1)
+        // VC0 channel 0 (worker) doesn't exist in VC1
+        TT_FATAL(
+            vc0_sender_channel_idx >= 1 && vc0_sender_channel_idx <= 3,
+            "VC0 sender channel {} is invalid for VC1 mapping. VC1 only supports channels 1-3 from VC0 (mapped to VC1 "
+            "logical channels 0-2).",
+            vc0_sender_channel_idx);
+        uint32_t vc1_logical_channel_idx = vc0_sender_channel_idx - 1;  // Map VC0 [1-3] to VC1 [0-2]
+
+        // Connect VC1 using logical channel index
+        connect_vc(1, get_downstream_builder_for_vc(1, vc1_logical_channel_idx), vc1_logical_channel_idx);
     }
 }
 
@@ -223,7 +262,8 @@ SenderWorkerAdapterSpec ComputeMeshRouterBuilder::build_connection_to_fabric_cha
     auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
 
     if (sender_mapping.builder_type == BuilderType::ERISC) {
-        return erisc_builder_->build_connection_to_fabric_channel(sender_mapping.internal_sender_channel_id);
+        // Pass VC and VC-relative channel ID to translate to absolute sender channel index
+        return erisc_builder_->build_connection_to_fabric_channel(vc, sender_mapping.internal_sender_channel_id);
     } else if (sender_mapping.builder_type == BuilderType::TENSIX) {
         TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available but mapping requires it");
         return tensix_builder_->build_connection_to_fabric_channel(sender_mapping.internal_sender_channel_id);

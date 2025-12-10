@@ -465,7 +465,10 @@ public:
         bool has_tensix_extension = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const override;
+    // Overload that accepts VC and VC-relative channel ID
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
+    // Base class override (for backward compatibility, treats channel_id as VC0-relative)
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
@@ -501,6 +504,7 @@ public:
 
     FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    bool isInterMesh = false;  // True if this data mover connects to a different mesh (inter-mesh router)
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 

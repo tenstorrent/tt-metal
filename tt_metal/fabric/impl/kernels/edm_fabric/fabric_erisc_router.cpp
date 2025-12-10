@@ -2266,6 +2266,34 @@ void kernel_main() {
     const auto downstream_edm_vc0_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
 #endif
 
+#if defined(FABRIC_2D)
+    uint32_t has_downstream_edm_vc1_buffer_connection;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_buffer_base_addresses;
+    uint32_t downstream_edm_vc1_noc_x;
+    uint32_t downstream_edm_vc1_noc_y;
+
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_worker_registration_ids;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_worker_location_info_addresses;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_buffer_index_semaphore_addresses;
+
+    if constexpr (NUM_VCS == 2) {
+        has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc1_buffer_base_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+        downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
+        downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc1_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc1_worker_location_info_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+            downstream_edm_vc1_buffer_index_semaphore_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+#endif
     // unused - to be deleted
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
