@@ -1,0 +1,178 @@
+{
+    "stable-diffusion-3.5-large": {
+        "hf_id": "stabilityai/stable-diffusion-3.5-large",
+        "num_inference_steps": 28,
+        "perf":{
+            "2x4_wh_t3k":{
+                "clip_encoding_time": 0.15,
+                "t5_encoding_time": 0.1,
+                "total_encoding_time": 0.25,
+                "denoising_steps_time": 11.3,
+                "vae_decoding_time": 1.6,
+                "total_time": 13.2
+            },
+            "4x8_wh_glx":{
+                "clip_encoding_time": 0.2,
+                "t5_encoding_time": 0.12,
+                "total_encoding_time": 0.6,
+                "denoising_steps_time": 4.2,
+                "vae_decoding_time": 1.35,
+                "total_time": 5.9
+            }
+        },
+        "accuracy": {
+            "5000": {
+                "fid_valid_range": [22.63592, 24.0361780112],
+                "clip_valid_range": [30.38525, 32.264881565]
+            },
+            "500": {
+                "fid_valid_range": [79.734, 84.66634524],
+                "clip_valid_range": [30.423468, 32.30546373048]
+            },
+            "100": {
+                "fid_valid_range": [175.35951, 186.2072492886],
+                "clip_valid_range": [30.162635, 32.028495601100005]
+            }
+        }
+    },
+    "flux.1-dev": {
+        "hf_id": "black-forest-labs/FLUX.1-dev",
+        "num_inference_steps": 28,
+        "perf":{
+            "1x2_bh_p300":{
+                "clip_encoding_time": 0.1,
+                "t5_encoding_time": 0.25,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 30.8,
+                "vae_decoding_time": 1.6,
+                "total_time": 29.0
+            },
+            "2x2_bh_qb":{
+                "clip_encoding_time": 0.05,
+                "t5_encoding_time": 0.25,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 15.4,
+                "vae_decoding_time": 1.8,
+                "total_time": 17.5
+            },
+            "2x4_wh_t3k":{
+                "clip_encoding_time": 0.1,
+                "t5_encoding_time": 0.25,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 21.0,
+                "vae_decoding_time": 1.6,
+                "total_time": 22.0
+            },
+            "4x8_wh_glx":{
+                "clip_encoding_time": 0.1,
+                "t5_encoding_time": 0.21,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 8.4,
+                "vae_decoding_time": 1.4,
+                "total_time": 9.0
+            }
+        },
+        "accuracy": {
+            "5000": {
+                "fid_valid_range": [28.14067, 29.8814518462],
+                "clip_valid_range": [29.7014, 31.538728604]
+            },
+            "500": {
+                "fid_valid_range": [82.37143, 87.46692665980001],
+                "clip_valid_range": [29.79258, 31.6355489988]
+            },
+            "100": {
+                "fid_valid_range": [174.97054, 185.79421760440002],
+                "clip_valid_range": [29.86339, 31.7107393054]
+            }
+        }
+    },
+    "flux.1-schnell": {
+        "hf_id": "black-forest-labs/FLUX.1-schnell",
+        "num_inference_steps": 4,
+        "perf":{
+            "1x2_bh_p300":{
+                "clip_encoding_time": 0.1,
+                "t5_encoding_time": 0.25,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 4.4,
+                "vae_decoding_time": 1.6,
+                "total_time": 29.0
+            },
+            "2x2_bh_qb":{
+                "clip_encoding_time": 0.05,
+                "t5_encoding_time": 0.25,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 2.2,
+                "vae_decoding_time": 1.8,
+                "total_time": 17.5
+            },
+            "2x4_wh_t3k":{
+                "clip_encoding_time": 0.1,
+                "t5_encoding_time": 0.25,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 3.0,
+                "vae_decoding_time": 1.6,
+                "total_time": 22.0
+            },
+            "4x8_wh_glx":{
+                "clip_encoding_time": 0.1,
+                "t5_encoding_time": 0.21,
+                "total_encoding_time": 0.3,
+                "denoising_steps_time": 1.2,
+                "vae_decoding_time": 1.4,
+                "total_time": 9.0
+            }
+        },
+        "accuracy": {
+            "5000": {
+                "fid_valid_range": [22.195637, 23.568659104820004],
+                "clip_valid_range": [30.010539, 31.866990942540003]
+            },
+            "500": {
+                "fid_valid_range": [77.21976, 81.9965743536],
+                "clip_valid_range": [30.19901, 32.067120758600005]
+            },
+            "100": {
+                "fid_valid_range": [171.065611, 181.64772969646],
+                "clip_valid_range": [30.41629, 32.2978416994]
+            }
+        }
+    },
+    "motif-image-6b-preview": {
+        "hf_id": "Motif-Technologies/Motif-Image-6B-Preview",
+        "num_inference_steps": 28,
+        "perf":{
+            "2x4_bh_t3k":{
+                "clip_encoding_time": 0.12,
+                "t5_encoding_time": 0.15,
+                "total_encoding_time": 0.45,
+                "denoising_steps_time": 12.6,
+                "vae_decoding_time": 1.7,
+                "total_time": 14.6
+            },
+            "4x8_bh_glx":{
+                "clip_encoding_time": 0.21,
+                "t5_encoding_time": 0.15,
+                "total_encoding_time": 0.5,
+                "denoising_steps_time": 5.6,
+                "vae_decoding_time": 1.4,
+                "total_time": 6.5
+            }
+        },
+        "accuracy": {
+            "5000": {
+                "fid_valid_range": [33.85203, 35.9461165758],
+                "clip_valid_range": [29.6529, 31.487228394]
+            },
+            "500": {
+                "fid_valid_range": [86.02833, 91.3500424938],
+                "clip_valid_range": [29.65581, 31.4903184066]
+            },
+            "100": {
+                "fid_valid_range": [180.97872, 192.1740636192],
+                "clip_valid_range": [29.65581, 31.4903184066]
+            }
+        }
+    }
+}

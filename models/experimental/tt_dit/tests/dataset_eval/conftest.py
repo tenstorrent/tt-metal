@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import json
+from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
+from ...pipelines.motif.pipeline_motif import MotifPipeline
+from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
+import os
+
+targets_setup = json.load(open(os.path.join(os.path.dirname(__file__), "eval_targets.json")))
 
 
 def pytest_addoption(parser):
@@ -18,7 +25,8 @@ def pytest_addoption(parser):
         help="Number of prompts to process (default: 5)",
     )
 
-    model_id_choices = ["flux1.dev", "flux1.schnell", "sd35.large", "motif.image.6b.preview"]
+    # model_id_choices = ["flux1.dev", "flux1.schnell", "sd35.large", "motif.image.6b.preview"]
+    model_id_choices = targets_setup.keys()
     parser.addoption(
         "--model-id",
         action="store",
@@ -58,7 +66,23 @@ def model_id(request):
 
 @pytest.fixture
 def num_inference_steps(request):
-    return request.config.getoption("--num-inference-steps")
+    return (
+        request.config.getoption("--num-inference-steps")
+        or targets_setup[request.config.getoption("--model-id")]["num_inference_steps"]
+    )
 
 
-# python -m pytest model.py::test_accuracy_model -v --start-from=0 --num-prompts=5 -s
+@pytest.fixture
+def create_dit_pipeline(mesh_device, model_id, model_location_generator):
+    pipeline_map = {
+        "flux.1-dev": Flux1Pipeline.create_pipeline,
+        "flux.1-schnell": Flux1Pipeline.create_pipeline,
+        "stable-diffusion-3.5-large": StableDiffusion3Pipeline.create_pipeline,
+        "motif-image-6b-preview": MotifPipeline.create_pipeline,
+    }
+    return pipeline_map[model_id]
+
+
+@pytest.fixture
+def model_setup(model_id):
+    return targets_setup[model_id]

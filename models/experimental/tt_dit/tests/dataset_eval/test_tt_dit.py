@@ -15,7 +15,6 @@ from .clip_encoder import CLIPEncoder
 
 # from .fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-
 from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 from ...pipelines.motif.pipeline_motif import MotifPipeline
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
@@ -27,20 +26,22 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 
 
 def get_pipeline(mesh_device, model_id, model_location_generator):
+    targets_setup = json.load(open("eval_targets.json"))
+    model_info = targets_setup[model_id]
     pipeline_map = {
         "flux1.dev": lambda: Flux1Pipeline.create_pipeline(
-            mesh_device=mesh_device, checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev")
+            mesh_device=mesh_device, checkpoint_name=model_location_generator(model_info["hf_id"])
         ),
         "flux1.schnell": lambda: Flux1Pipeline.create_pipeline(
-            mesh_device=mesh_device, checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-schnell")
+            mesh_device=mesh_device, checkpoint_name=model_location_generator(model_info["hf_id"])
         ),
         "sd35.large": lambda: StableDiffusion3Pipeline.create_pipeline(
             mesh_device=mesh_device,
-            model_checkpoint_path=model_location_generator(f"stabilityai/stable-diffusion-3.5-large"),
+            checkpoint_name=model_location_generator(model_info["hf_id"]),
         ),
         "motif.image.6b.preview": lambda: MotifPipeline.create_pipeline(
             mesh_device=mesh_device,
-            model_checkpoint_path=model_location_generator(f"Motif-Technologies/Motif-Image-6B-Preview"),
+            checkpoint_name=model_location_generator(model_info["hf_id"]),
         ),
     }
     return pipeline_map[model_id]()
@@ -97,6 +98,8 @@ def test_tt_dit_accuracy(
     num_inference_steps,
     model_id,
     model_location_generator,
+    create_dit_pipeline,
+    model_setup,
     evaluation_range,
 ) -> None:
     """Accuracy test for TT-Metal DiT pipelines with CLIP and FID score evaluation.
@@ -114,7 +117,9 @@ def test_tt_dit_accuracy(
     logger.info(f"  Inference steps: {num_inference_steps}")
 
     # Create pipeline similar to test_performance_flux1.py
-    pipeline = get_pipeline(mesh_device, model_id, model_location_generator)
+    pipeline = create_dit_pipeline(
+        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_setup["hf_id"])
+    )
 
     # Setup timing collector
     timer = TimingCollector()
@@ -228,11 +233,19 @@ def test_tt_dit_accuracy(
                 "individual_clip_scores": [float(score) for score in clip_scores],
             }
         ],
+        "evals": [
+            {
+                "model": model_id,
+                "average_clip": average_clip_score,
+                "fid_score": fid_score,
+            }
+        ],
     }
 
     out_root = "test_reports"
     os.makedirs(out_root, exist_ok=True)
-    file_path = f"{out_root}/test_{model_id.replace('.', '')}_results.json"
+    # file_path = f"{out_root}/test_{model_id.replace('.', '')}_results.json"
+    file_path = f"{out_root}/sdxl_test_results.json"
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
     logger.info(f"test results saved to {file_path}")
