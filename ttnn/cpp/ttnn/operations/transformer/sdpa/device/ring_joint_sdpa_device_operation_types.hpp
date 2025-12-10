@@ -13,8 +13,7 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 
-namespace ttnn::operations::transformer::sdpa {
-namespace ring_joint_sdpa {
+namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
 
 struct operation_attributes_t {
     std::string joint_strategy;
@@ -94,5 +93,4 @@ struct spec_return_value_t {
     TensorSpec lse_output;
 };
 
-}  // namespace ring_joint_sdpa
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa

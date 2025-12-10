@@ -18,8 +18,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa {
-namespace ring_joint_sdpa::program {
+namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
 
 RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
     const operation_attributes_t& args,
@@ -818,5 +817,4 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ring_joint_sdpa::program
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program

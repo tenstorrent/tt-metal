@@ -13,8 +13,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 
-namespace ttnn::operations::transformer::sdpa {
-namespace ring_joint_sdpa {
+namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
 
 struct RingJointSDPADeviceOperation {
     using operation_attributes_t = ring_joint_sdpa::operation_attributes_t;
@@ -54,8 +53,7 @@ struct RingJointSDPADeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
-}  // namespace ring_joint_sdpa
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa
 
 namespace ttnn::prim {
 

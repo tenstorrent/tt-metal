@@ -12,8 +12,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 
-namespace ttnn::operations::transformer::sdpa {
-namespace ring_joint_sdpa::program {
+namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
 
 struct RingJointSDPASharedVariables {
     uint32_t num_cores = 0;
@@ -50,5 +49,4 @@ private:
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ring_joint_sdpa::program
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program
