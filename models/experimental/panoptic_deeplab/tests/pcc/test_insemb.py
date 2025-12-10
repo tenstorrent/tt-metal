@@ -19,12 +19,39 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
-from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
+from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    check_ttnn_output,
+    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_20_cores,
+)
 
 
+@pytest.mark.parametrize(
+    "pcc_values, skip_check",
+    [
+        (
+            {
+                "center": {"pcc": 0.887, "abs_err": 0.09, "rel_err": 27.5},
+                "offset": {"pcc": 0.742, "abs_err": 6.8, "rel_err": 5.0},
+            },
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            {
+                "center": {"pcc": 0.887, "abs_err": 0.09, "rel_err": 27.5},
+                "offset": {"pcc": 0.741, "abs_err": 6.8, "rel_err": 5.0},
+            },
+            skip_if_not_blackhole_130_cores,
+        ),
+    ],
+    ids=["20_cores", "130_cores"],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_insemb(device, model_location_generator):
+def test_ttnn_insemb(device, pcc_values, skip_check, model_location_generator):
     """Test instance embedding head using the full model with real weights."""
+
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
 
     compute_grid = device.compute_with_storage_grid_size()
     logger.info(
@@ -120,15 +147,9 @@ def test_ttnn_insemb(device, model_location_generator):
     logger.info("Running TTNN instance embedding head test...")
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model.instance_head(ttnn_features)
 
-    # PCC values differ between 20-core (5x4) and all-core configurations
-    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
-
-    if is_20_core_grid:
-        center_pcc, center_abs_err, center_rel_err = 0.887, 0.09, 27.5
-        offset_pcc, offset_abs_err, offset_rel_err = 0.742, 6.8, 5.0
-    else:
-        center_pcc, center_abs_err, center_rel_err = 0.887, 0.09, 27.5
-        offset_pcc, offset_abs_err, offset_rel_err = 0.741, 6.8, 5.0
+    # Extract PCC thresholds from parameters
+    center_vals = pcc_values["center"]
+    offset_vals = pcc_values["offset"]
 
     all_passed = []
     all_passed.append(
@@ -138,9 +159,9 @@ def test_ttnn_insemb(device, model_location_generator):
             ttnn_center_out_tt,
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-            exp_pcc=center_pcc,
-            exp_abs_err=center_abs_err,
-            exp_rel_err=center_rel_err,
+            exp_pcc=center_vals["pcc"],
+            exp_abs_err=center_vals["abs_err"],
+            exp_rel_err=center_vals["rel_err"],
         )
     )
     all_passed.append(
@@ -150,9 +171,9 @@ def test_ttnn_insemb(device, model_location_generator):
             ttnn_offset_out_tt,
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-            exp_pcc=offset_pcc,
-            exp_abs_err=offset_abs_err,
-            exp_rel_err=offset_rel_err,
+            exp_pcc=offset_vals["pcc"],
+            exp_abs_err=offset_vals["abs_err"],
+            exp_rel_err=offset_vals["rel_err"],
         )
     )
 
