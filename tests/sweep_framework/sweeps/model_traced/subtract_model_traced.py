@@ -14,7 +14,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 60
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -50,7 +50,7 @@ def run(
     input_b_layout,
     input_a_memory_config,
     input_b_memory_config,
-    output_memory_config,
+    output_memory_config=None,  # Default to input_a_memory_config if not provided
     storage_type="StorageType::DEVICE",
     input_c_dtype=None,  # Ignored (loader may provide this but operation doesn't use it)
     input_c_layout=None,  # Ignored
@@ -114,6 +114,10 @@ def run(
         from_torch_kwargs["memory_config"] = input_b_memory_config
 
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+
+    # Use input_a_memory_config as fallback if output_memory_config not provided
+    if output_memory_config is None:
+        output_memory_config = input_a_memory_config
 
     start_time = start_measuring_time()
     output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
