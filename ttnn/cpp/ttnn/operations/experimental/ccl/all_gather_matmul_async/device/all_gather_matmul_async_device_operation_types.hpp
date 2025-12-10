@@ -29,45 +29,8 @@ struct operation_attributes_t {
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 
-    operation_attributes_t() :
-        all_gather_async(make_default_all_gather_async()), matmul(), all_gather_core_grid_offset({0, 0}) {}
-    operation_attributes_t(
-        const ttnn::AllGatherAsync& all_gather_async,
-        const operations::matmul::Matmul& matmul,
-        CoreCoord all_gather_core_grid_offset) :
-        all_gather_async(all_gather_async), matmul(matmul), all_gather_core_grid_offset(all_gather_core_grid_offset) {}
-
     static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "all_gather_core_grid_offset");
     auto attribute_values() const { return std::forward_as_tuple(this->matmul, this->all_gather_core_grid_offset); }
-
-private:
-    static const ttnn::AllGatherAsync& make_default_all_gather_async() {
-        static MemoryConfig default_mem_config{};
-        static std::vector<GlobalSemaphore> default_semaphore{};
-        static std::optional<tt::tt_metal::SubDeviceId> default_sub_device_id = std::nullopt;
-        static std::optional<GlobalSemaphore> default_barrier = std::nullopt;
-        static std::optional<uint32_t> default_cluster_axis = std::nullopt;
-        static std::optional<uint32_t> default_chunks_per_sync = std::nullopt;
-        static std::optional<uint32_t> default_num_workers_per_link = std::nullopt;
-        static std::optional<uint32_t> default_num_buffers_per_channel = std::nullopt;
-        static const ttnn::AllGatherAsync default_instance(
-            /*dim=*/0,
-            /*num_links=*/0,
-            /*ring_size=*/0,
-            default_mem_config,
-            ttnn::ccl::Topology::Ring,
-            default_semaphore,
-            default_sub_device_id,
-            default_cluster_axis,
-            /*use_all_gather_async_llama_sharded=*/false,
-            /*use_optimal_ccl_for_llama=*/false,
-            default_barrier,
-            /*using_persistent_buffers=*/false,
-            default_chunks_per_sync,
-            default_num_workers_per_link,
-            default_num_buffers_per_channel);
-        return default_instance;
-    }
 };
 
 struct tensor_args_t {
