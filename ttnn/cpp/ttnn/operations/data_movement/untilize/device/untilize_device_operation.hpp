@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,9 @@ struct UntilizeDeviceOperation {
         bool enough_space_width,
         bool enough_space_height,
         uint32_t pf_type);
+
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output);
 };
 }  // namespace ttnn::operations::data_movement
 

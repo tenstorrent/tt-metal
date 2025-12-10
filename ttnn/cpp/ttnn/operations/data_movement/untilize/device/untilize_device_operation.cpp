@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -289,6 +289,35 @@ UntilizeDeviceOperation::invoke(
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},
         UntilizeDeviceOperation::tensor_args_t{.input = input}};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
+UntilizeDeviceOperation::create_op_performance_model(
+    const UntilizeDeviceOperation::operation_attributes_t& op_attr,
+    const UntilizeDeviceOperation::tensor_args_t& inputs,
+    const Tensor& output) {
+    const auto& input_tensor = inputs.input;
+    const auto& output_tensor = output;
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles =
+        std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
+    int compute_cycles = 0;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil(static_cast<float>(input_tensor.padded_shape()[-1]) / static_cast<float>(tile_width)) <=
+        max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
+    } else {
+        compute_cycles = num_tiles * latency_untilize;
+    }
+
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t> result(
+        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+    return result;
 }
 
 }  // namespace ttnn::operations::data_movement
