@@ -76,7 +76,7 @@ std::array<uint32_t, 2> get_sender_channel_count_per_vc(Topology topology);
 
 std::array<uint32_t, 2> get_receiver_channel_count_per_vc(Topology topology);
 
-uint32_t get_num_used_sender_channel_count(const Topology topology);
+uint32_t get_num_used_sender_channel_count(Topology topology);
 
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config);
 

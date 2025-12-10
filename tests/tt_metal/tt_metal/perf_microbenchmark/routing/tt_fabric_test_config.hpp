@@ -1170,7 +1170,7 @@ private:
 
             // Create sender config with all split sync patterns
             // Sync always uses link 0 (no override allowed)
-            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns), .link_id = 0};
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns, .link_id = 0};
 
             // Generate a SyncConfig for this device
             SyncConfig sync_config = {.sync_val = sync_val, .sender_config = std::move(sync_sender)};
