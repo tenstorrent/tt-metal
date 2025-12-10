@@ -131,10 +131,10 @@ jobs:
             fi
           fi
 
-          # If no items selected, add a placeholder to avoid matrix error
+          # If no items selected, fail with an explicit error
           if [ ${#matrix_items[@]} -eq 0 ]; then
-            echo "No test configurations selected, adding placeholder"
-            matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+            echo "ERROR: No test configurations selected. Please select at least one test to run."
+            exit 1
           fi
 
           # Convert array to JSON array format

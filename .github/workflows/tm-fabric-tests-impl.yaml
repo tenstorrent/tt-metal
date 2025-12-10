@@ -1,4 +1,4 @@
-name: "[internal] TM Fabric tests impl"
+name: "[internal] TM Fabric tests"
 
 on:
   workflow_call:
@@ -252,10 +252,10 @@ jobs:
             runner_items+=('{"name":"QuietBox Global Edition unit tests","runner-label":"BH-QB-GE"}')
           fi
 
-          # If no runners selected, add a placeholder to avoid matrix error
+          # If no runners selected, fail the job with an error
           if [ ${#runner_items[@]} -eq 0 ]; then
-            echo "No BH runners selected, adding placeholder"
-            runner_items+=('{"name":"LLMBox unit tests","runner-label":"BH-LLMBox"}')
+            echo "ERROR: No BH runners selected. Please enable at least one runner input."
+            exit 1
           fi
 
           # Convert array to JSON array format

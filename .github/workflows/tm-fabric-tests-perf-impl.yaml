@@ -1,4 +1,4 @@
-name: "[internal] TM Fabric Perf Tests impl"
+name: "[internal] TM Fabric Perf Tests"
 
 on:
   workflow_call:
@@ -52,10 +52,10 @@ jobs:
             matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Mux BW","cmd":"pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py"}')
           fi
 
-          # If no items selected, add a placeholder to avoid matrix error
+          # If no items selected, fail the job with an error
           if [ ${#matrix_items[@]} -eq 0 ]; then
-            echo "No perf test groups selected, adding placeholder"
-            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric BW","cmd":"TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml"}')
+            echo "ERROR: No perf test groups selected. Please enable at least one test group input."
+            exit 1
           fi
 
           # Convert array to JSON array format
