@@ -85,6 +85,7 @@ def grouped_gate_golden(
 
     # find the top k groups
     _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1)
+    logger.info(f"top_k_groups_indices: {top_k_groups_indices}")
     # logger.info(f"top_k_groups_indices: {top_k_groups_indices}")
 
     # Create a mask for valid groups
@@ -104,13 +105,15 @@ def grouped_gate_golden(
     # then gather the UNBIASED scores (original sigmoid output) based on the top k experts indices
     # The reference uses 'original_scores' (no bias) for the final weights
     chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
+    logger.info(f"chosen_scores: {chosen_scores[-1, -1, -1, :]}")
 
     # normalize the chosen scores
     normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
+    logger.info(f"normalized_scores: {normalized_scores[-1, -1, -1, :]}")
 
     # then scale the normalized scores by the scales
     scaled_scores = normalized_scores * route_scale
-
+    logger.info(f"scaled_scores: {scaled_scores[-1, -1, -1, :]}")
     return scaled_scores, top_k_experts_indices
 
 
@@ -150,6 +153,7 @@ def test_grouped_gate(device):
 
     logger.info(f"initial scores: {scores[-1, -1, -1, :]}")
     bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)  # no bias for simplicity
+    logger.info(f"bias: {bias[-1, -1, -1, :]}")
 
     n_groups = 8
     summed_experts_per_group = 2  # number of experts to sum per group

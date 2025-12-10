@@ -41,10 +41,6 @@ FORCE_INLINE void generate_index_tile(
 
     // Create the top two faces by writing 1 face line, then using noc to write the rest of the face
     cb_reserve_back(topk_index_creation_cb_index, 1);
-    // Debug: print write address for first tile only
-    if (start_expert_index == 0) {
-        DPRINT << "generate_index_tile: write_addr=" << index_write_addr << ENDL();
-    }
     for (uint32_t width_face = 0; width_face < 2; width_face++) {
         uint32_t current_index = start_expert_index + width_face * face_line;
         uint32_t index_write_face_offset = index_write_addr + width_face * face_size_bytes;
@@ -89,8 +85,6 @@ FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t group_indices_cb_index, uint32_t width_tiles, uint32_t n_groups) {
     cb_reserve_back(group_indices_cb_index, 1);  // max of 32 groups
     uint32_t base_write_addr = get_write_ptr(group_indices_cb_index);
-    DPRINT << "generate_group_indices: base_addr=" << base_write_addr << " face2_dest=" << (base_write_addr + 512)
-           << ENDL();
     constexpr uint32_t face_line = 16;
     constexpr uint32_t face_line_bytes = 32;
     constexpr uint32_t num_tile_elements = 1024;
@@ -151,8 +145,6 @@ FORCE_INLINE void generate_reduce_scalar(
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t face_line_bytes = 32;
     uint32_t write_addr = get_write_ptr(reduce_scalar_cb_index);
-    DPRINT << "generate_reduce_scalar: write_addr=" << write_addr << " zeros_dest=" << (write_addr + face_size_bytes)
-           << ENDL();
     tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
     // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
     uint16_t scalar = packed_scalar >> 16;
@@ -293,6 +285,7 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
 #pragma GCC unroll 16
         for (uint32_t t = 0; t < limit_part1; t++) {
             uint16_t winning_group_idx = sorted_indices_ptr[k_indices_offset_0_15 + t];
+            DPRINT << "winning_group_idx: " << winning_group_idx << ENDL();
             uint64_t src_tile_offset = winning_group_idx * tile_size_bytes;
 
             uint32_t ro_p1 = t * face_line_bytes;
@@ -332,6 +325,10 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     cb_pop_front(sigmoid_input_cb_index, width_tiles);
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
 
+    for (uint32_t i = 0; i < topk_groups; i++) {
+        print_tile(winning_group_scores_cb_index, i, true, 0, 1, 0, 32);
+        print_tile(winning_group_indices_cb_index, i, true, 0, 1, 0, 32);
+    }
     cb_push_back(winning_group_scores_cb_index, topk_groups);
     cb_push_back(winning_group_indices_cb_index, topk_groups);
 }
