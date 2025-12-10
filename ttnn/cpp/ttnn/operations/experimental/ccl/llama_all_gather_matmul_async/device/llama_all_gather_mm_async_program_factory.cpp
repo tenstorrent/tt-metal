@@ -52,7 +52,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config,
+    const operations::matmul::config::MatmulProgramConfig& program_config,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     tt::tt_metal::Program program{};
 

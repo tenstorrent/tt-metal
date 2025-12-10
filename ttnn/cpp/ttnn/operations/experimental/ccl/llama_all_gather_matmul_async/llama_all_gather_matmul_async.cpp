@@ -23,7 +23,7 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const std::optional<MemoryConfig>& mm_memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {

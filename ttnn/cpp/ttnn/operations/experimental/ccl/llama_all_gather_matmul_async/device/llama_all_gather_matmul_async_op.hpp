@@ -14,7 +14,8 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -62,7 +63,8 @@ struct LlamaAllGatherMatmulAsync {
     const ttnn::AllGatherParams all_gather_params;
 
     /* Matmul Params */
-    const operations::matmul::Matmul matmul_struct;
+    using matmul_device_t = operations::matmul::MatmulDeviceOperation;
+    const matmul_device_t::operation_attributes_t matmul_struct;
 
     /* Physical Devices this op runs on*/
     std::vector<IDevice*> devices;
@@ -115,7 +117,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config,
+    const operations::matmul::config::MatmulProgramConfig& program_config,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb);
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(
@@ -126,7 +128,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const operations::matmul::MatmulProgramConfig& program_config,
+    const operations::matmul::config::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
@@ -149,14 +151,14 @@ Tensor llama_all_gather_matmul_async(
     const std::optional<MemoryConfig>& mm_memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+    const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 
 LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
     const ttnn::AllGatherParams& all_gather_params,
-    const operations::matmul::Matmul& matmul_struct,
+    const LlamaAllGatherMatmulAsync::matmul_device_t::operation_attributes_t& matmul_struct,
     const std::vector<IDevice*>& devices);
 
 }  // namespace ccl
@@ -172,7 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const matmul::MatmulProgramConfig& program_config,
+    const matmul::config::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
@@ -186,7 +188,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
 
 namespace llama_agmm_fusion_helpers {
 void override_program_parameters(
-    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
+    const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
