@@ -80,6 +80,18 @@ private:
 
     static cabling_generator::proto::ClusterDescriptor load_descriptor(const std::string& file_path);
 
+    static void merge_root_instances(
+        cabling_generator::proto::ClusterDescriptor& merged,
+        const std::vector<cabling_generator::proto::ClusterDescriptor>& descriptors,
+        MergeValidationResult& validation_result);
+
+    static void merge_graph_template(
+        cabling_generator::proto::GraphTemplate& target_template,
+        const cabling_generator::proto::GraphTemplate& source_template,
+        const std::string& template_name,
+        const std::string& source_file,
+        MergeValidationResult& result);
+
     static void merge_internal_connections(
         cabling_generator::proto::GraphTemplate& target_template,
         const cabling_generator::proto::GraphTemplate& source_template,

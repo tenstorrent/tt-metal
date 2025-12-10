@@ -204,7 +204,7 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors(
             if (!merged.graph_templates().contains(name)) {
                 (*merged.mutable_graph_templates())[name] = tmpl;
             } else {
-                merge_internal_connections(
+                merge_graph_template(
                     (*merged.mutable_graph_templates())[name],
                     tmpl,
                     name,
@@ -253,7 +253,122 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors(
         (*merged.mutable_node_descriptors())[base_name] = base_desc;
     }
 
+    merge_root_instances(merged, descriptors, validation_result);
+
     return merged;
+}
+
+void DescriptorMerger::merge_root_instances(
+    cabling_generator::proto::ClusterDescriptor& merged,
+    const std::vector<cabling_generator::proto::ClusterDescriptor>& descriptors,
+    MergeValidationResult& validation_result) {
+    // Find the first descriptor with a root_instance
+    const cabling_generator::proto::GraphInstance* base_root_instance = nullptr;
+    size_t base_idx = 0;
+
+    if (merged.has_root_instance()) {
+        base_root_instance = &merged.root_instance();
+    } else {
+        // Find first descriptor with root_instance
+        for (size_t i = 0; i < descriptors.size(); ++i) {
+            if (descriptors[i].has_root_instance()) {
+                *merged.mutable_root_instance() = descriptors[i].root_instance();
+                base_root_instance = &merged.root_instance();
+                base_idx = i + 1;  // Start merging from next descriptor
+                break;
+            }
+        }
+
+        if (!base_root_instance) {
+            return;  // No descriptor has root_instance
+        }
+    }
+
+    const std::string base_template_name = base_root_instance->template_name();
+
+    for (size_t i = base_idx; i < descriptors.size(); ++i) {
+        const auto& source = descriptors[i];
+
+        if (!source.has_root_instance()) {
+            continue;
+        }
+
+        if (source.root_instance().template_name() != base_template_name) {
+            validation_result.add_warning(
+                "root_instance template_name mismatch in descriptor[" + std::to_string(i) + "]: '" +
+                source.root_instance().template_name() + "' vs '" + base_template_name + "'. Using first occurrence.");
+            continue;
+        }
+
+        for (const auto& [child_name, child_mapping] : source.root_instance().child_mappings()) {
+            if (merged.root_instance().child_mappings().contains(child_name)) {
+                const auto& existing_mapping = merged.root_instance().child_mappings().at(child_name);
+
+                if (existing_mapping.mapping_case() != child_mapping.mapping_case()) {
+                    validation_result.add_error(
+                        "Child '" + child_name + "' has conflicting mapping types in root_instance");
+                    continue;
+                }
+
+                if (child_mapping.has_host_id()) {
+                    if (existing_mapping.host_id() != child_mapping.host_id()) {
+                        validation_result.add_error(
+                            "Child '" + child_name +
+                            "' mapped to different host_ids: " + std::to_string(existing_mapping.host_id()) + " vs " +
+                            std::to_string(child_mapping.host_id()));
+                    }
+                }
+            } else {
+                (*merged.mutable_root_instance()->mutable_child_mappings())[child_name] = child_mapping;
+            }
+        }
+    }
+}
+
+void DescriptorMerger::merge_graph_template(
+    cabling_generator::proto::GraphTemplate& target_template,
+    const cabling_generator::proto::GraphTemplate& source_template,
+    const std::string& template_name,
+    const std::string& source_file,
+    MergeValidationResult& result) {
+    std::set<std::string> existing_children;
+    for (const auto& child : target_template.children()) {
+        existing_children.insert(child.name());
+    }
+
+    for (const auto& child : source_template.children()) {
+        if (!existing_children.contains(child.name())) {
+            *target_template.add_children() = child;
+            existing_children.insert(child.name());
+        } else {
+            const auto& existing_child = std::find_if(
+                target_template.children().begin(), target_template.children().end(), [&child](const auto& c) {
+                    return c.name() == child.name();
+                });
+
+            if (existing_child != target_template.children().end()) {
+                if (existing_child->has_node_ref() && child.has_node_ref()) {
+                    if (existing_child->node_ref().node_descriptor() != child.node_ref().node_descriptor()) {
+                        result.add_warning(
+                            "Child '" + child.name() + "' in template '" + template_name +
+                            "' has different node_descriptor in " + source_file + " ('" +
+                            child.node_ref().node_descriptor() + "' vs '" +
+                            existing_child->node_ref().node_descriptor() + "'). Using first occurrence.");
+                    }
+                } else if (existing_child->has_graph_ref() && child.has_graph_ref()) {
+                    if (existing_child->graph_ref().graph_template() != child.graph_ref().graph_template()) {
+                        result.add_warning(
+                            "Child '" + child.name() + "' in template '" + template_name +
+                            "' has different graph_template in " + source_file + " ('" +
+                            child.graph_ref().graph_template() + "' vs '" +
+                            existing_child->graph_ref().graph_template() + "'). Using first occurrence.");
+                    }
+                }
+            }
+        }
+    }
+
+    merge_internal_connections(target_template, source_template, template_name, source_file, result);
 }
 
 void DescriptorMerger::merge_internal_connections(
