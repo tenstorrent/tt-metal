@@ -36,7 +36,7 @@ struct ExecuteLlamaReduceScatterMatmul {
         bool transpose_a = false,                                      // mm2 set false
         bool transpose_b = false,                                      // mm3 set false
         std::optional<const DataType> dtype = std::nullopt,            // mm5 set false
-        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config =
+        const std::optional<const operations::matmul::config::MatmulProgramConfig>& program_config =
             std::nullopt,                                                           // mm6 std::nullopt
         const std::optional<const std::string>& activation = std::nullopt,          // mm7 set false
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,  // mm10 std::nullopt
