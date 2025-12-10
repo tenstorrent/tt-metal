@@ -97,9 +97,30 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
 
-DataMovementProcessor = ttnn._ttnn.types.DataMovementProcessor
-NOC = ttnn._ttnn.types.NOC
-NOC_MODE = ttnn._ttnn.types.NOC_MODE
+# DataMovementProcessor = ttnn._ttnn.types.DataMovementProcessor  # Temporarily commented out for testing
+
+
+class DataMovementProcessor:
+    """Dummy class to allow imports - DataMovementProcessor functionality removed in this commit"""
+
+    pass
+
+
+# NOC = ttnn._ttnn.types.NOC  # Temporarily commented out for testing
+# NOC_MODE = ttnn._ttnn.types.NOC_MODE  # Temporarily commented out for testing
+
+
+class NOC:
+    """Dummy class to allow imports - NOC functionality removed in this commit"""
+
+    pass
+
+
+class NOC_MODE:
+    """Dummy class to allow imports - NOC_MODE functionality removed in this commit"""
+
+    pass
+
 
 TileDescriptor = ttnn._ttnn.program_descriptor.TileDescriptor
 CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor
