@@ -4,10 +4,17 @@
 
 #include <cstdint>
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+void print_tile(
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = true,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
+    for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
                       cb_idx,
@@ -16,8 +23,8 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
                           .h0 = (uint8_t)r,
                           .h1 = (uint8_t)(r + 1),
                           .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
                           .ws = (uint8_t)1},
                       true,
                       untilize)
@@ -47,12 +54,17 @@ void kernel_main() {
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;
+        DPRINT << "Height tile: " << height_tile << ENDL();
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+            uint32_t page = base_page + width_tile;
+            DPRINT << "Page: " << page << ENDL();
             cb_reserve_back(scores_cb_index, 1);
             cb_reserve_back(bias_cb_index, 1);
-            noc_async_read_page(base_page + width_tile, scores_accessor, get_write_ptr(scores_cb_index));
-            noc_async_read_page(base_page + width_tile, bias_accessor, get_write_ptr(bias_cb_index));
+            noc_async_read_page(page, scores_accessor, get_write_ptr(scores_cb_index));
+            noc_async_read_page(page, bias_accessor, get_write_ptr(bias_cb_index));
             noc_async_read_barrier();
+            print_tile(scores_cb_index, 0, true, 0, 1, 0, 8);
+            print_tile(bias_cb_index, 0, true, 0, 1, 0, 8);
             cb_push_back(scores_cb_index, 1);
             cb_push_back(bias_cb_index, 1);
         }

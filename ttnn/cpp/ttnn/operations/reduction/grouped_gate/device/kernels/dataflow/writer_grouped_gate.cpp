@@ -406,9 +406,10 @@ void kernel_main() {
             num_group_tiles>(tokens_per_tile);
 
         cb_wait_front(indices_cb_index, 1);
-        noc_async_write_page(height_tile, indices_accessor, get_write_ptr(indices_cb_index));
+        print_tile(indices_cb_index, 0, true, 0, 1, 0, 8);
+        noc_async_write_page(height_tile, indices_accessor, get_read_ptr(indices_cb_index));
         cb_wait_front(weights_cb_index, 1);
-        noc_async_write_page(height_tile, weights_accessor, get_write_ptr(weights_cb_index));
+        noc_async_write_page(height_tile, weights_accessor, get_read_ptr(weights_cb_index));
         noc_async_writes_flushed();
         cb_pop_front(indices_cb_index, 1);
         cb_pop_front(weights_cb_index, 1);
