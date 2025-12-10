@@ -436,10 +436,10 @@ void MetalContext::teardown() {
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 MetalContext* g_instance;
-std::mutex g_instance_mutex;
+std::recursive_mutex g_instance_mutex;
 
 MetalContext& MetalContext::instance() {
-    std::lock_guard<std::mutex> lock(g_instance_mutex);
+    std::lock_guard lock(g_instance_mutex);
     if (!g_instance) {
         g_instance = new MetalContext();
     }
@@ -447,7 +447,7 @@ MetalContext& MetalContext::instance() {
 }
 
 void MetalContext::destroy_instance() {
-    std::lock_guard<std::mutex> lock(g_instance_mutex);
+    std::lock_guard lock(g_instance_mutex);
     if (DeviceManager::is_initialized() && !DeviceManager::instance().get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
