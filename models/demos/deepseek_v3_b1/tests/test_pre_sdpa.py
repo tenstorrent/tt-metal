@@ -76,23 +76,31 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     ttnn_matmul_weights = ttnn.from_torch(
         torch_matmul_weights,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=matmul_mem_config,
     )
 
     # Compute reference output using PyTorch
-    torch_expected = PreSDPA.golden(torch_input, torch_gamma, num_output_cores=1, epsilon=epsilon)
+    torch_expected = PreSDPA.golden(torch_input, torch_gamma, torch_matmul_weights, epsilon=epsilon)
 
-    # Create output tensor sharded on same core
-    torch_output = torch.zeros(shape, dtype=torch.bfloat16)
+    # Create output tensor sharded on same core - shape is (1, 1536) after matmul
+    output_shape = (1, matmul_weights_shape[1])  # (1, 1536)
+    output_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        output_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_output,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem_config,
+        memory_config=output_mem_config,
         tile=tile,
     )
 
@@ -113,10 +121,13 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     output_torch = ttnn.to_torch(ttnn_result)
 
     # Verify output shape
-    assert output_torch.shape == shape, f"Expected shape {shape}, got {output_torch.shape}"
+    assert output_torch.shape == output_shape, f"Expected shape {output_shape}, got {output_torch.shape}"
 
     # Verify results
     logger.info("Verifying pre-SDPA results...")
+
+    # torch_expected = torch_expected[:, :32]
+    # output_torch = output_torch[:, :32]
 
     # Check if outputs are close (allowing for numerical precision differences)
     # bfloat16 has limited precision, so we use a relatively loose tolerance
@@ -126,7 +137,13 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     logger.info(f"Max absolute difference: {max_diff}")
     logger.info(f"Mean absolute difference: {mean_diff}")
 
+    # passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
+    torch.set_printoptions(threshold=1000000)
+    print(torch_expected)
+    print(output_torch)
+
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
+
     logger.info(pcc_message)
 
     assert passing, pcc_message

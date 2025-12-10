@@ -220,9 +220,13 @@ struct Mcast {
     struct ComputeCTArgs {};
 
     // ========================================================================
-    // Op - the actual operation, templated on CTArgs
+    // Op - the actual operation, templated on CTArgs and role
+    //
+    // IsSenderCore: compile-time flag to distinguish sender vs receiver cores
+    // - true:  This core is the sender (NCRISC sends, BRISC does nothing unless loopback)
+    // - false: This core is a receiver (NCRISC does nothing, BRISC waits for semaphore)
     // ========================================================================
-    template <typename CTArgs>
+    template <typename CTArgs, bool IsSenderCore = false, bool IsReceiverCore = false>
     class Op {
     public:
         // ====================================================================
@@ -244,63 +248,79 @@ struct Mcast {
         void impl(const RTArgs& rt_args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // NCRISC (Sender) - DataMovementProcessor.RISCV_1
+            // NCRISC - Only sender core runs the send logic
             // ================================================================
+            if constexpr (IsSenderCore) {
+                // Get semaphore addresses from compile-time IDs
+                uint32_t data_sender_semaphore_addr = get_semaphore(CTArgs::data_sender_semaphore_id);
+                uint32_t data_receiver_semaphore_addr = get_semaphore(CTArgs::data_receiver_semaphore_id);
 
-            // Get semaphore addresses from compile-time IDs
-            uint32_t data_sender_semaphore_addr = get_semaphore(CTArgs::data_sender_semaphore_id);
-            uint32_t data_receiver_semaphore_addr = get_semaphore(CTArgs::data_receiver_semaphore_id);
+                // Compute multicast NOC address
+                const uint64_t noc_coord = get_noc_multicast_addr<noc_index>(
+                    CTArgs::dest_noc_start_x,
+                    CTArgs::dest_noc_start_y,
+                    CTArgs::dest_noc_end_x,
+                    CTArgs::dest_noc_end_y,
+                    0);
+                uint64_t mcast_flag_noc_addr = noc_coord | (uint64_t)(data_receiver_semaphore_addr);
 
-            // Compute multicast NOC address
-            const uint64_t noc_coord = get_noc_multicast_addr<noc_index>(
-                CTArgs::dest_noc_start_x, CTArgs::dest_noc_start_y, CTArgs::dest_noc_end_x, CTArgs::dest_noc_end_y, 0);
-            uint64_t mcast_flag_noc_addr = noc_coord | (uint64_t)(data_receiver_semaphore_addr);
+                volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr =
+                    (volatile tt_l1_ptr uint32_t*)data_sender_semaphore_addr;
 
-            volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr =
-                (volatile tt_l1_ptr uint32_t*)data_sender_semaphore_addr;
+                // Initialize persistent mcast sender
+                init_persistent_mcast_sender<
+                    CTArgs::mcast_num_cores,
+                    CTArgs::loopback,
+                    CTArgs::is_part_of_receiver_grid>(
+                    mcast_flag_noc_addr, data_sender_semaphore_addr, data_sender_semaphore_addr_ptr);
 
-            // Initialize persistent mcast sender
-            init_persistent_mcast_sender<CTArgs::mcast_num_cores, CTArgs::loopback, CTArgs::is_part_of_receiver_grid>(
-                mcast_flag_noc_addr, data_sender_semaphore_addr, data_sender_semaphore_addr_ptr);
+                // Compute mcast data NOC address from runtime args
+                uint64_t mcast_data_noc_addr = noc_coord | (uint64_t)rt_args.mcast_receiver_data_addr;
 
-            // Compute mcast data NOC address from runtime args
-            uint64_t mcast_data_noc_addr = noc_coord | (uint64_t)rt_args.mcast_receiver_data_addr;
+                // Send data with state
+                mcast_send_with_state<
+                    CTArgs::mcast_num_cores,
+                    CTArgs::loopback,
+                    CTArgs::is_part_of_receiver_grid,
+                    true,
+                    true,
+                    true,
+                    true,
+                    write_cmd_buf>(rt_args.input_data_addr, mcast_data_noc_addr, CTArgs::data_size_bytes);
+                mcast_send_with_state<
+                    CTArgs::mcast_num_cores,
+                    CTArgs::loopback,
+                    CTArgs::is_part_of_receiver_grid,
+                    true,
+                    true,
+                    false,
+                    false,
+                    write_reg_cmd_buf>(0, 0, 0);
 
-            // Send data with state
-            mcast_send_with_state<
-                CTArgs::mcast_num_cores,
-                CTArgs::loopback,
-                CTArgs::is_part_of_receiver_grid,
-                true,
-                true,
-                true,
-                true,
-                write_cmd_buf>(rt_args.input_data_addr, mcast_data_noc_addr, CTArgs::data_size_bytes);
-            mcast_send_with_state<
-                CTArgs::mcast_num_cores,
-                CTArgs::loopback,
-                CTArgs::is_part_of_receiver_grid,
-                true,
-                true,
-                false,
-                false,
-                write_reg_cmd_buf>(0, 0, 0);
-
-            // Teardown persistent mcast sender
-            teardown_persistent_mcast_sender<
-                CTArgs::mcast_num_cores,
-                CTArgs::loopback,
-                CTArgs::is_part_of_receiver_grid>(mcast_flag_noc_addr);
+                // Teardown persistent mcast sender
+                teardown_persistent_mcast_sender<
+                    CTArgs::mcast_num_cores,
+                    CTArgs::loopback,
+                    CTArgs::is_part_of_receiver_grid>(mcast_flag_noc_addr);
+            }
+            // Receiver cores' NCRISC does nothing
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
-            // BRISC (Receiver) - DataMovementProcessor.RISCV_0
+            // BRISC - Receiver cores wait for semaphore
+            // Sender core also waits if loopback is enabled (sender is part of receiver grid)
             // ================================================================
-            uint32_t data_receiver_semaphore_addr = get_semaphore(CTArgs::data_receiver_semaphore_id);
+            // Note: For receiver cores (IsSenderCore=false), always receive.
+            // For sender core (IsSenderCore=true), only receive if loopback is enabled.
+            if constexpr (IsReceiverCore) {
+                uint32_t data_receiver_semaphore_addr = get_semaphore(CTArgs::data_receiver_semaphore_id);
 
-            volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
-                (volatile tt_l1_ptr uint32_t*)(data_receiver_semaphore_addr);
-            noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
-            noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
+                volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
+                    (volatile tt_l1_ptr uint32_t*)(data_receiver_semaphore_addr);
+                DPRINT << "Mcast receiver: semaphore waiting" << ENDL();
+                noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+                DPRINT << "Mcast receiver: semaphore received" << ENDL();
+                noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
+            }
 #endif
         }
     };  // class Op

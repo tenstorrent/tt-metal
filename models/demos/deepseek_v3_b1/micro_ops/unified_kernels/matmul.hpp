@@ -76,11 +76,7 @@ struct Matmul {
             // NCRISC (Reader) - ReaderConfigDescriptor compiles as NCRISC
             // ================================================================
             // Both in0 and in1 are backed by sharded tensors - just signal they're ready
-            cb_reserve_back(CTArgs::in0_cb, CTArgs::num_tiles_k);
-            cb_push_back(CTArgs::in0_cb, CTArgs::num_tiles_k);
 
-            cb_reserve_back(CTArgs::in1_cb, CTArgs::num_tiles_k);
-            cb_push_back(CTArgs::in1_cb, CTArgs::num_tiles_k);
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Writer) - WriterConfigDescriptor compiles as BRISC
@@ -111,7 +107,7 @@ struct Matmul {
             tile_regs_acquire();
 
             for (uint32_t k = 0; k < CTArgs::num_tiles_k; k++) {
-                matmul_tiles(CTArgs::in0_cb, CTArgs::in1_cb, k, k, 0, false);
+                matmul_tiles(CTArgs::in0_cb, CTArgs::in1_cb, k, k, 0);
             }
 
             tile_regs_commit();
