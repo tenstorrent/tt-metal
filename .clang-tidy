@@ -1,4 +1,9 @@
 ---
+# === Forward Plan ===
+#
+# Goal: Enable all checks in these categories (unless in Intentionally Disabled):
+#   bugprone-*, cppcoreguidelines-*, misc-*, modernize-*, readability-*
+#
 # === Disabled Check Groups ===
 #
 # Irrelevant platforms/frameworks:
@@ -13,22 +18,23 @@
 # bugprone-branch-clone:
 #   Attempted, no fixit, lots of violations.
 #
-# bugprone-sizeof-expression:
-#   Attempted, no fixit, developers rejected stating lack of value.
-#
 # bugprone-unchecked-optional-access:
 #   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
-#
-# concurrency-mt-unsafe:
-#   Attempted, no fixit, may not be realistic to fix as it flags std::getenv();
 #
 # cppcoreguidelines-init-variables:
 #   Attempted, has fixit, results in massive diff. Somewhat desireable for ND avoidance.
 #
+# === Intentionally Disabled ===
+#
+# bugprone-sizeof-expression:
+#   Attempted, no fixit, developers rejected stating lack of value.
+#
+# concurrency-mt-unsafe:
+#   Attempted, no fixit, may not be realistic to fix as it flags std::getenv();
+#
 # performance-avoid-endl:
 #   Attempted, but developers rejected auto-fixits due to concerns about
 #   potential flush dependency.
-#
 Checks: >
   *,
   -bugprone-branch-clone,
