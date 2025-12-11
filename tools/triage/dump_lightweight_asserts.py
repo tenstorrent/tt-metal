@@ -61,7 +61,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
     try:
         with open(file, "r") as f:
             lines = f.readlines()
-            if line - 1 < 0 or line - 1 >= len(lines):
+            if not (0 <= line - 1 < len(lines)):
                 return "?wrong line number?"
             code_line = lines[line - 1]
             start_index = -1
