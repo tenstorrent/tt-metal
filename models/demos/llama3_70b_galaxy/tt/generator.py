@@ -627,6 +627,9 @@ class Generator:
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            if isinstance(tt_out, tuple):
+                # Get logits and skip log-probs
+                tt_out = tt_out[0]
             return tt_out.cpu()
 
         logits, read_event = self.model.process_output_decode(tt_out)
