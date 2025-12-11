@@ -200,15 +200,16 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = round_mode.has_value();
+    const auto has_legacy_only_args = round_mode.has_value() or !fast_and_approximate_mode;
     if (not(use_legacy ? *use_legacy
                        : has_legacy_only_args or
                              binary::is_legacy_only(
                                  input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "round_mode is not valid when passing use_legacy=false in div "
-            "(tensor-scalar); binary_ng does not support these features for scalar operations yet");
+            "round_mode or fast_and_approximate_mode=false (accurate mode) are not valid when passing "
+            "use_legacy=false in div (tensor-scalar); binary_ng does not support these features for scalar operations "
+            "yet");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             input,
             value,
@@ -278,7 +279,10 @@ Tensor ExecuteDiv::invoke(
     // Only require legacy mode for round_mode if not INT32
     const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32));
 
-    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or output_dtype.has_value();
+    // Binary_ng supports: 1) accurate mode for all types, 2) fast mode only for FP32/INT32
+    // Force legacy when: fast mode with non-FP32/INT32, or round_mode with non-INT32
+    const auto has_legacy_only_args =
+        (fast_and_approximate_mode && !is_fp32 && !is_int32) || (round_mode.has_value() && !is_int32);
 
     if (not(use_legacy
                 ? *use_legacy
@@ -287,7 +291,8 @@ Tensor ExecuteDiv::invoke(
                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "fast_and_approximate_mode=true is not valid when passing use_legacy=false in div");
+            "fast_and_approximate_mode=true with non-FP32/INT32 types, or round_mode with non-INT32 types "
+            "are not valid when passing use_legacy=false in div");
 
         TT_FATAL(
             (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
