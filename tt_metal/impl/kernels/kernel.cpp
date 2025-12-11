@@ -755,7 +755,7 @@ uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
     return enchantum::to_underlying(this->config_.processors[index]);
 }
 
-void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     const uint32_t tensix_core_type =
@@ -793,6 +793,9 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
 void QuasarDataMovementKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     Kernel::process_defines(callback);
+    // TODO: Need to add these defines because kernels don't build on Quasar otherwise.
+    // Since Quasar will only have one NOC, should we keep these defines or update the kernel to not need these defines?
+    // If we keep these defines here, are they hardcoded to NOC_0 and DM_DEDICATED_NOC?
     callback("NOC_INDEX", std::to_string(NOC::NOC_0));
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
@@ -801,7 +804,6 @@ bool QuasarDataMovementKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     TT_FATAL(
         is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
-    log_info(tt::LogMetal, "Configuring Quasar Data Movement kernel on core {}", logical_core.str());
     const ChipId device_id = device->id();
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
