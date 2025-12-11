@@ -35,15 +35,15 @@ CI tests related to models pass (choose "models-mandatory", "models-extended" pr
         [(internal) C++ unit tests](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/cpp-post-commit.yaml)
     )
   - [ ] `models-extended` preset (runs: 
-        the mandatory tests, plus [Demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml)
+        the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml)
         and [Model perf tests](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml)
     )
   - [ ] other selection - specify runs
 - [ ] [(T3K) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-t3k.yaml)
-  - [ ] models-mandatory
-  - [ ] models-extended
+  - [ ] `models-mandatory` preset (runs: [Unit tests]())
+  - [ ] `models-extended` preset (runs: the mandatory tests, plus [Demo]() and [Model perf tests]())
   - [ ] other selection - specify runs
 - [ ] [(Galaxy) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-galaxy.yaml)
-  - [ ] models-mandatory
-  - [ ] models-extended
+  - [ ] `models-mandatory` preset (runs: [Quick tests]())
+  - [ ] `models-extended` preset (runs: the mandatory tests, plus [Demo]() and [Model perf tests]())
   - [ ] other selection - specify runs
