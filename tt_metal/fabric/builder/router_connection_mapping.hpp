@@ -76,10 +76,10 @@ public:
      * @brief Get downstream connection targets for a receiver channel
      *
      * @param vc Virtual channel index
-     * @param sender_channel Sender channel index within the VC
+     * @param receiver_channel Sender channel index within the VC
      * @return Vector of connection targets (may be empty if no connections)
      */
-    std::vector<ConnectionTarget> get_downstream_targets(uint32_t vc, uint32_t sender_channel) const;
+    std::vector<ConnectionTarget> get_downstream_targets(uint32_t vc, uint32_t receiver_channel) const;
 
     /**
      * @brief Factory method for mesh router connection mapping
@@ -118,7 +118,7 @@ public:
     /**
      * @brief Get total number of configured sender channels across all VCs
      */
-    size_t get_total_sender_count() const { return receiver_to_targets_.size(); }
+    size_t get_total_sender_count() const { return std::accumulate(receiver_to_targets_.begin(), receiver_to_targets_.end(), 0, [](size_t sum, const auto& pair) { return sum + pair.second.size(); }); }
 
     /**
      * @brief Get all receiver channel keys (for iteration/testing)

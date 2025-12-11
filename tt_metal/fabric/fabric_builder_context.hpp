@@ -84,8 +84,8 @@ private:
     const FabricContext& fabric_context_;
 
     // Computed max channel counts based on actual router types in this fabric
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_;
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_;
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_{};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_{};
 
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;

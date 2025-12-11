@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
+#include <algorithm>
 
 namespace tt::tt_fabric {
 

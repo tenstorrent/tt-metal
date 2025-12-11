@@ -376,8 +376,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     // Set total counts for backward compatibility
-    this->num_used_sender_channels = std::accumulate(this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), 0);
-    this->num_used_receiver_channels = std::accumulate(this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), 0);
+    this->num_used_sender_channels = std::accumulate(this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
+    this->num_used_receiver_channels = std::accumulate(this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
 
     // num_fwd_paths = total sender channels - 1 (worker channel)
     this->num_fwd_paths = this->num_used_sender_channels - 1;

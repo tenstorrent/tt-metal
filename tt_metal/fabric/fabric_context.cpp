@@ -218,9 +218,13 @@ IntermeshVCConfig FabricContext::compute_intermesh_vc_config() const {
                     break;
                 }
             }
-            if (has_z_routers) break;
+            if (has_z_routers) {
+                break;
+            }
         }
-        if (has_z_routers) break;
+        if (has_z_routers) {
+            break;
+        }
     }
 
     // Default to FULL_MESH when intermesh exists

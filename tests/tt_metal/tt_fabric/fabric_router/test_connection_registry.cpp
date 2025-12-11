@@ -653,8 +653,8 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_1D_ConnectionMapping) {
         false);  // No Z router
 
     // Verify mapping has expected targets
-    constexpr uint32_t sender_channel = 1;
-    auto targets = mapping.get_downstream_targets(0, sender_channel);
+    constexpr uint32_t receiver_channel = 0;
+    auto targets = mapping.get_downstream_targets(0, receiver_channel);
     ASSERT_EQ(targets.size(), 1);
     EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
     EXPECT_EQ(targets[0].target_direction.value(), RoutingDirection::S);
@@ -669,7 +669,7 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_1D_ConnectionMapping) {
             .source_direction = RoutingDirection::N,
             .source_eth_chan = 0,
             .source_vc = 0,
-            .source_receiver_channel = sender_channel,
+            .source_receiver_channel = receiver_channel,
             .dest_node = dest,
             .dest_direction = target.target_direction.value(),
             .dest_eth_chan = 0,
@@ -925,7 +925,7 @@ TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
         FabricNodeId source(MeshId{0}, i);
 
         // Record MESH_TO_Z connection
-        auto z_targets = mapping.get_downstream_targets(0, 4);
+        auto z_targets = mapping.get_downstream_targets(0, 0);
         ASSERT_EQ(z_targets.size(), 1);
 
         RouterConnectionRecord z_record{
