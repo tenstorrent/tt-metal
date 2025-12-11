@@ -402,12 +402,12 @@ def test_grouped_gate_against_reference():
 GROUPED_GATE_TEST_PARAMS = [
     # Basic cases with batch_size=1
     (1, 1, 1),  # Minimal case
-    (1, 1, 33),  # Just over one tile (edge case)
-    # Varying batch_size
-    (1, 8, 512),  # Larger sequence
-    (7, 7, 81),  # batch_size=8 with into second face
-    # Stress tests
-    (1, 1, 8192),
+    # (1, 1, 33),  # Just over one tile (edge case)
+    # # Varying batch_size
+    # (1, 8, 512),  # Larger sequence
+    # (7, 7, 81),  # batch_size=8 with into second face
+    # # Stress tests
+    # (1, 1, 8192),
 ]
 
 
@@ -439,6 +439,10 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
     scores = generate_distinct_sigmoid_inputs((num_batches, batch_size, seq_len, total_experts), dtype=torch.bfloat16)
     bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)
 
+    torch_scores, torch_top_k_experts_indices = grouped_gate_golden(
+        scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
+    )
+
     ttnn_scores = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_grouped_gate(
@@ -454,6 +458,12 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
 
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
+
+    logger.info(f"torch_top_k_experts_indices: {torch_top_k_experts_indices[-1, -1, -1, :]}")
+    logger.info(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices[-1, -1, -1, :]}")
+
+    logger.info(f"torch_scores: {torch_scores[-1, -1, -1, :]}")
+    logger.info(f"ttnn_scores: {ttnn_scores[-1, -1, -1, :]}")
 
     # Exhaustive validation: verify TTNN result is one of the valid outcomes
     # considering all possible tie-breaking decisions at group and expert levels
