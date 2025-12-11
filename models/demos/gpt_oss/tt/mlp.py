@@ -8,8 +8,6 @@ import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from .expert_configs import GPTOSSProgramConfig
-from .experts import ExpertConfig, Experts
 from .experts_throughput import ThroughputExpertConfig, ThroughputExperts
 from .topk import TopKRouter
 
@@ -81,6 +79,7 @@ class MLP:
             dispatch_cluster_axis=0,
             # decode_memory_config=ttnn.L1_MEMORY_CONFIG,
             decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
+            tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
         )
 
     def __call__(self, hidden_states, is_decode):
