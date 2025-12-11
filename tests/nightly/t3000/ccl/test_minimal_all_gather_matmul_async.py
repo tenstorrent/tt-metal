@@ -225,6 +225,7 @@ def run_all_gather_impl(
                 compute_kernel_config=compute_kernel_config,
             )
         else:
+            print("before all_gather_matmul_async")
             tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
                 input_tensor_mesh_list[i],
                 weight_tt,
@@ -245,12 +246,15 @@ def run_all_gather_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
             )
+            print("after all_gather_matmul_async")
 
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
     if enable_trace:
         # Compile the op
+        print("before run_op 0")
         tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(0)
+        print("after run_op 0")
         if not use_legacy_allgather:
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")

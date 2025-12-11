@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async.hpp"
+
+#include <iostream>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -31,8 +33,9 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    std::cout << "start of all_gather_matmul_async prim" << std::endl;
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
-    return ttnn::operations::experimental::ccl::all_gather_matmul_async(
+    auto outputs = ttnn::prim::all_gather_matmul_async(
         input_tensor,
         weight_tensor,
         persistent_output_buffer,
@@ -57,6 +60,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
         num_workers_per_link.value_or(
             1),  // Conservatively 1 right now since the all gather core grid is hardcoded from the outside
         num_buffers_per_channel);
+    std::cout << "end of all_gather_matmul_async prim" << std::endl;
+    return outputs;
 }
 
 }  // namespace ttnn::operations::experimental::ccl
