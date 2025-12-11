@@ -316,7 +316,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 {4, 8, 0, 0},   // Option 2: VC0 only, smaller
                 {4, 8, 2, 4},   // Option 3: supports both VCs
                 {4, 8, 2, 2},   // Option 4: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2}    // Option 5: supports both VCs, smaller overall
+                {2, 4, 2, 2},   // Option 5: supports both VCs, smaller overall
+                {2, 4, 1, 1},   // Option 6: supports both VCs, smaller overall
+                {2, 2, 1, 1},   // Option 7: supports both VCs, smaller overall
+                {1, 1, 1, 1}    // Option 8: supports both VCs, smaller overall
+
             },
             // BLACKHOLE
             {
