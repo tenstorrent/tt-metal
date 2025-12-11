@@ -106,7 +106,7 @@ def test_model_panoptic_deeplab(device, model_category, pcc_values, skip_check, 
 
     # Both models have ImageNet normalization fused into conv1 weights
     # so they both receive unnormalized input (no explicit normalization needed)
-    pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.float32)
+    pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
 
     # Use proper input preprocessing to avoid OOM (creates HEIGHT SHARDED memory config)
     ttnn_input = preprocess_nchw_input_tensor(device, pytorch_input)
@@ -123,7 +123,7 @@ def test_model_panoptic_deeplab(device, model_category, pcc_values, skip_check, 
             weights_path=complete_weights_path,
             model_category=model_category,
         )
-        pytorch_model = pytorch_model.to(dtype=torch.float32)
+        pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
         pytorch_model.eval()
 
         # Create TTNN parameters from the PyTorch model with loaded weights
@@ -222,5 +222,5 @@ def test_model_panoptic_deeplab(device, model_category, pcc_values, skip_check, 
         )
 
     # Fail test based on PCC results
-    # assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
+    assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
     logger.info("All PCC and tolerance tests passed!")
