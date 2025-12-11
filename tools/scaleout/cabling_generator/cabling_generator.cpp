@@ -337,7 +337,7 @@ tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor load_cluster_des
         }
         return DescriptorMerger::merge_descriptors(descriptor_files);
     } else {
-        return load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(path);
+        return load_cluster_descriptor(path);
     }
 }
 

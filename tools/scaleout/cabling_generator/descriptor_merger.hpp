@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <iostream>
 #include <map>
 #include <set>
 #include <string>
@@ -42,13 +43,14 @@ struct MergeValidationResult {
 struct ConnectionEndpoint {
     std::string graph_template_name;
     std::vector<std::string> path;
-    uint32_t tray_id;
-    uint32_t port_id;
+    uint32_t tray_id = 0;
+    uint32_t port_id = 0;
 
     bool operator<(const ConnectionEndpoint& other) const;
     bool operator==(const ConnectionEndpoint& other) const;
-    std::string to_string() const;
 };
+
+std::ostream& operator<<(std::ostream& os, const ConnectionEndpoint& endpoint);
 
 struct ConnectionPair {
     ConnectionEndpoint endpoint_a;
@@ -57,8 +59,9 @@ struct ConnectionPair {
 
     bool operator<(const ConnectionPair& other) const;
     bool operator==(const ConnectionPair& other) const;
-    std::string to_string() const;
 };
+
+std::ostream& operator<<(std::ostream& os, const ConnectionPair& pair);
 
 class DescriptorMerger {
 public:
@@ -77,8 +80,6 @@ public:
 
 private:
     using ConnectionMap = std::map<ConnectionEndpoint, ConnectionEndpoint>;
-
-    static cabling_generator::proto::ClusterDescriptor load_descriptor(const std::string& file_path);
 
     static void merge_internal_connections(
         cabling_generator::proto::GraphTemplate& target_template,
