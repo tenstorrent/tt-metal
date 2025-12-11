@@ -104,18 +104,19 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = (
-            self.max_prefill_chunk_size if self.max_prefill_chunk_size < self.max_seq_len else self.max_seq_len
-        )
+        cap = min(self.max_prefill_chunk_size, self.max_seq_len)
+        DEFAULT_VALUE = cap
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "gpt-oss-120b": 4096
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+        if max_seq_len_to_warmup > cap:
+            max_seq_len_to_warmup = cap
 
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size, self.max_seq_len
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
@@ -164,15 +165,17 @@ class ModelArgs:
         model_name = self.model_name
         device_name = determine_device_name(self.mesh_device)
 
+        cap = min(self.max_prefill_chunk_size, self.max_seq_len)
+
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size, self.max_seq_len)
+            return cap_seq_lens_to_max_prefill_chunk_size(result, cap)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size, self.max_seq_len)
+            return cap_seq_lens_to_max_prefill_chunk_size(result, cap)
 
         # No supported sequence lengths found, return empty list
         return []
