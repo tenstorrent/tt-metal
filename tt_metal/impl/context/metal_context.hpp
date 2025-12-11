@@ -106,6 +106,7 @@ public:
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
+    tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
@@ -134,6 +135,7 @@ private:
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
+    void construct_control_plane();
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();

@@ -18,7 +18,6 @@ void MAIN {
     const uint32_t out_r = get_compile_time_arg_val(6);
     const uint32_t out_c = get_compile_time_arg_val(7);
     const uint32_t in0_k = get_compile_time_arg_val(8);
-    const bool transpose = false;
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
@@ -35,7 +34,7 @@ void MAIN {
             for (uint32_t k = 0; k < in0_k; k++) {
                 int in0_tile_index = in0_index_r_offset + k;
                 int in1_tile_index = in1_index_c_offset + c;
-                matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
+                matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
                 in1_index_c_offset += k;
             }
             out_tile_index++;

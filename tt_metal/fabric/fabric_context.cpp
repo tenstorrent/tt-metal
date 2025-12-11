@@ -44,6 +44,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE: return tt::tt_fabric::Topology::NeighborExchange;
         case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
@@ -112,6 +113,10 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
 // Destructor needed because of unique_ptr with forward-declared FabricBuilderContext
 FabricContext::~FabricContext() = default;
 
+// Used to check whether a physical mesh has external torus connections, to enable Ring topology.
+// Note: is_wrap_around_mesh is true if the mesh does NOT have external torus connections.
+// Returning true tells the fabric code that it must fold the internal connections on the corner chips in order to form
+// a "torus mesh"
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");

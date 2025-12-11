@@ -107,9 +107,14 @@ public:
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
+    virtual std::optional<FabricNodeId> get_neighbor_node_id_or_nullopt(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
+        const FabricNodeId& src_node_id) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
+    virtual void validate_single_hop(const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
 };
 
 class IDistributedContextManager {
