@@ -642,7 +642,7 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-const std::optional<ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
