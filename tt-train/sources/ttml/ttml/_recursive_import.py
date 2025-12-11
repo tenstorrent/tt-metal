@@ -31,22 +31,8 @@ def _should_import_symbol(
     Returns:
         True if the symbol should be imported, False otherwise
     """
-    # Skip private symbols (except __all__)
+    # Skip private symbols, metadata (except __all__)
     if name.startswith("_") and name != "__all__":
-        return False
-
-    # Skip module metadata
-    if name in (
-        "__name__",
-        "__file__",
-        "__doc__",
-        "__package__",
-        "__path__",
-        "__loader__",
-        "__spec__",
-        "__cached__",
-        "__builtins__",
-    ):
         return False
 
     # Skip if already exists in target
@@ -159,19 +145,16 @@ def _recursive_import_from_ttml(
         visited.add(source_name)
 
     # Get all attributes from source module
-    try:
-        source_attrs = dir(source_module)
-    except (AttributeError, TypeError):
-        # If we can't get attributes, skip this module
-        return
+    source_attrs = dir(source_module)
 
     # Process each attribute
     for name in source_attrs:
-        try:
-            source_value = getattr(source_module, name)
-        except (AttributeError, TypeError):
-            # Skip if we can't get the attribute
-            continue
+        source_value = getattr(source_module, name)
+        # try:
+        #     source_value = getattr(source_module, name)
+        # except (AttributeError, TypeError):
+        #     # Skip if we can't get the attribute
+        #     continue
 
         # Check if we should import this symbol
         if not _should_import_symbol(name, source_value, target_module):
@@ -207,11 +190,12 @@ def _recursive_import_from_ttml(
                 continue
         else:
             # Import regular symbols
-            try:
-                setattr(target_module, name, source_value)
-            except (TypeError, AttributeError):
-                # Skip if we can't set the attribute (e.g., read-only)
-                continue
+            setattr(target_module, name, source_value)
+            # try:
+            #     setattr(target_module, name, source_value)
+            # except (TypeError, AttributeError):
+            #     # Skip if we can't set the attribute (e.g., read-only)
+            #     continue
 
     # Handle __all__ if present in source
     if hasattr(source_module, "__all__"):
