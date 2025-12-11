@@ -150,7 +150,8 @@ def dump_callstacks(
                 arguments_and_locals += "\nArguments:\n"
                 arguments_and_locals += serialize_variables(callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code)
                 for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
-                    assert_code = assert_code.replace(var.name, f"{BLUE}{var.name}{RST}")
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"{BLUE}{var.name}{RST}")
             if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
                 arguments_and_locals += serialize_variables(callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code)
