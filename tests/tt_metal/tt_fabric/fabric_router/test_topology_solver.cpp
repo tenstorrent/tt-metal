@@ -2103,5 +2103,4 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
     EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
     EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
 }
-
 }  // namespace tt::tt_fabric
