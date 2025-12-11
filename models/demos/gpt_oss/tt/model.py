@@ -253,13 +253,16 @@ class Model:
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
         # Forward through layers and head (shared with prefill)
-        return self._forward_layers_and_head(
+        out = self._forward_layers_and_head(
             hidden_states=hidden_states,
             rope_mats=rope_mats,
             current_pos=current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        # Return logits and None for log-probs for compatibility with generator interface
+        # TODO: Add log-probs return value once sampling_on_device is supported
+        return out, None
 
     def ttnn_prefill_forward(
         self,

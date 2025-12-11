@@ -495,6 +495,10 @@ class TtTransformer(LightweightModule):
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
+        if isinstance(tt_out, tuple):
+            # Get logits and skip log-probs
+            tt_out = tt_out[0]
+
         tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
         return tt_out_cpu, ttnn.record_event(self.mesh_device, 0)
 
