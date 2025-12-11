@@ -180,6 +180,16 @@ void py_module(nb::module_& m) {
             [](const TensorPtr& self, const TensorPtr& other) { return ttml::ops::operator/(self, other); },
             nb::arg("other"),
             nb::is_operator());
+        py_tensor.def(
+            "grad_to_numpy",
+            [](const Tensor& tensor,
+               std::optional<tt::tt_metal::DataType> new_type,
+               ttnn::distributed::MeshToTensor* composer) {
+                return ttml::nanobind::util::make_numpy_tensor(tensor.get_grad(), new_type, composer);
+            },
+            nb::arg("new_type") = std::nullopt,
+            nb::arg("composer") = nullptr,
+            "Construct a numpy tensor from the Tensor gradient");
     }
 
     {
