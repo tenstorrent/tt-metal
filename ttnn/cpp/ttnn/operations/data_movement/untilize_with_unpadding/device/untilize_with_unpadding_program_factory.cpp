@@ -220,7 +220,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // TODO
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -686,7 +685,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // TODO
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
