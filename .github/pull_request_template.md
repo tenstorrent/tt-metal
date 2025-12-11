@@ -15,17 +15,35 @@ Summarize the changes made and its impact.
 - [ ] [cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) job passes
 - [ ] New/Existing tests provide coverage for changes
 
+
+```
+models-mandatory: depending on the platform:
+- T3K: unit tests
+- Galaxy: quick tests
+
+models-extended: runs all respective tests from the above models-mandatory preset AND:
+- T3K: demo, perf-models tests
+- Galaxy: demo, perf-models tests
+```
+
 #### Model tests
 CI tests related to models pass (choose "models-mandatory", "models-extended" presets, or select applicable tests manually):
 - [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml) 
-  - [ ] models-mandatory
-  - [ ] models-extended
-  - [ ] other selection - specify
+  - [ ] `models-mandatory` preset (runs: 
+        [Device perf regressions](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml), 
+        [Frequent model and ttnn tests](https://github.com/tenstorrent/tt-metal/actions/workflows/fast-dispatch-full-regressions-and-models.yaml) and
+        [(internal) C++ unit tests](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/cpp-post-commit.yaml)
+    )
+  - [ ] `models-extended` preset (runs: 
+        the mandatory tests, plus [Demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml)
+        and [Model perf tests](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml)
+    )
+  - [ ] other selection - specify runs
 - [ ] [(T3K) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-t3k.yaml)
   - [ ] models-mandatory
   - [ ] models-extended
-  - [ ] other selection - specify
+  - [ ] other selection - specify runs
 - [ ] [(Galaxy) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-galaxy.yaml)
   - [ ] models-mandatory
   - [ ] models-extended
-  - [ ] other selection - specify
+  - [ ] other selection - specify runs
