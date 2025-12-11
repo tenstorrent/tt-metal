@@ -20,23 +20,6 @@ class TopologyMapper;
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
 
-// TODO: first pass at switching over MeshId/ChipId to proper struct
-// Need to update the usage in routing table generator
-class FabricNodeId {
-public:
-    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
-    MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
-};
-
-bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
-
 class RoutingTableGenerator {
 public:
     explicit RoutingTableGenerator(const TopologyMapper& topology_mapper);
@@ -80,19 +63,3 @@ private:
 };
 
 }  // namespace tt::tt_fabric
-
-namespace std {
-template <>
-struct hash<tt::tt_fabric::FabricNodeId> {
-    size_t operator()(const tt::tt_fabric::FabricNodeId& fabric_node_id) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-    }
-};
-}  // namespace std
-
-template <>
-struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
-};
