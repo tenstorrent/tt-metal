@@ -12,10 +12,13 @@ from pathlib import Path
 
 
 def extract_model_name(csv_path: Path) -> str:
-    """Extract model name from CSV filename or parent directory."""
+    """Extract model name from CSV filename, stripping architecture suffix."""
     filename = csv_path.stem
     match = re.match(r"ops_perf_results_(.+)$", filename)
-    return match.group(1) if match else csv_path.parent.name
+    model_name = match.group(1) if match else csv_path.parent.name
+    # Remove architecture suffix (e.g., _N150, _N300)
+    model_name = re.sub(r"_N\d+$", "", model_name)
+    return model_name
 
 
 def parse_csv_operations(csv_path: Path) -> set:
@@ -50,9 +53,7 @@ def generate_json_report(op_models: dict, output_path: Path) -> Path:
     """Generate a JSON report of operations by model."""
     report_path = output_path / "aggregated_operations.json"
     with open(report_path, "w") as f:
-        json.dump({
-            "by_operation": {op: sorted(list(models)) for op, models in sorted(op_models.items())}
-        }, f, indent=2)
+        json.dump({"by_operation": {op: sorted(list(models)) for op, models in sorted(op_models.items())}}, f, indent=2)
     return report_path
 
 
