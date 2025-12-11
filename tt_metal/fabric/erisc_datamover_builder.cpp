@@ -150,7 +150,7 @@ size_t get_num_riscv_cores() {
 bool should_risc_service_sender_channels(size_t risc_id) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     size_t num_riscv_cores = get_num_riscv_cores();
-    
+
     if (arch == tt::ARCH::BLACKHOLE && num_riscv_cores == 2) {
         return risc_id == 0;  // Only ERISC0 services senders
     }
@@ -163,7 +163,7 @@ bool should_risc_service_sender_channels(size_t risc_id) {
 bool should_risc_service_receiver_channels(size_t risc_id) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     size_t num_riscv_cores = get_num_riscv_cores();
-    
+
     if (arch == tt::ARCH::BLACKHOLE && num_riscv_cores == 2) {
         return risc_id == 1;  // Only ERISC1 services receivers
     }
@@ -195,7 +195,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     enable_context_switch_(true),
     enable_interrupts_(true) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-    
+
     configure_risc_settings(
         get_num_riscv_cores(),
         risc_id,
@@ -688,21 +688,20 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // Initialize per-RISC channel servicing flags
     const auto& sender_counts = actual_sender_channels_per_vc.value_or(this->config.num_used_sender_channels_per_vc);
     const auto& receiver_counts = actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
-    
-    bool is_mux_mode = has_tensix_extension && 
-                       (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == 
-                        tt::tt_fabric::FabricTensixConfig::MUX);
-    
+
+    bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
+                                                tt::tt_fabric::FabricTensixConfig::MUX);
+
     size_t num_riscv_cores = this->config.risc_configs.size();
     for (size_t risc_id = 0; risc_id < num_riscv_cores; ++risc_id) {
         this->is_sender_channel_serviced_[risc_id].fill(false);
         this->is_receiver_channel_serviced_[risc_id].fill(false);
-        
+
         if (is_mux_mode) {
             // MUX mode: Only worker channel serviced for senders
             uint32_t worker_channel = get_worker_connected_sender_channel();
             this->is_sender_channel_serviced_[risc_id][worker_channel] = true;
-            
+
             // All receiver channels serviced in MUX mode
             size_t receiver_offset = 0;
             for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
@@ -716,7 +715,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             // Normal mode: Enable channels based on per-VC counts AND this RISC's responsibility
             bool services_senders = should_risc_service_sender_channels(risc_id);
             bool services_receivers = should_risc_service_receiver_channels(risc_id);
-            
+
             if (services_senders) {
                 size_t sender_offset = 0;
                 for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
@@ -727,7 +726,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
                     sender_offset += num_channels;
                 }
             }
-            
+
             if (services_receivers) {
                 size_t receiver_offset = 0;
                 for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {

@@ -123,8 +123,8 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
                 0,  // Receiver channel 0
                 ConnectionTarget(
                     ConnectionType::INTRA_MESH,
-                    0,  // Target VC0 - hardcoded for INTRA_MESH (see documentation above)
-                    i + 1,  // Target sender channel 
+                    0,      // Target VC0 - hardcoded for INTRA_MESH (see documentation above)
+                    i + 1,  // Target sender channel
                     outbound_directions[i]));
         }
     }
