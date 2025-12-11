@@ -119,9 +119,6 @@ public:
     // Method to generate factory system descriptor as protobuf object
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generate_factory_system_descriptor() const;
 
-    // Method to save factory system descriptor to file
-    void save_factory_system_descriptor(const std::string& output_path) const;
-
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 

@@ -501,10 +501,6 @@ tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::genera
     return build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 }
 
-void CablingGenerator::save_factory_system_descriptor(const std::string& output_path) const {
-    emit_factory_system_descriptor(output_path);
-}
-
 void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
