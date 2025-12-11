@@ -838,7 +838,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 2;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     bool is_multicast = false;
     bool is_linked = false;
@@ -895,7 +895,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes2
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 5;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -952,7 +952,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacket
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 8;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -971,7 +971,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 9;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     bool loopback = true;
     NOC noc_id = NOC::NOC_0;
