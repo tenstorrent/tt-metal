@@ -335,8 +335,8 @@ void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& src_tensor = tensor_args.input;
-    auto& dst_tensor = tensor_return_value;
+    const auto& src_tensor = tensor_args.input;
+    const auto& dst_tensor = tensor_return_value;
 
     UpdateDynamicCircularBufferAddress(
         cached_program.program, std::get<1>(cached_program.shared_variables.cb_input_tuple), *src_tensor.buffer());
