@@ -96,7 +96,9 @@ constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX);
-constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
+constexpr size_t NUM_VCS_CT_ARG_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
+constexpr size_t NUM_VCS = get_compile_time_arg_val(NUM_VCS_CT_ARG_IDX);
+constexpr size_t wait_for_host_signal_IDX = NUM_VCS_CT_ARG_IDX + 1;
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
 constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
 
@@ -110,15 +112,17 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 39,
-    "wait_for_host_signal_IDX must be 39 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 4 "
-    "config args)");
+    wait_for_host_signal_IDX == 40,
+    "wait_for_host_signal_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, num_vcs, "
+    "wait_for_host_signal)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
+static_assert(NUM_VCS == 1 || NUM_VCS == 2, "NUM_VCS must be 1 or 2 (1 for VC0 only, 2 for VC0+VC1)");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 40,
-    "MAIN_CT_ARGS_START_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 5 "
+    MAIN_CT_ARGS_START_IDX == 41,
+    "MAIN_CT_ARGS_START_IDX must be 41 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =

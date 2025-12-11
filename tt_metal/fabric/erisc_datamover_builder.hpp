@@ -210,8 +210,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
-    static constexpr uint32_t num_virtual_channels = 2;
-
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
@@ -467,7 +465,10 @@ public:
         bool has_tensix_extension = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const override;
+    // Overload that accepts VC and VC-relative channel ID
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
+    // Base class override (for backward compatibility, treats channel_id as VC0-relative)
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
@@ -503,6 +504,7 @@ public:
 
     FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    bool isInterMesh = false;  // True if this data mover connects to a different mesh (inter-mesh router)
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
