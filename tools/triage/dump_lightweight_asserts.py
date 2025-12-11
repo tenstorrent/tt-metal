@@ -56,6 +56,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
     if file is None or line is None:
         return "?"
     import os
+
     if not os.path.exists(file):
         return "?file not found?"
     try:
@@ -144,23 +145,35 @@ def dump_callstacks(
         elif current_instruction != ebreak_instruction:
             return None
 
-        callstack_data = callstack_provider.get_callstacks(location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True)
+        callstack_data = callstack_provider.get_callstacks(
+            location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
+        )
         arguments_and_locals = None
         assert_code = "?"
         if callstack_data.kernel_callstack_with_message.callstack[0] is not None:
-            assert_code = extract_assert_code(callstack_data.kernel_callstack_with_message.callstack[0].file, callstack_data.kernel_callstack_with_message.callstack[0].line, callstack_data.kernel_callstack_with_message.callstack[0].column)
+            assert_code = extract_assert_code(
+                callstack_data.kernel_callstack_with_message.callstack[0].file,
+                callstack_data.kernel_callstack_with_message.callstack[0].line,
+                callstack_data.kernel_callstack_with_message.callstack[0].column,
+            )
             arguments_and_locals = ""
             if len(callstack_data.kernel_callstack_with_message.callstack[0].arguments) > 0:
                 arguments_and_locals += "\nArguments:\n"
-                arguments_and_locals += serialize_variables(callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code)
+                arguments_and_locals += serialize_variables(
+                    callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code
+                )
                 for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
                     assert_code = assert_code.replace(var.name, f"{BLUE}{var.name}{RST}")
             if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code)
+                arguments_and_locals += serialize_variables(
+                    callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code
+                )
         return LightweightAssertInfo(
             kernel_name=callstack_data.dispatcher_core_data.kernel_name,
-            kernel_callstack_with_message=LightweightAssertCallstackWithCode(assert_code, callstack_data.kernel_callstack_with_message),
+            kernel_callstack_with_message=LightweightAssertCallstackWithCode(
+                assert_code, callstack_data.kernel_callstack_with_message
+            ),
             arguments_and_locals=arguments_and_locals,
         )
 
