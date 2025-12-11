@@ -8,81 +8,112 @@ import torch
 from loguru import logger
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_real(device):
     # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    real_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    imag_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(real_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(imag_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Get the real part
-    output = ttnn.real(tensor)
+    output = ttnn.real(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Real part: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_imag(device):
     # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    real_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    imag_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(real_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(imag_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Get the imaginary part
-    output = ttnn.imag(tensor)
+    output = ttnn.imag(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Imaginary part: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_angle(device):
     # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    real_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    imag_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(real_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(imag_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Get the angle (phase) of the complex tensor
-    output = ttnn.angle(tensor)
+    output = ttnn.angle(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Angle: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_is_imag(device):
-    # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    # Create a complex tensor with only imaginary part
+    real_part = torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16)
+    imag_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(real_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(imag_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Check if tensor values are purely imaginary
-    output = ttnn.is_imag(tensor)
+    output = ttnn.is_imag(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Is imaginary: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_is_real(device):
-    # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    # Create a complex tensor with only real part
+    real_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    imag_part = torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16)
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(real_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(imag_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Check if tensor values are purely real
-    output = ttnn.is_real(tensor)
+    output = ttnn.is_real(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Is real: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_conj(device):
     # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    real_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    imag_part = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(real_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(imag_part, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Get the complex conjugate
-    output = ttnn.conj(tensor)
+    output = ttnn.conj(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Complex conjugate: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_polar(device):
-    # Create a complex tensor
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+    # Create a complex tensor where real=magnitude, imag=angle
+    magnitude = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    angle = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16) * 2 * 3.14159  # angle in radians
+    tensor = ttnn.complex_tensor(
+        ttnn.Tensor(magnitude, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(angle, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
-    # Convert to polar form
-    output = ttnn.polar(tensor)
-    logger.info(f"Polar form: {output}")
+    # Convert from polar to Cartesian form
+    output = ttnn.polar(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    logger.info(f"Polar to Cartesian: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_alt_complex_rotate90(device):
-    # Create a tensor with alternating complex layout
-    tensor = ttnn.rand([2, 2], dtype=torch.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Create a tensor with alternating complex layout (even last dimension required)
+    tensor = ttnn.from_torch(
+        torch.rand([1, 1, 32, 64], dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
 
-    # Rotate complex values by 90 degrees
+    # Rotate complex values by 90 degrees in alternating format
     output = ttnn.alt_complex_rotate90(tensor)
     logger.info(f"Complex rotated by 90 degrees: {output}")
