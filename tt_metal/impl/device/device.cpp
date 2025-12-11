@@ -58,10 +58,10 @@
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <impl/debug/watcher_server.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
@@ -165,7 +165,7 @@ void Device::initialize_default_sub_device_state(
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(this, std::move(allocator), sub_devices);
 }
 
-std::unique_ptr<Allocator> Device::initialize_allocator(
+std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
@@ -595,12 +595,18 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     }
 }
 
-const std::unique_ptr<Allocator>& Device::allocator() const {
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
+const std::unique_ptr<Allocator>& Device::allocator() const { return this->allocator_impl()->view(); }
+
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(sub_device_id);
+}
+
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 uint32_t Device::num_sub_devices() const {
@@ -675,9 +681,9 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
@@ -861,6 +867,4 @@ IDevice::RingbufferUsage Device::get_ringbuffer_usage(std::optional<uint8_t> cq_
     return {stats.total_size_bytes, stats.used_bytes, stats.num_cached_programs};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -819,6 +819,20 @@ def test_unary_chain(device):
     logger.info(f"Unary chain: {output}")
 
 
+def test_bitcast(device):
+    # Create a tensor with uint16 values
+    tensor = ttnn.from_torch(
+        torch.tensor([[16457, 16429], [32641, 31744]], dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    # Bitcast uint16 to bfloat16 (reinterprets bit pattern)
+    output = ttnn.bitcast(tensor, ttnn.bfloat16)
+    logger.info(f"Bitcast uint16->bfloat16: {output}")
+
+
 def test_identity(device):
     # Create a tensor with specific values
     tensor = ttnn.from_torch(

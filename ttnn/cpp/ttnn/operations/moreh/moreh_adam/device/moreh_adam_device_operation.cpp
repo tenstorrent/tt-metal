@@ -13,10 +13,10 @@
 namespace ttnn::operations::moreh::moreh_adam {
 void MorehAdamOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& params_in = tensor_args.param_in;
-    auto& grad = tensor_args.grad;
-    auto& exp_avg_in = tensor_args.exp_avg_in;
-    auto& exp_avg_sq_in = tensor_args.exp_avg_sq_in;
+    const auto& params_in = tensor_args.param_in;
+    const auto& grad = tensor_args.grad;
+    const auto& exp_avg_in = tensor_args.exp_avg_in;
+    const auto& exp_avg_sq_in = tensor_args.exp_avg_sq_in;
 
     check_tensor(params_in, "moreh_adam", "params_in");
     check_tensor(grad, "moreh_adam", "grad");
@@ -91,7 +91,7 @@ MorehAdamOperation::spec_return_value_t MorehAdamOperation::compute_output_specs
 MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.param_in.device();
+    auto* device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
     auto memory_config = operation_attributes.memory_config;

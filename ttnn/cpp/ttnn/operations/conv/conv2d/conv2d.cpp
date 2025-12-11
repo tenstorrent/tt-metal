@@ -21,7 +21,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -285,8 +285,15 @@ Result conv2d_L1(
             }
         }
 
+        const std::array<std::uint32_t, 4> input_tensor_shape = {
+            batch_size,
+            input_height,
+            input_width,
+            in_channels,
+        };
+
         // call conv micro op
-        auto conv_output = conv2d(
+        auto conv_output = ttnn::prim::conv2d(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
@@ -299,7 +306,7 @@ Result conv2d_L1(
             opt_conv_op_block_config,
             conv_out_memory_config,
             output_dtype,
-            {batch_size, input_height, input_width, in_channels},
+            input_tensor_shape,
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
@@ -480,6 +487,9 @@ Result conv2d_DRAM(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    TT_FATAL(
+        !conv_config.override_output_sharding_config,
+        "Conv2D DRAM slicing doesn't support override_output_sharding_config.");
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     // Fold the input tensor if required - this may update mm_conv after folding

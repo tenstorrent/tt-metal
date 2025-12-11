@@ -4,17 +4,22 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include "nlp_concat_heads_boltz_device_operation.hpp"
+#include "nlp_concat_heads_boltz_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
 
 using namespace tt::constants;
 using namespace tt;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
-    const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+NLPConcatHeadsBoltzProgramFactory::cached_program_t NLPConcatHeadsBoltzProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    CoreCoord compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -187,35 +192,47 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
         }
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, cb_src0, cb_out, cores](
-                                                   const void* operation,
-                                                   tt::tt_metal::Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto src_buffer = input_tensors.at(0).buffer();
-        const auto dst_buffer = output_tensors.at(0).buffer();
-        const bool in_sharded = input_tensors.at(0).is_sharded();
-        const bool out_sharded = output_tensors.at(0).is_sharded();
-        if (in_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        } else {
-            for (const auto& core : cores) {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-            }
-        }
-
-        if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_out, *dst_buffer);
-        } else {
-            for (const auto& core : cores) {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    // Return cached program with shared variables
+    return cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernel_id,
+         .writer_kernel_id = writer_kernel_id,
+         .cores = cores,
+         .cb_src0 = cb_src0,
+         .cb_out = cb_out}};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+void NLPConcatHeadsBoltzProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    auto& shared_variables = cached_program.shared_variables;
+
+    const auto& input = tensor_args.input;
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
+    const bool in_sharded = input.is_sharded();
+    const bool out_sharded = output.is_sharded();
+
+    if (in_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
+    } else {
+        for (const auto& core : shared_variables.cores) {
+            auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+        }
+    }
+
+    if (out_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_out, *dst_buffer);
+    } else {
+        for (const auto& core : shared_variables.cores) {
+            auto& runtime_args = GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
+            runtime_args[0] = dst_buffer->address();
+        }
+    }
+}
+
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz

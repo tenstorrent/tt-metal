@@ -81,7 +81,7 @@ std::vector<std::pair<uint32_t, DeviceInfo>> get_all_devices_info(
 
 std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferInfo> buffer_infos;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         // For multi-device meshes, iterate through all physical devices
         auto physical_devices = device->get_devices();
         for (auto* physical_device : physical_devices) {
@@ -141,7 +141,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
 
 std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferPageInfo> buffer_page_infos;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         // For multi-device meshes, iterate through all physical devices
         auto physical_devices = device->get_devices();
         for (auto* physical_device : physical_devices) {

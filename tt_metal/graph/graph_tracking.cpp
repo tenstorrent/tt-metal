@@ -20,15 +20,13 @@
 #include "tt_stl/assert.hpp"
 #endif
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Buffer;
 class IDevice;
 namespace distributed {
 class MeshDevice;
 }
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 // Global tracking for L1 allocation statistics
 namespace {
@@ -104,6 +102,11 @@ L1Stats& get_l1_stats() {
 }  // anonymous namespace
 
 namespace tt::tt_metal {
+
+GraphTracker& GraphTracker::instance() {
+    static GraphTracker tracker;
+    return tracker;
+}
 
 bool GraphTracker::is_enabled() const { return (not processors.empty()); }
 

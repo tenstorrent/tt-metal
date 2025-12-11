@@ -9,6 +9,8 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
+#include <vector>
+
 namespace tt::tt_fabric {
 
 enum class BuilderType : uint8_t {
@@ -59,8 +61,7 @@ struct InternalReceiverChannelMapping {
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
  * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
- * - VC1: [0] = vc1 forward channel (ring/torus only, for deadlock avoidance)
- * - VC2: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
+ * - VC1: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
  */
 class FabricRouterChannelMapping {
 public:
@@ -79,11 +80,22 @@ public:
      */
     InternalReceiverChannelMapping get_receiver_mapping(uint32_t vc, uint32_t receiver_channel_idx) const;
 
+    /**
+     * Get the topology for this router
+     */
+    Topology get_topology() const { return topology_; }
+
+    uint32_t get_num_virtual_channels() const;
+
+    uint32_t get_num_sender_channels_for_vc(uint32_t vc) const;
+
+    std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
+
 private:
     Topology topology_;
     // will become used when Z-link support is added
     [[maybe_unused]] eth_chan_directions direction_;
-    bool has_tensix_extension_;
+    bool downstream_is_tensix_builder_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
@@ -91,7 +103,6 @@ private:
     void initialize_mappings();
     void initialize_vc0_mappings();
     void initialize_vc1_mappings();
-    void initialize_vc2_mappings();
     bool is_2d_topology() const;
     bool is_ring_or_torus() const;
 };

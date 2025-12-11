@@ -14,6 +14,8 @@
 #include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace std {
 std::size_t hash<tt::tt_metal::experimental::ProgramExecutionUID>::operator()(
@@ -48,9 +50,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::ERISC, "ERISC"}});
 }  // namespace tracy
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // INVALID_NUM_PROGRAM_EXECUTION_UID and INVALID_NUM must be equal to ensure proper translation between TTDeviceMarker
 // IDs and ProgramExecutionUID. INVALID_NUM cannot be used directly because ProgramExecutionUID is exposed in the public
@@ -471,6 +471,4 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     }
     return configs;
 }
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
