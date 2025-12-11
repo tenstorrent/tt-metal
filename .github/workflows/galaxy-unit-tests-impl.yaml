@@ -113,6 +113,11 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
           fi
 
+          # Fail fast if the matrix is empty (invalid model selected)
+          if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
+            echo "Error: Invalid model selected: '${{ inputs.model }}'"
+            exit 1
+          fi
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   galaxy-unit-tests:
