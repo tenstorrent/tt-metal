@@ -73,6 +73,8 @@ std::shared_ptr<distributed::multihost::DistributedContext> construct_compute_on
         return global_context;
     }
 
+    log_critical(tt::LogMetal, "Constructing compute-only distributed context");
+
     // Get all compute mesh IDs (excludes switches) from control plane mesh graph
     const auto& mesh_graph = metal_context.get_control_plane().get_mesh_graph();
     const auto& compute_mesh_ids = mesh_graph.get_mesh_ids();
@@ -472,12 +474,6 @@ MetalContext::MetalContext() {
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
-    // print the distributed context type if its mpi or single host
-#if defined(OPEN_MPI)
-    log_info(tt::LogMetal, "Distributed context type: MPI");
-#else
-    log_info(tt::LogMetal, "Distributed context type: SingleHost");
-#endif
     return *distributed_context_;
 }
 
