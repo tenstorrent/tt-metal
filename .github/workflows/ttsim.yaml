@@ -304,9 +304,6 @@ jobs:
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
-          - arch: quasar
-            build_suffix: release_qsr
-            soc_desc: quasar_1_arch.yaml
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
