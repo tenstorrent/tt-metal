@@ -165,7 +165,6 @@ template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
-    policies::ReserveBackPolicy reserve_back_policy = policies::ReserveBackPolicy::RESERVE,
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
 inline void row_wise_accumulate_with_epilogue(
@@ -178,7 +177,6 @@ inline void row_wise_accumulate_with_epilogue(
     AdditionalCBs... additional_cbs) {
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
-    constexpr bool reserve_back = reserve_back_policy == policies::ReserveBackPolicy::RESERVE;
 
     reconfig_data_format(cb_in, cb_scalar);
     tile_regs_acquire();
@@ -191,9 +189,7 @@ inline void row_wise_accumulate_with_epilogue(
     tile_regs_commit();
     tile_regs_wait();
 
-    if constexpr (reserve_back) {
-        cb_reserve_back(cb_out, 1);
-    }
+    cb_reserve_back(cb_out, 1);
     pack_reconfig_data_format(cb_out);
     pack_tile(detail::dst0, cb_out);
     tile_regs_release();
@@ -223,11 +219,10 @@ inline void row_wise_accumulate_with_epilogue(
 template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
-    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
-    policies::ReserveBackPolicy reserve_back_policy = policies::ReserveBackPolicy::RESERVE>
+    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy, reserve_back_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
             // dprint_tensix_dest_reg<true>(detail::dst0);
             detail::scale_dest(detail::dst0, one_over_N);
@@ -254,8 +249,7 @@ inline void row_wise_mean(
 template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
-    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
-    policies::ReserveBackPolicy reserve_back_policy = policies::ReserveBackPolicy::RESERVE>
+    policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean_with_pre_add(
     uint32_t cb_in0,
     uint32_t cb_in1,
@@ -264,7 +258,7 @@ inline void row_wise_mean_with_pre_add(
     uint32_t one_over_N,
     uint32_t num_tiles,
     uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy, reserve_back_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
         cb_in0,
         cb_scalar,
         cb_out,

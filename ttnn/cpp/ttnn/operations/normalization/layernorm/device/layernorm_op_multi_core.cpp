@@ -118,7 +118,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         operation_attributes.program_config);
 
     const auto& shape = a.logical_shape();
-    std::cout << "shape: " << shape << std::endl;
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
     uint32_t NC = a.physical_volume() / HW;
@@ -150,9 +149,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     // Round the width span up to the block boundary
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;
     // Wt = WtB;
-    std::cout << "Wt: " << Wt << std::endl;
-    std::cout << "WtB: " << WtB << std::endl;
-    std::cout << "block_size: " << block_size << std::endl;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -568,7 +564,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
              b_dram_addr}  // 6-8
         );
         SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
-        SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+        SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, Wt, num_tile_rows_per_core, tile_offset});
         curr_row += num_tile_rows_per_core;
     }
 
