@@ -82,10 +82,6 @@ on:
         required: false
         type: boolean
         default: true
-      run_eltwise_tests:
-        required: false
-        type: boolean
-        default: true
 
 
 # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
