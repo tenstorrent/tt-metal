@@ -4,6 +4,7 @@
 
 #include "cabling_generator.hpp"
 #include "descriptor_merger.hpp"
+#include "protobuf_utils.hpp"
 
 #include <board/board.hpp>
 #include <connector/connector.hpp>
@@ -28,24 +29,6 @@
 namespace tt::scaleout_tools {
 
 namespace {
-
-// Helper to load protobuf descriptors
-template <typename Descriptor>
-Descriptor load_descriptor_from_textproto(const std::string& file_path) {
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + file_path);
-    }
-
-    std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
-
-    Descriptor descriptor;
-    if (!google::protobuf::TextFormat::ParseFromString(file_content, &descriptor)) {
-        throw std::runtime_error("Failed to parse textproto file: " + file_path);
-    }
-    return descriptor;
-}
 
 // Find node descriptor by name - search inline first, then fallback to file
 tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descriptor(
