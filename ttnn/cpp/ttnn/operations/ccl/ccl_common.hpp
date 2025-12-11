@@ -16,8 +16,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 bool is_fabric_2d();
 
@@ -90,7 +89,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt
+    );
 
 class EriscDatamoverBuilder;
 
@@ -746,6 +747,4 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
     Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, uint32_t num_targets_forward, uint32_t num_targets_backward, distributed::MeshDevice* mesh_device);
 
-
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

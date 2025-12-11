@@ -10,9 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
+namespace ttnn::operations::binary {
 
 namespace detail {
 
@@ -1196,7 +1194,12 @@ void bind_prelu(
 
 template <typename binary_operation_t>
 void bind_div(
-    py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1218,7 +1221,7 @@ void bind_div(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {4}
+        {6}
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1229,7 +1232,7 @@ void bind_div(
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16
+               * - {4}
                  - TILE
                  - 2, 3, 4
 
@@ -1239,6 +1242,8 @@ void bind_div(
         operation.python_fully_qualified_name(),
         description,
         math,
+        supported_dtype,
+        note,
         BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
@@ -1555,6 +1560,7 @@ void bind_binary_overload_operation(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1594,24 +1600,30 @@ void bind_binary_overload_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
                float scalar,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, scalar, memory_config); },
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(input_tensor, scalar, memory_config, sub_core_grids);
+            },
             py::arg("input_tensor"),
             py::arg("scalar"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 template <typename binary_operation_t>
@@ -2325,6 +2337,7 @@ void py_module(py::module& module) {
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
+        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
         )doc");
 
     detail::bind_binary_operation(
@@ -2514,8 +2527,12 @@ void py_module(py::module& module) {
     detail::bind_div(
         module,
         ttnn::div,
-        R"doc(Computes div for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
+        )doc",
+        R"doc(BFLOAT16, FLOAT32, INT32)doc",
+        R"doc(
+        With INT32 inputs, round_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
         )doc");
 
     detail::bind_binary_composite_overload(
@@ -2651,10 +2668,11 @@ void py_module(py::module& module) {
         ttnn::divide_,
         R"doc(Performs division in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
+        R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` (default), the operation uses SFPU implementation for better accuracy.
+        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
         )doc");
 
     detail::bind_inplace_operation(
@@ -2677,6 +2695,4 @@ void py_module(py::module& module) {
         R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.)doc");
 }
 
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary

@@ -14,8 +14,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
-namespace ccl {
-namespace matmul_reduce_scatter_async_detail {
+
+namespace ccl::matmul_reduce_scatter_async_detail {
 
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
@@ -26,16 +26,15 @@ MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
         reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset, devices};
 }
 
-}  // namespace matmul_reduce_scatter_async_detail
-}  // namespace ccl
+}  // namespace ccl::matmul_reduce_scatter_async_detail
 
 void MatmulReduceScatterAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_ASSERT(input_tensors.size() == 2, "MatmulReduceScatterAsync requires 2 input tensors: [input, weight]");
-    auto& input_tensor = input_tensors[0];
-    auto& weight_tensor = input_tensors[1];
+    const auto& input_tensor = input_tensors[0];
+    const auto& weight_tensor = input_tensors[1];
     // // Reduce Scatter validate
     // this->reduce_scatter_minimal_async_struct.validate_with_output_tensors(
     //     {}, {intermediate_tensor, reduce_scatter_output_tensor});
@@ -79,8 +78,8 @@ std::vector<Tensor> MatmulReduceScatterAsync::create_output_tensors(
         this->matmul_struct.create_output_tensors({input_tensors[0], input_tensors[1]})[0];
 
     // Reduce Scatter output tensor
-    auto& intermediate_tensor = optional_output_tensors.at(0).value();
-    auto& reduce_scatter_output_tensor = optional_output_tensors.at(1).value();
+    const auto& intermediate_tensor = optional_output_tensors.at(0).value();
+    const auto& reduce_scatter_output_tensor = optional_output_tensors.at(1).value();
 
     return {matmul_output_tensor, intermediate_tensor, reduce_scatter_output_tensor};
 }
@@ -183,9 +182,7 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
@@ -288,8 +285,6 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     return std::vector<ttnn::Tensor>{full_output.at(0), full_output.at(2)};
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

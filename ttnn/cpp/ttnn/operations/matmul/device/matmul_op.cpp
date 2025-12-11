@@ -155,7 +155,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 std::tuple<uint32_t, uint32_t> get_subblock_sizes(
     uint32_t m_tiles_per_core, uint32_t n_tiles_per_core, bool fp32_dest_acc_en) {
     uint32_t out_subblock_h, out_subblock_w;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         out_subblock_w = std::get<0>(subblock_hw);
         out_subblock_h = std::get<1>(subblock_hw);
         if ((out_subblock_h * out_subblock_w) <= 4 || !fp32_dest_acc_en) {
@@ -199,7 +199,7 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = in0_single_tile_size;
-    auto in0_buffer = input_tensor_a.buffer();
+    auto* in0_buffer = input_tensor_a.buffer();
     auto in0_tile = input_tensor_a.tensor_spec().tile();
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -219,7 +219,7 @@ inline uint32_t get_estimated_size_of_cbs(
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
     max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -447,7 +447,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype,
     const bool all_dram_interleaved) {
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
     uint32_t M = fuse_batch ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                             : input_tensor_a.padded_shape()[-2];
@@ -799,8 +799,8 @@ MatmulProgramConfig create_matmul_program_config(
                 compute_kernel_config,
                 output_dtype);
         }
-        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
-        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t k = a_padded_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t n = b_padded_shape[-1] / ttnn::TILE_SIZE;
         auto shard_shape = input_tensor_a_memory_config.shard_spec().value().shape;
         m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
         n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
@@ -1289,7 +1289,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
         "Only one constraint may be true for h or w!");
 
     uint32_t out_subblock_h, out_subblock_w;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         out_subblock_h = std::get<0>(subblock_hw);
         out_subblock_w = std::get<1>(subblock_hw);
         if (fp32_dest_acc_en) {
@@ -1318,11 +1318,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 }  // namespace bmm_op_utils
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -1943,10 +1939,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
@@ -2970,8 +2966,4 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
         chosen_program_config);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

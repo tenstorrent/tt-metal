@@ -66,7 +66,7 @@ TrayID get_tray_id_for_chip(
 
 std::pair<TrayID, ASICLocation> get_asic_position(
     tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -281,7 +281,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         add_local_asic_descriptor(src_unique_id, src);
         std::unordered_map<ChipId, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
-        for (auto& [chan, dst] : conn) {
+        for (const auto& [chan, dst] : conn) {
             auto dst_chip = std::get<0>(dst);
             auto dst_chan = std::get<1>(dst);
             if (visited_dst.find(dst_chip) == visited_dst.end()) {
@@ -812,7 +812,7 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
             }
         }
     }
-    TT_FATAL(false, "No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
+    TT_THROW("No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
     return {AsicID{0}, 0};
 }
 
@@ -909,6 +909,15 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {
     TT_FATAL(host_to_rank_.find(host_name) != host_to_rank_.end(), "Rank for host {} not found", host_name);
     return host_to_rank_.at(host_name);
+}
+
+std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const {
+    for (const auto& [host, host_rank] : host_to_rank_) {
+        if (host_rank == rank) {
+            return host;
+        }
+    }
+    TT_THROW("Hostname for rank {} not found", rank);
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {

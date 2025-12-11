@@ -19,6 +19,7 @@
 #include "tt_fabric_test_context.hpp"
 
 const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
+    {Topology::NeighborExchange, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
     {Topology::Linear, FabricConfig::FABRIC_1D},
     {Topology::Ring, FabricConfig::FABRIC_1D_RING},
     {Topology::Mesh, FabricConfig::FABRIC_2D},
@@ -161,7 +162,7 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
         log_info(
@@ -273,7 +274,7 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(false);
 
     // Generate summaries after all tests have run
     if (has_bandwidth_tests) {

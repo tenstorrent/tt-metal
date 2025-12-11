@@ -3,27 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_program_factory.hpp"
-#include "ring_distributed_sdpa_op.hpp"
 
+#include <cmath>
 #include <optional>
 #include <string>
-#include <cmath>
+#include <unordered_map>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::ring_distributed_sdpa::program {
 
 // Ring-distributed SDPA program factory
-operation::ProgramWithCallbacks ring_sdpa_multi_core(
+RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMeshWorkloadFactory::create_at(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
@@ -47,11 +45,11 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = input_tensor_v.buffer();
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
 
-    auto out0_buffer = output_tensor.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
@@ -191,6 +189,14 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
@@ -289,6 +295,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel = (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0);
     if (balanced_q_parallel) {
@@ -499,41 +507,137 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              chunked_q_chunk_offset_phase_2});
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-
-            auto out0_buffer = output_tensors.at(0).buffer();
-            uint32_t q_addr = q_buffer->address();
-            uint32_t k_addr = k_buffer->address();
-            uint32_t v_addr = v_buffer->address();
-            uint32_t out_addr = out0_buffer->address();
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-
-                reader_args[0] = q_addr;
-                reader_args[1] = k_addr;
-                reader_args[2] = v_addr;
-
-                writer_args[0] = out_addr;
-            }
-        };
-
-    return {std::move(program), override_runtime_arguments_callback};
+    return cached_program_t(
+        std::move(program),
+        shared_variables_t{
+            .num_cores = num_cores,
+            .grid_size = grid_size,
+            .reader_kernel_id = reader_kernels_id,
+            .writer_kernel_id = writer_kernels_id,
+            .compute_kernel_id = compute_kernels_id,
+        });
 }
 
-}  // namespace ttnn::operations::transformer::detail
+RingDistributedSdpaMeshWorkloadFactory::cached_mesh_workload_t
+RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    const auto& input_tensor_q = tensor_args.q;
+    const auto& input_tensor_k = tensor_args.k;
+    const auto& input_tensor_v = tensor_args.v;
+
+    const auto q_chunk_size =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->q_chunk_size : 32;
+    const auto k_chunk_size =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->k_chunk_size : 32;
+
+    // Determine ring_id: use provided value or infer from device coordinate
+    uint32_t curr_ring_id;
+    // Create programs for each coordinate in tensor_coords
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            if (operation_attributes.ring_id.has_value()) {
+                // Use explicitly provided ring_id
+                curr_ring_id = operation_attributes.ring_id.value();
+            } else {
+                // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
+                auto* mesh_device = input_tensor_q.device();
+                IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensor_q.device();
+
+                // Ensure mesh_device is not null before dereferencing
+                TT_FATAL(mesh_device != nullptr, "Mesh device must not be null when inferring ring_id");
+                const auto& mesh_view = mesh_device->get_view();
+                std::vector<IDevice*> devices_to_use;
+                // For simplicity, assume ring is along the first axis (adjust as needed)
+                if (mesh_view.shape()[0] == operation_attributes.ring_size) {
+                    devices_to_use = mesh_view.get_devices_on_column(mesh_coord[1]);
+                } else if (mesh_view.shape()[1] == operation_attributes.ring_size) {
+                    devices_to_use = mesh_view.get_devices_on_row(mesh_coord[0]);
+                } else {
+                    TT_FATAL(
+                        false,
+                        "Ring size {} doesn't match mesh dimensions [{}, {}]",
+                        operation_attributes.ring_size,
+                        mesh_view.shape()[0],
+                        mesh_view.shape()[1]);
+                }
+
+                // Find ring_id (device index in the ring)
+                curr_ring_id = 0;
+                for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
+                    if (devices_to_use.at(i) == target_device) {
+                        curr_ring_id = i;
+                        break;
+                    }
+                }
+                log_debug(tt::LogOp, "Inferred ring_id: {} for device_id: {}", curr_ring_id, target_device->id());
+            }
+            // Create a program for this specific coordinate using the base factory
+            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
+            auto cached_program = create_at(
+                input_tensor_q,
+                input_tensor_k,
+                input_tensor_v,
+                tensor_return_value,
+                operation_attributes.ring_size,
+                curr_ring_id,
+                operation_attributes.scale,
+                q_chunk_size,
+                k_chunk_size,
+                operation_attributes.compute_kernel_config,
+                operation_attributes.program_config);
+            shared_variables[single_coord_range] = cached_program.shared_variables;
+            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
+        }
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Update runtime arguments for each program in the mesh workload
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+
+        const auto& reader_kernels_id = shared_vars.reader_kernel_id;
+        const auto& writer_kernels_id = shared_vars.writer_kernel_id;
+        const auto num_cores = shared_vars.num_cores;
+        const auto& grid_size = shared_vars.grid_size;
+
+        auto* q_buffer = tensor_args.q.buffer();
+        auto* k_buffer = tensor_args.k.buffer();
+        auto* v_buffer = tensor_args.v.buffer();
+
+        auto* out0_buffer = tensor_return_value.buffer();
+        uint32_t q_addr = q_buffer->address();
+        uint32_t k_addr = k_buffer->address();
+        uint32_t v_addr = v_buffer->address();
+        uint32_t out_addr = out0_buffer->address();
+
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+
+            auto& reader_args = reader_args_by_core[core.x][core.y];
+            auto& writer_args = writer_args_by_core[core.x][core.y];
+
+            reader_args[0] = q_addr;
+            reader_args[1] = k_addr;
+            reader_args[2] = v_addr;
+
+            writer_args[0] = out_addr;
+        }
+    }
+}
+}  // namespace ttnn::operations::transformer::ring_distributed_sdpa::program

@@ -75,6 +75,7 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
+    ControlPlane();
     explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_file,
@@ -92,6 +93,7 @@ public:
     void configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
+    void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
 
     // Return mesh_id, chip_id from physical chip id
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
@@ -206,7 +208,7 @@ public:
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
 
-    // Get the mesh graph from the routing table
+    // Get the mesh graph from the control plane
     const MeshGraph& get_mesh_graph() const;
 
     // Get the logical node id to mesh id and mesh host rank id mapping
@@ -217,6 +219,8 @@ public:
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
+    tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
@@ -226,9 +230,14 @@ private:
         std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
             logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
 
+    void init_control_plane_auto_discovery();
+
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
+    std::unique_ptr<MeshGraph> mesh_graph_;
 
     std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
 
@@ -301,6 +310,12 @@ private:
         tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
         ChipId physical_chip_id,
         chan_id_t eth_channel_id) const;
+
+    // UDM-specific helper to write per-worker connection info to each worker core's L1
+    void write_udm_fabric_connections_to_tensix_cores(
+        ChipId physical_chip_id,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_worker_connections,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const;
 
     void assign_direction_to_fabric_eth_chan(
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
@@ -380,8 +395,6 @@ private:
         distributed_contexts_;
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
-    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
-    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
 
     // Performance caches for frequently accessed data
     // Cache for faster asic_id to fabric_node_id lookup

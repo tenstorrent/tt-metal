@@ -44,7 +44,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
@@ -200,6 +200,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch
                     int k_id = 1 + 2;
+                    // NOLINTNEXTLINE(bugprone-unused-local-non-trivial-variable)
                     std::string k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
                 } else {
                     k_id_s = "";

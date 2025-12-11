@@ -404,7 +404,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     if (!dump_data.highest_stack_usage.empty()) {
         fprintf(f, "Stack usage summary:");
         for (auto& [processor, info] : dump_data.highest_stack_usage) {
-            auto processor_name = get_riscv_name(
+            const auto* processor_name = get_riscv_name(
                 processor.core_type,
                 hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type));
             // Threshold of free space for warning.
@@ -448,7 +448,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Handle any paused cores, wait for user input.
     if (!dump_data.paused_cores.empty()) {
         string paused_cores_str = "Paused cores: ";
-        for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
+        for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
@@ -464,7 +464,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
 
         // Clear all pause flags
-        for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
+        for (const auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
@@ -643,7 +643,6 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
 void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
-    string error_reason;
 
     switch (san.return_code()) {
         case dev_msgs::DebugSanitizeOK:

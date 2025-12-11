@@ -5,6 +5,7 @@
 #pragma once
 
 #include "dev_msgs.h"
+#include "risc_attribs.h"
 
 #if defined(WATCHER_ENABLED)
 
@@ -12,7 +13,7 @@
 // Forward declare these functions to avoid including erisc.h -> circular dependency via noc_nonblocking_api.h,
 // sanitize.h.
 namespace internal_ {
-void risc_context_switch();
+void risc_context_switch(bool);
 void disable_erisc_app();
 }  // namespace internal_
 
