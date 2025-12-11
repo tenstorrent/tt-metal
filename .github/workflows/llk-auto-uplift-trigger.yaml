@@ -147,7 +147,7 @@ jobs:
             while IFS='|' read -r short_hash message author full_hash || [ -n "$short_hash" ]; do
               [ -z "$short_hash" ] && continue
 
-              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
               clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
 
               # Format PR column
