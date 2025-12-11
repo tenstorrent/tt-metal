@@ -48,7 +48,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
     auto temp_tensor2 = ttnn::prim::reshape(
-        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
+        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid, std::nullopt);
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");

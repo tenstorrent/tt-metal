@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_without_device_mapping_pf.hpp"
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -13,19 +14,19 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
-#include "reshape_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
 
-tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory_without_device_mapping(
-    const Tensor& input_tensor, const Tensor& output_tensor, std::optional<CoreRangeSet> sub_core_grid) {
+ReshapeTiledWithoutDeviceMappingProgramFactory::cached_program_t ReshapeTiledWithoutDeviceMappingProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    printf("start of ReshapeTiledProgramFactory::create\n");
+
+    const auto& input_tensor = tensor_args.input;
+    const auto& output_tensor = tensor_return_value;
+
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
@@ -83,8 +84,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory_with
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            sub_core_grid.has_value() ? tt::tt_metal::split_work_to_cores(sub_core_grid.value(), num_output_pages)
-                                      : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
+            operation_attributes.sub_core_grid.has_value()
+                ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grid.value(), num_output_pages)
+                : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
 
     TT_ASSERT(num_cores <= num_output_pages);
 
@@ -221,30 +223,33 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory_with
         page_idx_start += increment;
         utilized_cores.push_back(c);
     }
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, utilized_cores}};
+}
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id, writer_kernel_id, utilized_cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& output_tensor = output_tensors.at(0);
+void ReshapeTiledWithoutDeviceMappingProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& shared_variables = cached_program.shared_variables;
+    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
+    const auto& utilized_cores = shared_variables.utilized_cores;
 
-            const auto input_buffer_addr = input_tensor.buffer()->address();
-            const auto output_buffer_addr = output_tensor.buffer()->address();
+    const auto& input_tensor = tensor_args.input;
+    const auto& output_tensor = tensor_return_value;
 
-            for (const auto& core : utilized_cores) {
-                auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
-                reader_runtime_args_core.at(3) = input_buffer_addr;
+    const auto input_buffer_addr = input_tensor.buffer()->address();
+    const auto output_buffer_addr = output_tensor.buffer()->address();
+    auto& program = cached_program.program;
 
-                auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
-                writer_runtime_args_core.at(3) = output_buffer_addr;
-            }
-        };
+    for (const auto& core : utilized_cores) {
+        auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_runtime_args_core.at(3) = input_buffer_addr;
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+        auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
+        writer_runtime_args_core.at(3) = output_buffer_addr;
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::reshape
