@@ -60,7 +60,6 @@ void kernel_main() {
 #endif
     if constexpr (is_non_aligned) {
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
-        constexpr uint32_t num_trids = 2;
         constexpr uint32_t trid_base = 1;
 
         uint32_t scratch_write_addrs[num_trids];

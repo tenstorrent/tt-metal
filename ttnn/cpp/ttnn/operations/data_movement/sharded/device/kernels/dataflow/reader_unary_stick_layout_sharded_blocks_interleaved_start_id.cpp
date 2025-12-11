@@ -76,21 +76,23 @@ void kernel_main() {
                     stick_id++;
                     dest_write_addr += padded_block_width_bytes;
                     rows_issued++;
-
-                } else if (slot_states[slot] == SlotState::SRC_PENDING) {
+                }
+                if (slot_states[slot] == SlotState::SRC_PENDING) {
                     // Check if src->scratch is complete
                     if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, active_trid) == 1) {
                         slot_states[slot] = SlotState::SCRATCH_READY;
                     }
-
-                } else if (slot_states[slot] == SlotState::SCRATCH_READY) {
+                }
+                if (slot_states[slot] == SlotState::SCRATCH_READY) {
                     // Start scratch->dest transfer
                     noc_async_read_set_trid(active_trid);
+
                     uint64_t scratch_noc_read_addr = get_noc_addr(scratch_write_addrs[slot] + aligned_offset);
                     noc_async_read(scratch_noc_read_addr, dest_write_addrs[slot], block_width_bytes);
-                    slot_states[slot] = SlotState::SCRATCH_PENDING;
 
-                } else if (slot_states[slot] == SlotState::SCRATCH_PENDING) {
+                    slot_states[slot] = SlotState::SCRATCH_PENDING;
+                }
+                if (slot_states[slot] == SlotState::SCRATCH_PENDING) {
                     // Check if scratch->dest is complete
                     if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, active_trid) == 1) {
                         slot_states[slot] = SlotState::IDLE;
@@ -99,6 +101,8 @@ void kernel_main() {
                 }
             }
         }
+
     }
+    noc_async_read_set_trid(0);
     cb_push_back(cb_id_in0, block_height);
 }
