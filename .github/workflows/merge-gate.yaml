@@ -174,38 +174,3 @@ jobs:
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
-
-
-  # GitHub has so many design limitations it's not even funny.
-  # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
-  workflow-status:
-    name: Merge Gate Status
-    # Force this job to run so GH can 'see' it, provided some other job has actually run.
-    # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
-    # report FAILED instead of SKIPPED.
-    if: >-
-      ${{
-        always() &&
-        contains(join(needs.*.result, ','), 'success') ||
-        contains(join(needs.*.result, ','), 'failure')
-      }}
-    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check if all jobs passed
-        uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
-        with:
-          required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
-        env:
-          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
-        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "U08GTDV8MDH"
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
-        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "U08GTDV8MDH,U0908S3LUMD,U0982FCD80N,U08VC9954CE,U08TVGQGGAE,U08LG51QALX,U08DEGUJY3H,U08BNDNLUCD,U084DCKE0B0,U0883RN6CRE,U088NCP32NP,U07J3K6KS1K,U07HTBQPHFG,U085LTYEC00,U014XCQ9CF8"
