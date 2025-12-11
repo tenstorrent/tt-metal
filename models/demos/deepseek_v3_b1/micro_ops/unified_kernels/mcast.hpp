@@ -299,7 +299,9 @@ struct Mcast {
 
             volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                 (volatile tt_l1_ptr uint32_t*)(data_receiver_semaphore_addr);
+            DPRINT << "Mcast receiver: semaphore waiting" << ENDL();
             noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+            DPRINT << "Mcast receiver: semaphore received" << ENDL();
             noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
 #endif
         }

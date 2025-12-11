@@ -134,25 +134,6 @@ class PreSDPA:
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
 
-        # Mcast sender compile-time args (named args for NCRISC)
-        mcast_sender_named_compile_time_args = [
-            ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
-            ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
-            ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
-            ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
-            ("mcast_num_cores", mcast_num_cores),
-            ("mcast_loopback", 1 if mcast_loopback else 0),
-            ("mcast_is_part_of_receiver_grid", 1 if mcast_is_part_of_receiver_grid else 0),
-            ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
-            ("mcast_data_size_bytes", mcast_data_size_bytes),
-        ]
-
-        # Mcast receiver compile-time args (named args for BRISC)
-        mcast_receiver_named_compile_time_args = [
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
-        ]
-
         # Calculate runtime args
         epsilon_packed = float_to_bfloat16_packed(epsilon)
 
@@ -171,6 +152,27 @@ class PreSDPA:
         rmsnorm_output_cb = 4
         matmul_weights_cb = 5
         matmul_input_cb = 6
+
+        # Mcast sender compile-time args (named args for NCRISC)
+        mcast_sender_named_compile_time_args = [
+            ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
+            ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
+            ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
+            ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
+            ("mcast_num_cores", mcast_num_cores),
+            ("mcast_loopback", 1 if mcast_loopback else 0),
+            ("mcast_is_part_of_receiver_grid", 1 if mcast_is_part_of_receiver_grid else 0),
+            ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
+            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_size_bytes", mcast_data_size_bytes),
+            ("mcast_src_cb", rmsnorm_output_cb),
+            ("mcast_dst_cb", matmul_input_cb),
+        ]
+
+        # Mcast receiver compile-time args (named args for BRISC)
+        mcast_receiver_named_compile_time_args = [
+            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+        ]
 
         # Create tile descriptor for proper tile dimensions
         tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -231,7 +233,7 @@ class PreSDPA:
         matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_weights_cb, matmul_weights_tensor)
 
         # CB 6: Matmul input buffer (1x32 tiles, on matmul cores, receives mcast data)
-        TILE_1x32 = ttnn.Tile((1, 32))
+        TILE_1x32 = ttnn.Tile((32, 32))
         matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul_input_page_size = TILE_1x32.get_tile_size(data_format)
         # Total size same as RMSNorm output (num_tiles * cb_page_size bytes)
