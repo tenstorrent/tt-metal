@@ -95,21 +95,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     const GlobalSemaphore& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-tt::tt_metal::operation::ProgramWithCallbacks broadcast_batch1(
-    const Tensor& input_tensor,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& self_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-
 namespace operations::ccl {
 
 Tensor broadcast(

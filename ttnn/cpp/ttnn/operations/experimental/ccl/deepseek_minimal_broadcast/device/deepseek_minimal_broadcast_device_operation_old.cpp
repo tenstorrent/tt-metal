@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "broadcast_op.hpp"
+#include "deepseek_minimal_broadcast_op.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -12,7 +12,7 @@
 
 namespace ttnn {
 
-void Broadcast::validate_with_output_tensors(
+void DeepseekMinimalBroadcast::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
@@ -25,15 +25,62 @@ void Broadcast::validate_with_output_tensors(
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
+
+    // input tensor dtype should be bfloat16
+    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
+    // input shard grid should be a single core
+    const auto& shard_spec = input_tensor.shard_spec().value();
+    const auto& shard_grid = shard_spec.grid;
+    std::vector<CoreCoord> cores;
+    for (const auto& core_range : shard_grid.ranges()) {
+        auto c = corerange_to_cores(core_range, std::nullopt);
+        cores.insert(cores.end(), c.begin(), c.end());
+    }
+    TT_FATAL(cores.size() == 1, "Input tensor must be sharded to a single core");
+
+    // input should be tiny tile (1,32)
+    const auto tile_width = input_tensor.tensor_spec().tile().get_width();
+    const auto tile_height = input_tensor.tensor_spec().tile().get_height();
+    TT_FATAL(input_tensor.layout() == ttnn::TILE_LAYOUT, "Input tensor must be in TILE_LAYOUT");
+    TT_FATAL(
+        tile_width == 32 && tile_height == 1,
+        "Input tensor must be in tile size (1,32). Got tile size: ({}, {})",
+        tile_height,
+        tile_width);
+    // input shape should be (1,1536)
+    // To do add shape (1,7168) once fabric supports larger packets
+    const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(
+        input_shape[0] == 1 && input_shape[1] == 1536,
+        "Input tensor shape must be (1,1536). Got shape: ({}, {})",
+        input_shape[0],
+        input_shape[1]);
+
+    // validate same configuration for output tensors
+    for (const auto& output_tensor_opt : output_tensors) {
+        TT_FATAL(output_tensor_opt.has_value(), "Output tensor is not allocated");
+        const auto& output_tensor = output_tensor_opt.value();
+        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to broadcast need to be on device!");
+        TT_FATAL(output_tensor.buffer() != nullptr, "Operands to broadcast need to be allocated in buffers on device!");
+        TT_FATAL(output_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Output tensor must be bfloat16");
+        const auto& out_shard_spec = output_tensor.shard_spec().value();
+        const auto& out_shard_grid = out_shard_spec.grid;
+        std::vector<CoreCoord> out_cores;
+        for (const auto& core_range : out_shard_grid.ranges()) {
+            auto c = corerange_to_cores(core_range, std::nullopt);
+            out_cores.insert(out_cores.end(), c.begin(), c.end());
+        }
+        TT_FATAL(out_cores.size() == 1, "Output tensor must be sharded to a single core");
+    }
 }
 
-std::vector<ttnn::TensorSpec> Broadcast::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> DeepseekMinimalBroadcast::compute_output_specs(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     const auto& shape = input_tensor.logical_shape();
     std::vector<TensorSpec> output_specs;
@@ -45,7 +92,7 @@ std::vector<ttnn::TensorSpec> Broadcast::compute_output_specs(const std::vector<
     return output_specs;
 }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks Broadcast::create_mesh_workload(
+tt::tt_metal::operation::MeshWorkloadWithCallbacks DeepseekMinimalBroadcast::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -70,7 +117,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks Broadcast::create_mesh_worklo
         });
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks Broadcast::create_program_at(
+tt::tt_metal::operation::ProgramWithCallbacks DeepseekMinimalBroadcast::create_program_at(
     const MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors,
@@ -92,7 +139,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Broadcast::create_program_at(
         ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
-    return broadcast_multicore(
+    return broadcast_batch1(
         input_tensor,
         this->sender_coord,
         coord,
@@ -108,13 +155,14 @@ tt::tt_metal::operation::ProgramWithCallbacks Broadcast::create_program_at(
         this->sub_device_id);
 }
 
-tt::tt_metal::operation::Hash Broadcast::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash DeepseekMinimalBroadcast::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
     auto input_shape = input_tensors[0].padded_shape();
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    return tt::tt_metal::operation::hash_operation<Broadcast>(
+    return tt::tt_metal::operation::hash_operation<DeepseekMinimalBroadcast>(
         this->sender_coord,
         this->num_links,
         this->ring_size,
@@ -132,9 +180,9 @@ tt::tt_metal::operation::Hash Broadcast::compute_program_hash(const std::vector<
         input_memory_config);
 }
 
-namespace operations::ccl {
+namespace operations::experimental::ccl {
 
-Tensor broadcast_impl(
+Tensor deepseek_minimal_broadcast_impl(
     const Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     const uint32_t num_links,
@@ -148,7 +196,7 @@ Tensor broadcast_impl(
     if (!cluster_axis.has_value()) {
         TT_FATAL(
             tensor_topology_shape.is_line_topology(),
-            "broadcast op is only supported for a linear tensor topology shape");
+            "minimal deepseek broadcast op is only supported for a linear tensor topology shape");
     }
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -160,14 +208,13 @@ Tensor broadcast_impl(
         tensor_topology_shape);
 
     ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2) {
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
-    log_debug(tt::LogOp, "DEBUG: line_fabric is created");
+    TT_FATAL(
+        ccl_topology == ttnn::ccl::Topology::Linear,
+        "Currently only Linear topology is supported in deepseek minimal broadcast op, but got {}",
+        ccl_topology);
 
     auto outputs = tt::tt_metal::operation::run(
-        ttnn::Broadcast(
+        ttnn::DeepseekMinimalBroadcast(
             sender_coord,
             num_links,
             num_devices,
@@ -179,7 +226,7 @@ Tensor broadcast_impl(
     return outputs.at(0);
 }
 
-Tensor broadcast(
+Tensor deepseek_minimal_broadcast(
     const Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     const uint32_t num_links,
@@ -187,9 +234,10 @@ Tensor broadcast(
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    return broadcast_impl(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, sub_device_id);
+    return deepseek_minimal_broadcast_impl(
+        input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, sub_device_id);
 }
 
-}  // namespace operations::ccl
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn
