@@ -318,19 +318,21 @@ jobs:
           # Create output directory
           mkdir -p aggregated_ops
 
-          # Aggregate using Python
+          # Aggregate using Python and generate GitHub Summary
           python3 << 'EOF'
           import csv
           import json
           import re
+          import os
           from pathlib import Path
           from collections import defaultdict
 
           op_models = defaultdict(set)  # operation -> set of models
+          model_op_counts = defaultdict(int)  # model -> count of unique ops
 
           for csv_path in Path("all_tracy_reports").rglob("ops_perf_results_*.csv"):
               # Extract model name from filename: ops_perf_results_<model>_<runner>.csv
-              filename = csv_path.stem  # e.g., ops_perf_results_resnet_N150
+              filename = csv_path.stem
               match = re.match(r'ops_perf_results_(.+)$', filename)
               model_name = match.group(1) if match else csv_path.parent.name
 
@@ -339,17 +341,19 @@ jobs:
                       reader = csv.DictReader(f)
                       ops_data = list(reader)
 
+                  unique_ops = set()
                   for op in ops_data:
                       op_name = op.get("OP CODE", op.get("op_code", "unknown"))
                       op_models[op_name].add(model_name)
+                      unique_ops.add(op_name)
 
-                  print(f"{model_name}: {len(set(op.get('OP CODE', '') for op in ops_data))} unique operations")
+                  model_op_counts[model_name] = len(unique_ops)
+                  print(f"{model_name}: {len(unique_ops)} unique operations")
               except Exception as e:
                   print(f"{model_name}: Error - {e}")
 
-          # Write aggregated report
+          # Write text report
           with open("aggregated_ops/aggregated_operations.txt", "w") as f:
-              f.write("=" * 60 + "\n")
               f.write("Models by Operation\n")
               f.write("=" * 60 + "\n")
               for op_name, models in sorted(op_models.items()):
@@ -362,6 +366,41 @@ jobs:
               json.dump({
                   "by_operation": {op: sorted(models) for op, models in op_models.items()}
               }, f, indent=2)
+
+          # Generate GitHub Actions Summary (Markdown)
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_path:
+              with open(summary_path, "w") as f:
+                  f.write("# 📊 TTNN Operations Report\n\n")
+                  f.write(f"**Total Unique Operations:** {len(op_models)}\n")
+                  f.write(f"**Models Analyzed:** {len(model_op_counts)}\n\n")
+
+                  # Models summary table
+                  f.write("## 📦 Models Summary\n\n")
+                  f.write("| Model | Unique Operations |\n")
+                  f.write("|-------|------------------|\n")
+                  for model, count in sorted(model_op_counts.items()):
+                      f.write(f"| {model} | {count} |\n")
+                  f.write("\n")
+
+                  # Operations table with model badges
+                  f.write("## 🔧 Operations by Model\n\n")
+                  f.write("| Operation | Models | Count |\n")
+                  f.write("|-----------|--------|-------|\n")
+                  for op_name, models in sorted(op_models.items()):
+                      models_str = ", ".join(f"`{m}`" for m in sorted(models))
+                      f.write(f"| `{op_name}` | {models_str} | {len(models)} |\n")
+                  f.write("\n")
+
+                  # Detailed breakdown
+                  f.write("<details>\n<summary>📋 Detailed Operations List</summary>\n\n")
+                  for op_name, models in sorted(op_models.items()):
+                      f.write(f"### `{op_name}`\n")
+                      f.write("Models using this operation:\n")
+                      for model in sorted(models):
+                          f.write(f"- {model}\n")
+                      f.write("\n")
+                  f.write("</details>\n")
 
           EOF
 
