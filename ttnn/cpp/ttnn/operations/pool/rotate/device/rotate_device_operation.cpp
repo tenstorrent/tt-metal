@@ -46,16 +46,6 @@ void RotateDeviceOperation::validate_inputs(
     TT_FATAL(
         !input.memory_config().is_sharded(), "Input tensor must be DRAM interleaved, sharded memory not supported");
 
-    // Channel alignment
-    const uint32_t C = input.logical_shape()[-1];
-    const uint32_t element_size = input.element_size();
-    TT_FATAL(
-        (C * element_size) % 32 == 0,
-        "Channel dimension must be aligned to 32 bytes, got {} channels * {} bytes = {} bytes",
-        C,
-        element_size,
-        C * element_size);
-
     // Expand parameter
     TT_FATAL(
         !operation_attributes.expand,
