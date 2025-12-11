@@ -12,7 +12,7 @@ namespace ttnn::operations::normalization {
 
 struct LayerNormDistributedDefaultProgramConfig {
     bool legacy_reduction = true;
-    bool legacy_rsqrt = true;
+    bool legacy_rsqrt = false;
 };
 
 enum class LayerNormDistributedType { LAYERNORM, RMSNORM };
