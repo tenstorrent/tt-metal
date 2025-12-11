@@ -41,6 +41,9 @@ inline void adjust_variance_for_partial_last_tile(uint32_t cb_var, uint32_t cb_m
 
     constexpr auto extra_cols = Wt * tt::constants::TILE_WIDTH - W;
     if constexpr (extra_cols > 0) {
+        cb_wait_front(cb_var, 1);
+        cb_wait_front(cb_mean, 1);
+
         cb_reserve_back(cb_var, 1);
 
         reconfig_data_format_srca(cb_var);
