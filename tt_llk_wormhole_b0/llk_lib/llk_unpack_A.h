@@ -100,7 +100,7 @@ inline void _llk_unpack_A_mop_config_(
         ckernel_template tmp(outerloop, innerloop, unpack_srcb, srcb_set_z_2);
         if (!(unpack_dst_format == (uint)DataFormat::UInt16))
         {
-            tmp.set_start_op(unpack_srca_set_dvalid);
+            tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
         }
         tmp.set_end_op(unpack_srcb);
         tmp.program();
