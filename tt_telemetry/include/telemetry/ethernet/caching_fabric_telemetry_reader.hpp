@@ -31,15 +31,16 @@
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <umd/device/cluster.hpp>
 
+#include <telemetry/caching_telemetry_reader.hpp>
+
 // Forward declarations
 namespace tt::tt_metal {
 class Hal;
 }
 
-class CachingFabricTelemetryReader {
+class CachingFabricTelemetryReader final : public CachingTelemetryReader<tt::tt_fabric::FabricTelemetrySnapshot> {
 public:
     // Constructor takes references available from create_ethernet_metrics()
-    // Does NOT use MetalContext
     // Note: cluster and hal must outlive this object (guaranteed by telemetry collector lifecycle)
     CachingFabricTelemetryReader(
         tt::ChipId chip_id,
@@ -52,22 +53,11 @@ public:
     CachingFabricTelemetryReader(CachingFabricTelemetryReader&&) = delete;
     CachingFabricTelemetryReader& operator=(CachingFabricTelemetryReader&&) = delete;
 
-    // Returns cached telemetry snapshot. Updates from device if this is a new update cycle.
-    // Returns nullptr if telemetry unavailable. Note: Returned pointer is valid only until next
-    // call to this method
-    const tt::tt_fabric::FabricTelemetrySnapshot* get_telemetry(
-        std::chrono::steady_clock::time_point start_of_update_cycle);
-
 private:
-    // Reads telemetry directly from L1
-    tt::tt_fabric::FabricTelemetrySnapshot read_telemetry();
+    tt::tt_fabric::FabricTelemetrySnapshot read_telemetry() override;
 
     const tt::ChipId chip_id_;
     const uint32_t channel_;
     tt::umd::Cluster* cluster_;
     tt::tt_metal::Hal* hal_;
-
-    tt::tt_fabric::FabricTelemetrySnapshot cached_telemetry_;
-    std::chrono::steady_clock::time_point last_update_cycle_;
-    mutable std::mutex telemetry_mutex_;
 };
