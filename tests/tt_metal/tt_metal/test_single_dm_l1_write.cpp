@@ -60,10 +60,9 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
     KernelHandle data_movement_kernel_0 = experimental::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .named_compile_args = named_compile_time_args});
+        core,
+        experimental::QuasarDataMovementConfig{
+            .processors = {DataMovementProcessor::RISCV_0}, .named_compile_args = named_compile_time_args});
 
     // Set Runtime Arguments for the Data Movement Kernel (memory address to write to)
     SetRuntimeArgs(program, data_movement_kernel_0, core, {address});
