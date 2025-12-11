@@ -524,7 +524,6 @@ def decoder_layer(
         kv_cache=kv_cache,
         cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
-        cross_attn_cache=cross_attn_cache,
         parameters=parameters.encoder_attn,
     )
 
@@ -591,7 +590,6 @@ def decoder(
             kv_cache=kv_cache[i] if kv_cache is not None else None,
             cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             current_decode_pos=current_decode_pos,
-            cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             parameters=decoder_layer_parameter,
         )
 
@@ -803,7 +801,6 @@ def whisper(
         kv_cache=kv_cache,
         cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
-        cross_attn_cache=cross_attn_cache,
         parameters=parameters.decoder,
     )
     return last_hidden_state
