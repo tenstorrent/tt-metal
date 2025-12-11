@@ -200,16 +200,15 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = round_mode.has_value() or !fast_and_approximate_mode;
+    const auto has_legacy_only_args = round_mode.has_value();
     if (not(use_legacy ? *use_legacy
                        : has_legacy_only_args or
                              binary::is_legacy_only(
                                  input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "round_mode or fast_and_approximate_mode=false (accurate mode) are not valid when passing "
-            "use_legacy=false in div (tensor-scalar); binary_ng does not support these features for scalar operations "
-            "yet");
+            "round_mode is not valid when passing use_legacy=false in div (tensor-scalar); binary_ng does not "
+            "support round_mode for scalar operations yet");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             input,
             value,
