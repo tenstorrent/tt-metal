@@ -27,12 +27,11 @@
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
+#include "fabric_builder_context.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 
@@ -191,7 +190,7 @@ void append_fabric_connection_rt_args(
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 src_chip_id, fabric_router_channel);
 
-        const auto& edm_config = fabric_context.get_fabric_router_config();
+        const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
         auto* channel_allocator = edm_config.channel_allocator.get();
         auto* const static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
@@ -352,7 +351,8 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
 
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
 }
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {

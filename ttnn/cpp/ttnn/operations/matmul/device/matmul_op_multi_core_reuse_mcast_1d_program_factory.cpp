@@ -2573,11 +2573,7 @@ void override_program_parameters(
 
 }  // namespace reuse_mcast_1d_optimized_helpers
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
     tt_metal::Program& program,
@@ -3772,8 +3768,4 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

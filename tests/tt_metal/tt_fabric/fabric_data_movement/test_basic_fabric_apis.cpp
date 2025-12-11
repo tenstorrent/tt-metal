@@ -42,8 +42,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 // hack to let topology.cpp to know the binary is a unit test
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -880,6 +879,25 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoords) {
         log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
         UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
     }
+}
+
+// UDM Mode All-to-All Tests - all devices send to all other devices simultaneously
+// Senders are on top half of compute grid, receivers are on bottom half
+// Each receiver receives from N-1 senders at different L1 locations
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_INLINE_WRITE);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_READ);
 }
 
 // Mux-to-Mux Forwarding Tests - test the mux's ability to forward packets to the correct downstream mux
@@ -1774,5 +1792,4 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
 }
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

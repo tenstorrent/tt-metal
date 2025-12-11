@@ -109,6 +109,8 @@ extern "C" uint32_t _start1() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -183,7 +185,7 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-
+                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
@@ -249,7 +251,7 @@ extern "C" uint32_t _start1() {
 
                 trigger_sync_register_init();
 
-                if constexpr (WATCHER_ASSERT_ENABLED) {
+                if constexpr (ASSERT_ENABLED) {
                     if (noc_mode == DM_DYNAMIC_NOC) {
                         WAYPOINT("NKFW");
                         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have

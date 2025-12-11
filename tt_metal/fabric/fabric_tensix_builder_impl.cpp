@@ -12,6 +12,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/core_descriptor.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -424,7 +425,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
 
     // UDM mode - collect downstream mux connection info
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     auto downstream_dirs = builder::get_all_other_directions(direction);
 
@@ -458,7 +459,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(fabric_tensix_config);
+    const auto& fabric_router_config =
+        fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config);
 
     auto* channel_allocator = fabric_router_config.channel_allocator.get();
     auto* const static_channel_allocator =
@@ -604,6 +606,25 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     const size_t udm_memory_pool_size = udm_memory_pool_slot_size_ * udm_memory_pool_num_slots_;
     udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
     current_address = udm_memory_pool_region_.get_end_address();
+    log_debug(
+        tt::LogMetal,
+        "udm memory pool has: {} slots, each slot is: {} bytes",
+        udm_memory_pool_num_slots_,
+        udm_memory_pool_slot_size_);
+
+    // Allocate response pool region - use remaining L1 space
+    // RegisteredResponse is 32 bytes per slot
+    const size_t available_l1_bytes = l1_end_address - current_address;
+    udm_registered_response_num_slots_ = available_l1_bytes / udm_registered_response_slot_size_;
+    const size_t udm_registered_response_pool_size =
+        udm_registered_response_num_slots_ * udm_registered_response_slot_size_;
+    udm_registered_response_pool_region_ = MemoryRegion(current_address, udm_registered_response_pool_size, 1);
+    current_address = udm_registered_response_pool_region_.get_end_address();
+    log_debug(
+        tt::LogMetal,
+        "udm registered response pool has: {} slots, each slot is: {} bytes",
+        udm_registered_response_num_slots_,
+        udm_registered_response_slot_size_);
 
     memory_map_end_address_ = current_address;
 
@@ -620,7 +641,7 @@ MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
     uint32_t connection_region_idx,
     uint32_t stream_id) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     auto mux_config = tensix_config.get_config(FabricTensixCoreType::MUX);
     auto channel_type = tt::tt_fabric::ChannelTypes::RELAY_TO_MUX_CHANNEL;
 
@@ -642,7 +663,7 @@ std::array<MuxConnectionInfo, FabricTensixDatamoverRelayConfig::NUM_MUX_CONNECTI
 FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Determine directions to check: [0]=local, [1]=perp1, [2]=perp2
     auto [perp_dir1, perp_dir2] = builder::get_perpendicular_directions(direction);
@@ -687,7 +708,7 @@ size_t FabricTensixDatamoverRelayConfig::get_channel_credits_stream_id(
     // In UDM mode, relay stream IDs must come after mux stream IDs to avoid collisions
     // Both mux and relay are on the same Tensix core, so they share the same stream ID space
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     auto mux_config = tensix_config.get_config(FabricTensixCoreType::MUX);
     TT_FATAL(mux_config != nullptr, "Mux config cannot be null");
@@ -702,7 +723,7 @@ size_t FabricTensixDatamoverRelayConfig::get_channel_credits_stream_id(
 std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Get mux configuration
     auto mux_config = tensix_config.get_config(FabricTensixCoreType::MUX);
@@ -810,11 +831,17 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     }
 
     // Final args
-    ct_args.push_back(mux_config->get_status_address());       // 44: local_mux_status_address
-    ct_args.push_back(udm_memory_pool_region_.get_address());  // 45: udm_memory_pool_base_address
+    ct_args.push_back(mux_config->get_status_address());                   // 44: local_mux_status_address
+    ct_args.push_back(udm_memory_pool_region_.get_address());              // 45: udm_memory_pool_base_address
     ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_slot_size_));  // 46: udm_memory_pool_slot_size
     ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_num_slots_));  // 47: udm_memory_pool_num_slots
     ct_args.push_back(static_cast<uint32_t>(direction));                   // 48: direction
+
+    // Response pool args
+    ct_args.push_back(
+        udm_registered_response_pool_region_.get_address());  // 49: udm_registered_response_pool_base_address
+    ct_args.push_back(
+        static_cast<uint32_t>(udm_registered_response_num_slots_));  // 50: udm_registered_response_pool_num_slots
 
     // Note: router NOC coords and sync address will be added by the builder
     return ct_args;
@@ -935,6 +962,9 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
             // Router channels: topology-based fabric router stream IDs (only in Legacy MUX mode)
             const auto topology = fabric_context.get_fabric_topology();
             switch (topology) {
+                case tt::tt_fabric::Topology::NeighborExchange:
+                    TT_THROW("NeighborExchange topology has not been tested in MUX mode");
+                    break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
                     fabric_stream_ids = {tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};
@@ -965,7 +995,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_flags(ChannelTypes channel_type) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     size_t num_channels = config_->get_num_channels(channel_type);
     std::vector<uint32_t> is_persistent_channels(num_channels, 0);
 
@@ -998,8 +1028,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
                 UdmMuxRelayToMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL};
 
             for (size_t i = 0; i < upstream_relay_dirs.size(); i++) {
-                const auto* noc_coords =
-                    tensix_config.get_active_tensix_noc_coords(local_fabric_node_id_, link_idx_, upstream_relay_dirs[i]);
+                const auto* noc_coords = tensix_config.get_active_tensix_noc_coords(
+                    local_fabric_node_id_, link_idx_, upstream_relay_dirs[i]);
                 if (noc_coords) {
                     is_persistent_channels[static_cast<uint32_t>(upstream_relay_channels[i])] = 1;
                 }
@@ -1032,17 +1062,16 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        fabric_tensix_config);
+    const auto& fabric_router_config = builder_context.get_fabric_router_config(fabric_tensix_config);
 
     // Call config's get_compile_time_args with fabric node, routing plane, and direction
     auto ct_args = config_->get_compile_time_args(local_fabric_node_id_, link_idx_, direction_);
 
     // Add bubble flow control flag, then upstream routers count and sync address
     // Order must match kernel expectations: bubble_flow_control, num_upstream_routers, sync_address
-    ct_args.push_back(
-        tt::tt_fabric::FabricRouterBuilder::is_bubble_flow_control_enabled(fabric_router_config.topology));
+    ct_args.push_back(fabric_context.is_bubble_flow_control_enabled());
     ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
     ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
 
@@ -1060,7 +1089,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 
     // In UDM mode, add relay's termination signal address for mux to write during teardown
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        const auto& tensix_config = fabric_context.get_tensix_config();
+        const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
         auto relay_config = tensix_config.get_config(FabricTensixCoreType::RELAY);
         auto relay_config_typed = std::dynamic_pointer_cast<const FabricTensixDatamoverRelayConfig>(relay_config);
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
@@ -1189,8 +1218,8 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args()
     ct_args.push_back(router_noc_y_);  // 49: router_noc_y
 
     // 50: fabric_router_sync_address
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        fabric_tensix_config);
+    const auto& fabric_router_config =
+        fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config);
     ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 50: fabric_router_sync_address
 
     return ct_args;
