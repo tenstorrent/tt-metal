@@ -94,8 +94,6 @@ class DecoderLayer:
     ):
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
-        if is_decode:
-            breakpoint()
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
         # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
@@ -116,6 +114,4 @@ class DecoderLayer:
         hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        if is_decode:
-            breakpoint()
         return hidden_states

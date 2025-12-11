@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
@@ -9,7 +11,6 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
-from ttnn import replicate_tensor_to_mesh_mapper
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -77,7 +78,7 @@ class Model:
         max_seq_len = 1024
         self.rope_setup = RotarySetup(
             device=mesh_device,
-            batch_size=1,
+            batch_size=128,
             head_dim=hf_config.head_dim,
             max_seq_len=max_seq_len,
             rope_theta=getattr(hf_config, "rope_theta", 10000.0),
@@ -177,7 +178,9 @@ class Model:
 
         return instance
 
-    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True):
+    def _forward_layers_and_head(
+        self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True
+    ):
         """
         Shared forward pass through decoder layers and final projection.
 
@@ -257,7 +260,6 @@ class Model:
 
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
-        breakpoint()
 
         # Forward through layers and head (shared with prefill)
         return self._forward_layers_and_head(
@@ -350,24 +352,28 @@ class Model:
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
         # Convert tokens to TTNN format
+        batch_tiles = math.ceil(len(tokens) / 32)
+        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 * batch_tiles - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
             tokens,
             device=None,
             dtype=ttnn.uint32,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
         )
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
         # Ensure position indices are non-negative (matches tt-transformers)
         rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
-        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=False)
 
         # Prepare current position tensor
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
             dtype=ttnn.int32,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
         )
 
         # Prepare page table if provided
@@ -376,7 +382,8 @@ class Model:
                 page_table,
                 device=None,
                 dtype=ttnn.int32,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
             )
 
         return tokens, current_pos_tt, rope_idxs, page_table

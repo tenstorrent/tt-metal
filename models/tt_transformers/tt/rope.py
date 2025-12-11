@@ -392,7 +392,8 @@ class RotarySetup(LightweightModule):
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
+            # self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
+            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[0], 1)
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
@@ -410,7 +411,7 @@ class RotarySetup(LightweightModule):
         self.batch_grid = (
             ttnn.CoreGrid(y=4, x=8)
             if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
+            else ttnn.num_cores_to_corerangeset(self.batch_size_per_device_group, self.core_grid, row_wise=True)
         )
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
@@ -436,7 +437,8 @@ class RotarySetup(LightweightModule):
             mesh_mapper=(
                 ShardTensor2dMesh(
                     device,
-                    dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
+                    # dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
+                    dims=(2, None) if (self.num_devices == 32 and batch_size > 1) else (None, None),
                     mesh_shape=list(device.shape),
                 )
                 if self.is_mesh_device
@@ -478,7 +480,8 @@ class RotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=(0, None), mesh_shape=self.device.shape),
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -487,7 +490,8 @@ class RotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=(-1, None), mesh_shape=self.device.shape),
             )
 
         return rot_idxs

@@ -234,7 +234,6 @@ def create_expert_mapping_tensors(
         .unsqueeze(0)
         .unsqueeze(0)
     )
-    # breakpoint()
     # if cluster_axis is not None:
     #     if cluster_axis == 0:
     #         mapping = mapping.repeat(1, 1, mesh_shape[1], 1)

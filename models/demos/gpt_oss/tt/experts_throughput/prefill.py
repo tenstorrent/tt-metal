@@ -162,8 +162,9 @@ def prefill_forward(
     post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
 
     # ========== 2. EXPERT TOKEN REMAP (for sparsity) ==========
-    # Repeat remap mask for batch size
-    remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
+    # Repeat remap mask for GLOBAL batch (total_tokens) to match dispatch_metadata
+    # dispatch_metadata has shape [D, total_tokens, S, K]
+    remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, total_tokens, 1, 1)))
 
     # Get sparsity pattern for sparse matmul
     _, sparsity = ttnn.moe_expert_token_remap(
