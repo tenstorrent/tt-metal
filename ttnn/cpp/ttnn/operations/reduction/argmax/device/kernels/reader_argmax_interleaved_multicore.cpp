@@ -364,7 +364,7 @@ void kernel_main() {
                     noc_semaphore_set_multicast(start_sem_local_addr, start_sem_noc_addr1, num_cores1);
                 }
 
-                noc_async_atomic_barrier();
+                noc_async_write_barrier();
             }
         }
 

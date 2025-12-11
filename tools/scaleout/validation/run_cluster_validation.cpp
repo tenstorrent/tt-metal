@@ -10,42 +10,21 @@
 #include <sstream>
 #include <unordered_map>
 
+#include <cxxopts.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tests/tt_metal/test_utils/test_common.hpp"
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include <yaml-cpp/yaml.h>
+#include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 
-// Validation (default) mode arguments and their descriptions
-const std::unordered_map<std::string_view, std::string_view> VALIDATION_ARGS = {
-    {"--cabling-descriptor-path", "Path to cabling descriptor"},
-    {"--deployment-descriptor-path", "Path to deployment descriptor"},
-    {"--factory-descriptor-path", "Path to factory descriptor"},
-    {"--global-descriptor-path", "Path to global descriptor"},
-    {"--output-path", "Path to output directory"},
-    {"--hard-fail", "Fail on warning"},
-    {"--log-ethernet-metrics", "Log live ethernet statistics"},
-    {"--print-connectivity", "Print Ethernet Connectivity between ASICs"},
-    {"--send-traffic", "Send traffic across detected links"},
-    {"--num-iterations", "Number of iterations to send traffic"},
-    {"--data-size", "Data size (bytes) sent across each link per iteration"},
-    {"--packet-size-bytes", "Packet size (bytes) sent across each link"},
-    {"--sweep-traffic-configs", "Sweep pre-generated traffic configurations across detected links (stress testing)"}};
-
-// link_reset subcommand arguments and their descriptions
-const std::unordered_map<std::string_view, std::string_view> LINK_RETRAIN_ARGS = {
-    {"--host", "Host name of the source ASIC"},
-    {"--tray-id", "Tray ID of the source ASIC"},
-    {"--asic-location", "ASIC location of the source ASIC"},
-    {"--channel", "Channel ID to reset"},
-    {"--help", "Print usage information"}};
-
+using tt::tt_metal::AsicTopology;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 enum class CommandMode {
@@ -71,6 +50,7 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -92,118 +72,193 @@ std::filesystem::path generate_output_dir() {
     return output_dir_path;
 }
 
-void parse_link_reset_args(const std::vector<std::string>& args_vec, InputArgs& input_args) {
+cxxopts::Options create_validation_options() {
+    cxxopts::Options options(
+        "run_cluster_validation",
+        "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster.\n"
+        "Compares live system state against the requested Cabling and Deployment Specifications.\n\n"
+        "Usage:\n"
+        "  run_cluster_validation [OPTIONS]                # Run validation (default)\n"
+        "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link\n\n"
+        "To run on a multi-node cluster, use mpirun with a --hostfile option.");
+
+    options.add_options()("cabling-descriptor-path", "Path to cabling descriptor", cxxopts::value<std::string>())(
+        "deployment-descriptor-path", "Path to deployment descriptor", cxxopts::value<std::string>())(
+        "factory-descriptor-path", "Path to factory descriptor", cxxopts::value<std::string>())(
+        "global-descriptor-path", "Path to global descriptor", cxxopts::value<std::string>())(
+        "output-path", "Path to output directory", cxxopts::value<std::string>())(
+        "hard-fail", "Fail on warning", cxxopts::value<bool>()->default_value("false"))(
+        "log-ethernet-metrics", "Log live ethernet statistics", cxxopts::value<bool>()->default_value("false"))(
+        "print-connectivity",
+        "Print Ethernet Connectivity between ASICs",
+        cxxopts::value<bool>()->default_value("false"))(
+        "send-traffic", "Send traffic across detected links", cxxopts::value<bool>()->default_value("false"))(
+        "num-iterations", "Number of iterations to send traffic", cxxopts::value<uint32_t>()->default_value("50"))(
+        "data-size", "Data size (bytes) sent across each link per iteration", cxxopts::value<uint32_t>())(
+        "packet-size-bytes",
+        "Packet size (bytes) sent across each link",
+        cxxopts::value<uint32_t>()->default_value("64"))(
+        "sweep-traffic-configs",
+        "Sweep pre-generated traffic configurations across detected links (stress testing)",
+        cxxopts::value<bool>()->default_value("false"))(
+        "min-connections",
+        "Minimum connections per ASIC pair required for relaxed validation mode",
+        cxxopts::value<uint32_t>())("h,help", "Print usage information");
+
+    return options;
+}
+
+cxxopts::Options create_link_reset_options() {
+    cxxopts::Options options(
+        "run_cluster_validation link_reset",
+        "Restart a specific cable/link on the cluster.");
+
+    options.add_options()("host", "Host name of the source ASIC", cxxopts::value<std::string>())(
+        "tray-id", "Tray ID of the source ASIC", cxxopts::value<uint32_t>())(
+        "asic-location", "ASIC location of the source ASIC", cxxopts::value<uint32_t>())(
+        "channel", "Channel ID to reset", cxxopts::value<uint32_t>())("h,help", "Print usage information");
+
+    return options;
+}
+
+void parse_link_reset_args(int argc, char* argv[], InputArgs& input_args) {
     input_args.mode = CommandMode::LINK_RETRAIN;
+    auto options = create_link_reset_options();
 
-    // Check for help flag first
-    if (test_args::has_command_option(args_vec, "--help")) {
-        input_args.help = true;
-        return;
-    }
+    try {
+        // Skip the first two args (program name and "link_reset" subcommand)
+        auto result = options.parse(argc - 1, argv + 1);
 
-    // Validate that only link_reset arguments are provided
-    for (size_t i = 2; i < args_vec.size(); ++i) {
-        const auto& arg = args_vec[i];
-        if (arg.rfind("--", 0) == 0) {  // Assuming all args start with "--"
-            TT_FATAL(
-                LINK_RETRAIN_ARGS.count(arg) > 0,
-                "Invalid argument '{}' for link_reset subcommand. Allowed arguments: {}",
-                arg,
-                [&]() {
-                    std::string args_list;
-                    for (const auto& [name, _] : LINK_RETRAIN_ARGS) {
-                        if (!args_list.empty()) {
-                            args_list += ", ";
-                        }
-                        args_list += name;
-                    }
-                    return args_list;
-                }());
+        if (result.count("help")) {
+            input_args.help = true;
+            return;
         }
-    }
 
-    // Parse and validate all required parameters
-    if (test_args::has_command_option(args_vec, "--host") && test_args::has_command_option(args_vec, "--tray-id") &&
-        test_args::has_command_option(args_vec, "--asic-location") &&
-        test_args::has_command_option(args_vec, "--channel")) {
-        input_args.reset_host = test_args::get_command_option(args_vec, "--host");
-        input_args.reset_tray_id = std::stoi(test_args::get_command_option(args_vec, "--tray-id"));
-        input_args.reset_asic_location = std::stoi(test_args::get_command_option(args_vec, "--asic-location"));
-        input_args.reset_channel = std::stoi(test_args::get_command_option(args_vec, "--channel"));
-    } else {
-        TT_FATAL(false, "All link_reset parameters must be specified: --host, --tray-id, --asic-location, --channel");
+        // Validate that all required parameters are provided
+        if (result.count("host") && result.count("tray-id") && result.count("asic-location") &&
+            result.count("channel")) {
+            input_args.reset_host = result["host"].as<std::string>();
+            input_args.reset_tray_id = result["tray-id"].as<uint32_t>();
+            input_args.reset_asic_location = result["asic-location"].as<uint32_t>();
+            input_args.reset_channel = result["channel"].as<uint32_t>();
+        } else {
+            TT_FATAL(
+                false, "All link_reset parameters must be specified: --host, --tray-id, --asic-location, --channel");
+        }
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing link_reset arguments: " << e.what() << std::endl;
+        std::cerr << options.help() << std::endl;
+        exit(1);
     }
 }
 
-void parse_validation_args(const std::vector<std::string>& args_vec, InputArgs& input_args) {
+void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
     input_args.mode = CommandMode::VALIDATE;
+    auto options = create_validation_options();
 
-    if (test_args::has_command_option(args_vec, "--cabling-descriptor-path")) {
-        input_args.cabling_descriptor_path = test_args::get_command_option(args_vec, "--cabling-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--deployment-descriptor-path")) {
-        TT_FATAL(
-            input_args.cabling_descriptor_path.has_value(),
-            "Cabling Descriptor Path is required when Deployment Descriptor Path is provided.");
-        input_args.deployment_descriptor_path = test_args::get_command_option(args_vec, "--deployment-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--factory-descriptor-path")) {
-        TT_FATAL(
-            !(input_args.cabling_descriptor_path.has_value() || input_args.deployment_descriptor_path.has_value()),
-            "Pass in either Cabling Spec + Deployment Spec or just Factory System Descriptor.");
-        input_args.fsd_path = test_args::get_command_option(args_vec, "--factory-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--global-descriptor-path")) {
-        input_args.gsd_path = test_args::get_command_option(args_vec, "--global-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--output-path")) {
-        input_args.output_path = std::filesystem::path(test_args::get_command_option(args_vec, "--output-path"));
-    } else {
-        input_args.output_path = generate_output_dir();
-    }
-    if (test_args::has_command_option(args_vec, "--num-iterations")) {
-        input_args.num_iterations = std::stoi(test_args::get_command_option(args_vec, "--num-iterations"));
-    }
-    if (test_args::has_command_option(args_vec, "--data-size")) {
-        input_args.data_size = std::stoi(test_args::get_command_option(args_vec, "--data-size"));
-        TT_FATAL(
-            input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
-            "Data size must be less than or equal to the L1 unreserved size: {} bytes",
-            tt::tt_metal::hal::get_erisc_l1_unreserved_size());
-    } else {
-        input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
-    }
+    try {
+        auto result = options.parse(argc, argv);
 
-    if (test_args::has_command_option(args_vec, "--packet-size-bytes")) {
-        input_args.packet_size_bytes = std::stoi(test_args::get_command_option(args_vec, "--packet-size-bytes"));
+        if (result.count("help")) {
+            input_args.help = true;
+            return;
+        }
+
+        // Parse cabling descriptor path
+        if (result.count("cabling-descriptor-path")) {
+            input_args.cabling_descriptor_path = result["cabling-descriptor-path"].as<std::string>();
+        }
+
+        // Parse deployment descriptor path
+        if (result.count("deployment-descriptor-path")) {
+            TT_FATAL(
+                input_args.cabling_descriptor_path.has_value(),
+                "Cabling Descriptor Path is required when Deployment Descriptor Path is provided.");
+            input_args.deployment_descriptor_path = result["deployment-descriptor-path"].as<std::string>();
+        }
+
+        // Parse factory descriptor path
+        if (result.count("factory-descriptor-path")) {
+            TT_FATAL(
+                !(input_args.cabling_descriptor_path.has_value() || input_args.deployment_descriptor_path.has_value()),
+                "Pass in either Cabling Spec + Deployment Spec or just Factory System Descriptor.");
+            input_args.fsd_path = result["factory-descriptor-path"].as<std::string>();
+        }
+
+        // Parse global descriptor path
+        if (result.count("global-descriptor-path")) {
+            input_args.gsd_path = result["global-descriptor-path"].as<std::string>();
+        }
+
+        // Parse output path
+        if (result.count("output-path")) {
+            input_args.output_path = std::filesystem::path(result["output-path"].as<std::string>());
+        } else {
+            input_args.output_path = generate_output_dir();
+        }
+
+        // Parse num iterations
+        input_args.num_iterations = result["num-iterations"].as<uint32_t>();
+
+        // Parse data size
+        if (result.count("data-size")) {
+            input_args.data_size = result["data-size"].as<uint32_t>();
+            TT_FATAL(
+                input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
+                "Data size must be less than or equal to the L1 unreserved size: {} bytes",
+                tt::tt_metal::hal::get_erisc_l1_unreserved_size());
+        } else {
+            input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+        }
+
+        // Parse packet size
+        input_args.packet_size_bytes = result["packet-size-bytes"].as<uint32_t>();
         TT_FATAL(
             input_args.data_size % input_args.packet_size_bytes == 0, "Data size must be divisible by packet size");
         TT_FATAL(input_args.packet_size_bytes % 16 == 0, "Packet size must be divisible by 16");
-    }
-    log_output_rank0("Generating System Validation Logs in " + input_args.output_path.string());
 
-    input_args.fail_on_warning = test_args::has_command_option(args_vec, "--hard-fail");
-    input_args.log_ethernet_metrics = test_args::has_command_option(args_vec, "--log-ethernet-metrics");
-    input_args.print_connectivity = test_args::has_command_option(args_vec, "--print-connectivity");
-    input_args.send_traffic = test_args::has_command_option(args_vec, "--send-traffic");
-    input_args.sweep_traffic_configs = test_args::has_command_option(args_vec, "--sweep-traffic-configs");
-    input_args.validate_connectivity =
-        input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+        log_output_rank0("Generating System Validation Logs in " + input_args.output_path.string());
+
+        // Parse boolean flags
+        input_args.fail_on_warning = result["hard-fail"].as<bool>();
+        input_args.log_ethernet_metrics = result["log-ethernet-metrics"].as<bool>();
+        input_args.print_connectivity = result["print-connectivity"].as<bool>();
+        input_args.send_traffic = result["send-traffic"].as<bool>();
+        input_args.sweep_traffic_configs = result["sweep-traffic-configs"].as<bool>();
+        input_args.validate_connectivity =
+            input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+
+        // Parse min-connections
+        if (result.count("min-connections")) {
+            uint32_t min_conn_value = result["min-connections"].as<uint32_t>();
+            TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
+            input_args.min_connections = min_conn_value;
+            log_output_rank0(
+                "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
+                std::to_string(input_args.min_connections.value()));
+        }
+
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
+        std::cerr << options.help() << std::endl;
+        exit(1);
+    }
 }
 
-InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
+InputArgs parse_input_args(int argc, char* argv[]) {
     InputArgs input_args;
 
-    if (test_args::has_command_option(args_vec, "--help")) {
+    // Check for top-level help first
+    if (argc >= 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
         input_args.help = true;
         return input_args;
     }
 
     // Check for subcommand and dispatch to appropriate parser
-    if (args_vec.size() > 1 && args_vec[1] == "link_reset") {
-        parse_link_reset_args(args_vec, input_args);
+    if (argc > 1 && std::string(argv[1]) == "link_reset") {
+        parse_link_reset_args(argc, argv, input_args);
     } else {
-        parse_validation_args(args_vec, input_args);
+        parse_validation_args(argc, argv, input_args);
     }
 
     return input_args;
@@ -240,74 +295,33 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     }
 }
 
-void cleanup_metadata(const InputArgs& input_args, const std::string& gsd_file, const std::string& fsd_file) {
-    // Remove GSD file
-    std::filesystem::remove(gsd_file);
-    if (!input_args.fsd_path.has_value()) {
-        // Remove FSD file
-        std::filesystem::remove(fsd_file);
-    } else {
-        TT_FATAL(fsd_file == input_args.fsd_path.value(), "Internal error: Expected FSD File Paths to match");
-    }
-}
-
 AsicTopology run_connectivity_validation(
     const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     if (!input_args.validate_connectivity) {
         return {};
     }
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    std::string gsd_yaml_filename = "global_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".yaml";
-    std::string gsd_yaml_path = input_args.output_path / gsd_yaml_filename;
-    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
-
-    const auto fsd_path = get_factory_system_descriptor_path(
+    YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
+    auto fsd_proto = get_factory_system_descriptor(
         input_args.cabling_descriptor_path,
         input_args.deployment_descriptor_path,
         input_args.fsd_path,
-        input_args.output_path.string(),
         physical_system_descriptor.get_all_hostnames());
-    auto missing_topology =
-        validate_connectivity(fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor);
+    auto missing_topology = validate_connectivity(
+        fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
 
-    // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
-    // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
-    // post validation (for all ranks except rank 0).
-    if (*distributed_context.rank() != 0) {
-        cleanup_metadata(input_args, gsd_yaml_path, fsd_path);
-    }
     return missing_topology;
 }
 
-void print_usage_info() {
-    std::cout << "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster" << std::endl;
-    std::cout << "Compares live system state against the requested Cabling and Deployment Specifications" << std::endl
-              << std::endl;
-
-    std::cout << "Usage:" << std::endl;
-    std::cout << "  run_cluster_validation [OPTIONS]                # Run validation (default)" << std::endl;
-    std::cout << "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link" << std::endl;
-    std::cout << std::endl;
-
-    std::cout << "Validation Mode Options:" << std::endl;
-    for (const auto& [arg, description] : VALIDATION_ARGS) {
-        std::cout << "  " << arg << ": " << description << std::endl;
+void print_usage_info(CommandMode mode = CommandMode::VALIDATE) {
+    if (mode == CommandMode::LINK_RETRAIN) {
+        auto options = create_link_reset_options();
+        std::cout << options.help() << std::endl;
+    } else {
+        auto options = create_validation_options();
+        std::cout << options.help() << std::endl;
+        std::cout << "link_reset Subcommand:" << std::endl;
+        std::cout << "  Use 'run_cluster_validation link_reset --help' for link_reset options." << std::endl;
     }
-    std::cout << std::endl;
-
-    std::cout << "link_reset Subcommand Options:" << std::endl;
-    for (const auto& [arg, description] : LINK_RETRAIN_ARGS) {
-        if (arg != "--help") {  // help is a not subcommand specific argument currently
-            std::cout << "  " << arg << ": " << description << std::endl;
-        }
-    }
-    std::cout << std::endl;
-
-    std::cout << "General Options:" << std::endl;
-    std::cout << "  --help: Print usage information" << std::endl;
-    std::cout << std::endl;
-
-    std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
 }
 
 void set_config_vars() {
@@ -332,9 +346,9 @@ int main(int argc, char* argv[]) {
 
     set_config_vars();
 
-    auto input_args = parse_input_args(std::vector<std::string>(argv, argv + argc));
+    auto input_args = parse_input_args(argc, argv);
     if (input_args.help) {
-        print_usage_info();
+        print_usage_info(input_args.mode);
         return 0;
     }
 
