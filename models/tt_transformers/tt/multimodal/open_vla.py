@@ -262,20 +262,27 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 
 class OpenVLALanguageModel(GenerationMixin):
-    def __init__(self, device, local_state_dict=None):
+    def __init__(self, device, local_state_dict=None, aggressive_perf=False):
         self.device = device  # Store device reference for profiler flushing
+
+        # Use aggressive performance mode to maximize FPS (may affect accuracy slightly)
+        # This uses LOFI for decode operations where most time is spent
+        optimization_mode = "performance"  # Default performance mode
+
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
             "mesh_device": device,
             "instruct": False,
             "global_batch_size": 1,
-            "optimizations": "performance",  # Use performance optimizations to reduce memory usage
+            "optimizations": optimization_mode,
             "max_seq_len": 1024,
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
             "paged_attention": True,
             "num_layers": 32,  # Default number of layers for LLaMA model
         }
+
+        self.aggressive_perf = aggressive_perf
 
         def model_factory_fn(*args, **kwargs):
             return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
@@ -290,6 +297,25 @@ class OpenVLALanguageModel(GenerationMixin):
         ) = prepare_generator_args(**self.generator_args_config, model_factory_fn=model_factory_fn)
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
         self.num_actions = 1
+
+        # Apply aggressive performance overrides if requested
+        # This uses LOFI for all decode operations to maximize throughput
+        if self.aggressive_perf:
+            from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
+
+            model_config = self.model_args[0].get_model_config()
+            opt = model_config["DECODERS_OPTIMIZATIONS"]
+            # Override decode ops to use LOFI (most aggressive) for all decoder layers
+            for decoder_id in opt.decoder_optimizations:
+                decoder_opt = opt.decoder_optimizations[decoder_id]
+                # Override decode ops to use LOFI
+                decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
+                decoder_opt._opt_settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.LOFI
+                decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
+                decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
+                # Also use HIFI2 for prefill SDPA (currently HIFI4)
+                decoder_opt._opt_settings["OpFidelity"][OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI2
+            print("[AGGRESSIVE PERF] Using LOFI for decode ops, HIFI2 for prefill SDPA")
 
         # Cache for page tables and rope slices to avoid repeated host->device transfers
         # Key: padded_seq_len, Value: cached tensor
@@ -997,8 +1023,9 @@ class PrismaticPreTrainedModel(PreTrainedModel):
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
-    def __init__(self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None) -> None:
+    def __init__(self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False) -> None:
         super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
+        self.aggressive_perf = aggressive_perf
 
         # [Validation] Lightweight Validate on `config` Fields + Dependency Versions
         if config.use_fused_vision_backbone is None:
@@ -1058,7 +1085,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         # Instantiate LLM Backbone
         if ttnn_device is not None:
             CHECKPOINTS.checkpoint("start_LLama2INIT")
-            self.language_model = OpenVLALanguageModel(ttnn_device, local_state_dict=local_state_dict)
+            self.language_model = OpenVLALanguageModel(
+                ttnn_device, local_state_dict=local_state_dict, aggressive_perf=self.aggressive_perf
+            )
             CHECKPOINTS.checkpoint("end_LLama2INIT")
         else:
             self.language_model = AutoModelForCausalLM.from_config(
@@ -1386,8 +1415,10 @@ def get_final_action(generated_ids, action_dims, bin_centers, vocab_size, action
 class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, GenerationMixin):
     config_class: PretrainedConfig = OpenVLAConfig
 
-    def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None) -> None:
-        super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
+    def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False) -> None:
+        super().__init__(
+            config, ttnn_device=ttnn_device, local_state_dict=local_state_dict, aggressive_perf=aggressive_perf
+        )
         self.norm_stats = config.norm_stats
         self.ttnn_device = ttnn_device
         # Compute action bins
@@ -1577,9 +1608,14 @@ def test_openvla_model(mesh_device, iterations):
     }
     config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors).to(
-        "cpu", dtype=torch.bfloat16
-    )
+    # Enable aggressive performance mode via environment variable for maximum FPS
+    # Set OPENVLA_AGGRESSIVE_PERF=1 to enable LOFI for decode operations
+    aggressive_perf = os.environ.get("OPENVLA_AGGRESSIVE_PERF", "0") == "1"
+    vla = TTOpenVLAForActionPrediction(
+        vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors, aggressive_perf=aggressive_perf
+    ).to("cpu", dtype=torch.bfloat16)
+    if aggressive_perf:
+        print("[INFO] Aggressive performance mode ENABLED - using LOFI for decode ops")
 
     # Full model: 32 layers, 7 actions (no reduction)
     print(f"Running FULL MODEL: 32 layers, 7 action tokens")
