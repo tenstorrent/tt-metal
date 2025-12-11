@@ -67,7 +67,7 @@ std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
             std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
         }
 
-        if (auto p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+        if (auto* p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
             recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
         } else {
             TT_THROW("Cannot cast to MeshDevice");
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     // bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, W};
 
-    auto compute_kernel_file =
+    const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_pre_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
