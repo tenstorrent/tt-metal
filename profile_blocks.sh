@@ -38,15 +38,16 @@ profile_block() {
 
 # Check arguments
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [all|1|2|3|4|5|full]"
+    echo "Usage: $0 [all|1|2|3|4|5|6|llm|full]"
     echo ""
     echo "Blocks:"
     echo "  1    - DinoV2 Vision Backbone"
     echo "  2    - SigLIP Vision Backbone"
     echo "  3    - Projector"
-    echo "  4    - LLM Prefill"
-    echo "  5    - LLM Decode Single Step"
-    echo "  full - Full OpenVLA Model (32 layers, 7 actions)"
+    echo "  4    - LLM Prefill only"
+    echo "  5    - LLM Decode (7 steps, no warmup - matches open_vla.py)"
+    echo "  6/llm- Full LLM (32 layers, prefill + 7 decodes) - NO vision"
+    echo "  full - Full OpenVLA Model (vision + LLM, 32 layers, 7 actions)"
     echo "  all  - Profile all blocks sequentially"
     exit 1
 fi
@@ -75,8 +76,16 @@ case "$1" in
     5)
         profile_block 5 "llm_decode" "test_block5_llm_decode_only"
         ;;
+    6|llm)
+        echo "Profiling Full LLM (32 layers, prefill + 7 decode steps)..."
+        echo "This profiles the LLaMA portion only, WITHOUT vision/projector."
+        python3 tools/tracy/profile_this.py \
+            -n "llm_full_32layers" \
+            -c "pytest test_openvla_blocks.py::test_block6_llm_full -v -s"
+        echo "✓ Full LLM profiling complete!"
+        ;;
     full)
-        echo "Profiling Full OpenVLA Model (32 layers, 7 actions)..."
+        echo "Profiling Full OpenVLA Model (vision + LLM, 32 layers, 7 actions)..."
         python3 tools/tracy/profile_this.py \
             -n "full_openvla_model" \
             -c "pytest models/tt_transformers/tt/multimodal/open_vla.py::test_openvla_model -v -s"
@@ -84,7 +93,7 @@ case "$1" in
         ;;
     *)
         echo "Invalid option: $1"
-        echo "Use: all, 1, 2, 3, 4, 5, or full"
+        echo "Use: all, 1, 2, 3, 4, 5, 6, llm, or full"
         exit 1
         ;;
 esac

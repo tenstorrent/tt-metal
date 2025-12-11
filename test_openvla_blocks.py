@@ -293,8 +293,10 @@ def test_block4_llm_prefill_only(mesh_device):
     indirect=True,
 )
 def test_block5_llm_decode_only(mesh_device):
-    """Profile LLM decode only (single step)."""
-    print("\n=== Profiling Block 5: LLM Decode (1 step) ===")
+    """Profile LLM decode only (7 steps like OpenVLA action tokens)."""
+    import time
+
+    print("\n=== Profiling Block 5: LLM Decode (7 steps) ===")
 
     from models.tt_transformers.tt.multimodal.open_vla import OpenVLALanguageModel
 
@@ -303,20 +305,145 @@ def test_block5_llm_decode_only(mesh_device):
     # Create language model
     language_model = OpenVLALanguageModel(mesh_device)
 
+    # Number of decode steps (7 action tokens like OpenVLA)
+    num_decode_steps = 7
+
     # Dummy token for decode
     dummy_token = torch.tensor([[1]], dtype=torch.long)
-    current_pos = torch.tensor([10])
+    current_pos = torch.tensor([267])  # After prefill of ~267 tokens
 
-    # Profile single decode step
-    print("Running LLM decode (1 step)...")
-    logits = language_model.generator.decode_forward_text(
-        dummy_token,
-        current_pos,
-        page_table=language_model.page_table,
-        kv_cache=language_model.tt_kv_cache,
-        sampling_params=None,
-    )
+    # Profile 7 decode steps (like OpenVLA)
+    # enable_trace=False for profiling to get proper visualizer data
+    print(f"Running LLM decode ({num_decode_steps} steps)...")
     ttnn.synchronize_device(mesh_device)
+    start_time = time.time()
 
-    print(f"Decode logits shape: {logits.shape}")
+    for i in range(num_decode_steps):
+        logits = language_model.generator.decode_forward_text(
+            dummy_token,
+            current_pos + i,
+            page_table=language_model.page_table,
+            kv_cache=language_model.tt_kv_cache,
+            sampling_params=None,
+            enable_trace=False,  # False for profiling, True for performance
+        )
+        # Flush profiler buffer after each decode step to prevent overflow
+        ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+        # Get next token for autoregressive
+        dummy_token = torch.argmax(logits, dim=-1).unsqueeze(0)
+
+    ttnn.synchronize_device(mesh_device)
+    decode_time = time.time() - start_time
+
+    print(f"Total decode time ({num_decode_steps} steps): {decode_time*1000:.2f} ms")
+    print(f"Per-step decode time: {decode_time*1000/num_decode_steps:.2f} ms")
     print("=== Block 5 Complete ===\n")
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 81920,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), (1, 1))
+    ],
+    indirect=True,
+)
+def test_block6_llm_full(mesh_device):
+    """
+    Profile full LLM (LLaMA-2-7B) as used in OpenVLA:
+    - 32 layers
+    - Prefill with ~267 tokens (simulating 1 BOS + 256 vision + 10 text)
+    - 7 decode steps (7 action tokens)
+
+    This profiles just the LLM portion without vision/projector overhead.
+    """
+    import time
+
+    print("\n" + "=" * 60)
+    print("Profiling Block 6: Full LLM (32 layers, prefill + 7 decodes)")
+    print("=" * 60)
+
+    from models.tt_transformers.tt.multimodal.open_vla import OpenVLALanguageModel
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    os.environ["HF_MODEL"] = "meta-llama/Llama-2-7b-hf"
+
+    # Create language model (32 layers)
+    print("\n[1/4] Initializing LLaMA-2-7B (32 layers)...")
+    language_model = OpenVLALanguageModel(mesh_device)
+    language_model.num_actions = 7  # Set to 7 action tokens like OpenVLA
+    # model_args is a list, access first element
+    model_args = language_model.model_args[0]
+    print(f"      Model layers: {model_args.n_layers}")
+    print(f"      Hidden dim: {model_args.dim}")
+    print(f"      Num heads: {model_args.n_heads}")
+    print(f"      Action tokens: {language_model.num_actions}")
+
+    # Create input that simulates OpenVLA's input:
+    # 1 BOS + 256 vision patches + ~10 text tokens = ~267 tokens
+    print("\n[2/4] Preparing inputs (simulating ~267 token prefill)...")
+
+    # In OpenVLA: [BOS, 256 vision patches, text tokens] → ~267 tokens total
+    seq_len = 267  # Simulating OpenVLA input length
+    hidden_dim = model_args.dim  # 4096 for LLaMA-2-7B
+
+    # Create dummy embeddings tensor [batch, 1, seq_len, hidden_dim]
+    dummy_embeds = torch.randn(1, 1, seq_len, hidden_dim, dtype=torch.bfloat16)
+
+    # Convert to TTNN
+    inputs_embeds = ttnn.from_torch(
+        dummy_embeds,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+
+    print(f"      Input shape: {inputs_embeds.shape}")
+    padded_len = get_padded_prefill_len(seq_len)
+    print(f"      Padded length: {padded_len}")
+
+    # ========== PREFILL + DECODE ==========
+    print("\n[3/4] Running PREFILL (32 layers, ~267 tokens) + 7 DECODE steps...")
+    ttnn.synchronize_device(mesh_device)
+    start_time = time.time()
+
+    # Call the language model's __call__ method which handles:
+    # 1. Prefill (process all input tokens)
+    # 2. 7 decode steps (generate 7 action tokens)
+    language_model_output = language_model(
+        inputs_embeds=inputs_embeds,
+        return_dict=True,
+    )
+
+    ttnn.synchronize_device(mesh_device)
+    total_time = time.time() - start_time
+    print(f"      Total LLM time: {total_time*1000:.2f} ms")
+
+    # ========== SUMMARY ==========
+    print("\n" + "=" * 60)
+    print("Block 6 Summary: Full LLM Profiling (prefill + 7 decodes)")
+    print("=" * 60)
+    print(f"  Layers:         32")
+    print(f"  Prefill tokens: {seq_len} (padded to {padded_len})")
+    print(f"  Decode tokens:  7 (action tokens)")
+    print(f"  Total LLM time: {total_time*1000:.2f} ms")
+    print(f"  LLM FPS:        {1.0/total_time:.2f}")
+    print("=" * 60 + "\n")
