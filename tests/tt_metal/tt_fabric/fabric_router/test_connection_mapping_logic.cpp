@@ -72,16 +72,13 @@ TEST_F(RouterConnectionMappingTest, MappingDriven_INTRA_MESH_Connections) {
         RoutingDirection::N,
         false);  // No Z router
 
-    // 2D Mesh router: channel 0 (local), channels 1-3 (peers N/E/S/W)
-    // Channel 0: local, no downstream
-    auto local_targets = mesh_mapping.get_downstream_targets(0, 0);
-    EXPECT_EQ(local_targets.size(), 0);
+    // 2D Mesh router: receiver channel 0 has 3 INTRA_MESH targets (peers in 3 directions)
+    auto targets = mesh_mapping.get_downstream_targets(0, 0);
+    EXPECT_EQ(targets.size(), builder_config::num_downstream_edms_2d_vc0);
 
-    // Channels 1-3: peer channels with INTRA_MESH targets
-    for (uint32_t sender_ch = 1; sender_ch <= builder_config::num_downstream_edms_2d_vc0; ++sender_ch) {
-        auto targets = mesh_mapping.get_downstream_targets(0, sender_ch);
-        EXPECT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
+    // All targets should be INTRA_MESH
+    for (const auto& target : targets) {
+        EXPECT_EQ(target.type, ConnectionType::INTRA_MESH);
     }
 }
 
@@ -92,21 +89,22 @@ TEST_F(RouterConnectionMappingTest, MappingDriven_MESH_TO_Z_Connection) {
         RoutingDirection::N,
         true);  // Has Z router
 
-    // MESH_TO_Z channel (channel after mesh directions) should have MESH_TO_Z target
-    auto targets = mesh_mapping.get_downstream_targets(0, builder_config::num_sender_channels_2d_mesh);
+    // Receiver channel 0 should have MESH_TO_Z target among its targets
+    auto targets = mesh_mapping.get_downstream_targets(0, 0);
 
-    ASSERT_EQ(targets.size(), 1);
-    EXPECT_EQ(targets[0].type, ConnectionType::MESH_TO_Z);
-    EXPECT_EQ(targets[0].target_vc, 0);  // Mesh VC0 → Z VC0
-    ASSERT_TRUE(targets[0].target_direction.has_value());
-    EXPECT_EQ(targets[0].target_direction.value(), RoutingDirection::Z);
+    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, targets.end());
+    EXPECT_EQ(mesh_to_z_it->target_vc, 0);  // Mesh VC0 → Z VC0
+    ASSERT_TRUE(mesh_to_z_it->target_direction.has_value());
+    EXPECT_EQ(mesh_to_z_it->target_direction.value(), RoutingDirection::Z);
 }
 
 TEST_F(RouterConnectionMappingTest, MappingDriven_Z_TO_MESH_Connections) {
     // Verify Z_TO_MESH connections are in the mapping
     auto z_mapping = RouterConnectionMapping::for_z_router();
 
-    // Z router VC1 should have Z_TO_MESH targets for all mesh directions (N/E/S/W intent)
+    // Z router VC1 receiver channel 0 should have Z_TO_MESH targets for all mesh directions (N/E/S/W intent)
     std::vector<RoutingDirection> expected_directions = {
         RoutingDirection::N,
         RoutingDirection::E,
@@ -114,14 +112,19 @@ TEST_F(RouterConnectionMappingTest, MappingDriven_Z_TO_MESH_Connections) {
         RoutingDirection::W
     };
 
-    for (size_t i = 0; i < builder_config::num_mesh_directions_2d; ++i) {
-        auto targets = z_mapping.get_downstream_targets(1, i);
+    auto targets = z_mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), builder_config::num_mesh_directions_2d);
 
-        ASSERT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
-        EXPECT_EQ(targets[0].target_vc, 1);  // Z VC1 → Mesh VC1
-        ASSERT_TRUE(targets[0].target_direction.has_value());
-        EXPECT_EQ(targets[0].target_direction.value(), expected_directions[i]);
+    // Verify all expected directions are present
+    for (const auto& expected_dir : expected_directions) {
+        auto it = std::find_if(targets.begin(), targets.end(),
+            [expected_dir](const ConnectionTarget& t) {
+                return t.target_direction.has_value() && 
+                       t.target_direction.value() == expected_dir;
+            });
+        ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
+        EXPECT_EQ(it->type, ConnectionType::Z_TO_MESH);
+        EXPECT_EQ(it->target_vc, 1);  // Z VC1 → Mesh VC1
     }
 }
 
@@ -139,18 +142,20 @@ TEST_F(RouterConnectionMappingTest, AsymmetricConnections_MeshToZ_vs_ZToMesh) {
 
     auto z_mapping = RouterConnectionMapping::for_z_router();
 
-    // MESH_TO_Z: Mesh VC0 channel (after mesh directions) → Z VC0
-    auto mesh_to_z = mesh_mapping.get_downstream_targets(0, builder_config::num_sender_channels_2d_mesh);
-    ASSERT_EQ(mesh_to_z.size(), 1);
-    EXPECT_EQ(mesh_to_z[0].type, ConnectionType::MESH_TO_Z);
-    EXPECT_EQ(mesh_to_z[0].target_vc, 0);
+    // MESH_TO_Z: Mesh VC0 receiver channel 0 has MESH_TO_Z target → Z VC0
+    auto mesh_targets = mesh_mapping.get_downstream_targets(0, 0);
+    auto mesh_to_z_it = std::find_if(mesh_targets.begin(), mesh_targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, mesh_targets.end());
+    EXPECT_EQ(mesh_to_z_it->target_vc, 0);
 
-    // Z_TO_MESH: Z VC1 channels (all mesh directions) → Mesh VC1
-    for (uint32_t ch = 0; ch < builder_config::num_mesh_directions_2d; ++ch) {
-        auto z_to_mesh = z_mapping.get_downstream_targets(1, ch);
-        ASSERT_EQ(z_to_mesh.size(), 1);
-        EXPECT_EQ(z_to_mesh[0].type, ConnectionType::Z_TO_MESH);
-        EXPECT_EQ(z_to_mesh[0].target_vc, 1);  // Different VC!
+    // Z_TO_MESH: Z VC1 receiver channel 0 has 4 targets (all mesh directions) → Mesh VC1
+    auto z_targets = z_mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(z_targets.size(), builder_config::num_mesh_directions_2d);
+    
+    for (const auto& target : z_targets) {
+        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
+        EXPECT_EQ(target.target_vc, 1);  // Different VC!
     }
 
     // Key insight: Different VCs, different directions, different connection types
@@ -165,16 +170,20 @@ TEST_F(RouterConnectionMappingTest, AsymmetricConnections_VCAssignments) {
         RoutingDirection::E,
         true);
 
-    auto mesh_targets = mesh_mapping.get_downstream_targets(0, builder_config::num_sender_channels_2d_mesh);
-    ASSERT_EQ(mesh_targets.size(), 1);
-    EXPECT_EQ(mesh_targets[0].target_vc, 0);
+    auto mesh_targets = mesh_mapping.get_downstream_targets(0, 0);
+    auto mesh_to_z_it = std::find_if(mesh_targets.begin(), mesh_targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, mesh_targets.end());
+    EXPECT_EQ(mesh_to_z_it->target_vc, 0);
 
     // Z VC1 → Mesh VC1 (distribution)
     auto z_mapping = RouterConnectionMapping::for_z_router();
 
     auto z_targets = z_mapping.get_downstream_targets(1, 0);
-    ASSERT_EQ(z_targets.size(), 1);
-    EXPECT_EQ(z_targets[0].target_vc, 1);
+    ASSERT_EQ(z_targets.size(), 4);  // 4 targets (N/E/S/W)
+    for (const auto& target : z_targets) {
+        EXPECT_EQ(target.target_vc, 1);
+    }
 }
 
 // ============================================================================
@@ -187,11 +196,12 @@ TEST_F(RouterConnectionMappingTest, EdgeDevice_TwoMeshRouters_ZMapping) {
 
     auto z_mapping = RouterConnectionMapping::for_z_router();
 
-    // Mapping always specifies all mesh directions (intent)
-    for (uint32_t ch = 0; ch < builder_config::num_mesh_directions_2d; ++ch) {
-        auto targets = z_mapping.get_downstream_targets(1, ch);
-        EXPECT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
+    // Receiver channel 0 on VC1 has all mesh direction targets (intent)
+    auto targets = z_mapping.get_downstream_targets(1, 0);
+    EXPECT_EQ(targets.size(), builder_config::num_mesh_directions_2d);
+    
+    for (const auto& target : targets) {
+        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
     }
 
     // FabricBuilder will check if routers exist before connecting
@@ -203,10 +213,10 @@ TEST_F(RouterConnectionMappingTest, EdgeDevice_ThreeMeshRouters_MappingIntent) {
 
     auto z_mapping_center = RouterConnectionMapping::for_z_router();
 
-    // All mesh direction sender channels should have targets (N/E/S/W)
-    for (uint32_t ch = 0; ch < builder_config::num_mesh_directions_2d; ++ch) {
-        EXPECT_TRUE(z_mapping_center.has_targets(1, ch));
-    }
+    // Receiver channel 0 on VC1 should have all mesh direction targets (N/E/S/W)
+    EXPECT_TRUE(z_mapping_center.has_targets(1, 0));
+    auto targets = z_mapping_center.get_downstream_targets(1, 0);
+    EXPECT_EQ(targets.size(), builder_config::num_mesh_directions_2d);
 
     // configure_local_connections() will gracefully skip missing routers
 }
@@ -351,14 +361,21 @@ TEST_F(RouterConnectionMappingTest, DirectionBased_ZRouter_ChannelToDirection) {
         {3, RoutingDirection::W}
     };
 
-    // Verify all mesh directions are mapped correctly
+    // Verify all mesh directions are mapped correctly in receiver channel 0
     TT_FATAL(expected.size() == builder_config::num_mesh_directions_2d, "Test configuration mismatch");
 
-    for (const auto& [channel, expected_dir] : expected) {
-        auto targets = z_mapping.get_downstream_targets(1, channel);
-        ASSERT_EQ(targets.size(), 1);
-        ASSERT_TRUE(targets[0].target_direction.has_value());
-        EXPECT_EQ(targets[0].target_direction.value(), expected_dir);
+    auto targets = z_mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), expected.size());
+
+    // Verify each expected direction is present
+    for (const auto& [channel_idx, expected_dir] : expected) {
+        auto it = std::find_if(targets.begin(), targets.end(),
+            [expected_dir](const ConnectionTarget& t) {
+                return t.target_direction.has_value() && 
+                       t.target_direction.value() == expected_dir;
+            });
+        ASSERT_NE(it, targets.end());
+        EXPECT_EQ(it->target_direction.value(), expected_dir);
     }
 }
 
@@ -369,11 +386,13 @@ TEST_F(RouterConnectionMappingTest, DirectionBased_MeshRouter_MeshToZ) {
         RoutingDirection::S,
         true);
 
-    auto targets = mesh_mapping.get_downstream_targets(0, builder_config::num_sender_channels_2d_mesh);
-    ASSERT_EQ(targets.size(), 1);
-    EXPECT_EQ(targets[0].type, ConnectionType::MESH_TO_Z);
-    ASSERT_TRUE(targets[0].target_direction.has_value());
-    EXPECT_EQ(targets[0].target_direction.value(), RoutingDirection::Z);
+    auto targets = mesh_mapping.get_downstream_targets(0, 0);
+    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, targets.end());
+    EXPECT_EQ(mesh_to_z_it->type, ConnectionType::MESH_TO_Z);
+    ASSERT_TRUE(mesh_to_z_it->target_direction.has_value());
+    EXPECT_EQ(mesh_to_z_it->target_direction.value(), RoutingDirection::Z);
 }
 
 // ============================================================================
@@ -392,22 +411,23 @@ TEST_F(RouterConnectionMappingTest, Regression_MeshToMesh_StillWorks) {
         RoutingDirection::S,
         false);
 
-    // Both should have INTRA_MESH targets
-    bool n_has_targets = false;
-    bool s_has_targets = false;
+    // Both should have INTRA_MESH targets on receiver channel 0
+    EXPECT_TRUE(mesh_n.has_targets(0, 0));
+    EXPECT_TRUE(mesh_s.has_targets(0, 0));
 
-    // Check all mesh direction channels (skip local channel 0)
-    for (uint32_t ch = 1; ch <= builder_config::num_sender_channels_2d_mesh; ++ch) {
-        if (mesh_n.has_targets(0, ch)) {
-            n_has_targets = true;
-        }
-        if (mesh_s.has_targets(0, ch)) {
-            s_has_targets = true;
-        }
+    auto n_targets = mesh_n.get_downstream_targets(0, 0);
+    auto s_targets = mesh_s.get_downstream_targets(0, 0);
+
+    EXPECT_GT(n_targets.size(), 0);
+    EXPECT_GT(s_targets.size(), 0);
+
+    // All should be INTRA_MESH
+    for (const auto& target : n_targets) {
+        EXPECT_EQ(target.type, ConnectionType::INTRA_MESH);
     }
-
-    EXPECT_TRUE(n_has_targets);
-    EXPECT_TRUE(s_has_targets);
+    for (const auto& target : s_targets) {
+        EXPECT_EQ(target.type, ConnectionType::INTRA_MESH);
+    }
 }
 
 TEST_F(RouterConnectionMappingTest, Regression_1D_Topology_StillWorks) {
@@ -417,9 +437,9 @@ TEST_F(RouterConnectionMappingTest, Regression_1D_Topology_StillWorks) {
         RoutingDirection::E,
         false);
 
-    // 1D should have fewer channels than 2D
-    // Channel 1 should have INTRA_MESH target
-    auto targets = mesh_1d.get_downstream_targets(0, 1);
+    // 1D should have fewer targets than 2D
+    // Receiver channel 0 should have 1 INTRA_MESH target
+    auto targets = mesh_1d.get_downstream_targets(0, 0);
     EXPECT_EQ(targets.size(), 1);
     EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
 }

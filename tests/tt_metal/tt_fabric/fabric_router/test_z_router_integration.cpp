@@ -12,7 +12,7 @@
 #include "tt_metal/fabric/builder/connection_registry.hpp"
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -137,21 +137,23 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_AllDirections) {
     // Test that Z router connection mapping specifies all 4 directions
     auto mapping = RouterConnectionMapping::for_z_router();
 
-    // Z router VC1 should have 4 sender channels (0-3) for N/E/S/W
+    // Z router VC1 receiver channel 0 should have 4 targets for N/E/S/W
     std::vector<RoutingDirection> expected_dirs = {
         RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W
     };
 
-    for (size_t i = 0; i < 4; ++i) {
-        auto targets = mapping.get_downstream_targets(1, i);
-        ASSERT_EQ(targets.size(), 1) << "Z VC1 sender " << i << " should have 1 target";
+    auto targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), 4) << "Z VC1 receiver channel 0 should have 4 targets";
 
-        const auto& target = targets[0];
-        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
-        EXPECT_EQ(target.target_vc, 1) << "Should target mesh VC1";
-        EXPECT_TRUE(target.target_direction.has_value());
-        EXPECT_EQ(target.target_direction.value(), expected_dirs[i])
-            << "Sender " << i << " should target direction " << static_cast<int>(expected_dirs[i]);
+    // Verify all expected directions are present
+    for (const auto& expected_dir : expected_dirs) {
+        auto it = std::find_if(targets.begin(), targets.end(),
+            [expected_dir](const ConnectionTarget& t) { 
+                return t.target_direction == expected_dir; 
+            });
+        ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
+        EXPECT_EQ(it->type, ConnectionType::Z_TO_MESH);
+        EXPECT_EQ(it->target_vc, 1) << "Should target mesh VC1";
     }
 }
 
@@ -160,17 +162,17 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_MeshWithZ_HasMeshToZTarget) {
     auto mapping = RouterConnectionMapping::for_mesh_router(
         Topology::Mesh, RoutingDirection::N, true);  // has_z = true
 
-    // MESH_TO_Z channel is after base channels (channel 4 for 2D)
-    uint32_t mesh_to_z_channel = builder_config::num_sender_channels_2d_mesh;
-    auto targets = mapping.get_downstream_targets(0, mesh_to_z_channel);
+    // Receiver channel 0 should have MESH_TO_Z target among its targets
+    auto targets = mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(targets.size(), 4) << "Receiver channel 0 should have 4 targets";
 
-    ASSERT_EQ(targets.size(), 1) << "MESH_TO_Z channel should have 1 target";
+    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, targets.end()) << "Should have MESH_TO_Z target";
 
-    const auto& target = targets[0];
-    EXPECT_EQ(target.type, ConnectionType::MESH_TO_Z);
-    EXPECT_EQ(target.target_vc, 0) << "Should target Z VC0";
-    EXPECT_TRUE(target.target_direction.has_value());
-    EXPECT_EQ(target.target_direction.value(), RoutingDirection::Z);
+    EXPECT_EQ(mesh_to_z_it->target_vc, 0) << "Should target Z VC0";
+    EXPECT_TRUE(mesh_to_z_it->target_direction.has_value());
+    EXPECT_EQ(mesh_to_z_it->target_direction.value(), RoutingDirection::Z);
 }
 
 // ============================================================================
@@ -422,14 +424,15 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_VC0_CannotBeDownstreamT
     auto mesh_mapping = RouterConnectionMapping::for_mesh_router(
         Topology::Mesh, RoutingDirection::N, true);  // has_z = true
 
-    uint32_t mesh_to_z_channel = builder_config::num_sender_channels_2d_mesh;
-    auto mesh_targets = mesh_mapping.get_downstream_targets(0, mesh_to_z_channel);
+    auto mesh_targets = mesh_mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(mesh_targets.size(), 4);  // 3 INTRA_MESH + 1 MESH_TO_Z
 
-    ASSERT_EQ(mesh_targets.size(), 1);
-    const auto& target = mesh_targets[0];
-    EXPECT_EQ(target.type, ConnectionType::MESH_TO_Z);
-    EXPECT_EQ(target.target_vc, 0) << "MESH_TO_Z should target Z VC0 (receiver)";
-    EXPECT_EQ(target.target_direction.value(), RoutingDirection::Z);
+    auto mesh_to_z_it = std::find_if(mesh_targets.begin(), mesh_targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, mesh_targets.end());
+    
+    EXPECT_EQ(mesh_to_z_it->target_vc, 0) << "MESH_TO_Z should target Z VC0 (receiver)";
+    EXPECT_EQ(mesh_to_z_it->target_direction.value(), RoutingDirection::Z);
 
     // The mapping specifies VC0, which implicitly means the receiver side
     // (since Z VC0 senders have no downstream connections)
@@ -530,12 +533,13 @@ TEST_F(ZRouterIntegrationTest, LinearTopology_NoMeshToZ) {
     auto mapping = RouterConnectionMapping::for_mesh_router(
         Topology::Linear, RoutingDirection::N, true);  // has_z = true
 
-    // Linear has MESH_TO_Z channel at position 2 (after channel 0=worker, 1=peer)
-    uint32_t mesh_to_z_channel = builder_config::num_sender_channels_1d_linear;
-    auto targets = mapping.get_downstream_targets(0, mesh_to_z_channel);
+    // Linear receiver channel 0 should have 2 targets (1 INTRA_MESH + 1 MESH_TO_Z)
+    auto targets = mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(targets.size(), 2);
 
-    ASSERT_EQ(targets.size(), 1);
-    EXPECT_EQ(targets[0].type, ConnectionType::MESH_TO_Z);
+    auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+        [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+    ASSERT_NE(mesh_to_z_it, targets.end());
 }
 
 // ============================================================================

@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <hostdevcommon/fabric_common.h>
 

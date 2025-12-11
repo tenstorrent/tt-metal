@@ -5,7 +5,7 @@
 
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 namespace tt::tt_fabric {
 
@@ -59,10 +59,12 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_1D_NoZ_MappingCreation) {
     // Create connection mapping
     auto conn_mapping = RouterConnectionMapping::for_mesh_router(topology, direction, has_z);
 
-    // Verify mapping has expected structure
-    EXPECT_EQ(conn_mapping.get_total_sender_count(), 1);  // Only channel 1
-    EXPECT_TRUE(conn_mapping.has_targets(0, 1));
-    EXPECT_FALSE(conn_mapping.has_targets(0, 2));  // No MESH_TO_Z channel
+    // Verify mapping has expected structure: receiver channel 0 has 1 target
+    EXPECT_EQ(conn_mapping.get_total_sender_count(), 1);
+    EXPECT_TRUE(conn_mapping.has_targets(0, 0));
+    auto targets = conn_mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(targets.size(), 1);
+    EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
 }
 
 TEST_F(BuilderConnectionMappingTest, MeshRouter_2D_WithZ_MappingCreation) {
@@ -74,34 +76,41 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_2D_WithZ_MappingCreation) {
     // Create connection mapping
     auto conn_mapping = RouterConnectionMapping::for_mesh_router(topology, direction, has_z);
 
-    // Verify mapping has expected structure
-    EXPECT_EQ(conn_mapping.get_total_sender_count(), 4);  // Channels 1-3 + MESH_TO_Z
+    // Verify mapping has expected structure: receiver channel 0 has 4 targets (3 INTRA_MESH + 1 MESH_TO_Z)
+    EXPECT_EQ(conn_mapping.get_total_sender_count(), 4);
+    EXPECT_TRUE(conn_mapping.has_targets(0, 0));
+    
+    auto targets = conn_mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(targets.size(), 4);
 
-    // Verify INTRA_MESH channels
-    EXPECT_TRUE(conn_mapping.has_targets(0, 1));
-    EXPECT_TRUE(conn_mapping.has_targets(0, 2));
-    EXPECT_TRUE(conn_mapping.has_targets(0, 3));
-
-    // Verify MESH_TO_Z channel
-    EXPECT_TRUE(conn_mapping.has_targets(0, 4));
-    auto z_targets = conn_mapping.get_downstream_targets(0, 4);
-    ASSERT_EQ(z_targets.size(), 1);
-    EXPECT_EQ(z_targets[0].type, ConnectionType::MESH_TO_Z);
+    // Count connection types
+    uint32_t intra_mesh_count = 0;
+    uint32_t mesh_to_z_count = 0;
+    for (const auto& target : targets) {
+        if (target.type == ConnectionType::INTRA_MESH) {
+            intra_mesh_count++;
+        } else if (target.type == ConnectionType::MESH_TO_Z) {
+            mesh_to_z_count++;
+        }
+    }
+    EXPECT_EQ(intra_mesh_count, 3);
+    EXPECT_EQ(mesh_to_z_count, 1);
 }
 
 TEST_F(BuilderConnectionMappingTest, ZRouter_MappingCreation) {
     // Simulate what build() does for a Z router
     auto conn_mapping = RouterConnectionMapping::for_z_router();
 
-    // Verify mapping has expected structure
-    EXPECT_EQ(conn_mapping.get_total_sender_count(), 4);  // VC1 channels 0-3
-
-    // Verify all Z_TO_MESH channels
-    for (uint32_t ch = 0; ch < 4; ++ch) {
-        EXPECT_TRUE(conn_mapping.has_targets(1, ch));
-        auto targets = conn_mapping.get_downstream_targets(1, ch);
-        ASSERT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
+    // Verify mapping has expected structure: receiver channel 0 on VC1 has 4 targets
+    EXPECT_EQ(conn_mapping.get_total_sender_count(), 4);
+    EXPECT_TRUE(conn_mapping.has_targets(1, 0));
+    
+    auto targets = conn_mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), 4);
+    
+    // Verify all are Z_TO_MESH
+    for (const auto& target : targets) {
+        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
     }
 }
 
@@ -123,18 +132,19 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_ChannelAndConnectionMapping_Cons
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_mesh_router(topology, routing_dir, has_z);
 
-    // Verify consistency: every sender channel in channel mapping should have connection targets
+    // Verify consistency: receiver channel 0 should have targets matching sender channel count
     uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         uint32_t num_senders = channel_mapping.get_num_sender_channels_for_vc(vc);
 
-        // For mesh router VC0, channels 1-4 should have targets (channel 0 is reserved)
-        for (uint32_t ch = 1; ch <= num_senders && ch <= 4; ++ch) {
-            bool has_channel_mapping = true;  // Channel mapping exists
-            bool has_conn_targets = conn_mapping.has_targets(vc, ch);
-
-            EXPECT_EQ(has_channel_mapping, has_conn_targets)
-                << "VC" << vc << " channel " << ch << " consistency mismatch";
+        // For mesh router VC0, receiver channel 0 should have targets
+        if (num_senders > 0) {
+            EXPECT_TRUE(conn_mapping.has_targets(vc, 0))
+                << "VC" << vc << " receiver channel 0 should have targets";
+            
+            auto targets = conn_mapping.get_downstream_targets(vc, 0);
+            EXPECT_EQ(targets.size(), num_senders)
+                << "VC" << vc << " receiver channel 0 should have " << num_senders << " targets";
         }
     }
 }
@@ -157,11 +167,13 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
     uint32_t vc1_senders = channel_mapping.get_num_sender_channels_for_vc(1);
     EXPECT_EQ(vc1_senders, 4);
 
-    // All VC1 sender channels should have connection targets
-    for (uint32_t ch = 0; ch < vc1_senders; ++ch) {
-        EXPECT_TRUE(conn_mapping.has_targets(1, ch))
-            << "Z router VC1 channel " << ch << " should have connection targets";
-    }
+    // VC1 receiver channel 0 should have 4 targets
+    EXPECT_TRUE(conn_mapping.has_targets(1, 0))
+        << "Z router VC1 receiver channel 0 should have connection targets";
+    
+    auto targets = conn_mapping.get_downstream_targets(1, 0);
+    EXPECT_EQ(targets.size(), vc1_senders)
+        << "Z router VC1 receiver channel 0 should have " << vc1_senders << " targets";
 }
 
 // ============================================================================
@@ -216,11 +228,18 @@ TEST_F(BuilderConnectionMappingTest, FactoryMethod_AllMeshConfigurations) {
         EXPECT_GT(mapping.get_total_sender_count(), 0)
             << "Mapping should have at least one sender channel";
 
+        // Receiver channel 0 should have targets
+        EXPECT_TRUE(mapping.has_targets(0, 0))
+            << "Receiver channel 0 should have targets";
+        
+        auto targets = mapping.get_downstream_targets(0, 0);
+        
         // If has_z, should have MESH_TO_Z target
         if (has_z) {
-            uint32_t z_channel = (topology == Topology::Linear) ? 2 : 4;
-            EXPECT_TRUE(mapping.has_targets(0, z_channel))
-                << "Should have MESH_TO_Z channel";
+            auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+                [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+            EXPECT_NE(mesh_to_z_it, targets.end())
+                << "Should have MESH_TO_Z target";
         }
     }
 }
@@ -228,14 +247,15 @@ TEST_F(BuilderConnectionMappingTest, FactoryMethod_AllMeshConfigurations) {
 TEST_F(BuilderConnectionMappingTest, FactoryMethod_ZRouter) {
     auto mapping = RouterConnectionMapping::for_z_router();
 
-    // Z router should have exactly 4 sender channels on VC1
+    // Z router receiver channel 0 on VC1 should have 4 targets
     EXPECT_EQ(mapping.get_total_sender_count(), 4);
 
+    auto targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(targets.size(), 4);
+    
     // All should be Z_TO_MESH type
-    for (uint32_t ch = 0; ch < 4; ++ch) {
-        auto targets = mapping.get_downstream_targets(1, ch);
-        ASSERT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
+    for (const auto& target : targets) {
+        EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
     }
 }
 
@@ -255,6 +275,7 @@ TEST_F(BuilderConnectionMappingTest, Scenario_FullDevice_4Mesh1Z) {
 
     // Create mesh router mappings
     std::vector<RouterConnectionMapping> mesh_mappings;
+    mesh_mappings.reserve(mesh_dirs.size());
     for (auto dir : mesh_dirs) {
         mesh_mappings.push_back(
             RouterConnectionMapping::for_mesh_router(Topology::Mesh, dir, true));
@@ -265,12 +286,17 @@ TEST_F(BuilderConnectionMappingTest, Scenario_FullDevice_4Mesh1Z) {
 
     // Verify each mesh router has MESH_TO_Z capability
     for (const auto& mapping : mesh_mappings) {
-        EXPECT_TRUE(mapping.has_targets(0, 4))  // Channel 4 is MESH_TO_Z
+        auto targets = mapping.get_downstream_targets(0, 0);
+        auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+            [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+        EXPECT_NE(mesh_to_z_it, targets.end())
             << "Mesh router should have MESH_TO_Z target";
     }
 
     // Verify Z router has Z_TO_MESH capability for all 4 directions
     EXPECT_EQ(z_mapping.get_total_sender_count(), 4);
+    auto z_targets = z_mapping.get_downstream_targets(1, 0);
+    EXPECT_EQ(z_targets.size(), 4);
 }
 
 TEST_F(BuilderConnectionMappingTest, Scenario_EdgeDevice_2Mesh1Z) {
@@ -284,7 +310,10 @@ TEST_F(BuilderConnectionMappingTest, Scenario_EdgeDevice_2Mesh1Z) {
     // Create mesh router mappings
     for (auto dir : mesh_dirs) {
         auto mapping = RouterConnectionMapping::for_mesh_router(Topology::Mesh, dir, true);
-        EXPECT_TRUE(mapping.has_targets(0, 4))
+        auto targets = mapping.get_downstream_targets(0, 0);
+        auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
+            [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
+        EXPECT_NE(mesh_to_z_it, targets.end())
             << "Mesh router should have MESH_TO_Z target";
     }
 

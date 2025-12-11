@@ -101,7 +101,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
     // Compute intermesh VC configuration (requires ControlPlane to be initialized)
-    this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+    // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
 
     // Builder context will be lazy-initialized on first access
     builder_context_ = nullptr;
@@ -190,56 +190,5 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     return false;
 }
 
-IntermeshVCConfig FabricContext::compute_intermesh_vc_config() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-
-    // Check if multiple meshes exist
-    const auto& mesh_ids = mesh_graph.get_mesh_ids();
-    constexpr size_t single_mesh_count = 1;
-    if (mesh_ids.size() <= single_mesh_count) {
-        return IntermeshVCConfig::disabled();
-    }
-
-    // Check if intermesh connections exist
-    const auto& intermesh_connections = mesh_graph.get_requested_intermesh_connections();
-    if (intermesh_connections.empty()) {
-        return IntermeshVCConfig::disabled();
-    }
-
-    // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
-    bool has_z_routers = false;
-    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
-    for (const auto& mesh_connections : inter_mesh_connectivity) {
-        for (const auto& chip_connections : mesh_connections) {
-            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
-                if (router_edge.port_direction == RoutingDirection::Z) {
-                    has_z_routers = true;
-                    break;
-                }
-            }
-            if (has_z_routers) {
-                break;
-            }
-        }
-        if (has_z_routers) {
-            break;
-        }
-    }
-
-    // Default to FULL_MESH when intermesh exists
-    // TODO: Implement detection logic for:
-    //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
-    //   - FULL_MESH_WITH_PASS_THROUGH: Check if any mesh forwards traffic between other meshes
-    constexpr bool needs_mesh_pass_through = false;
-
-    auto config =
-        needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through() : IntermeshVCConfig::full_mesh();
-
-    // Set router type based on detection
-    config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
-
-    return config;
-}
 
 }  // namespace tt::tt_fabric

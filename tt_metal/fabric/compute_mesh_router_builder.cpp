@@ -70,7 +70,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Create channel mapping EARLY (needed for computing injection flags)
     RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
-    const auto& intermesh_config = fabric_context.get_intermesh_vc_config();
+    const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping = FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config);
 
     // Create connection mapping (Phase 3)

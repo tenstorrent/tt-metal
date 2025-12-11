@@ -4,7 +4,7 @@
 
 #include "fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <vector>

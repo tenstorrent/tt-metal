@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
@@ -14,7 +15,6 @@ namespace tt::tt_fabric {
 
 void FabricBuilderContext::compute_max_channel_counts() {
     // Create channel mappings for all router types that exist in this fabric
-    const auto& intermesh_config = fabric_context_.get_intermesh_vc_config();
     const auto topology = fabric_context_.get_fabric_topology();
 
     std::vector<FabricRouterChannelMapping> possible_mappings;
@@ -24,15 +24,15 @@ void FabricBuilderContext::compute_max_channel_counts() {
         topology,
         false,  // no tensix
         RouterVariant::MESH,
-        intermesh_config.requires_vc1 ? &intermesh_config : nullptr);
+        intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr);
 
     // If Z routers exist in this fabric, add Z_ROUTER mapping
-    if (intermesh_config.router_type == IntermeshRouterType::Z_INTERMESH) {
+    if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
         possible_mappings.emplace_back(
             topology,
             false,  // no tensix
             RouterVariant::Z_ROUTER,
-            &intermesh_config);
+            &intermesh_vc_config_);
     }
 
     // Compute max channel counts across all router types in this fabric
@@ -53,6 +53,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
 }
 
 FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
+    this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+
     // Compute max channel counts for this fabric instance
     compute_max_channel_counts();
 
@@ -184,5 +186,58 @@ void FabricBuilderContext::initialize_tensix_config() {
         tensix_config_ = std::make_unique<FabricTensixDatamoverConfig>();
     }
 }
+
+IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // Check if multiple meshes exist
+    const auto& mesh_ids = mesh_graph.get_mesh_ids();
+    constexpr size_t single_mesh_count = 1;
+    if (mesh_ids.size() <= single_mesh_count) {
+        return IntermeshVCConfig::disabled();
+    }
+
+    // Check if intermesh connections exist
+    const auto& intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+    if (intermesh_connections.empty()) {
+        return IntermeshVCConfig::disabled();
+    }
+
+    // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
+    bool has_z_routers = false;
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+    for (const auto& mesh_connections : inter_mesh_connectivity) {
+        for (const auto& chip_connections : mesh_connections) {
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    has_z_routers = true;
+                    break;
+                }
+            }
+            if (has_z_routers) {
+                break;
+            }
+        }
+        if (has_z_routers) {
+            break;
+        }
+    }
+
+    // Default to FULL_MESH when intermesh exists
+    // TODO: Implement detection logic for:
+    //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
+    //   - FULL_MESH_WITH_PASS_THROUGH: Check if any mesh forwards traffic between other meshes
+    constexpr bool needs_mesh_pass_through = false;
+
+    auto config =
+        needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through() : IntermeshVCConfig::full_mesh();
+
+    // Set router type based on detection
+    config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
+
+    return config;
+}
+
 
 }  // namespace tt::tt_fabric
