@@ -69,6 +69,11 @@ def describe_header(headers: Sequence[str], column_index: int) -> str:
     return ""
 
 
+def normalize_header(header: str) -> str:
+    """Normalize header for case-insensitive comparison."""
+    return header.strip().upper()
+
+
 def compare_cells(
     headers_a: List[str],
     rows_a: List[List[str]],
@@ -96,6 +101,16 @@ def compare_cells(
     for row_index in range(shared_row_count):
         row_a = all_rows_a[row_index]
         row_b = all_rows_b[row_index]
+
+        # Skip header row differences (case-only differences in headers are acceptable)
+        if row_index == 0 and headers_a and headers_b:
+            # Check if headers differ only in case
+            if len(headers_a) == len(headers_b):
+                headers_match = all(
+                    h_a.strip().upper() == h_b.strip().upper() for h_a, h_b in zip(headers_a, headers_b)
+                )
+                if headers_match:
+                    continue  # Headers match (case-insensitive), skip header row comparison
         cols_a = len(row_a)
         cols_b = len(row_b)
 
@@ -109,18 +124,39 @@ def compare_cells(
         for col_index in range(shared_col_count):
             value_a = row_a[col_index]
             value_b = row_b[col_index]
-            if value_a == value_b:
+
+            # Normalize nan and empty string to be equivalent
+            def normalize_missing(value: str) -> str:
+                value_lower = value.lower().strip() if value else ""
+                if value_lower in ("nan", "none", ""):
+                    return ""
+                return value
+
+            normalized_a = normalize_missing(value_a)
+            normalized_b = normalize_missing(value_b)
+
+            # Get header names for both files
+            header_a = headers_a[col_index] if headers_a and 0 <= col_index < len(headers_a) else ""
+            header_b = headers_b[col_index] if headers_b and 0 <= col_index < len(headers_b) else ""
+
+            # Normalize headers for case-insensitive comparison
+            normalized_header_a = normalize_header(header_a)
+            normalized_header_b = normalize_header(header_b)
+
+            # If headers differ only in case, skip the comparison (header format difference)
+            if normalized_header_a == normalized_header_b and header_a != header_b:
                 continue
 
-            header_name = headers_a[col_index] if headers_a and 0 <= col_index < len(headers_a) else ""
-            normalized_header = header_name.strip().upper() if header_name else ""
-            if not normalized_header and headers_b and 0 <= col_index < len(headers_b):
-                normalized_header = headers_b[col_index].strip().upper()
+            if normalized_a == normalized_b:
+                continue
+
+            header_name = header_a or header_b
+            normalized_header = normalized_header_a or normalized_header_b
             header_hint = describe_header(headers_a, col_index) or describe_header(headers_b, col_index)
 
             if normalized_header in IGNORED_HEADERS:
-                a_missing = value_a in ("", "0")
-                b_missing = value_b in ("", "0")
+                a_missing = normalized_a == ""
+                b_missing = normalized_b == ""
                 if a_missing != b_missing:
                     allowed_headers.add(normalized_header or header_hint)
                     continue

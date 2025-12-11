@@ -405,7 +405,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
         for event in events:
             metadata = event[EVENT_METADATA_IDX]
             if metadata["id"] == PERF_COUNTER_ID:
-                meta_dict = json.loads(metadata["meta_data"].replace(";", ",").replace("'", '\"'))
+                meta_dict = json.loads(metadata["meta_data"].replace(";", ",").replace("'", '"'))
                 perf_counter_events.append(
                     {
                         "run_host_id": metadata["run_host_id"],
@@ -592,7 +592,7 @@ def _enrich_ops_from_device_logs(
                     assert (
                         device_op_id in op_id_host_data_dict
                     ), f"Device op ID not present: Device op ID {device_op_id} not present in host data on device {device}"
-                    
+
                     trace_id = op_id_host_data_dict[device_op_id].get("metal_trace_id")
                     if trace_id is not None:
                         if device in trace_ops_map:
@@ -606,17 +606,17 @@ def _enrich_ops_from_device_logs(
                                 trace_ops_map[device][trace_id] = set([device_op_id])
                         else:
                             trace_ops_map[device] = {trace_id: set([device_op_id])}
-                        
+
                         assert (
                             len(trace_replays[device][trace_id]) > 0
                         ), "Wrong trace replay count: Device has more ops than trace replay issued commands"
-                        
+
                         op_id_host_data_dict[device_op_id]["tracy_time"] = trace_replays[device][trace_id][0]
-                        op_id_host_data_dict[device_op_id]["metal_trace_replay_session_id"] = (\
-                            trace_replay_counts[device][trace_id] - len(trace_replays[device][trace_id]) + 1\
+                        op_id_host_data_dict[device_op_id]["metal_trace_replay_session_id"] = (
+                            trace_replay_counts[device][trace_id] - len(trace_replays[device][trace_id]) + 1
                         )
                     generated_host_data.append(copy.deepcopy(op_id_host_data_dict[device_op_id]))
-            
+
             # Update host_ops_by_device with generated data including trace replays
             host_ops_by_device[device] = generated_host_data
 
@@ -667,7 +667,7 @@ def _enrich_ops_from_device_logs(
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
             perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
-        
+
         agg_sfpu_util_min = {}
         agg_sfpu_util_median = {}
         agg_sfpu_util_max = {}
@@ -688,31 +688,31 @@ def _enrich_ops_from_device_logs(
             perf_counter_df["Util"] = perf_counter_df["value"] / perf_counter_df["ref cnt"] * 100
 
             # SFPU Counter aggregations
-            sfpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "SFPU_COUNTER"].groupby(\
-                ["run_host_id", "trace_id_count"], group_keys=True\
+            sfpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "SFPU_COUNTER"].groupby(
+                ["run_host_id", "trace_id_count"], group_keys=True
             )
-            agg_sfpu_util_min = sfpu_counters_grouped["Util"].min()
-            agg_sfpu_util_median = sfpu_counters_grouped["Util"].median()
-            agg_sfpu_util_max = sfpu_counters_grouped["Util"].max()
-            avg_sfpu_count = sfpu_counters_grouped["value"].sum() / total_compute_cores
+            agg_sfpu_util_min = sfpu_counters_grouped["Util"].min().to_dict()
+            agg_sfpu_util_median = sfpu_counters_grouped["Util"].median().to_dict()
+            agg_sfpu_util_max = sfpu_counters_grouped["Util"].max().to_dict()
+            avg_sfpu_count = (sfpu_counters_grouped["value"].sum() / total_compute_cores).to_dict()
 
             # FPU Counter aggregations
-            fpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "FPU_COUNTER"].groupby(\
-                ["run_host_id", "trace_id_count"], group_keys=True\
+            fpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "FPU_COUNTER"].groupby(
+                ["run_host_id", "trace_id_count"], group_keys=True
             )
-            agg_fpu_util_min = fpu_counters_grouped["Util"].min()
-            agg_fpu_util_median = fpu_counters_grouped["Util"].median()
-            agg_fpu_util_max = fpu_counters_grouped["Util"].max()
-            avg_fpu_count = fpu_counters_grouped["value"].sum() / total_compute_cores
+            agg_fpu_util_min = fpu_counters_grouped["Util"].min().to_dict()
+            agg_fpu_util_median = fpu_counters_grouped["Util"].median().to_dict()
+            agg_fpu_util_max = fpu_counters_grouped["Util"].max().to_dict()
+            avg_fpu_count = (fpu_counters_grouped["value"].sum() / total_compute_cores).to_dict()
 
             # MATH Counter aggregations
-            math_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "MATH_COUNTER"].groupby(\
-                ["run_host_id", "trace_id_count"], group_keys=True\
+            math_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "MATH_COUNTER"].groupby(
+                ["run_host_id", "trace_id_count"], group_keys=True
             )
-            agg_math_util_min = math_counters_grouped["Util"].min()
-            agg_math_util_median = math_counters_grouped["Util"].median()
-            agg_math_util_max = math_counters_grouped["Util"].max()
-            avg_math_count = math_counters_grouped["value"].sum() / total_compute_cores
+            agg_math_util_min = math_counters_grouped["Util"].min().to_dict()
+            agg_math_util_median = math_counters_grouped["Util"].median().to_dict()
+            agg_math_util_max = math_counters_grouped["Util"].max().to_dict()
+            avg_math_count = (math_counters_grouped["value"].sum() / total_compute_cores).to_dict()
 
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
@@ -731,23 +731,35 @@ def _enrich_ops_from_device_logs(
             global_call_count = device_op["global_call_count"]
             device_op["freq"] = freq
 
-            if not perf_counter_df is None and not perf_counter_df.empty:
+            if perf_counter_df is not None and not perf_counter_df.empty:
+                lookup_key = (global_call_count, trace_id_counter)
                 # SFPU
-                device_op["SFPU Util Min (%)"] = agg_sfpu_util_min.get((global_call_count, trace_id_counter), nan)
-                device_op["SFPU Util Median (%)"] = agg_sfpu_util_median.get((global_call_count, trace_id_counter), nan)
-                device_op["SFPU Util Max (%)"] = agg_sfpu_util_max.get((global_call_count, trace_id_counter), nan)
-                # FPU
-                device_op["FPU Util Min (%)"] = agg_fpu_util_min.get((global_call_count, trace_id_counter), nan)
-                device_op["FPU Util Median (%)"] = agg_fpu_util_median.get((global_call_count, trace_id_counter), nan)
-                device_op["FPU Util Max (%)"] = agg_fpu_util_max.get((global_call_count, trace_id_counter), nan)
-                # MATH
-                device_op["MATH Util Min (%)"] = agg_math_util_min.get((global_call_count, trace_id_counter), nan)
-                device_op["MATH Util Median (%)"] = agg_math_util_median.get((global_call_count, trace_id_counter), nan)
-                device_op["MATH Util Max (%)"] = agg_math_util_max.get((global_call_count, trace_id_counter), nan)
+                sfpu_min_val = agg_sfpu_util_min.get(lookup_key, nan)
+                sfpu_median_val = agg_sfpu_util_median.get(lookup_key, nan)
+                sfpu_max_val = agg_sfpu_util_max.get(lookup_key, nan)
+                device_op["SFPU Util Min (%)"] = sfpu_min_val
+                device_op["SFPU Util Median (%)"] = sfpu_median_val
+                device_op["SFPU Util Max (%)"] = sfpu_max_val
 
-                device_op["avg_sfpu_count"] = avg_sfpu_count.get((global_call_count, trace_id_counter), nan)
-                device_op["avg_fpu_count"] = avg_fpu_count.get((global_call_count, trace_id_counter), nan)
-                device_op["avg_math_count"] = avg_math_count.get((global_call_count, trace_id_counter), nan)
+                # FPU
+                fpu_min_val = agg_fpu_util_min.get(lookup_key, nan)
+                fpu_median_val = agg_fpu_util_median.get(lookup_key, nan)
+                fpu_max_val = agg_fpu_util_max.get(lookup_key, nan)
+                device_op["FPU Util Min (%)"] = fpu_min_val
+                device_op["FPU Util Median (%)"] = fpu_median_val
+                device_op["FPU Util Max (%)"] = fpu_max_val
+
+                # MATH
+                math_min_val = agg_math_util_min.get(lookup_key, nan)
+                math_median_val = agg_math_util_median.get(lookup_key, nan)
+                math_max_val = agg_math_util_max.get(lookup_key, nan)
+                device_op["MATH Util Min (%)"] = math_min_val
+                device_op["MATH Util Median (%)"] = math_median_val
+                device_op["MATH Util Max (%)"] = math_max_val
+
+                device_op["avg_sfpu_count"] = avg_sfpu_count.get(lookup_key, nan)
+                device_op["avg_fpu_count"] = avg_fpu_count.get(lookup_key, nan)
+                device_op["avg_math_count"] = avg_math_count.get(lookup_key, nan)
 
     return host_ops_by_device
 
@@ -801,7 +813,9 @@ def append_device_data(
                 f"Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer."
             )
         # Pass traceReplays so legacy path can generate trace host data
-        host_ops_by_device = _enrich_ops_from_device_logs(host_ops_by_device, logFolder, device_analysis_types, traceReplays)
+        host_ops_by_device = _enrich_ops_from_device_logs(
+            host_ops_by_device, logFolder, device_analysis_types, traceReplays
+        )
 
     trace_ops_by_augmented_id = _build_trace_ops_mapping(host_ops_by_device, ops)
 
@@ -1187,8 +1201,16 @@ def generate_reports(
 
                 for field, fieldData in active_op_record.items():
                     headerField = csv_header_format(field)
-                    if headerField in OPS_CSV_HEADER:
-                        csv_row[headerField] = fieldData
+                    # Check if headerField (uppercase) matches any header in OPS_CSV_HEADER (case-insensitive)
+                    # If it matches, use the original case from OPS_CSV_HEADER to preserve previous commit's format
+                    matching_header = None
+                    for ops_header in OPS_CSV_HEADER:
+                        if headerField == csv_header_format(ops_header):
+                            matching_header = ops_header
+                            break
+
+                    if matching_header:
+                        csv_row[matching_header] = fieldData
 
                 assert "host_time" in active_op_record, "Corrupted op data"
                 csv_row["HOST START TS"] = int(active_op_record["host_time"]["ns_since_start"])
@@ -1348,6 +1370,30 @@ def generate_reports(
                         csv_row["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
                     prev_device_dm_start_cycle[deviceID] = dm_series["end_cycle"]
 
+                # Convert avg counter values to percentages for "Avg ... util on full grid (%)" columns
+                kernel_duration_cycles = None
+                if kernel_series:
+                    kernel_duration_cycles = kernel_series.get("duration_cycles")
+                elif device_perf_row:
+                    kernel_start_cycle = device_perf_row.get("DEVICE KERNEL START CYCLE")
+                    kernel_end_cycle = device_perf_row.get("DEVICE KERNEL END CYCLE")
+                    if kernel_start_cycle is not None and kernel_end_cycle is not None:
+                        kernel_duration_cycles = kernel_end_cycle - kernel_start_cycle
+
+                if kernel_duration_cycles is not None and kernel_duration_cycles > 0:
+                    if "avg_sfpu_count" in active_op_record:
+                        avg_sfpu_val = active_op_record.get("avg_sfpu_count")
+                        if avg_sfpu_val is not None and not isnan(avg_sfpu_val):
+                            csv_row["Avg SFPU util on full grid (%)"] = avg_sfpu_val / kernel_duration_cycles * 100
+                    if "avg_fpu_count" in active_op_record:
+                        avg_fpu_val = active_op_record.get("avg_fpu_count")
+                        if avg_fpu_val is not None and not isnan(avg_fpu_val):
+                            csv_row["Avg FPU util on full grid (%)"] = avg_fpu_val / kernel_duration_cycles * 100
+                    if "avg_math_count" in active_op_record:
+                        avg_math_val = active_op_record.get("avg_math_count")
+                        if avg_math_val is not None and not isnan(avg_math_val):
+                            csv_row["Avg Math util on full grid (%)"] = avg_math_val / kernel_duration_cycles * 100
+
                 if "child_calls" in active_op_record:
                     for childCall, duration in active_op_record["child_calls"].items():
                         headerField = f"{childCall}_TT_HOST_FUNC [ns]"
@@ -1474,7 +1520,9 @@ def process_ops(
     is_flag=True,
     help="Force use of legacy device log parsing instead of cpp_device_perf_report.csv.",
 )
-def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types, force_legacy_device_logs):
+def main(
+    output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types, force_legacy_device_logs
+):
     if output_folder:
         output_folder = Path(output_folder)
     process_ops(
