@@ -155,7 +155,9 @@ def preprocess_inputs_prefill(
 
     # we need to make room for the generated tokens in the total token budget
     max_prefill_len -= max_generated_tokens
-    assert max_prefill_len > 0, f"max_prefill_len ({max_prefill_len + max_generated_tokens}) must be greater than max_generated_tokens ({max_generated_tokens})"
+    assert (
+        max_prefill_len > 0
+    ), f"max_prefill_len ({max_prefill_len + max_generated_tokens}) must be greater than max_generated_tokens ({max_generated_tokens})"
 
     encoded_prompts = [
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
