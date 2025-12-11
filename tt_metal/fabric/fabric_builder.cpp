@@ -4,6 +4,7 @@
 
 #include "fabric_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -181,12 +182,44 @@ void FabricBuilder::connect_routers() {
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair
+    // Connect each pair (inter-device INTRA_MESH connections)
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+    }
+
+    // Configure local connections between routers on this device
+    configure_local_connections();
+}
+
+void FabricBuilder::configure_local_connections() {
+    // Generic local connection establishment: iterate through all routers and
+    // establish connections to local targets based on their connection mappings
+
+    // Build a map of all routers by direction for quick lookup
+    std::map<RoutingDirection, ComputeMeshRouterBuilder*> routers_by_direction;
+    for (const auto& [chan, router] : routers_) {
+        auto* compute_router = dynamic_cast<ComputeMeshRouterBuilder*>(router.get());
+        if (compute_router != nullptr) {
+            routers_by_direction[router->get_location().direction] = compute_router;
+        }
+    }
+
+    // For each router, establish its local connections
+    for (auto& [source_dir, source_router] : routers_by_direction) {
+        // Build map of potential local targets (all other routers on this device)
+        std::map<RoutingDirection, ComputeMeshRouterBuilder*> local_targets;
+        for (auto& [target_dir, target_router] : routers_by_direction) {
+            if (target_dir != source_dir) {
+                local_targets[target_dir] = target_router;
+            }
+        }
+
+        // Let the router establish connections to available local targets
+        // The router's connection mapping determines which targets to connect to
+        source_router->configure_local_connections(local_targets);
     }
 }
 

@@ -4,6 +4,7 @@
 
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,24 +12,63 @@
 
 namespace tt::tt_fabric {
 
-FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
-    // Create default router config
-    router_config_ = create_edm_config();
+void FabricBuilderContext::compute_max_channel_counts() {
+    // Create channel mappings for all router types that exist in this fabric
+    const auto& intermesh_config = fabric_context_.get_intermesh_vc_config();
+    const auto topology = fabric_context_.get_fabric_topology();
 
-    // Create router config with mux extension for all directions
+    std::vector<FabricRouterChannelMapping> possible_mappings;
+
+    // Always have MESH routers
+    possible_mappings.emplace_back(
+        topology,
+        false,  // no tensix
+        RouterVariant::MESH,
+        intermesh_config.requires_vc1 ? &intermesh_config : nullptr);
+
+    // If Z routers exist in this fabric, add Z_ROUTER mapping
+    if (intermesh_config.router_type == IntermeshRouterType::Z_INTERMESH) {
+        possible_mappings.emplace_back(
+            topology,
+            false,  // no tensix
+            RouterVariant::Z_ROUTER,
+            &intermesh_config);
+    }
+
+    // Compute max channel counts across all router types in this fabric
+    max_sender_channels_per_vc_.fill(0);
+    max_receiver_channels_per_vc_.fill(0);
+
+    for (const auto& mapping : possible_mappings) {
+        uint32_t num_vcs = mapping.get_num_virtual_channels();
+        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+            max_sender_channels_per_vc_[vc] = std::max(
+                max_sender_channels_per_vc_[vc],
+                static_cast<std::size_t>(mapping.get_num_sender_channels_for_vc(vc)));
+            max_receiver_channels_per_vc_[vc] = std::max(
+                max_receiver_channels_per_vc_[vc],
+                static_cast<std::size_t>(1u));  // Always 1 receiver per VC
+        }
+    }
+}
+
+FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
+    // Compute max channel counts for this fabric instance
+    compute_max_channel_counts();
+
+    // Create configs using computed max
+    router_config_ = create_edm_config();
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
         router_with_mux_config_[direction] =
             create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
     }
 
-    // Initialize tensix config later after routing tables are configured
     tensix_config_ = nullptr;
 
     // Initialize per-device build state
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
     if (num_devices_ != 4 && num_pcie_devices == 4) {
-        // Add dispatch devices for multi-host setups
         num_devices_ += num_pcie_devices;
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
@@ -42,10 +82,12 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         .direction = direction,
     };
 
-    const auto channel_buffer_size_bytes = fabric_context_.get_fabric_channel_buffer_size_bytes();
-    const auto topology = fabric_context_.get_fabric_topology();
-
-    return std::make_unique<FabricEriscDatamoverConfig>(channel_buffer_size_bytes, topology, edm_options);
+    return std::make_unique<FabricEriscDatamoverConfig>(
+        fabric_context_.get_fabric_channel_buffer_size_bytes(),
+        fabric_context_.get_fabric_topology(),
+        edm_options,
+        max_sender_channels_per_vc_,      // Max for this fabric instance
+        max_receiver_channels_per_vc_);   // Max for this fabric instance
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(

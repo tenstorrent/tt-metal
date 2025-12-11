@@ -91,6 +91,19 @@ private:
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 
     /**
+     * Configure local connections between routers on this device.
+     *
+     * Generic connection establishment: iterates through all routers and
+     * establishes connections to local targets based on their connection mappings.
+     * Each router's mapping determines which local routers to connect to.
+     *
+     * Handles variable router configurations (e.g., 2-4 mesh routers on edge devices).
+     *
+     * Called by connect_routers() after inter-device connections are established.
+     */
+    void configure_local_connections();
+
+    /**
      * Compile kernels for directions that have no router/eth channel.
      *
      * In UDM mode, edge devices (e.g., corner of a mesh) don't have neighbors

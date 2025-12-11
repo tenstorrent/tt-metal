@@ -85,11 +85,19 @@ inline uint32_t get_downstream_edm_sender_channel(
     return 1 + downstream_compact_index_for_upstream;
 }
 
-// A receiver channel has 3 downstream EDMs
+// A receiver channel has up to 4 downstream EDMs (3 mesh directions + optional Z)
 // This helper returns the index at which the receiver channel should store the downstream EDMs information.
-// The index is 0, 1, 2 and depends on the downstream direction relative to the my direction.
+// The index is 0-2 for mesh directions (N/E/S/W excluding own direction), 3 for Z direction.
 inline size_t get_receiver_channel_compact_index(
     const eth_chan_directions receiver_direction, const eth_chan_directions downstream_direction) {
+    // TODO: Add Z direction support when eth_chan_directions::Z is added to fabric_common.h
+    // Z direction will get compact index 3 (after the 3 mesh directions)
+    // For now, Z is not yet defined in eth_chan_directions enum
+    // if (downstream_direction == eth_chan_directions::Z) {
+    //     return 3;
+    // }
+
+    // Mesh directions (N/E/S/W) get compact indices 0-2
     size_t compact_index;
     if (receiver_direction == 0) {
         compact_index = downstream_direction - 1;

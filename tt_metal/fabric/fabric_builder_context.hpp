@@ -52,6 +52,14 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
 
+    // ============ Max Channel Counts ============
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_sender_channels_per_vc() const {
+        return max_sender_channels_per_vc_;
+    }
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_receiver_channels_per_vc() const {
+        return max_receiver_channels_per_vc_;
+    }
+
     // ============ Tensix Config ============
     void initialize_tensix_config();
     FabricTensixDatamoverConfig& get_tensix_config() const;
@@ -75,6 +83,10 @@ private:
 
     const FabricContext& fabric_context_;
 
+    // Computed max channel counts based on actual router types in this fabric
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_;
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_;
+
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;
     // Router config with mux extension for each direction (E, W, N, S)
@@ -94,6 +106,9 @@ private:
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
+
+    // Helper to compute max channel counts for this fabric instance
+    void compute_max_channel_counts();
 };
 
 }  // namespace tt::tt_fabric
