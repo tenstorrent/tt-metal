@@ -144,6 +144,7 @@ constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_ID
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 
 constexpr size_t VC0_RECEIVER_CHANNEL = 0;
+constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
 // Doesn't REALLY matter but for consistency I picked the next available ID
 constexpr size_t worker_info_offset_past_connection_semaphore = 32;
@@ -255,7 +256,7 @@ constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFF
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 =
-    (NUM_DOWNSTREAM_CHANNELS > 1) ? DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[1] : 0;
+    (NUM_DOWNSTREAM_CHANNELS > NUM_DOWNSTREAM_SENDERS_VC0) ? DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[1] : 0;
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;

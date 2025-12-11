@@ -342,8 +342,14 @@ size_t ComputeMeshRouterBuilder::get_configured_risc_count() const {
 }
 
 std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_vc(
-    Topology topology, eth_chan_directions direction, uint32_t /*vc*/, uint32_t num_channels) {
+    Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels) {
     std::vector<bool> injection_flags(num_channels, false);
+
+    // VC1 is for inter-mesh routing and doesn't need bubble flow control
+    // All VC1 channels are marked as non-injection (false) regardless of topology
+    if (vc == 1) {
+        return injection_flags;
+    }
 
     // Early return for Linear/Mesh - no injection channels marked
     if (topology == Topology::Linear || topology == Topology::Mesh) {
@@ -357,7 +363,7 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
         return injection_flags;
     }
 
-    // For Torus: Turn channels are injection channels
+    // For Torus: Turn channels are injection channels (VC0 only)
     // A turn channel is where my_direction differs from sender_channel_direction
 
     bool I_am_ew = builder::is_east_or_west(direction);
@@ -512,6 +518,14 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     std::map<std::string, std::string> defines = {};
     if (ctx.is_2D_routing) {
         defines["FABRIC_2D"] = "";
+
+        // Set FABRIC_2D_VC1_ACTIVE when VC1 is configured and needed
+        // VC1 is used for inter-mesh routing in multi-mesh topologies
+        bool vc1_active =
+            erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0 && !erisc_builder_->isInterMesh;
+        if (vc1_active) {
+            defines["FABRIC_2D_VC1_ACTIVE"] = "";
+        }
     }
 
     // Get SOC descriptor for eth core lookup
@@ -548,6 +562,11 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
         }
 
+        // Use Os (optimize for size) when VC1 is active to fit in code space
+        // Use O3 (optimize for performance) otherwise
+        bool vc1_active = erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0;
+        auto opt_level = vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
             program,
@@ -558,7 +577,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+                .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
     }
