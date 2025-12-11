@@ -102,17 +102,14 @@ class GatherSingleCore:
                     noc1_cores.append(core)
 
         # Create semaphores
-        # Note: semaphore_ids 0 and 1 are used for NOC0 and NOC1 receivers respectively
-        # TODO: Add semaphore_ids to semaphore descriptor to ensure we are using the correct semaphore ids (#33711)
-        noc0_receiver_semaphore_id = 0
-        noc1_receiver_semaphore_id = 1
-
         noc0_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=0,
             core_ranges=all_cores,
             initial_value=0,
         )
 
         noc1_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=1,
             core_ranges=all_cores,
             initial_value=0,
         )
@@ -137,8 +134,8 @@ class GatherSingleCore:
             receiver_compile_args = [
                 len(noc0_cores),
                 len(noc1_cores),
-                noc0_receiver_semaphore_id,
-                noc1_receiver_semaphore_id,
+                noc0_receiver_semaphore_descriptor.id,
+                noc1_receiver_semaphore_descriptor.id,
             ]
 
             receiver_kernel_descriptor = ttnn.KernelDescriptor(
@@ -184,7 +181,7 @@ class GatherSingleCore:
             0,  # semaphore (will be set per NOC)
         ]
         if not noc0_core_range_set.empty():
-            sender_compile_args[3] = noc0_receiver_semaphore_id
+            sender_compile_args[3] = noc0_receiver_semaphore_descriptor.id
             sender_noc0_kernel_descriptor = ttnn.KernelDescriptor(
                 kernel_source=sender_kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -199,7 +196,7 @@ class GatherSingleCore:
             kernels.append(sender_noc0_kernel_descriptor)
 
         if not noc1_core_range_set.empty():
-            sender_compile_args[3] = noc1_receiver_semaphore_id
+            sender_compile_args[3] = noc1_receiver_semaphore_descriptor.id
             sender_noc1_kernel_descriptor = ttnn.KernelDescriptor(
                 kernel_source=sender_kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
