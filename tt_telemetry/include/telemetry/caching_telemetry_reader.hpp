@@ -17,11 +17,11 @@
 
 #include <tt_stl/assert.hpp>
 
-template <typename TelemetryContainer>
+template <typename TelemetrySnapshot>
 class CachingTelemetryReader {
 public:
     CachingTelemetryReader() :
-        cached_telemetry_(TelemetryContainer{}), last_update_cycle_(std::chrono::steady_clock::time_point::min()) {}
+        cached_telemetry_(TelemetrySnapshot{}), last_update_cycle_(std::chrono::steady_clock::time_point::min()) {}
 
     virtual ~CachingTelemetryReader() {}
 
@@ -33,7 +33,7 @@ public:
     // Returns cached telemetry snapshot. Updates from device if this is a new update cycle.
     // Returns nullptr if telemetry unavailable. Note: Returned pointer is valid only until next
     // call to this method
-    const TelemetryContainer* get_telemetry(std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const TelemetrySnapshot* get_telemetry(std::chrono::steady_clock::time_point start_of_update_cycle) {
         std::lock_guard<std::mutex> lock(mtx_);
         if (start_of_update_cycle != last_update_cycle_) {
             cached_telemetry_ = read_telemetry();
@@ -44,10 +44,10 @@ public:
 
 protected:
     // Reads telemetry directly from L1
-    virtual TelemetryContainer read_telemetry() = 0;
+    virtual TelemetrySnapshot read_telemetry() = 0;
 
 private:
-    TelemetryContainer cached_telemetry_;
+    TelemetrySnapshot cached_telemetry_;
     std::chrono::steady_clock::time_point last_update_cycle_;
     mutable std::mutex mtx_;
 };

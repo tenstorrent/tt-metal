@@ -13,7 +13,8 @@
  #include <chrono>
  #include <optional>
  #include <string>
- #include <vector>
+#include <unordered_map>
+#include <vector>
 
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <llrt/hal.hpp>
@@ -25,6 +26,9 @@
 namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
 }
+
+class CachingFabricTelemetryReader;
+class CachingARCTelemetryReader;
 
 class EthernetEndpointUpMetric : public BoolMetric {
 public:
@@ -160,9 +164,6 @@ private:
     uint32_t uncorr_addr_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
-
-// Forward declaration for fabric telemetry reader
-class CachingFabricTelemetryReader;
 
 class FabricMeshIdMetric : public UIntMetric {
 public:
@@ -380,7 +381,7 @@ public:
         uint32_t channel,
         std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
-        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -395,7 +396,7 @@ private:
     uint32_t channel_;
     std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
-    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader_;
     tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
@@ -411,7 +412,7 @@ public:
         uint32_t channel,
         std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
-        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -426,7 +427,7 @@ private:
     uint32_t channel_;
     std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
-    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader_;
     tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
@@ -442,7 +443,7 @@ public:
         uint32_t channel,
         std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
-        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -457,7 +458,7 @@ private:
     uint32_t channel_;
     std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
-    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader_;
     tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
@@ -473,7 +474,7 @@ public:
         uint32_t channel,
         std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
-        tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
+        std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -488,7 +489,7 @@ private:
     uint32_t channel_;
     std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
-    tt::umd::FirmwareInfoProvider* firmware_info_provider_;
+    std::shared_ptr<CachingARCTelemetryReader> arc_telemetry_reader_;
     tt::ARCH arch_;
 
     uint64_t prev_words_ = 0;
@@ -578,4 +579,5 @@ void create_ethernet_metrics(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal);
+    const std::unique_ptr<tt::tt_metal::Hal>& hal,
+    const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& arc_telemetry_reader_by_chip_id);
