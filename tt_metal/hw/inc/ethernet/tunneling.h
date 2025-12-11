@@ -17,13 +17,9 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 
-// Ultra-fast postcode implementation: single 32-bit write to L1 memory
-// Pre-calculated pointer to postcode memory region (8 bytes allocated, 4 bytes used)
 static volatile uint32_t* const fabric_postcode_ptr =
     reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
 
-// Macro for maximum speed - single 32-bit memory write
-// Compiles to: load immediate + store word (1-2 instructions)
 #define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
 struct eth_channel_sync_t {

@@ -257,8 +257,7 @@
 #define MEM_AERISC_FABRIC_TELEMETRY_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE)
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 128
 
-// Lightweight fabric postcode region (8 bytes for postcodes + 24 bytes scratch)
-// Using 8 bytes (power of 2) enables fast bit-mask indexing instead of modulo
+// Reserved region for fabric postcodes and scratch space
 #define MEM_AERISC_FABRIC_POSTCODES_BASE (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE)
 #define MEM_AERISC_FABRIC_POSTCODES_SIZE 8
 #define MEM_AERISC_FABRIC_SCRATCH_BASE (MEM_AERISC_FABRIC_POSTCODES_BASE + MEM_AERISC_FABRIC_POSTCODES_SIZE)
