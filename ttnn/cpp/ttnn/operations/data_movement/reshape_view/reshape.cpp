@@ -234,15 +234,14 @@ ttnn::Tensor reshape_tiled(
             output_tensor_3d = ttnn::typecast(output_tensor_3d, DataType::FLOAT32);
         }
     } else {
-        printf("direct path\n");
-        auto output_tensor_3d = ttnn::prim::reshape(
-                            tensor3d,
-                            requested_shape_3d,
-                            requested_padded_shape_3d,
-                            working_output_memory_config,
-                            recreate_mapping_tensor,
-                            sub_core_grid,
-                            on_device_mappings);
+        output_tensor_3d = ttnn::prim::reshape(
+            tensor3d,
+            requested_shape_3d,
+            requested_padded_shape_3d,
+            working_output_memory_config,
+            recreate_mapping_tensor,
+            sub_core_grid,
+            on_device_mappings);
     }
 
     if (memory_config.is_sharded()) {

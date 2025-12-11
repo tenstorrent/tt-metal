@@ -22,8 +22,6 @@ ReshapeTiledWithoutDeviceMappingProgramFactory::cached_program_t ReshapeTiledWit
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    printf("start of ReshapeTiledProgramFactory::create\n");
-
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
 

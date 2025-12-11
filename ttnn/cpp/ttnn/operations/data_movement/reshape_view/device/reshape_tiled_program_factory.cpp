@@ -50,7 +50,7 @@ Tensor compute_reshape_mapping_host_tensor(
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
     auto it = flat_mapping_vector.begin();
     for (const auto& v : mapping_vector) {
-        auto map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
+        auto* map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
         std::copy(v.begin(), v.end(), map_ptr);
 
         it += max_input_segments * SegmentMapData::size;
@@ -91,7 +91,6 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    printf("start of ReshapeTiledProgramFactory::create\n");
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
 
@@ -149,8 +148,6 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
     const auto input_tile_size_bytes = tt::tile_size(input_cb_data_format);
     constexpr auto input_cb_idx = tt::CBIndex::c_1;
 
-    printf("before creating input CB\n");
-
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
             input_tile_size_bytes * reader_cb_len, {{input_cb_idx, input_cb_data_format}})
@@ -174,8 +171,6 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
                 : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
 
     TT_ASSERT(num_cores <= num_output_pages);
-
-    printf("before creating reader kernel\n");
 
     std::vector<uint32_t> reader_compile_time_args = {
         mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx};
@@ -205,9 +200,7 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;
-    printf("before setting runtime args\n");
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
-        printf("setting runtime args for core (%zu, %zu)\n", c.x, c.y);
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
             increment = num_tiles_per_core_group_1;
@@ -228,7 +221,6 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
 
         page_idx_start += increment;
         utilized_cores.push_back(c);
-        printf("set runtime args for core (%zu, %zu)\n", c.x, c.y);
     }
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, utilized_cores, mapping_tensor}};
@@ -247,7 +239,6 @@ void ReshapeTiledProgramFactory::override_runtime_arguments(
 
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
-    printf("start of ReshapeTiledProgramFactory::override_runtime_arguments\n");
 
     if (operation_attributes.recreate_mapping_tensor) {
         const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
