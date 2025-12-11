@@ -457,8 +457,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     std::tie(target_system_topology_str, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--system-topology", "");
     if (not target_system_topology_str.empty()) {
-        target_system_topology =
-            enchantum::cast<FabricType>(target_system_topology_str, ttsl::ascii_caseless_comp);
+        target_system_topology = enchantum::cast<FabricType>(target_system_topology_str, ttsl::ascii_caseless_comp);
         // TORUS_XY is the only topology that is supported for all cluster types
         if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_XY) {
             bool supported_topology = false;
