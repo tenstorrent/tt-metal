@@ -113,7 +113,7 @@ void kernel_main() {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
     BINARY_SFPU_INIT
 #endif
 
