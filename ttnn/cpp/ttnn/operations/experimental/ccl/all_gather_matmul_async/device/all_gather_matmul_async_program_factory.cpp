@@ -44,7 +44,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     const CoreCoord core_grid_offset,
 
     /* Matmul Params */
-    const std::optional<const Tensor> bias,
+    const std::optional<Tensor>& bias,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,
