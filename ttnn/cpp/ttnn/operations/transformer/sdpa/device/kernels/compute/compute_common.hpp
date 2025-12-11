@@ -19,6 +19,9 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
+/**
+ * in0_cb = max(in0_cb, in1_cb)
+ */
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
@@ -42,7 +45,17 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     cb_push_back(in0, num_tiles);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
+/**
+ * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
+ */
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t in0_cb,
+    uint32_t scale_cb,
+    uint32_t rows,
+    uint32_t cols,
+    int vector_mode = static_cast<int>(VectorMode::C)>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -50,6 +63,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Postcondition: in0_cb has rows*cols produced
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
+    // If do_eltwise_max == true, prev_cb has rows produced.
 
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
@@ -70,7 +84,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+            max_tile(reduce_dst_idx, prev_max_dst_idx, vector_mode);
         }
 
         pack_tile(reduce_dst_idx, out_cb);
@@ -131,6 +145,9 @@ void recip_tile_first_column(uint32_t idst) {
 }
 #endif
 
+/**
+ * in_cb = 1 / in_cb
+ */
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
@@ -143,7 +160,6 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        // recip_tile(0, static_cast<int>(VectorMode::C));
         MATH((recip_tile_first_column(0)));
         pack_tile(0, in_cb);
         release_dst();
@@ -153,7 +169,16 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_push_back(in_cb, num_tiles);
 }
 
-template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace = true>
+/**
+ * in0_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ */
+template <
+    uint32_t in0_cb,
+    uint32_t rows,
+    uint32_t cols,
+    uint32_t scale_fp32,
+    bool write_result_inplace = true,
+    int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -166,15 +191,21 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
 
+#ifdef SUB_EXP_GRANULARITY
     constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
+#else
+    uint32_t dst_tiles = cols;
+    uint32_t granularity = 1;
+#endif
+
     uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                exp_tile<true, true>(j);
+                exp_tile<true, true>(j, vector_mode);
                 in0_index++;
             }
             tile_regs_commit();
@@ -211,6 +242,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_push_back(reduce_cb, rows);
 }
 
+/**
+ * out_cb = in0_cb * in1_cb
+ */
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, bool pack_accumulate = false) {
     // Precondition: in0_cb has rows*cols produced
@@ -258,6 +292,9 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
     }
 }
 
+/**
+ * in0_cb *= in1_cb
+ */
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Precondition: in0_cb has rows*cols produced
@@ -321,6 +358,10 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
     cb_push_back(in0_cb, num_tiles);
 }
 
+/**
+ * in0_cb += in1_cb
+ */
+template <bool pop_in1 = true>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -336,8 +377,10 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         release_dst();
     }
 
-    cb_pop_front(in1_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
+    if (pop_in1) {
+        cb_pop_front(in1_cb, num_tiles);
+    }
     cb_reserve_back(in0_cb, num_tiles);
     cb_push_back(in0_cb, num_tiles);
 }
@@ -357,6 +400,29 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst();
+    }
+}
+
+/**
+ * in0_cb *= in1_cb
+ */
+void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles produced
+
+    mul_tiles_init(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        invalidate_l1_cache();
+        acquire_dst();
+        mul_tiles(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
         pack_tile(0, in0_cb);
@@ -403,6 +469,9 @@ void exp_tile_first_column(uint32_t idst, int scale_bf16) {
 }
 #endif
 
+/**
+ * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ */
 template <uint32_t scale_fp32>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
@@ -419,17 +488,161 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
+        invalidate_l1_cache();
         acquire_dst();
-
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-
-        // exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
         MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
-
         pack_tile(0, out_cb);
-
         cb_push_back(out_cb, 1);
         release_dst();
+    }
+}
+
+#ifdef TRISC_MATH
+/**
+ * The custom SFPI LLK function computes the following operation:
+ * cur_max = max(prev_max, worker_max)
+ * cur_sum = exp((worker_max - cur_max) * scale) * worker_sum + exp((prev_max - cur_max) * scale) * prev_sum
+ * There are 4 results produced:
+ * 1. exp_max_diff = exp((worker_max - cur_max) * scale), produced in dst_reg[prev_max_base_idx]
+ * 2. exp_max_diff_2 = exp((prev_max - cur_max) * scale), produced in dst_reg[worker_max_base_idx]
+ * 3. cur_sum produced in dst_reg[prev_sum_base_idx]
+ * 4. cur_max produced in dst_reg[cur_max_base_idx]
+ * fused_max_sub_exp_add_tile
+ */
+template <bool SDPA_EXP_APPROX_MODE>
+void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    constexpr uint32_t prev_max_base_idx = 0;      // dst_reg_0 (Tile 0)
+    constexpr uint32_t worker_max_base_idx = 32;   // dst_reg_1 (Tile 1)
+    constexpr uint32_t cur_max_base_idx = 64;      // dst_reg_2 (Tile 2)
+    constexpr uint32_t prev_sum_base_idx = 96;     // dst_reg_3 (Tile 3)
+    constexpr uint32_t worker_sum_base_idx = 128;  // dst_reg_4 (Tile 4)
+
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        // Load inputs for this vector-slot into temporaries to avoid aliasing on dst_reg
+        sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
+        sfpi::vFloat worker_max_vec = sfpi::dst_reg[worker_max_base_idx];
+        sfpi::vFloat prev_sum_vec = sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::vFloat worker_sum_vec = sfpi::dst_reg[worker_sum_base_idx];
+        v_if(prev_max_vec < worker_max_vec) { sfpi::dst_reg[cur_max_base_idx] = worker_max_vec; }
+        v_else { sfpi::dst_reg[cur_max_base_idx] = prev_max_vec; }
+        v_endif;
+        sfpi::vFloat cur_max = sfpi::dst_reg[cur_max_base_idx];
+
+        // Compute differences
+        sfpi::vFloat diff_prev = prev_max_vec - cur_max;
+        sfpi::vFloat diff_worker = worker_max_vec - cur_max;
+
+        // Exponentials of differences
+        sfpi::vFloat exp_prev = ckernel::sfpu::
+            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                diff_prev, scale_bf16);
+        sfpi::vFloat exp_worker = ckernel::sfpu::
+            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                diff_worker, scale_bf16);
+
+        // Store exponentials for optional debug/pack-out
+        sfpi::dst_reg[prev_max_base_idx] = exp_prev;
+        sfpi::dst_reg[worker_max_base_idx] = exp_worker;
+
+        // cur_sum = exp(worker_max - cur_max) * worker_sum + exp(prev_max - cur_max) * prev_sum
+        sfpi::dst_reg[worker_sum_base_idx] = exp_worker * worker_sum_vec;
+        sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
+        sfpi::vFloat corr_worker_sum = sfpi::dst_reg[worker_sum_base_idx];
+        sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::vFloat corr_sum = corr_worker_sum + corr_prev_sum;
+        sfpi::dst_reg[prev_sum_base_idx] = corr_sum;
+        sfpi::dst_reg += 2;
+    }
+}
+
+template <bool SDPA_EXP_APPROX_MODE>
+void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
+    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, (int)VectorMode::C, scale_bf16);
+}
+#endif
+
+template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::C>
+void correction_block(
+    uint32_t cb_worker_max,
+    uint32_t cb_worker_sum,
+    uint32_t cb_cur_max,
+    uint32_t cb_prev_max,
+    uint32_t cb_cur_sum,
+    uint32_t cb_prev_sum,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_exp_max_diff_2,
+    uint32_t num_head_tiles) {
+    cb_wait_front(cb_worker_max, num_head_tiles);
+    cb_wait_front(cb_worker_sum, num_head_tiles);
+    cb_wait_front(cb_prev_max, num_head_tiles);
+    cb_wait_front(cb_prev_sum, num_head_tiles);
+
+    cb_reserve_back(cb_cur_max, num_head_tiles);
+    cb_reserve_back(cb_cur_sum, num_head_tiles);
+    cb_reserve_back(cb_exp_max_diff, num_head_tiles);
+    cb_reserve_back(cb_exp_max_diff_2, num_head_tiles);
+
+    constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
+    constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
+    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
+    constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
+    constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
+
+    // convert scale from fp32 to bf16
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    for (uint32_t i = 0; i < num_head_tiles; i++) {
+        acquire_dst();
+        copy_tile_to_dst_init_short(cb_worker_max);
+        exp_tile_init<EXP_APPROX_MODE, false>();
+        max_tile_init();
+        copy_tile(cb_prev_max, i, dst_reg_0);
+        copy_tile(cb_worker_max, i, dst_reg_1);
+        copy_tile(cb_prev_sum, i, dst_reg_3);
+        copy_tile(cb_worker_sum, i, dst_reg_4);
+        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE>(0, scale_bf16)));
+        pack_tile(dst_reg_0, cb_exp_max_diff);
+        pack_tile(dst_reg_1, cb_exp_max_diff_2);
+        pack_tile(dst_reg_2, cb_cur_max);
+        pack_tile(dst_reg_3, cb_cur_sum);
+        cb_push_back(cb_cur_max, 1);
+        cb_push_back(cb_cur_sum, 1);
+        cb_push_back(cb_exp_max_diff, 1);
+        cb_push_back(cb_exp_max_diff_2, 1);
+        release_dst();
+    }
+    cb_pop_front(cb_prev_sum, num_head_tiles);
+    cb_pop_front(cb_worker_sum, num_head_tiles);
+}
+
+/**
+ * in_cb -> out_cb
+ */
+template <bool pop_in_cb>
+void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // Precondition: in_cb has num_tiles produced
+    // Precondition: out_cb has num_tiles free
+    // Postcondition: in_cb has num_tiles consumed
+    // Postcondition: out_cb has num_tiles produced
+
+    copy_tile_to_dst_init_short(in_cb);
+
+    cb_wait_front(in_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        copy_tile(in_cb, i, 0 /*dst*/);
+        pack_tile(0, out_cb);
+        cb_push_back(out_cb, 1);
+        release_dst();
+    }
+    if (pop_in_cb) {
+        cb_pop_front(in_cb, num_tiles);
     }
 }
 
@@ -551,6 +764,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     }
     cb_push_back(out_cb, num_tiles);
 }
+
 void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = in0_cb - in1_cb
 
@@ -568,7 +782,10 @@ void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_t
     cb_push_back(out_cb, num_tiles);
 }
 
-void matmul_blocks(
+/**
+ * out_cb = in0_cb @ in1_cb
+ */
+ALWI void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
     const uint32_t& out_cb,
@@ -581,11 +798,15 @@ void matmul_blocks(
     const uint32_t& in0_block_w,
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
-    const bool& transpose) {
+    const bool& transpose,
+    const bool& add_mask = false,
+    const uint32_t& mask_cb = 0,
+    const uint32_t& zero_cb = 0) {
     // precondition: in0_cb has M*K produced
-    // preconditino: in1_cb has K*N produced
+    // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
+
     mm_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
@@ -612,8 +833,16 @@ void matmul_blocks(
                 in0_index++;
                 in1_index += N;
             }
+            if (add_mask) {
+                cb_wait_front(mask_cb, out_subblock_num_tiles);
+                cb_wait_front(zero_cb, 1);
+                add_tiles_init(zero_cb, mask_cb, true);
+                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                    add_tiles(zero_cb, mask_cb, 0, i, i);
+                }
+                cb_pop_front(mask_cb, out_subblock_num_tiles);
+            }
             tile_regs_commit();
-
             tile_regs_wait();
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
