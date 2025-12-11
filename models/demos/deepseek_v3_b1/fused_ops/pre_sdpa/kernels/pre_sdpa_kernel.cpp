@@ -97,6 +97,28 @@ KERNEL_ENTRY {
     RMSNorm::Op<RMSNormCTArgs>::ComputeArgs rmsnorm_rt_args;
 #endif
 
+    // Print out all compile time args by RISC
+    // #if defined(COMPILE_FOR_NCRISC)
+    //     DPRINT << "NCRISC Compile-time Args:" << ENDL();
+    //     DPRINT << "mcast_src_cb: " << mcast_src_cb << ENDL();
+    //     DPRINT << "mcast_dst_cb: " << mcast_dst_cb << ENDL();
+    // #elif defined(COMPILE_FOR_BRISC)
+    //     DPRINT << "BRISC Compile-time Args:" << ENDL();
+    //     DPRINT << "output_cb: " << get_compile_time_arg_val(0) << ENDL();
+    //     DPRINT << "num_tiles: " << get_compile_time_arg_val(1) << ENDL();
+    // #elif defined(COMPILE_FOR_TRISC)
+    //     DPRINT << "TRISC Compile-time Args:" << ENDL();
+    //     DPRINT << "input_cb: " << get_compile_time_arg_val(0) << ENDL();
+    //     DPRINT << "scalars_cb: " << get_compile_time_arg_val(1) << ENDL();
+    //     DPRINT << "interm_cb: " << get_compile_time_arg_val(2) << ENDL();
+    //     DPRINT << "gamma_cb: " << get_compile_time_arg_val(3) << ENDL();
+    //     DPRINT << "output_cb: " << get_compile_time_arg_val(4) << ENDL();
+    //     DPRINT << "fp32_acc: " << get_compile_time_arg_val(5) << ENDL();
+    //     DPRINT << "num_tiles: " << get_compile_time_arg_val(6) << ENDL();
+    //     DPRINT << "epsilon_index: " << get_compile_time_arg_val(7) << ENDL();
+    //     DPRINT << "scalar_index: " << get_compile_time_arg_val(8) << ENDL();
+    // #endif
+
     // Use UnifiedCoreDescriptor for compile-time role checks
     using Core = pre_sdpa::UnifiedCoreDescriptor;
 
@@ -109,12 +131,12 @@ KERNEL_ENTRY {
     }
 
     // Matmul cores: mcast (dataflow only - NCRISC sends, BRISC receives)
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_matmul_core) {
-        Mcast::Op<McastCTArgs> mcast;
-        mcast(mcast_rt_args);
-    }
-#endif
+    // #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    //     if constexpr (Core::is_matmul_core) {
+    //         Mcast::Op<McastCTArgs> mcast;
+    //         mcast(mcast_rt_args);
+    //     }
+    // #endif
 
     DPRINT << "Pre-SDPA kernel completed" << ENDL();
 }

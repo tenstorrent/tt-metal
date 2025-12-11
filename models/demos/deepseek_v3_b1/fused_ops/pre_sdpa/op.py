@@ -152,6 +152,7 @@ class PreSDPA:
         rmsnorm_output_cb = 4
         matmul_weights_cb = 5
         matmul_input_cb = 6
+        output_cb = 7
 
         # Mcast sender compile-time args (named args for NCRISC)
         mcast_sender_named_compile_time_args = [
@@ -233,7 +234,7 @@ class PreSDPA:
         matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_weights_cb, matmul_weights_tensor)
 
         # CB 6: Matmul input buffer (1x32 tiles, on matmul cores, receives mcast data)
-        TILE_1x32 = ttnn.Tile((32, 32))
+        TILE_1x32 = ttnn.Tile((1, 32))
         matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul_input_page_size = TILE_1x32.get_tile_size(data_format)
         # Total size same as RMSNorm output (num_tiles * cb_page_size bytes)
@@ -241,7 +242,7 @@ class PreSDPA:
         matmul_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=matmul_input_cb,
             data_format=data_format,
-            page_size=matmul_input_page_size,
+            page_size=matmul_input_total_size,
             tile=matmul_input_tile_descriptor,
         )
         matmul_input_cb_descriptor = ttnn.CBDescriptor(
@@ -249,6 +250,9 @@ class PreSDPA:
             core_ranges=mcast_grid,
             format_descriptors=[matmul_input_cb_format],
         )
+
+        # Set up sharded output CB, mapping to output_tensor shards
+        output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
 
         # ========================================================================
         # Kernel descriptors
@@ -326,11 +330,13 @@ class PreSDPA:
                 rmsnorm_output_cb_descriptor,
                 matmul_weights_cb_descriptor,
                 matmul_input_cb_descriptor,
+                output_cb_descriptor,
             ],
         )
 
         # Execute generic op
         io_tensors = [input_tensor, gamma_tensor, matmul_weights_tensor, output_tensor]
+        print("launching generic op")
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
         return output
