@@ -18,10 +18,10 @@ on:
       build-artifact-name:
         required: false
         type: string
-      ttsim-ref:
+      ttsim-version:
         required: false
         type: string
-        default: "cf36a157613fadebe1f205bd065aa384a4ab2b30"
+        default: "v1.0.0"
       job-timeout:
         required: false
         type: number
@@ -83,28 +83,26 @@ jobs:
           apt update
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
 
-      - name: Install System Packages
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          apt update
-          apt install -y git
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
-          repository: tenstorrent/ttsim-private
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
-        run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
@@ -184,23 +182,26 @@ jobs:
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
-        with:
-          repository: tenstorrent/ttsim-private
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
@@ -303,9 +304,6 @@ jobs:
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
-          - arch: quasar
-            build_suffix: release_qsr
-            soc_desc: quasar_1_arch.yaml
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -331,23 +329,26 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
-        with:
-          repository: tenstorrent/ttsim-private
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
@@ -355,7 +356,7 @@ jobs:
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
             # ToDo: Re-enable this test once tt-sim supports NOC
-            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim-private/issues/24
+            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim/issues/24
             # ./build/test/tt_metal/test_single_dm_l1_write
             :
           else
@@ -419,23 +420,26 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
-        with:
-          repository: tenstorrent/ttsim-private
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
