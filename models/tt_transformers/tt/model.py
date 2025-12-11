@@ -179,13 +179,15 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
-        print(
-            f"prepare_inputs_prefill called with tokens:\n{tokens} shape: {tokens.shape}\n\
-start_pos: {start_pos}\n\
-page_table: {page_table}\n\
-chunk_page_table: {chunk_page_table}\n\
-trace_enabled: {trace_enabled}"
-        )
+        print("================= prepare_inputs_prefill called with: =================\n")
+        print("tokens (full tensor):")
+        torch.set_printoptions(profile="full")
+        print(tokens)
+        torch.set_printoptions(profile="default")
+        print("tokens shape:", tokens.shape)
+        print("start_pos:", start_pos)
+        print("page_table:", page_table)
+        print("chunk_page_table:", chunk_page_table)
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
         device = None if trace_enabled else self.mesh_device
@@ -193,6 +195,8 @@ trace_enabled: {trace_enabled}"
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
+        print("tokens (reshaped):\n", tokens)
+        print("S:", S)
         tokens = ttnn.from_torch(
             tokens,
             device=device,
@@ -209,27 +213,39 @@ trace_enabled: {trace_enabled}"
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix.shape[2]
         required_end = start_pos + S
+        print("mat_len:", mat_len)
+        print("required_end:", required_end)
 
         # Determine how much padding is needed
         if required_end > mat_len:
             pad_len = required_end - mat_len
         else:
             pad_len = 0
+        print("pad_len:", pad_len)
 
         # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
         slice_start = 0 if trace_enabled else start_pos
         slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
-
+        print("slice_start:", slice_start)
+        print("slice_end:", slice_end)
         cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
         sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
-
+        print("cos_slice shape:", cos_slice.shape)
+        print("sin_slice shape:", sin_slice.shape)
         if pad_len > 0:
             # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
             padding = [(0, 0)] * 4
             padding[2] = (0, pad_len)
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-
+        # Print first full slice of shape [1, 1, 128, 4] from both cos_slice and sin_slice.
+        # Assumes shape [1, 1, 2048, 128]
+        cos_slice_first = cos_slice[:, :, :70, :4]  # [1,1,128,4]
+        sin_slice_first = sin_slice[:, :, :70, :4]  # [1,1,128,4]
+        ttnn.set_printoptions(profile="full")
+        # print("cos_slice (padded) first slice [1,1,70,4]:\n", cos_slice_first)
+        # print("sin_slice (padded) first slice [1,1,70,4]:\n", sin_slice_first)
+        ttnn.set_printoptions(profile="short")
         tt_rot_mats_prefill_global = [
             cos_slice,
             sin_slice,
@@ -281,7 +297,7 @@ trace_enabled: {trace_enabled}"
             )
         else:
             tt_chunk_page_table = None
-
+        print("=== end of prepare_inputs_prefill ===")
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,
@@ -433,13 +449,11 @@ trace_enabled: {trace_enabled}"
         """
         print(
             f"=== ttnn_prefill_forward called with ===\n\
-user_id: {user_id}\n\
 page_table: {page_table}\n\
 chunk_page_table: {chunk_page_table}\n\
 chunk_start_idx: {chunk_start_idx}\n\
 get_last_token: {get_last_token}"
         )
-        print(f"First 4 items of x: {x[0, 0, :4, :4]}")
         return self.forward(
             x,
             current_pos=None,
@@ -538,6 +552,9 @@ get_last_token: {get_last_token}"
         get_last_token=-1,
         kv_cache=None,
     ):
+        ttnn.set_printoptions(profile="full")
+        print(f"Transformer.forward called with\nx: {x.cpu()[0, 0, :80, :4]}")
+        ttnn.set_printoptions(profile="short")
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
@@ -560,6 +577,9 @@ get_last_token: {get_last_token}"
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+            ttnn.set_printoptions(profile="full")
+            print(f"forward === layer {i} === returns x:\n{x.cpu()[0, 0, :80, :4]}")
+            ttnn.set_printoptions(profile="short")
 
         if mode == "prefill" and get_last_token == -1:
             return x

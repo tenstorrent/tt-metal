@@ -274,11 +274,7 @@ class Generator:
             f"prefill_forward_text called with tokens:\n{tokens} shape: {tokens.shape}\n\
 page_table:\n{page_table}, shape: {page_table.shape}\n\
 prompt_lens: {prompt_lens}\n\
-empty_slots: {empty_slots}\n\
-enable_trace: {enable_trace}\n\
-model_id_warmup: {model_id_warmup}\n\
-start_pos: {start_pos}\n\
-kwargs: {kwargs}"
+start_pos: {start_pos}\n"
         )
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -404,6 +400,16 @@ kwargs: {kwargs}"
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx - num_cached_tokens) % 32))
 
+        # KV cache shape: (model, layer, k/v, block, heads, block_size, head_dim)
+        print(f"K cache page 275:\n{kv_cache[0][1][0][275][0]}")
+        print(f"K cache page 214:\n{kv_cache[0][1][0][214][0]}")
+        print(f"K cache page 3:\n{kv_cache[0][1][0][3][0]}")
+        print(f"K cache page 1340:\n{kv_cache[0][1][0][1340][0]}")
+
+        print(f"V cache page 275:\n{kv_cache[0][1][1][275][0]}")
+        print(f"V cache page 214:\n{kv_cache[0][1][1][214][0]}")
+        print(f"V cache page 3:\n{kv_cache[0][1][1][3][0]}")
+        print(f"V cache page 1340:\n{kv_cache[0][1][1][1340][0]}")
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
@@ -464,14 +470,8 @@ kwargs: {kwargs}"
                     chunk_end <= seq_len
                 ), f"Chunk end should be less or equal to seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
                 chunk_tokens = tokens[:, chunk_start:chunk_end]
-                # Only include blocks for actual tokens, not padded tokens
-                # actual_chunk_end is the exclusive end (1-based count of actual tokens)
-                actual_chunk_end = min(chunk_end, last_token_idx_in_seq + 1)
-                # Calculate the end block index: the block containing (actual_chunk_end - 1) is the last block we need
-                # Since actual_chunk_end is exclusive, we need blocks up to and including the block for (actual_chunk_end - 1)
-                actual_chunk_end_block = num_cached_blocks + (actual_chunk_end - 1) // block_size + 1
                 chunk_page_table = page_table_user_padded[
-                    :, num_cached_blocks + chunk_start // block_size : actual_chunk_end_block
+                    :, num_cached_blocks + chunk_start // block_size : num_cached_blocks + chunk_end // block_size
                 ]
 
                 (
@@ -494,17 +494,18 @@ kwargs: {kwargs}"
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
-                    chunk_start_idx=num_cached_blocks + chunk_start // block_size,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    chunk_start_idx=num_cached_tokens + chunk_start,
+                    get_last_token=((last_token_idx_in_chunk) // 32) * 32,
                     kv_cache=kv_cache,
                     **kwargs,
                 )
+                ttnn.set_printoptions(profile="full")
+                print(f"prefill_forward_single_user_text chunk tt_logits: {tt_logits.cpu()[0, 0, :, :4]}")
+                ttnn.set_printoptions(profile="short")
 
                 if chunk_start == last_chunk_start:
-                    print(f"Returning tt_logits for chunk_start: {chunk_start}, last_chunk_start: {last_chunk_start}")
                     return tt_logits
                 else:
-                    print(f"Deleting tt_logits for chunk_start: {chunk_start}, last_chunk_start: {last_chunk_start}")
                     del tt_logits
         else:
             (
@@ -528,6 +529,9 @@ kwargs: {kwargs}"
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
+            ttnn.set_printoptions(profile="full")
+            print(f"prefill_forward_single_user_text nochunk tt_logits: {tt_logits.cpu()[0, 0, :, :4]}")
+            ttnn.set_printoptions(profile="short")
             return tt_logits
 
     # Note: This function is called by vLLM
