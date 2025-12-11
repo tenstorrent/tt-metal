@@ -157,12 +157,9 @@ std::string get_ubb_id_str(ChipId chip_id) {
 
 std::string get_pcie_device_id_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& driver = cluster.get_driver();
-    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
-    auto pci_device = driver->get_pci_device(chip_id);
-    if (pci_device != nullptr) {
-        auto device_info = pci_device->get_device_info();
-        return "PCIe: " + std::to_string(device_info.pci_device);
+    auto pci_device_id = cluster.get_pci_device_id(chip_id);
+    if (pci_device_id.has_value()) {
+        return "PCIe: " + std::to_string(*pci_device_id);
     }
     return "";
 }
