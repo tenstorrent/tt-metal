@@ -96,13 +96,11 @@ struct ToMemoryConfig {
                     .at(0);
             } else {
                 // L1 to DRAM or DRAM to L1
-                return tt::tt_metal::operation::run(
-                           ttnn::operations::data_movement::CopyDeviceOperation{
-                               memory_config, dtype.value_or(tensor.dtype())},
-                           {tensor},
-                           {},
-                           optional_output_tensors)
-                    .at(0);
+                return ttnn::prim::copy(
+                    tensor,
+                    memory_config,
+                    dtype.value_or(tensor.dtype()),
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             }
         }
 
