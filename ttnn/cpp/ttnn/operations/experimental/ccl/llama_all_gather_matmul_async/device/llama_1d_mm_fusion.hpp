@@ -7,8 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-namespace ttnn::operations {
-namespace llama_matmul {
+namespace ttnn::operations::llama_matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(
     tt::tt_metal::Program& program,
@@ -24,5 +23,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-}  // namespace llama_matmul
-}  // namespace ttnn::operations
+}  // namespace ttnn::operations::llama_matmul

@@ -24,8 +24,7 @@
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
 
-namespace ttnn::operations::experimental::ccl {
-namespace llama_all_gather_matmul_async {
+namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
 struct LlamaAllGatherMatmulAsyncDeviceOperation {
     using operation_attributes_t = llama_all_gather_matmul_async::operation_attributes_t;
@@ -61,8 +60,7 @@ struct LlamaAllGatherMatmulAsyncDeviceOperation {
         const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
-}  // namespace llama_all_gather_matmul_async
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
 
 namespace ttnn::prim {
 

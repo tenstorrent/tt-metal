@@ -24,8 +24,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::operations {
-namespace llama_agmm_fusion_helpers {
+namespace ttnn::operations::llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -701,9 +700,9 @@ inline void override_agmm_fusion_program_parameters(
     }
 }
 
-}  // namespace llama_agmm_fusion_helpers
+}  // namespace ttnn::operations::llama_agmm_fusion_helpers
 
-namespace llama_matmul {
+namespace ttnn::operations::llama_matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
     tt_metal::Program& program,
@@ -1081,5 +1080,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace llama_matmul
-}  // namespace ttnn::operations
+}  // namespace ttnn::operations::llama_matmul

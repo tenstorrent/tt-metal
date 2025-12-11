@@ -20,8 +20,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-namespace ttnn::operations::experimental::ccl {
-namespace llama_all_gather_matmul_async {
+namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
 struct operation_attributes_t {
     operations::matmul::Matmul matmul_struct;
@@ -94,5 +93,4 @@ struct tensor_args_t {
     Tensor intermediate;
 };
 
-}  // namespace llama_all_gather_matmul_async
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async

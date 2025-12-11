@@ -9,7 +9,6 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-
 namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
 LlamaAllGatherMatmulAsyncDeviceOperation::program_factory_t

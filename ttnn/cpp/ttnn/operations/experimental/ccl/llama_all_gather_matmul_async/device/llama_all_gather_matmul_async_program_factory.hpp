@@ -7,8 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ccl {
-namespace llama_all_gather_matmul_async::program {
+namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program {
 
 struct LlamaAllGatherMatmulAsyncSharedVariables {
     tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
@@ -47,5 +46,4 @@ private:
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace llama_all_gather_matmul_async::program
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program
