@@ -57,6 +57,33 @@ run_async_tracing_T3000_test() {
             echo $res
             python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 
+            # Compare runtime analysis report with legacy path report
+            runtime_report="$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
+            echo "Comparing runtime analysis report with legacy path report..."
+            echo "Runtime analysis report: $runtime_report"
+
+            # Regenerate report using legacy path
+            echo "Regenerating report using legacy path (--force-legacy-device-logs)..."
+            ./tools/tracy/process_ops_logs.py -o $PROFILER_ARTIFACTS_DIR -n "legacy_comparison" --force-legacy-device-logs
+
+            # Find the legacy report (it's in the reports subdirectory)
+            legacy_report="$PROFILER_ARTIFACTS_DIR/reports/legacy_comparison/ops_perf_results_legacy_comparison.csv"
+
+            if [ ! -f "$legacy_report" ]; then
+                echo "ERROR: Legacy path report not found at $legacy_report"
+                exit 1
+            fi
+
+            echo "Legacy path report: $legacy_report"
+
+            # Compare the two reports
+            if python tools/tracy/compare_full_op_report.py "$runtime_report" "$legacy_report"; then
+                echo "✓ Reports are identical - runtime analysis and legacy path produce the same results"
+            else
+                echo "✗ Reports differ - runtime analysis and legacy path produce different results"
+                exit 1
+            fi
+
             # Testing device only report on the same artifacts
             rm -rf $PROFILER_OUTPUT_DIR/$runDate
             ./tools/tracy/process_ops_logs.py --device-only --date
@@ -123,58 +150,6 @@ run_ccl_T3000_test() {
     fi
 }
 
-run_resnet_runtime_vs_legacy_comparison_test() {
-    # Test that runtime analysis and legacy path produce identical reports
-    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        remove_default_log_locations
-        mkdir -p $PROFILER_ARTIFACTS_DIR
-
-        echo "Running resnet test with runtime analysis (enabled by default)..."
-        python -m tracy -v -r -p -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
-
-        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-        then
-            echo "No verification as test was skipped"
-            return
-        fi
-
-        # Get the runtime analysis report
-        runtime_runDate=$(ls $PROFILER_OUTPUT_DIR/ | head -1)
-        runtime_report="$PROFILER_OUTPUT_DIR/$runtime_runDate/ops_perf_results_$runtime_runDate.csv"
-
-        if [ ! -f "$runtime_report" ]; then
-            echo "ERROR: Runtime analysis report not found at $runtime_report"
-            exit 1
-        fi
-
-        echo "Runtime analysis report generated: $runtime_report"
-
-        # Regenerate report using legacy path
-        echo "Regenerating report using legacy path (--force-legacy-device-logs)..."
-        # Use PROFILER_ARTIFACTS_DIR as output folder so logs are found in .logs subdirectory
-        ./tools/tracy/process_ops_logs.py -o $PROFILER_ARTIFACTS_DIR -n "legacy_comparison" --date false --force-legacy-device-logs
-
-        # Find the legacy report (it should be in a subdirectory named "legacy_comparison" under artifacts dir)
-        legacy_report="$PROFILER_ARTIFACTS_DIR/legacy_comparison/ops_perf_results_legacy_comparison.csv"
-
-        if [ ! -f "$legacy_report" ]; then
-            echo "ERROR: Legacy path report not found at $legacy_report"
-            exit 1
-        fi
-
-        echo "Legacy path report generated: $legacy_report"
-
-        # Compare the two reports
-        echo "Comparing runtime analysis report with legacy path report..."
-        if python tools/tracy/compare_full_op_report.py "$runtime_report" "$legacy_report"; then
-            echo "✓ Reports are identical - runtime analysis and legacy path produce the same results"
-        else
-            echo "✗ Reports differ - runtime analysis and legacy path produce different results"
-            exit 1
-        fi
-    fi
-}
-
 run_profiling_test() {
     run_async_test
 
@@ -185,8 +160,6 @@ run_profiling_test() {
     run_async_tracing_mid_run_dump_T3000_test
 
     run_mid_run_data_dump
-
-    run_resnet_runtime_vs_legacy_comparison_test
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
