@@ -23,7 +23,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
 
 
-from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig
+from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...models.transformers.transformer_mochi import MochiTransformer3DModel
 from ...models.vae.vae_mochi import MochiVAEDecoder
@@ -300,6 +300,88 @@ class MochiPipeline(DiffusionPipeline):
             transformer=self.transformer,
             vae=self.vae,
         )
+
+    @staticmethod
+    def create_pipeline(
+        mesh_device,
+        checkpoint_name,
+        sp_axis=None,
+        tp_axis=None,
+        vae_sp_axis=None,
+        vae_tp_axis=None,
+        vae_mesh_shape=None,
+        num_links=None,
+        use_cache=True,
+        use_reference_vae=False,
+        force_zeros_for_empty_prompt=False,
+    ):
+        default_config = {
+            (2, 4): {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "vae_mesh_shape": (1, 8),
+                "vae_sp_axis": 0,
+                "vae_tp_axis": 1,
+                "num_links": 1,
+            },
+            (4, 8): {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "vae_mesh_shape": (4, 8),
+                "vae_sp_axis": 0,
+                "vae_tp_axis": 1,
+                "num_links": 4,
+            },
+        }
+
+        mesh_shape = tuple(mesh_device.shape)
+
+        sp_axis = sp_axis or default_config[mesh_shape]["sp_axis"]
+        tp_axis = tp_axis or default_config[mesh_shape]["tp_axis"]
+        vae_sp_axis = vae_sp_axis or default_config[mesh_shape]["vae_sp_axis"]
+        vae_tp_axis = vae_tp_axis or default_config[mesh_shape]["vae_tp_axis"]
+        vae_mesh_shape = vae_mesh_shape or default_config[mesh_shape]["vae_mesh_shape"]
+        num_links = num_links or default_config[mesh_shape]["num_links"]
+
+        sp_factor = mesh_device.shape[sp_axis]
+        tp_factor = mesh_device.shape[tp_axis]
+
+        # Create parallel config
+        parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+        )
+
+        if vae_mesh_shape[vae_sp_axis] == 1:
+            w_parallel_factor = 1
+        else:
+            w_parallel_factor = 2
+
+        vae_parallel_config = MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+            w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
+            h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
+        )
+        assert (
+            vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
+        )
+        assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+
+        # Create the TT Mochi pipeline
+        pipeline = MochiPipeline(
+            mesh_device=mesh_device,
+            vae_mesh_shape=vae_mesh_shape,
+            parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            num_links=num_links,
+            use_cache=use_cache,
+            use_reference_vae=use_reference_vae,
+            model_name=checkpoint_name,
+            force_zeros_for_empty_prompt=force_zeros_for_empty_prompt,
+        )
+
+        return pipeline
 
     def _get_t5_prompt_embeds(
         self,
