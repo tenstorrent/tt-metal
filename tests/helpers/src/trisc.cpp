@@ -30,7 +30,10 @@ uint32_t open_zone_cnt    = 0;
 
 #endif
 
-void run_kernel();
+__attribute__((weak)) void run_kernel()
+{
+    return;
+}
 
 int main()
 {
