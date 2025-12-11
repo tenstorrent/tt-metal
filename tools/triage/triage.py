@@ -554,7 +554,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
 
     try:
         with open(ref_path, "r", encoding="utf-8") as f:
-            approved_ref = f.read().strip()
+            approved_version = f.read().strip()
     except FileNotFoundError:
         utils.WARN("ttexalens_ref.txt not found. Skipping debugger version check. " f"Expected at: {ref_path}")
         return
@@ -562,41 +562,26 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         utils.WARN(f"Failed to read ttexalens_ref.txt: {e}. Skipping debugger version check.")
         return
 
-    if not approved_ref:
+    if not approved_version:
         utils.WARN("ttexalens_ref.txt is empty. Skipping debugger version check.")
         return
 
     # Get installed version string
     try:
-        installed_version = importlib_metadata.version("ttexalens")
-        utils.DEBUG(f"Installed ttexalens version: {installed_version}")
+        installed_version = importlib_metadata.version("tt-exalens")
+        utils.DEBUG(f"Installed tt-exalens version: {installed_version}")
     except importlib_metadata.PackageNotFoundError:
         utils.WARN(
             "Required debugger component is not installed. Please run scripts/install_debugger.sh to install debugger dependencies."
         )
         raise TTTriageError("Debugger dependency is not installed")
 
-    # Expected version format from setup.py: 0.1.<date>+dev.<short_hash>
-    installed_hash: str | None = None
-    if "+dev." in installed_version:
-        try:
-            installed_hash = installed_version.split("+dev.", 1)[1]
-        except Exception:
-            installed_hash = None
-
-    expected_hash: str | None = approved_ref
-
     # Match by prefix to allow short-vs-long
-    match_ok = False
-    if installed_hash and expected_hash:
-        if expected_hash.startswith(installed_hash) or installed_hash.startswith(expected_hash):
-            match_ok = True
-
-    if not match_ok:
+    if approved_version != installed_version:
         message = (
             "Debugger version mismatch.\n"
-            f"  Installed: {installed_version} (hash: {installed_hash or 'unknown'})\n"
-            f"  Approved:  hash: {approved_ref}\n"
+            f"  Installed: {installed_version}\n"
+            f"  Approved:  {approved_version}\n"
             "Use scripts/install_debugger.sh to install the approved version, or run with --skip-version-check"
         )
         if skip_check:
@@ -646,6 +631,10 @@ def run_script(
     # Parse arguments
     if args is None:
         args = parse_arguments(scripts, script_path, argv)
+
+        # Set verbose level from -v count (controls which columns are displayed)
+        verbose_level = args["-v"]
+        set_verbose_level(verbose_level)
 
         # Setting verbosity level
         try:
@@ -724,6 +713,10 @@ def main():
 
     # Parse common command line arguments
     args = parse_arguments(scripts)
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
 
     # Setting verbosity level
     try:
