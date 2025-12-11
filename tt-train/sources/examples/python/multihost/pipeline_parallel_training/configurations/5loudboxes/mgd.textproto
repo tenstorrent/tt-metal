@@ -26,27 +26,27 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 2 } }
-    channels { count: 2 policy: STRICT }
+    channels { count: 1 policy: STRICT }
   }
   connections {
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 3 } }
-    channels { count: 2 policy: STRICT }
+    channels { count: 1 policy: STRICT }
   }
   connections {
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 4 } }
-    channels { count: 2 policy: STRICT }
+    channels { count: 1 policy: STRICT }
   }
   connections {
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 3 } }
-    channels { count: 2 policy: STRICT }
+    channels { count: 1 policy: STRICT }
   }
   connections {
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 4 } }
-    channels { count: 2 policy: STRICT }
+    channels { count: 1 policy: STRICT }
   }
   connections {
     nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 3 } }
