@@ -75,7 +75,7 @@ def _shard_experts_by_device(
             mesh_device,
             dim=shard_dim,  # Shard expert dim across all devices
         ),
-        # cache_file_name=cache_file_name,
+        cache_file_name=cache_file_name,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

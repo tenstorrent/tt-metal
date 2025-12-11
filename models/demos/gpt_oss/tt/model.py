@@ -257,6 +257,7 @@ class Model:
 
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        breakpoint()
 
         # Forward through layers and head (shared with prefill)
         return self._forward_layers_and_head(

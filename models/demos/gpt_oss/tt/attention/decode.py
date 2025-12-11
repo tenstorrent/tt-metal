@@ -72,6 +72,7 @@ def decode_forward(
     xqkv_fused.deallocate(True)
 
     # Apply RoPE
+    breakpoint()
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
 

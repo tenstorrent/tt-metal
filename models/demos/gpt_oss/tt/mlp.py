@@ -40,28 +40,28 @@ class MLP:
         )
 
         # Create expert config from HF config
-        expert_config = ExpertConfig(
-            intermediate_size=hf_config.intermediate_size,
-            num_experts=hf_config.num_local_experts,
-            hidden_size=hf_config.hidden_size,
-            num_experts_per_tok=hf_config.num_experts_per_tok,
-            swiglu_limit=hf_config.swiglu_limit,
-        )
+        # expert_config = ExpertConfig(
+        #     intermediate_size=hf_config.intermediate_size,
+        #     num_experts=hf_config.num_local_experts,
+        #     hidden_size=hf_config.hidden_size,
+        #     num_experts_per_tok=hf_config.num_experts_per_tok,
+        #     swiglu_limit=hf_config.swiglu_limit,
+        # )
 
         # Use GPT-OSS specific program config
-        program_config = GPTOSSProgramConfig()
+        # program_config = GPTOSSProgramConfig()
 
         # Create experts with new modular implementation
-        self.experts = Experts(
-            mesh_device=mesh_device,
-            config=expert_config,
-            state_dict=experts_state_dict,
-            ccl_manager=ccl_manager,
-            mesh_config=mesh_config,
-            program_config=program_config,
-            weight_dtype=ttnn.bfloat4_b,
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
-        )
+        # self.experts = Experts(
+        #     mesh_device=mesh_device,
+        #     config=expert_config,
+        #     state_dict=experts_state_dict,
+        #     ccl_manager=ccl_manager,
+        #     mesh_config=mesh_config,
+        #     program_config=program_config,
+        #     weight_dtype=ttnn.bfloat4_b,
+        #     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+        # )
 
         # Create TT config
         throughput_expert_config = ThroughputExpertConfig(
