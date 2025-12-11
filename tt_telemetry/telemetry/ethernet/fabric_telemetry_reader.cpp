@@ -14,32 +14,25 @@
 
 FabricTelemetryReader::FabricTelemetryReader(
     tt::ChipId chip_id,
+    uint32_t channel,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :
     chip_id_(chip_id),
+    channel_(channel),
     cluster_(cluster.get()),
     hal_(hal.get()),
+    cached_telemetry_(tt::tt_fabric::FabricTelemetrySnapshot{}),
     last_update_cycle_(std::chrono::steady_clock::time_point::min()) {
     TT_FATAL(cluster_ != nullptr, "FabricTelemetryReader: cluster cannot be null");
     TT_FATAL(hal_ != nullptr, "FabricTelemetryReader: hal cannot be null");
 
-    const auto& soc_desc = cluster_->get_soc_descriptor(chip_id_);
-    uint32_t num_eth_channels = soc_desc.get_num_eth_channels();
-    for (uint32_t channel = 0; channel < num_eth_channels; channel++) {
-        cached_telemetry_[channel] = tt::tt_fabric::FabricTelemetrySnapshot{};
-    }
-
-    log_debug(
-        tt::LogAlways,
-        "FabricTelemetryReader initialized for chip {} with {} channels",
-        chip_id_,
-        cached_telemetry_.size());
+    log_debug(tt::LogAlways, "FabricTelemetryReader initialized for chip {}, channel {}", chip_id, channel);
 }
 
-tt::tt_fabric::FabricTelemetrySnapshot FabricTelemetryReader::read_channel_telemetry(uint32_t channel) {
+tt::tt_fabric::FabricTelemetrySnapshot FabricTelemetryReader::read_telemetry() {
     try {
         auto snapshot =
-            tt::tt_fabric::read_fabric_telemetry(const_cast<tt::umd::Cluster&>(*cluster_), *hal_, chip_id_, channel);
+            tt::tt_fabric::read_fabric_telemetry(const_cast<tt::umd::Cluster&>(*cluster_), *hal_, chip_id_, channel_);
 
         if (snapshot.static_info.supported_stats == 0) {
             log_debug(
@@ -59,7 +52,7 @@ tt::tt_fabric::FabricTelemetrySnapshot FabricTelemetryReader::read_channel_telem
             "Failed to read fabric telemetry for chip {} channel {}: {}. "
             "Device may be busy or unavailable.",
             chip_id_,
-            channel,
+            channel_,
             e.what());
 
         tt::tt_fabric::FabricTelemetrySnapshot empty_snapshot;
@@ -68,21 +61,14 @@ tt::tt_fabric::FabricTelemetrySnapshot FabricTelemetryReader::read_channel_telem
     }
 }
 
-const tt::tt_fabric::FabricTelemetrySnapshot* FabricTelemetryReader::get_fabric_telemetry_for_channel(
-    uint32_t channel, std::chrono::steady_clock::time_point start_of_update_cycle) {
+const tt::tt_fabric::FabricTelemetrySnapshot* FabricTelemetryReader::get_telemetry(
+    std::chrono::steady_clock::time_point start_of_update_cycle) {
     std::lock_guard<std::mutex> lock(telemetry_mutex_);
 
     if (start_of_update_cycle != last_update_cycle_) {
-        for (auto& [ch, snapshot] : cached_telemetry_) {
-            snapshot = read_channel_telemetry(ch);
-        }
+        cached_telemetry_ = read_telemetry();
         last_update_cycle_ = start_of_update_cycle;
     }
 
-    auto it = cached_telemetry_.find(channel);
-    if (it != cached_telemetry_.end()) {
-        return &it->second;
-    }
-
-    return nullptr;
+    return &cached_telemetry_;
 }
