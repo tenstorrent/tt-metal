@@ -12,8 +12,7 @@
 
 using PadValue = std::variant<uint32_t, float>;
 
-namespace ttnn::operations::data_movement::reshape {
-namespace detail {
+namespace ttnn::operations::data_movement::reshape::detail {
 
 const uint32_t MAX_RT_ARGS = 341;
 struct Dims {
@@ -286,7 +285,7 @@ inline size_t detect_stride_run(
     if (segs[start].num_elements == 0) {
         return 0;
     }
-    auto& base = segs[start];
+    const auto& base = segs[start];
     size_t len = 1;
     int32_t input_page_stride = 0, input_offset_stride = 0, output_stride = 0;
 
@@ -481,7 +480,7 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
     auto compressed_map = reshape::detail::compute_reshape_map(
         num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape);
 
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     const auto grid = device->compute_with_storage_grid_size();
 
     const auto
@@ -543,5 +542,4 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
 
     return estimate;
 }
-}  // namespace detail
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::operations::data_movement::reshape::detail
