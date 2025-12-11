@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
 
 # Import from local reference files
@@ -172,7 +171,6 @@ def assert_in_valid_outcomes(
     group_scores = top_expert_scores.sum(dim=-1)  # [batch, seq, n_groups]
 
     # Flatten for easier iteration
-    original_shape = ttnn_weights.shape
     ttnn_weights_2d = ttnn_weights.reshape(-1, n_activated_experts)
     ttnn_indices_2d = ttnn_indices.reshape(-1, n_activated_experts).to(torch.int64)
     biased_scores_2d = biased_scores.reshape(-1, scores.shape[-1])
@@ -402,12 +400,12 @@ def test_grouped_gate_against_reference():
 GROUPED_GATE_TEST_PARAMS = [
     # Basic cases with batch_size=1
     (1, 1, 1),  # Minimal case
-    # (1, 1, 33),  # Just over one tile (edge case)
-    # # Varying batch_size
-    # (1, 8, 512),  # Larger sequence
-    # (7, 7, 81),  # batch_size=8 with into second face
-    # # Stress tests
-    # (1, 1, 8192),
+    (1, 1, 33),  # Just over one tile (edge case)
+    # Varying batch_size
+    (1, 8, 512),  # Larger sequence
+    (7, 7, 81),  # batch_size=8 with sequence length 81 which extends into the second face along the height
+    # Stress tests
+    (1, 1, 8192),
 ]
 
 

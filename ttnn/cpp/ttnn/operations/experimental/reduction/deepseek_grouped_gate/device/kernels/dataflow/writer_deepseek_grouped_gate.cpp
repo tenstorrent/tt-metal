@@ -454,7 +454,8 @@ void kernel_main() {
             cb_top_experts_per_group, cb_sorted_group_scores, width_tiles, summed_experts_per_group, tokens_per_tile);
         generate_winning_group_tiles<
             cb_sorted_group_order,
-            cb_biased_scores,  // Use biased scores for selection (intermediate step - weights will also use biased)
+            cb_biased_scores,  // Use biased scores for selection/routing; unbiased (sigmoid-only) scores are gathered
+                               // later for final weight computation
             cb_expert_index_template,
             cb_winning_group_scores,
             cb_winning_group_indices,
@@ -472,11 +473,6 @@ void kernel_main() {
             width_tiles,
             n_activated_experts,
             n_activated_expert_tiles>(tokens_per_tile);
-
-        // TODO: Pass cb_gathered_sigmoid to compute for normalization instead of pre_normalized_scores
-        // For now, just pop it since we're only testing the gather
-        cb_wait_front(cb_gathered_sigmoid, n_activated_expert_tiles);
-        cb_pop_front(cb_gathered_sigmoid, n_activated_expert_tiles);
 
         noc_async_write_page(height_tile, indices_accessor, get_read_ptr(cb_out_indices));
         cb_wait_front(cb_out_weights, 1);

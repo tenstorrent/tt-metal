@@ -163,15 +163,10 @@ void topk_group_scores(
     cb_wait_front(cb_group_summed_scores, 1);
     cb_wait_front(cb_group_index_template, 1);
 
-    // copy scores tile to dest reg 0
+    // copy scores tiles to dest reg 0 and index tiles to dest reg 2
     copy_tile_to_dst_init_short(cb_group_summed_scores);
     copy_tile(cb_group_summed_scores, 0, 0);
-
-    // copy indices tile to dest reg 2
-    // CVELE: Going to be correctly packed out if we use the reconfig call
     copy_tile_to_dst_init_short_with_dt(cb_group_summed_scores, cb_group_index_template);
-    // CVELE: If we use this call, dprint will not use the correct data format
-    // copy_tile_to_dst_init_short(cb_group_index_template);
     copy_tile(cb_group_index_template, 0, 2);
 
     // llk_topk_sort -> inplace
@@ -190,7 +185,7 @@ void topk_group_scores(
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
-    pack_reconfig_data_format(output_cb_index);  // uncommenting this causes a hang
+    pack_reconfig_data_format(output_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
         tile_regs_acquire();
         cb_wait_front(input_cb_index, 1);
@@ -222,7 +217,6 @@ void topk(
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
     topk_tile_init();
-    // acquire_dst();
     tile_regs_acquire();
     cb_wait_front(cb_winning_group_scores, tiles);
     cb_wait_front(cb_winning_group_indices, tiles);

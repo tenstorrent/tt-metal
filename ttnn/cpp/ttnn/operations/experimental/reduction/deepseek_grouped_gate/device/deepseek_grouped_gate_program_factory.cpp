@@ -66,9 +66,11 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
     uint32_t n_activated_expert_tiles = tt::div_up(operation_attributes.n_activated_experts, 32);
-    // Scores are streamed one tile at a time (double-buffered with 2 tiles)
-    // Bias needs width_tiles capacity because add_bias doesn't consume bias until ALL sigmoid tiles are ready,
-    // but reader pushes scores+bias together - if bias CB is too small, reader blocks causing deadlock
+    // Deadlock prevention for bias CB:
+    //   - Bias needs width_tiles capacity because:
+    //       * The add_bias stage does not consume bias until ALL sigmoid tiles are ready.
+    //       * The reader pushes scores and bias together.
+    //   - If the bias CB is too small, the reader can block, causing a deadlock.
     tt::tt_metal::create_cb(
         cb_in_scores, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
@@ -292,8 +294,7 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     std::vector<uint32_t> compute_compile_time_args = {};
 
     // Compute kernel
-    bool fp32_dest_acc_en =
-        false;  // has to be false otherwise transpose_wh_tile of the index tiles corrupts dest reg 1 bfp16 somehow?
+    bool fp32_dest_acc_en = false;  // Needed for topK to work with uint16_t indices
     auto compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/"
