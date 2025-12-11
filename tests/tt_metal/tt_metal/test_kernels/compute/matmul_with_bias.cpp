@@ -38,8 +38,7 @@ void MAIN {
                         tt::CBIndex::c_1,
                         in0_block_tile_index + i,
                         in1_block_tile_index + c,
-                        dst_tile_index,
-                        false);
+                        dst_tile_index);
                     in1_block_tile_index += dst_tile_cols;
                 }
                 dst_tile_index++;

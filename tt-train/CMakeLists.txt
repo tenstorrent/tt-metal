@@ -52,6 +52,9 @@ endif()
 
 message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
 
+# Add cmake directory to module path for flatbuffers helper
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
 include(cmake/dependencies.cmake)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

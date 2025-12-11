@@ -691,6 +691,8 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
+tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
+
 void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
     fabric_tensix_config_ = fabric_tensix_config;
 }
@@ -707,6 +709,21 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
     }
+}
+
+void MetalContext::construct_control_plane() {
+    // Use auto-discovery to generate mesh graph from physical system descriptor
+    // This uses MeshGraph::generate_from_physical_system_descriptor which internally
+    // uses map_mesh_to_physical to find a valid mapping
+    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+        log_warning(
+            tt::LogDistributed,
+            "Custom Fabric Node Id to physical chip mapping provided but no mesh graph descriptor path. "
+            "Mapping will be ignored. Please provide a custom mesh graph descriptor path for custom logical to "
+            "physical mapping.");
+    }
+    log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
 }
 
 void MetalContext::initialize_control_plane() {
@@ -727,24 +744,27 @@ void MetalContext::initialize_control_plane_impl() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
-    log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
-    log_debug(tt::LogDistributed, "Using MGD mesh graph descriptor.");
+    // If no custom mesh graph descriptor use auto discovery to generate mesh graph
+    log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
-    auto cluster_type = cluster_->get_cluster_type();
-    auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
-    std::filesystem::path mesh_graph_desc_path =
-        tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type, rtoptions_.get_root_dir(), fabric_type);
+    if (*distributed_context_->size() == 1) {
+        this->construct_control_plane();
+    } else {
+        auto cluster_type = cluster_->get_cluster_type();
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+        std::filesystem::path mesh_graph_desc_path =
+            tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+                cluster_type, rtoptions_.get_root_dir(), fabric_type);
 
-    log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+        log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
-    TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
-    TT_FATAL(
-        std::filesystem::exists(mesh_graph_desc_path),
-        "Mesh graph descriptor file not found: {}",
-        mesh_graph_desc_path.string());
-
-    this->construct_control_plane(mesh_graph_desc_path);
+        TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
+        this->construct_control_plane(mesh_graph_desc_path);
+    }
 }
 
 void MetalContext::reset_cores(ChipId device_id) {

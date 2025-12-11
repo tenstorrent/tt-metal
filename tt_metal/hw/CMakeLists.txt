@@ -21,10 +21,10 @@ set(TYPES
 )
 
 set(TLS_ARCH_CPUS quasar:tt-qsr32:tt-qsr64)
-# name:number:cpu
+# name:cpu
 set(TLS_PROCS
-    trisc:4:tt-qsr32
-    dm:8:tt-qsr64
+    trisc:tt-qsr32
+    dm:tt-qsr64
 )
 
 # for wormhole, we need to generate two different linker scripts
@@ -198,7 +198,6 @@ foreach(ARCH IN LISTS ARCHS)
                         ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                         ${HW_INCLUDE}/dev_mem_map.h
-                        ${HW_INCLUDE}/tensix_dev_map.h
                     COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}${IRAM_COMMENT}"
                     VERBATIM
                 )
@@ -229,7 +228,6 @@ foreach(ARCH IN LISTS ARCHS)
                     ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                     ${HW_INCLUDE}/dev_mem_map.h
-                    ${HW_INCLUDE}/tensix_dev_map.h
                 COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
                 VERBATIM
             )
@@ -249,30 +247,26 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
     foreach(PROC IN LISTS TLS_PROCS)
-        # PROC is NAME:NUM:CPU
+        # PROC is NAME:CPU
         string(REPLACE ":" ";" PROC_INFO ${PROC})
-        list(LENGTH PROC_INFO LEN)
         list(GET PROC_INFO 0 NAME)
-        list(GET PROC_INFO 1 NUM)
-        list(GET PROC_INFO 2 CPU)
+        list(GET PROC_INFO 1 CPU)
 
         foreach(TYPE IN LISTS TYPES)
-            string(TOUPPER ${TYPE} TYPE_DEFINE)
             if(TYPE STREQUAL "firmware")
-                # Firmware is always TLS
                 set(BOUND 0)
             else()
-                set(BOUND ${NUM})
+                set(BOUND 1)
             endif()
             # bounds are inclusive [0,NUM]
             foreach(IX RANGE ${BOUND})
-                set(CNT ${IX})
-                if(CNT EQUAL BOUND)
-                    # The last one generates the non-legacy TLS script
-                    set(CNT "")
+                set(LGC "")
+                if(IX)
+                    set(LGC "_lgc")
                 endif()
-                set(HW_OUTPUT_FILE "${TYPE}_${NAME}${CNT}.ld")
-                string(TOUPPER "${NAME}=${CNT}" PROC_DEFINE)
+                set(HW_OUTPUT_FILE "${TYPE}_${NAME}${LGC}.ld")
+                string(TOUPPER "${TYPE}=${IX}" TYPE_DEFINE)
+                string(TOUPPER "${NAME}" PROC_DEFINE)
 
                 # custom command to preprocess/generate the output file
                 add_custom_command(
@@ -283,12 +277,10 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                     COMMAND
                         ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
                         -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
-                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/script_tng.ld
                     DEPENDS
                         ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
-                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
-                        ${HW_INCLUDE}/dev_mem_map.h
-                        ${HW_INCLUDE}/tensix_dev_map.h
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/script_tng.ld
                     COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
                     VERBATIM
                 )
@@ -544,7 +536,6 @@ target_sources(
             inc/tt-1xx/blackhole/stream_io_map.h
             inc/tt-1xx/blackhole/tdma_xmov.h
             inc/tt-1xx/blackhole/tensix.h
-            inc/tt-1xx/blackhole/tensix_dev_map.h
             inc/tt-1xx/blackhole/tensix_types.h
             inc/circular_buffer.h
             inc/circular_buffer_init.h
@@ -591,7 +582,6 @@ target_sources(
             inc/tt-2xx/quasar/stream_io_map.h
             inc/tt-2xx/quasar/tdma_xmov.h
             inc/tt-2xx/quasar/tensix.h
-            inc/tt-2xx/quasar/tensix_dev_map.h
             inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
@@ -616,7 +606,6 @@ target_sources(
             inc/tt-1xx/wormhole/stream_io_map.h
             inc/tt-1xx/wormhole/tdma_xmov.h
             inc/tt-1xx/wormhole/tensix.h
-            inc/tt-1xx/wormhole/tensix_dev_map.h
             inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
             inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
             inc/dataflow_api_addrgen.h

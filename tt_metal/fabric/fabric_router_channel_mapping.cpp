@@ -35,10 +35,12 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
             sender_channel_map_[LogicalSenderChannelKey{0, i}] =
                 InternalSenderChannelMapping{builder_type, i};
         }
-
-        // Receiver channel
-        receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] =
-            InternalReceiverChannelMapping{BuilderType::ERISC, 0};
+    } else if (topology_ == Topology::NeighborExchange) {
+        // Neighbor Exchange topology VC0 has 1 sender channel:
+        //  [0] = local worker channel
+        // Neighbor Exchange topology currently does not support mux extension
+        TT_FATAL(!downstream_is_tensix_builder_, "Neighbor Exchange topology does not support mux extension");
+        sender_channel_map_[LogicalSenderChannelKey{0, 0}] = InternalSenderChannelMapping{BuilderType::ERISC, 0};
     } else {
         // 1D topology VC0 has 2 sender channels (relative indices within VC0):
         //   [0] = local worker channel
@@ -49,11 +51,9 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
             InternalSenderChannelMapping{vc0_builder_type, 0};  // worker channel
         sender_channel_map_[LogicalSenderChannelKey{0, 1}] =
             InternalSenderChannelMapping{vc0_builder_type, 1};  // forward channel
-
-        // Receiver channel (typically single receiver channel per VC)
-        receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] =
-            InternalReceiverChannelMapping{BuilderType::ERISC, 0};
     }
+    // Receiver channel (typically single receiver channel per VC)
+    receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] = InternalReceiverChannelMapping{BuilderType::ERISC, 0};
 }
 
 void FabricRouterChannelMapping::initialize_vc1_mappings() {
@@ -113,7 +113,7 @@ uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
 uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc) const {
     switch (vc) {
         case 0:  // VC0
-            return is_2d_topology() ? 4 : 2;
+            return builder_config::get_num_used_sender_channel_count(get_topology());
         default:
             // intermesh vc support not added yet (Issue https://github.com/tenstorrent/tt-metal/issues/32561)
             return 0;

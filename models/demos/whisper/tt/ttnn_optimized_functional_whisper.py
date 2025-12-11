@@ -28,15 +28,21 @@ def dropout(hidden_states, p, training):
 
 def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapper, n_layers=None):
     """
-    Generates empty KV cache and sends to device
+    Generates empty KV cache for self-attention and cross-attention, and sends to device.
+    Returns:
+        tuple: (kv_cache, cross_attn_cache)
+            - kv_cache: List of [K, V] tensors per layer for self-attention
+            - cross_attn_cache: List of [None, None] per layer for cross-attention (populated on first use)
     """
 
     logger.info(f"Initializing KV cache with max batch size: {max_batch_size} and max sequence length: {max_seq_len}")
 
     kv_cache = []
+    cross_attn_cache = []
     if n_layers is None:
         n_layers = config.decoder_layers
     for i in range(n_layers):
+        # Self-attention cache
         kv_cache_layer = []
         for j in range(2):
             cache_k_or_v = torch.zeros(
@@ -58,8 +64,9 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
             )
             kv_cache_layer.append(cache_k_or_v)
         kv_cache.append(kv_cache_layer)
+        cross_attn_cache.append([None, None])
 
-    return kv_cache
+    return kv_cache, cross_attn_cache
 
 
 def calculate_key_values(config, key_value_states, *, parameters):
@@ -254,6 +261,7 @@ def whisper_attention(
     is_decode,
     encoder_hidden_states=None,
     kv_cache=None,
+    cross_attn_cache=None,
     current_decode_pos=None,
     *,
     parameters,
@@ -279,7 +287,16 @@ def whisper_attention(
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
-        key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
+        # Use cached cross-attention K/V if available, otherwise compute and cache
+        if cross_attn_cache is not None and cross_attn_cache[0] is not None:
+            # Use cached K/V from previous decoder step
+            key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
+        else:
+            # First pass: compute K/V and store references in cache
+            key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
+            if cross_attn_cache is not None:
+                cross_attn_cache[0] = key_states
+                cross_attn_cache[1] = value_states
         attn_output = functional_sdpa(
             query_states,
             key_states,
@@ -459,7 +476,15 @@ def expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] =
 
 
 def decoder_layer(
-    config, hidden_states, attention_mask, encoder_hidden_states, kv_cache=None, current_decode_pos=None, *, parameters
+    config,
+    hidden_states,
+    attention_mask,
+    encoder_hidden_states,
+    kv_cache=None,
+    current_decode_pos=None,
+    cross_attn_cache=None,
+    *,
+    parameters,
 ):
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
@@ -497,6 +522,7 @@ def decoder_layer(
         is_decode=True,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
         parameters=parameters.encoder_attn,
     )
@@ -545,6 +571,7 @@ def decoder(
     decoder_attention_mask,
     encoder_hidden_states,
     kv_cache=None,
+    cross_attn_cache=None,
     current_decode_pos=None,
     *,
     parameters,
@@ -561,6 +588,7 @@ def decoder(
             decoder_attention_mask,
             encoder_hidden_states,
             kv_cache=kv_cache[i] if kv_cache is not None else None,
+            cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             current_decode_pos=current_decode_pos,
             parameters=decoder_layer_parameter,
         )
@@ -759,6 +787,7 @@ def whisper(
     decoder_hidden_states,
     decoder_attention_mask,
     kv_cache=None,
+    cross_attn_cache=None,
     current_decode_pos=None,
     *,
     parameters,
@@ -770,6 +799,7 @@ def whisper(
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
         parameters=parameters.decoder,
     )
