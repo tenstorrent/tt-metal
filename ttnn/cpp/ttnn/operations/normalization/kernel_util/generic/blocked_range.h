@@ -11,8 +11,6 @@
  * over an array of 10 objects with a block size of 3, which will
  * result in 3 blocks of 3 and 1 block of 1. For each block, one
  * can also iterate within the block.
- *
- * @note No object
  */
 
 #pragma once
