@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-struct TilizeWithValPaddingMultiCoreBlockInterleavedProgramFactory {
+struct TilizeWithValPaddingMultiCoreInterleavedfactories {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};

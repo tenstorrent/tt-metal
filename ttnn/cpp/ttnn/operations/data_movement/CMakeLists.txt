@@ -202,11 +202,11 @@ target_sources(
         tilize/device/tilize_program_factory.cpp
         tilize/tilize.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
-        tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_factory_helper.cpp
-        tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_single_core_program_factory.cpp
-        tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
-        tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_multi_core_interleaved_program_factory.cpp
-        tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
         tilize_with_val_padding/tilize_with_val_padding.cpp
         transpose/device/transpose_op.cpp
         transpose/device/transpose_program_factory.cpp

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,10 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_single_core_program_factory.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_multi_core_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -26,10 +26,10 @@ struct TilizeWithValPaddingDeviceOperation {
     using tensor_return_value_t = tilize_with_val_padding::tensor_return_value_t;
 
     using program_factory_t = std::variant<
-        tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreProgramFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedProgramFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedProgramFactory,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedProgramFactory>;
+        tilize_with_val_padding::program::TilizeWithValPaddingSingleCorefactories,
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedfactories,
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedfactories,
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedfactories>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

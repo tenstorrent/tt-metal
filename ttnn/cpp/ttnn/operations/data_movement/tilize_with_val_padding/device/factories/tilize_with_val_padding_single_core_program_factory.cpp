@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,14 +16,14 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_factory_helper.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-TilizeWithValPaddingSingleCoreProgramFactory::cached_program_t TilizeWithValPaddingSingleCoreProgramFactory::create(
+TilizeWithValPaddingSingleCorefactories::cached_program_t TilizeWithValPaddingSingleCorefactories::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
@@ -190,7 +190,7 @@ TilizeWithValPaddingSingleCoreProgramFactory::cached_program_t TilizeWithValPadd
     return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-void TilizeWithValPaddingSingleCoreProgramFactory::override_runtime_arguments(
+void TilizeWithValPaddingSingleCorefactories::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

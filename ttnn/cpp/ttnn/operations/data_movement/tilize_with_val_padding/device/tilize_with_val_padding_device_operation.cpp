@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,16 +18,16 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     const auto& input_tensor = tensor_args.input_tensor;
 
     if (input_tensor.memory_config().is_sharded()) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedProgramFactory{};
+        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedfactories{};
     }
     if (!operation_attributes.enough_space_height) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedProgramFactory{};
+        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedfactories{};
     }
     if (!operation_attributes.use_multicore) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreProgramFactory{};
+        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCorefactories{};
     }
 
-    return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedProgramFactory{};
+    return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedfactories{};
 }
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_hit(
