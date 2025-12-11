@@ -1,0 +1,28 @@
+training_config:
+  project_name: "tt_train_nano_gpt"
+  model_type: "llama"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 1
+  num_epochs: 1
+  max_steps: 5000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  tokenizer_path: "data/tinyllama-tokenizer.json"
+  tokenizer_type: "bpe"
+  model_config: "model_configs/llama8b_pp.yaml"
+  multihost_config: multihost_configs/5worker_32block_pp_fabric.yaml
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0
+
+device_config:
+  enable_tp: true
+  mesh_shape: [1, 8]

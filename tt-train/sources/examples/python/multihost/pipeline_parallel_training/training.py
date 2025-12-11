@@ -10,10 +10,13 @@ using configurations specified in YAML files.
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-
 import ttml
-from ttml.common.config import get_config, DeviceConfig, TrainingConfig, MultiHostConfig
+from ttml.common.config import (
+    load_config,
+    DeviceConfig,
+    TrainingConfig,
+    MultiHostConfig,
+)
 from ttml.common.utils import set_seed, initialize_device, create_optimizer
 from ttml.common.model_factory import TransformerModelFactory
 import click
@@ -23,7 +26,9 @@ from trainer import train
 
 
 @click.command()
-@click.option("-c", "--config", type=str, default="training_shakespeare_llama7b_pp_fabric.yaml")
+@click.option(
+    "-c", "--config", type=str, default="training_shakespeare_llama7b_pp_fabric.yaml"
+)
 def main(config: str):
     """Main training function.
 
@@ -31,14 +36,16 @@ def main(config: str):
         config: Path to YAML configuration file (relative to configs directory)
     """
     # Load configuration and set seed
-    yaml_config = get_config(config)
+    yaml_config = load_config(config)
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
     distributed_ctx = autograd_ctx.get_distributed_context()
 
     # Initialize socket manager based on multihost configuration
-    multihost_config = MultiHostConfig(yaml_config)
+    multihost_config = MultiHostConfig(
+        yaml_config["training_config"]["multihost_config"]
+    )
     socket_type = (
         ttml.core.distributed.SocketType.FABRIC
         if multihost_config.socket_type == "fabric"
@@ -54,7 +61,9 @@ def main(config: str):
     assert (
         world_size == multihost_config.num_workers
     ), f"World size ({world_size}) must equal multihost_config.num_workers ({multihost_config.num_workers})"
-    assert world_size > 1, f"World size must be greater than 1, world size: {world_size}"
+    assert (
+        world_size > 1
+    ), f"World size must be greater than 1, world size: {world_size}"
 
     # adjust seed based on worker rank to make sure that each worker has a different seed
     set_seed(yaml_config["training_config"].get("seed", 42) + rank)
@@ -80,7 +89,14 @@ def main(config: str):
 
     # Execute training
     train_losses, val_losses = train(
-        training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+        training_cfg,
+        model_factory.transformer_config.max_sequence_length,
+        model,
+        optimizer,
+        train_ids,
+        val_ids,
+        device_config.enable_ddp,
+        device_config.enable_tp,
     )
 
     # Cleanup

@@ -7,10 +7,13 @@ from time import time
 
 import numpy as np
 import ttml
+from ttml.common.config import load_config, TransformerConfig
 from data import get_batch, build_causal_mask
 
 
-def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
+def get_batch_ttml(
+    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
+):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -34,20 +37,25 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
             ttml.autograd.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+        )
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttml.Layout.ROW_MAJOR,
             ttml.autograd.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+        )
     return tt_x, tt_y
 
 
 class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
+    def __init__(self, cfg, seq_len, window_size=10):
         self.cfg = cfg
+        self.seq_len = seq_len
         self.steps = []
         self.window_size = window_size
 
@@ -61,13 +69,24 @@ class PerformanceMeter:
         if time_window == 0:
             return 0, 0
 
-        samples = len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
+        samples = (
+            len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
+        )
         samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
+        tokens_per_second = samples * self.seq_len / time_window
         return samples_per_second, tokens_per_second
 
 
-def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
+def train(
+    cfg,
+    seq_len,
+    model,
+    optim,
+    train_ids: np.ndarray,
+    val_ids: np.ndarray,
+    use_ddp: bool = False,
+    use_tp: bool = False,
+):
     """Execute pipeline parallel training loop.
 
     In pipeline parallelism:
@@ -91,8 +110,10 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
-    causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
+    causal_mask = build_causal_mask(seq_len)
+    tt_mask = ttml.autograd.Tensor.from_numpy(
+        causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+    )
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -105,7 +126,9 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
     is_first_stage = rank == 0
     is_final_stage = rank == world_size - 1
 
-    assert world_size > 1, f"Pipeline parallel requires world_size > 1, got {world_size}"
+    assert (
+        world_size > 1
+    ), f"Pipeline parallel requires world_size > 1, got {world_size}"
 
     # Create composer for distributed tensors if using DDP or TP
     composer = None
@@ -117,7 +140,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
     train_losses = []
     val_losses = []  # Unused, kept for API compatibility
 
-    performance_meter = PerformanceMeter(cfg)
+    performance_meter = PerformanceMeter(cfg, seq_len)
     # Training loop: outer loop = optimizer steps, inner loop = gradient accumulation
     for step in range(1, cfg.steps + 1):
         performance_meter.step()
@@ -129,7 +152,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
             # Generate batch data
             # Note: All ranks generate batches, but only rank 0's input is used.
             # Pipeline model handles activation passing between ranks automatically.
-            tt_x, tt_y = get_batch_ttml(train_ids, cfg.seq_len, cfg.batch_size, use_ddp)
+            tt_x, tt_y = get_batch_ttml(train_ids, seq_len, cfg.batch_size, use_ddp)
 
             # Transfer targets from first stage to final stage
             # Only the final stage computes loss, so it needs the correct targets
