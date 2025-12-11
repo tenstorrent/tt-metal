@@ -155,7 +155,7 @@ def test_distributed_norm_allclose(
     ],
     indirect=True,
 )
-def test_distributed_norm_allclose_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use_welford):
+def test_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use_welford):
     """
     Smoke test for distributed layer norm and RMS norm with standard parameters.
     Note: RMS norm only runs with use_welford=False.

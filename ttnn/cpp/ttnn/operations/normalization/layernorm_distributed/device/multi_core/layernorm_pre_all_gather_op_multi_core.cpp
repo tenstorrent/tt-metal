@@ -303,11 +303,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-<<<<<<< HEAD
-    LayerNormDistributedDefaultProgramConfig program_config) {
-=======
     LayerNormDefaultProgramConfig program_config) {
->>>>>>> 5cbc7efdc5 (format, and removed all mention of distributed_ln_program_config)
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
