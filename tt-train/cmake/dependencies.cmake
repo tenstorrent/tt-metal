@@ -131,6 +131,7 @@ find_package(
         Interpreter
     REQUIRED
 )
+set(NB_USE_SUBMODULE_DEPS ON)
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
