@@ -54,6 +54,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
+      contents: read
+      actions: read
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
@@ -61,6 +63,7 @@ jobs:
       version: ${{ inputs.version }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
+      use-artifacts-from-run: 20107383957
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 120
