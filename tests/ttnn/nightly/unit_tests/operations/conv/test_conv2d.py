@@ -304,6 +304,7 @@ def run_conv(
     )
 
     if run_twice:
+        del tt_output_tensor_on_device
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
             weight_tensor=d_w,
