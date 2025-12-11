@@ -23,7 +23,7 @@ from models.experimental.tt_dit.utils.padding import get_padded_vision_seq_len
 @pytest.mark.parametrize(
     "n_iters, trace_enabled, skip_check", [(1, False, True), (10, True, True)], ids=["no_trace", "yes_trace"]
 )
-@pytest.mark.parametrize("num_links", [4], ids=["4link"])
+@pytest.mark.parametrize("num_links", [2, 4], ids=["2link", "4link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
