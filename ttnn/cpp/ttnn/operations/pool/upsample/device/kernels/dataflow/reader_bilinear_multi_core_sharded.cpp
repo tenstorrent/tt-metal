@@ -275,29 +275,39 @@ void kernel_main() {
             for (uint32_t i = 0; i < blocks; i++) {
                 cb_reserve_back(out_cb_id, 4);
 
+                // Calculate the correct block size for this iteration
+                // For the last block, we may need to read fewer tiles than MAX_TILES_PER_REDUCTION
+                uint32_t current_block_size_bytes = input_block_size_bytes;
+                if (i == blocks - 1) {
+                    // This is the last block - calculate remaining size
+                    // Total stick size - what we've already processed
+                    uint32_t remaining_size_bytes = stick_nbytes - (blocks - 1) * input_block_size_bytes;
+                    current_block_size_bytes = remaining_size_bytes;
+                }
+
                 uint32_t l1_write_addr = get_write_ptr(out_cb_id);
                 uint32_t l1_read_addr_temp = y1_base + x1_offset + block_offset;
                 // 1st stick
                 uint64_t src_noc_addr = get_noc_addr(l1_read_addr_temp);
-                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                noc_async_read(src_noc_addr, l1_write_addr, current_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 // 2nd stick
                 l1_read_addr_temp = y1_base + x2_offset + block_offset;
                 src_noc_addr = get_noc_addr(l1_read_addr_temp);
-                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                noc_async_read(src_noc_addr, l1_write_addr, current_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 // 3rd stick
                 l1_read_addr_temp = y2_base + x1_offset + block_offset;
                 src_noc_addr = get_noc_addr(l1_read_addr_temp);
-                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                noc_async_read(src_noc_addr, l1_write_addr, current_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 // 4th stick
                 l1_read_addr_temp = y2_base + x2_offset + block_offset;
                 src_noc_addr = get_noc_addr(l1_read_addr_temp);
-                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                noc_async_read(src_noc_addr, l1_write_addr, current_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 fill_four_val(get_write_ptr(in_scalar_cb_id), p1_bf16, p2_bf16, p3_bf16, p4_bf16);
@@ -306,7 +316,7 @@ void kernel_main() {
                 // push scaler and data into cb.
                 noc_async_read_barrier();
                 cb_push_back(out_cb_id, 4);
-                block_offset += input_block_size_bytes;
+                block_offset += current_block_size_bytes;
             }
             x_coordinate += (scale_w_inv_x2);  // scale_w_inv * 2 in fixed-point
         }
