@@ -20,40 +20,42 @@
 #include "compute_kernel_api/lcm.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/binary_comp.h"
+
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+#include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "debug/dprint_pages.h"
+#include "debug/dprint_tensix.h"
+
 namespace NAMESPACE {
+void MAIN {
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-ALWI void process_tile(
-    tt::CBIndex cb_pre_lhs,
-    tt::CBIndex cb_post_lhs,
-    tt::CBIndex cb_pre_rhs,
-    tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
-    using namespace ckernel;
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-#if BCAST_INPUT
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
-#define CB_PRE_OTHER cb_pre_lhs
-#define CB_POST_OTHER cb_post_lhs
-#else
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
-#define CB_PRE_OTHER cb_pre_rhs
-#define CB_POST_OTHER cb_post_rhs
+    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_2;
+
+    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
+    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
+
+    unary_op_init_common(cb_post_lhs, cb_out);
+#ifdef PACK_RELU
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
-    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
-    cb_wait_front(CB_POST_BCAST, num_tiles_per_cycle);
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+    BINARY_SFPU_INIT
+#endif
 
-    for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
-        cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
+    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
+
+        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
@@ -75,62 +77,16 @@ ALWI void process_tile(
         tile_regs_commit();
 
         tile_regs_wait();
+
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
-    }
-    cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
-}
 
-void MAIN {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
-
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
-
-    if (num_tiles == 0) {
-        return;
-    }
-
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
-
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
-
-    unary_op_init_common(cb_post_lhs, cb_out);
-#ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-#endif
-
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
-    BINARY_SFPU_INIT
-#endif
-
-    uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
-    uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
-
-    for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
-            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
-    }
-
-    if (remaining_iterations > 0) {
-        process_tile(
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
-            cb_out,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle);
+        cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
+        cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE

@@ -155,3 +155,22 @@ FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
         }
     }
 }
+
+// TODO: Optimize for BF16 Layout and big reads and writes
+FORCE_INLINE void fill_tile_with_first_column_rm(uint32_t ptr_arg, uint32_t row_width) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    // is it not possible to read like QWORD to make this more efficiently and bulk read and write here ?
+    for (uint32_t i = 1; i < row_width; i++) {
+        ptr[i] = ptr[0];
+    }
+}
+
+FORCE_INLINE void fill_tile_with_first_row_rm(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr float*>(ptr_arg);
+    // is it not possible to read like QWORD to make this more efficnelty and bulk read and write here ?
+    for (uint32_t i = 1; i < num_rows; i++) {
+        for (uint32_t j = 0; j < row_width; j++) {
+            ptr[i * row_width + j] = ptr[j];
+        }
+    }
+}

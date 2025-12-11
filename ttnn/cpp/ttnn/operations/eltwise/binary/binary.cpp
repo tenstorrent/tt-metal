@@ -373,38 +373,57 @@ inline auto invoke_binary_ng(
     if (not typecast_a and not typecast_b) {
         const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
         const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
-        const auto input_a = detail::to_layout(lhs, Layout::TILE);
-        const auto input_b = detail::to_layout(rhs, Layout::TILE);
-
-        if (input_a_rm and input_b_rm) {
+        // To benchmark and test both branches
+        static const bool force_tilize_rm = std::getenv("TTNN_FORCE_TILIZE") != nullptr;
+        if (input_a_rm and input_b_rm and not force_tilize_rm) {
             // we don't support to_layout with optional output tensor
             TT_FATAL(
                 !output_preallocated,
-                "Optional output tensor with Row Major input is not supported right now for Elementwise "
-                "operations");
+                "Optional output tensor with Row Major input is not supported"
+                "right now for Elementwise operations");
+
+            auto result = ttnn::prim::binary_ng(
+                lhs,
+                rhs,
+                binary_op_type,
+                out_dtype,
+                mem_config,
+                output,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt);
+            TT_FATAL(
+                result.layout() == Layout::ROW_MAJOR,
+                "Row-major binary_ng path expected row-major output but got {}",
+                result.layout());
+
+            return result;
+        } else {
+            // Either one or both are tiles
+            const auto input_a = detail::to_layout(lhs, Layout::TILE);
+            const auto input_b = detail::to_layout(rhs, Layout::TILE);
+
+            auto result = ttnn::prim::binary_ng(
+                input_a,
+                input_b,
+                binary_op_type,
+                out_dtype,
+                mem_config,
+                output,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt);
+
+            if (input_a_rm or input_b_rm) {
+                // if one argument was row major do we return row major or tile?
+                return detail::to_layout(result, Layout::ROW_MAJOR);
+            }
+            return result;
         }
-
-        auto result = ttnn::prim::binary_ng(
-            input_a,
-            input_b,
-            binary_op_type,
-            out_dtype,
-            mem_config,
-            output,
-            fast_and_approximate_mode,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            std::nullopt);
-
-        // if both inputs are in row major, convert the output to row major
-        // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-        // since it leads to better perf
-        if (input_a_rm and input_b_rm) {
-            return detail::to_layout(result, Layout::ROW_MAJOR);
-        }
-
-        return result;
     } else {
         const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
         const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
