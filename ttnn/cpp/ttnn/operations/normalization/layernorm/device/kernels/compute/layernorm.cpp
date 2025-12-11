@@ -14,12 +14,11 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "layernorm_utils.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -28,30 +27,6 @@ namespace policies = kutil::compute::policies;
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
-
-namespace detail {
-/**
- * @brief C++17 compatible bit_cast replacement using union
- * @tparam To The type to cast to
- * @tparam From The type to cast from
- * @param from The value to cast from
- * @return The casted value
- */
-template <typename To, typename From>
-inline To bit_cast(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
-}
-}  // namespace detail
 
 namespace NAMESPACE {
 void MAIN {
@@ -196,53 +171,9 @@ void MAIN {
         // cb_reserve_back(cb_ex2, 2);
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
             cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
-        // If the last block is partially-filled, we overaccumulated
-        // the variance by:
-        //
-        // over_accumulation = (Wt * TILE_WIDTH - W) * E[x]^2 / W
-        //
-        // So we need to subtract this from the variance
-        constexpr auto extra_cols = Wt * tt::constants::TILE_WIDTH - W;
-        if constexpr (extra_cols > 0) {
-            cb_reserve_back(cb_ex2, 1);
 
-            reconfig_data_format_srca(cb_ex2);
-            copy_tile_init(cb_ex2);
-            tile_regs_acquire();
+        norm::layernorm::device::kernels::compute::adjust_variance_for_partial_last_tile<W>(cb_ex2, cb_ex);
 
-            // Copy variance tile to dst0
-            copy_tile_init(cb_ex2);
-            copy_tile(cb_ex2, 0, dst0);
-
-            // Copy E[x] tile to dst1
-            copy_tile_init(cb_ex);
-            copy_tile(cb_ex, 0, dst1);
-
-            // Square E[x]
-            square_tile_init();
-            square_tile(dst1);
-
-            // Multiply by (#extra cols / W)
-            binop_with_scalar_tile_init();
-            mul_unary_tile(dst1, detail::bit_cast<uint32_t>(static_cast<float>(extra_cols) / W));
-
-            // Subtract dst1 from dst0
-            sub_binary_tile_init();
-            sub_binary_tile(dst0, dst1, dst0);
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            // Pack final value in dst0 into cb_ex2
-            pack_tile(dst0, cb_ex2);
-
-            tile_regs_release();
-
-            cb_push_back(cb_ex2, 1);
-
-            // Pop the old var tile
-            cb_pop_front(cb_ex2, 1);
-        }
         cb_pop_front(cb_ex, 1);
 
         // Var[x] + eps
