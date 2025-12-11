@@ -237,8 +237,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
-    constexpr uint32_t no_weights_max_size = 120;
-    constexpr uint32_t with_weights_max_size = 60;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -260,10 +258,8 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
-            Wt = with_weights_max_size;
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
-            Wt = no_weights_max_size;
         }
     }
     if (large_tensor_needed) {

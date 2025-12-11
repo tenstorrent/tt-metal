@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+
+namespace generic = norm::kernel_util::generic;
 
 template <typename T>
 void read_block_to_cb(
@@ -63,29 +66,29 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // First pass
         // Calculate E[x] and Var[x]
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+        for (auto block : generic::blocks(Wt, blk)) {
+            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block.size());
 #ifdef FUSE_PRE_ADD
-            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block.size());
 #endif
         }  // wt loop
 
         // Second pass
         // Calculate final output
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+        for (auto block : generic::blocks(Wt, blk)) {
+            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block.size());
 #ifdef FUSE_PRE_ADD
-            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block.size());
 #endif
 #ifdef FUSE_GAMMA
             {
-                read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block.size());
             }
 #endif
 
 #ifdef FUSE_BETA
             {
-                read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block.size());
             }
 #endif
         }  // wt loop

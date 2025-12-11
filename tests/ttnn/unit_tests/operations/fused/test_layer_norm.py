@@ -418,8 +418,8 @@ def test_layer_norm_with_padding(device, use_welford, dtype):
 
     torch.manual_seed(191919)
 
-    h, w = 32, 12 * 32 + 1
-    non_zero_columns = 14
+    h, w = 32, 100 * 32 + 1
+    non_zero_columns = 63 * 32 + 3
     torch_input_tensor = torch.zeros((h, w), dtype=dtype)
     torch_input_tensor[:, :non_zero_columns] = torch.ones((h, non_zero_columns), dtype=dtype)
 
@@ -447,7 +447,8 @@ def test_layer_norm_with_padding(device, use_welford, dtype):
     # Assert that the output is close to the golden output
     # rtol = 1e-2  # 1%, ~1-2 ULP
     # atol = 0     # Output doesn't have small values so we don't need this
-    assert_output_accuracy(golden_output, output_ttnn)
+    assert_allclose(golden_output, output_ttnn, rtol=1e-2, atol=0.01)
+    # assert_output_accuracy(golden_output, output_ttnn)
     # passed, message = assert_allclose(golden_output, output_ttnn, rtol=rtol, atol=atol)
     # print(f"Message: {message}")
     # assert passed, message

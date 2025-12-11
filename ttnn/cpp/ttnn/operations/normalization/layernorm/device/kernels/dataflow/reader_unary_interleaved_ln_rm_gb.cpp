@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+
+namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -62,27 +65,27 @@ void kernel_main() {
     uint32_t offs = 0;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+        for (auto block : generic::blocks(Wt, blk)) {
             cb_reserve_back(cb_id_in0, blk);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-            for (uint32_t r = 0; r < blk; r++) {
-                noc_async_read_tile(offs + wt + r + tile_offset, src_a, l1_write_addr);
+            for (auto r : block.local()) {
+                noc_async_read_tile(offs + block.start() + r + tile_offset, src_a, l1_write_addr);
                 l1_write_addr += src0_tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_in0, blk);
+            cb_push_back(cb_id_in0, block.size());
 
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
-            cb_reserve_back(cb_id_in1, blk);
+            cb_reserve_back(cb_id_in1, block.size());
             l1_write_addr = get_write_ptr(cb_id_in1);
-            for (uint32_t r = 0; r < blk; r++) {
-                noc_async_read_tile(offs + wt + r + tile_offset, src_b, l1_write_addr);
+            for (auto r : block.local()) {
+                noc_async_read_tile(offs + block.start() + r + tile_offset, src_b, l1_write_addr);
                 l1_write_addr += src1_tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_in1, blk);
+            cb_push_back(cb_id_in1, block.size());
 #endif
         }  // wt loop
 
@@ -91,10 +94,10 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
 #ifdef FUSE_GAMMA
                 {
-                    cb_reserve_back(cb_id_gamma, blk);
+                    cb_reserve_back(cb_id_gamma, block.size());
                     uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
+                    for (auto r : block.local()) {
+                        uint64_t gamma_noc_addr = get_noc_addr(block.start() + r, addrg);
                         noc_async_read(gamma_noc_addr, l1_write_addr, 64);
                         gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
                         noc_async_read_barrier();
@@ -102,16 +105,16 @@ void kernel_main() {
                         l1_write_addr += gamma_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_id_gamma, blk);
+                    cb_push_back(cb_id_gamma, block.size());
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    cb_reserve_back(cb_id_beta, blk);
+                    cb_reserve_back(cb_id_beta, block.size());
                     uint32_t l1_write_addr = get_write_ptr(cb_id_beta);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
+                    for (auto r : block.local()) {
+                        uint64_t beta_noc_addr = get_noc_addr(block.start() + r, addrb);
                         noc_async_read(beta_noc_addr, l1_write_addr, 64);
                         beta_noc_addr = get_noc_addr(l1_write_addr + 32);
                         noc_async_read_barrier();
@@ -119,7 +122,7 @@ void kernel_main() {
                         l1_write_addr += beta_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_id_beta, blk);
+                    cb_push_back(cb_id_beta, block.size());
                 }
 #endif
             }  // wt loop
