@@ -21,6 +21,10 @@ inputs:
     description: 'Enable lightweight kernel asserts'
     default: false
     type: boolean
+  enable-llk-asserts:
+    description: 'Enable LLK asserts'
+    default: false
+    type: boolean
   use-evaluation-image:
     description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
@@ -91,6 +95,14 @@ runs:
       run: |
         echo "Enabling TT Metal Lightweight Kernel Asserts"
         echo "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for LLK asserts
+      if: ${{ inputs.enable-llk-asserts == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal LLK Asserts"
+        echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
       shell: bash
 
     - name: Set up env vars for auto-triage
