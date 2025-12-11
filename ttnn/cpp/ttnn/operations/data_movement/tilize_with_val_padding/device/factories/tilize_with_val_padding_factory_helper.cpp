@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::detail {
