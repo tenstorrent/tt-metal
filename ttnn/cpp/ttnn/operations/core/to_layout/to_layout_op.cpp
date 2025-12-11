@@ -134,11 +134,15 @@ Tensor to_layout_impl(
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
-            TT_FATAL(
-                !sub_core_grids.has_value(), "Untilize with unpadding OP does not currently support sub core grid");
-            tensor =
-                ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
-            return ttnn::reshape(tensor, ttnn::Shape{output_shape});
+            tensor = ttnn::untilize_with_unpadding(
+                tensor, output_tensor_end, output_memory_config, use_multicore_untilize, true, sub_core_grids);
+            return ttnn::reshape(
+                tensor,
+                ttnn::Shape{output_shape},
+                std::nullopt /*Memory Config*/,
+                std::nullopt /*pad value*/,
+                TileReshapeMapMode::CACHE,
+                sub_core_grids);
 
         } else if (layout == ttnn::TILE_LAYOUT) {
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
