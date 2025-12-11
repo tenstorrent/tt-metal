@@ -96,8 +96,8 @@ Tensor to_layout_impl(
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                TT_FATAL(!sub_core_grids.has_value(), "Untilize OP does not currently support sub core grid");
-                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
+                return ttnn::untilize(
+                    tensor, output_memory_config, use_multicore_untilize, true /*use_pack_untilize*/, sub_core_grids);
             } else if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
                     const auto tensor_tile = tensor.tensor_spec().tile();
@@ -135,7 +135,12 @@ Tensor to_layout_impl(
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
             tensor = ttnn::untilize_with_unpadding(
-                tensor, output_tensor_end, output_memory_config, use_multicore_untilize, true, sub_core_grids);
+                tensor,
+                output_tensor_end,
+                output_memory_config,
+                use_multicore_untilize,
+                true /*use_pack_untilize*/,
+                sub_core_grids);
             return ttnn::reshape(
                 tensor,
                 ttnn::Shape{output_shape},
