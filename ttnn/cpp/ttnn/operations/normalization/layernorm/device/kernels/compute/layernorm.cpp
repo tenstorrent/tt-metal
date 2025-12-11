@@ -102,14 +102,14 @@ void MAIN {
             cb_wait_front(cb_in, block.size());
             cb_wait_front(cb_inb, block.size());
             cb_reserve_back(cb_x, block.size());
-            for (uint32_t j = 0; j < blk; j++) {
-                add_tiles(cb_in, cb_inb, j, j, j);
-                pack_tile(j, cb_x);
+            for (auto i : block.local()) {
+                add_tiles(cb_in, cb_inb, block.to_global(i), block.to_global(i), i);
+                pack_tile(i, cb_x);
             }
             REL();
-            cb_push_back(cb_x, blk);  // push the sum into the same buffer
-            cb_pop_front(cb_in, blk);
-            cb_pop_front(cb_inb, blk);
+            cb_push_back(cb_x, block.size());  // push the sum into the same buffer
+            cb_pop_front(cb_in, block.size());
+            cb_pop_front(cb_inb, block.size());
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -201,7 +201,7 @@ void MAIN {
             } else {
                 pack_reconfig_data_format(cb_fusion);
             }
-            cb_reserve_back(cb_im_or_out, blk);
+            cb_reserve_back(cb_im_or_out, block.size());
 #if defined RMSNORM and not defined FUSE_PRE_ADD
             reconfig_data_format_srca(cb_fusion, cb_xmm);
 #endif
