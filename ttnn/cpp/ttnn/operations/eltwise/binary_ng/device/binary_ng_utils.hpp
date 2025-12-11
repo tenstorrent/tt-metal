@@ -118,7 +118,5 @@ std::optional<AllShardVolumes> get_shard_volumes(
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
 
-inline auto is_uneven(const TensorSpec& t);
-
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
 }  // namespace ttnn::operations::binary_ng
