@@ -221,7 +221,7 @@ jobs:
             exit 1
           fi
       - name: Run demo regression tests
-        timeout-minutes: 120
+        timeout-minutes: 60
         shell: bash
         env:
           # When ops recording is enabled, wrap pytest with Tracy profiler
