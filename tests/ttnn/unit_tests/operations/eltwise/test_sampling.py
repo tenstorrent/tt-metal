@@ -362,9 +362,12 @@ def test_log_probs_calculation2(shape, mesh_device):
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}),
+        ({
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }),
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_linear"],
 )
 @pytest.mark.parametrize(
@@ -378,7 +381,18 @@ def test_log_probs_with_sub_core_grids(shape, mesh_device):
     seed = 1234
     torch.manual_seed(seed)
 
-    log_probs_calculator = LogProbsCalculator(shape[-1], mesh_device)
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9))
+        ]
+    )
+    sub_core_grids1 = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
+        ]
+    )
+    log_probs_calculator = LogProbsCalculator(shape[-1], mesh_device, sub_core_grids)
 
     torch_tensor = torch.randn(shape)
     # shuffle the tensor in last 2 dimensions
@@ -431,7 +445,7 @@ def test_log_probs_with_sub_core_grids(shape, mesh_device):
     log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
     log_probs_torch_argmax = torch.reshape(log_probs_torch_argmax, (1, 1, 1, 32))
 
-    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)                                                                                  
     print(f"pcc={pcc}")
 
     assert passing, f"Assertion failed, PCC={pcc}"
