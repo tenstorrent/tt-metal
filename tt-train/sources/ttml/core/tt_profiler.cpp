@@ -25,7 +25,7 @@ void TTProfiler::read_results(
         return;
     }
     call_device_noop(device, number_of_noops, noop_identifier);
-    tt::tt_metal::ReadMeshDeviceProfilerResults(device, read_state);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device, read_state);
     call_device_noop(device, number_of_noops, noop_identifier);
 }
 
