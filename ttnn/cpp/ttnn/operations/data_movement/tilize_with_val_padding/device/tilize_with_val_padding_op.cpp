@@ -128,17 +128,20 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.memory_config().is_sharded()) {
+        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded tilize does not support sub core grid specification");
         return detail::tilize_with_val_padding_multi_core_sharded(input_tensor_a, output_tensor, this->pad_value);
     }
     if (!this->enough_space_height) {
         return detail::tilize_with_val_padding_multi_core_block_interleaved(
-            input_tensor_a, output_tensor, this->pad_value);
+            input_tensor_a, output_tensor, this->pad_value, this->sub_core_grids);
     }
     if (!this->use_multicore) {
-        return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
+        return detail::tilize_with_val_padding_single_core(
+            input_tensor_a, output_tensor, this->pad_value, this->sub_core_grids);
     }
 
-    return detail::tilize_with_val_padding_multi_core_interleaved(input_tensor_a, output_tensor, this->pad_value);
+    return detail::tilize_with_val_padding_multi_core_interleaved(
+        input_tensor_a, output_tensor, this->pad_value, this->sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement

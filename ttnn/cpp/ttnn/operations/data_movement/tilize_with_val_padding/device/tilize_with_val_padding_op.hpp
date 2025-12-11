@@ -19,6 +19,7 @@ struct TilizeWithValPadding {
     const bool use_multicore;
     const bool enough_space_width;
     const bool enough_space_height;
+    const std::optional<CoreRangeSet> sub_core_grids;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
