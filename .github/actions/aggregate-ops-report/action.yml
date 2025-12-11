@@ -20,9 +20,6 @@ outputs:
   operations-count:
     description: 'Total number of unique operations found'
     value: ${{ steps.aggregate.outputs.operations-count }}
-  models-count:
-    description: 'Total number of models analyzed'
-    value: ${{ steps.aggregate.outputs.models-count }}
 
 runs:
   using: 'composite'
