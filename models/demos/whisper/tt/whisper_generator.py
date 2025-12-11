@@ -729,11 +729,11 @@ class WhisperGenerator:
                 )
 
                 # After first iteration, cross_attn_cache is populated with valid K/V
-                if i == 0:
+                if i == generation_start:
                     self.cross_attn_cache_valid = True
 
                 # Capture trace after first iteration (cross-attention cache is now populated)
-                if use_trace and self.kv_cache and i == 0 and not self.trace_compiled:
+                if use_trace and self.kv_cache and i == generation_start and not self.trace_compiled:
                     logger.info("Capturing fully persistent decoder trace (reused across ALL generations)")
                     self._capture_decoder_trace(decoder_hidden_states)
 
