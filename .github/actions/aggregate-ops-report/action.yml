@@ -32,4 +32,3 @@ runs:
         OUTPUT_PATH: ${{ inputs.output-path }}
       run: |
         python3 ${{ github.action_path }}/aggregate_ops.py
-
