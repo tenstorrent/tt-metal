@@ -83,7 +83,7 @@ class MeshDeviceBinaryStatus:
 
 
 @dataclass
-class RuntimeIdEntry:
+class MeshWorkloadRuntimeIdEntry:
     workloadId: int
     runtimeId: int
 
@@ -456,7 +456,7 @@ class InspectorLogsData:
             meshWorkloads=list(get_mesh_workloads(self.log_directory).values()), runtimeIds=self._get_runtime_ids()
         )
 
-    def _get_runtime_ids(self) -> list[RuntimeIdEntry]:
+    def _get_runtime_ids(self) -> list[MeshWorkloadRuntimeIdEntry]:
         """Parse runtime IDs from logs"""
         yaml_path = os.path.join(self.log_directory, "mesh_workloads_log.yaml")
         data = read_yaml(yaml_path)
@@ -465,12 +465,18 @@ class InspectorLogsData:
             if "workload_runtime_id" in entry:
                 info = entry["workload_runtime_id"]
                 runtime_ids.append(
-                    RuntimeIdEntry(workloadId=int(info.get("mesh_workload_id")), runtimeId=int(info.get("runtime_id")))
+                    MeshWorkloadRuntimeIdEntry(
+                        workloadId=int(info.get("mesh_workload_id")), runtimeId=int(info.get("runtime_id"))
+                    )
                 )
         return runtime_ids
 
     def getMeshWorkloads(self):
         return self.mesh_workloads
+
+    def getMeshWorkloadsRuntimeIds(self):
+        GetMeshWorkloadsRuntimeIdsResults = namedtuple("GetMeshWorkloadsRuntimeIdsResults", ["runtimeIds"])
+        return GetMeshWorkloadsRuntimeIdsResults(runtimeIds=self._get_runtime_ids())
 
     @cached_property
     def kernels(self) -> dict[int, KernelData]:

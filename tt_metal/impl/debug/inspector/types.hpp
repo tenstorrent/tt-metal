@@ -49,7 +49,7 @@ struct MeshDeviceData {
     bool initialized = false;
 };
 
-struct RuntimeIdEntry {
+struct MeshWorkloadRuntimeIdEntry {
     uint64_t workload_id;
     uint64_t runtime_id;
 };

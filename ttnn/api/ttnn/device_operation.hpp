@@ -253,10 +253,11 @@ void set_mesh_workload_metadata(
 
 // GCC 12 has a bug that causes a segfault when using reflection
 #if defined(__clang__)
-    // tensor args - format as comma-separated list for JSONL
     auto index = 0;
+    // tensor args - format as comma-separated list
+    constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
     fmt::memory_buffer tensor_args_buffer;
-    tensor_args_buffer.reserve(4096);
+    tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);  // Will grow if needed
 
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&index, &tensor_args_buffer](const Tensor& tensor) {
