@@ -9,11 +9,12 @@
 #include <stdexcept>
 #include <string>
 
+#include "protobuf/cluster_config.pb.h"
+
 namespace tt::scaleout_tools {
 
-// Helper to load protobuf descriptors from textproto files
 template <typename Descriptor>
-Descriptor load_descriptor_from_textproto(const std::string& file_path) {
+[[nodiscard]] Descriptor load_descriptor_from_textproto(const std::string& file_path) {
     std::ifstream file(file_path);
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open file: " + file_path);
@@ -26,6 +27,10 @@ Descriptor load_descriptor_from_textproto(const std::string& file_path) {
         throw std::runtime_error("Failed to parse textproto file: " + file_path);
     }
     return descriptor;
+}
+
+[[nodiscard]] inline cabling_generator::proto::ClusterDescriptor load_cluster_descriptor(const std::string& file_path) {
+    return load_descriptor_from_textproto<cabling_generator::proto::ClusterDescriptor>(file_path);
 }
 
 }  // namespace tt::scaleout_tools
