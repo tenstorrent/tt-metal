@@ -16,6 +16,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "layernorm_utils.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -36,6 +37,7 @@ void MAIN {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t one_over_W = get_compile_time_arg_val(7);
+    constexpr uint32_t W = get_compile_time_arg_val(8);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -176,6 +178,8 @@ void MAIN {
             tile_regs_release();
             cb_push_back(pack_cb, onetile);
         }
+
+        norm::layernorm::device::kernels::compute::adjust_variance_for_partial_last_tile<W>(cb_ex2, cb_ex);
 
         // End of
         // Var Calculation

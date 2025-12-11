@@ -419,7 +419,7 @@ def test_layer_norm_with_padding(device, use_welford, dtype):
     torch.manual_seed(191919)
 
     h, w = 32, 100 * 32 + 1
-    non_zero_columns = 63 * 32 + 3
+    non_zero_columns = 87 * 32 + 9
     torch_input_tensor = torch.zeros((h, w), dtype=dtype)
     torch_input_tensor[:, :non_zero_columns] = torch.ones((h, non_zero_columns), dtype=dtype)
 
