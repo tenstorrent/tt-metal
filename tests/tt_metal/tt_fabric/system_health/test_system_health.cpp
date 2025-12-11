@@ -155,6 +155,18 @@ std::string get_ubb_id_str(ChipId chip_id) {
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
 
+std::string get_pcie_device_id_str(ChipId chip_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
+    auto pci_device = driver->get_pci_device(chip_id);
+    if (pci_device != nullptr) {
+        auto device_info = pci_device->get_device_info();
+        return "PCIe: " + std::to_string(device_info.pci_device);
+    }
+    return "";
+}
+
 std::string get_physical_slot_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto physical_slot = cluster.get_physical_slot(chip_id);
@@ -271,7 +283,12 @@ TEST(Cluster, ReportSystemHealth) {
     for (const auto& [chip_id, unique_chip_id] : unique_chip_ids) {
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
         std::stringstream chip_id_ss;
-        chip_id_ss << std::dec << "Chip: " << chip_id << " Unique ID: " << std::hex << unique_chip_id;
+        chip_id_ss << std::dec << "Chip: " << chip_id;
+        auto pcie_id = get_pcie_device_id_str(chip_id);
+        if (not pcie_id.empty()) {
+            chip_id_ss << " " << pcie_id;
+        }
+        chip_id_ss << " Unique ID: " << std::hex << unique_chip_id;
         auto physical_loc = get_physical_loc_str(chip_id, cluster_type);
         if (not physical_loc.empty()) {
             chip_id_ss << " " << physical_loc;
