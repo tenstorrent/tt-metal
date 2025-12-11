@@ -67,6 +67,7 @@ class AbstractModuleBase(ABC):
         """Initialize the abstract module base.
 
         Sets up internal state for name, run mode, and parameter tracking.
+        Automatically sets the module name to the subclass name if not already set.
         """
         # Set these directly to avoid triggering __setattr__ during initialization
         object.__setattr__(self, "_name", None)
@@ -75,6 +76,13 @@ class AbstractModuleBase(ABC):
         object.__setattr__(self, "_named_tensors", OrderedDict())
         object.__setattr__(self, "_named_modules", OrderedDict())
         object.__setattr__(self, "_named_buffers", OrderedDict())
+
+        # Automatically set module name to subclass name if not explicitly set
+        # This provides a convenient default while still allowing manual override
+        # Subclasses can call self._create_name("custom_name") to override
+        if self._name is None:
+            subclass_name = self.__class__.__name__
+            self._create_name(subclass_name)
 
     def _is_tensor(self, value: Any) -> bool:
         """Check if a value is a tensor-like object.

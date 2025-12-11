@@ -54,15 +54,17 @@ class LinearRegression(AbstractModuleBase):
             init_scale: Scale factor for weight initialization. If None, uses sqrt(1/in_features)
         """
         super().__init__()
+        # Module name is automatically set to class name ("LinearRegression") by AbstractModuleBase
+        # Can be overridden by calling self._create_name("custom_name") if needed
 
         self.in_features = in_features
         self.out_features = out_features
-        self.bias = bias
 
         # Initialize weight and bias tensors
         init_k = init_scale if init_scale is not None else math.sqrt(1.0 / in_features)
 
         # Create weight tensor: shape [1, 1, out_features, in_features]
+        # Parameter wrapper automatically registers this via __setattr__
         weight_shape = (1, 1, out_features, in_features)
         weight_np = np.random.uniform(
             low=-init_k, high=init_k, size=weight_shape
@@ -71,6 +73,7 @@ class LinearRegression(AbstractModuleBase):
         self.weight = Parameter(weight_tensor)
 
         # Create bias tensor if needed: shape [1, 1, 1, out_features]
+        # Parameter wrapper automatically registers this via __setattr__
         if bias:
             bias_shape = (1, 1, 1, out_features)
             bias_np = np.random.uniform(
@@ -79,6 +82,7 @@ class LinearRegression(AbstractModuleBase):
             bias_tensor = ttml.autograd.Tensor.from_numpy(bias_np)
             self.bias = Parameter(bias_tensor)
         else:
+            # Set to None explicitly - won't be registered as parameter
             self.bias = None
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -91,12 +95,15 @@ class LinearRegression(AbstractModuleBase):
             Output tensor of shape [batch_size, 1, 1, out_features]
         """
         # Use ttml's linear operation
-        return ttml.ops.linear.linear_op(
-            x, self.weight.tensor, self.bias.tensor if self.bias else None
-        )
+        # Access underlying tensor from Parameter wrapper via .tensor attribute
+        bias_tensor = self.bias.tensor if self.bias is not None else None
+        return ttml.ops.linear.linear_op(x, self.weight.tensor, bias_tensor)
 
     def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Call the forward method.
+
+        This method is required by AbstractModuleBase (it's abstract in the base class).
+        It provides the standard PyTorch-like interface: `model(input)`.
 
         Args:
             x: Input tensor

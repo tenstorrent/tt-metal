@@ -114,11 +114,12 @@ def test_parameter_structure(sample_data):
     py_params = py_model.parameters()
 
     # Both should have weight and bias
-    # C++ uses "linear/weight" and "linear/bias", Python uses "weight" and "bias"
+    # C++ uses "linear/weight" and "linear/bias"
+    # Python uses "LinearRegression/weight" and "LinearRegression/bias" (with module name prefix)
     cpp_has_weight = any("weight" in k.lower() for k in cpp_params.keys())
     cpp_has_bias = any("bias" in k.lower() for k in cpp_params.keys())
-    py_has_weight = "weight" in py_params
-    py_has_bias = "bias" in py_params
+    py_has_weight = any("weight" in k.lower() for k in py_params.keys())
+    py_has_bias = any("bias" in k.lower() for k in py_params.keys())
 
     assert cpp_has_weight and py_has_weight, "Both models should have weight parameter"
     assert cpp_has_bias and py_has_bias, "Both models should have bias parameter"
@@ -126,6 +127,8 @@ def test_parameter_structure(sample_data):
     # Check parameter shapes
     cpp_weight_key = [k for k in cpp_params.keys() if "weight" in k.lower()][0]
     cpp_bias_key = [k for k in cpp_params.keys() if "bias" in k.lower()][0]
+    py_weight_key = [k for k in py_params.keys() if "weight" in k.lower()][0]
+    py_bias_key = [k for k in py_params.keys() if "bias" in k.lower()][0]
 
     cpp_weight_shape = (
         cpp_params[cpp_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
@@ -133,8 +136,12 @@ def test_parameter_structure(sample_data):
     cpp_bias_shape = (
         cpp_params[cpp_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
     )
-    py_weight_shape = py_params["weight"].to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    py_bias_shape = py_params["bias"].to_numpy(ttml.autograd.DataType.FLOAT32).shape
+    py_weight_shape = (
+        py_params[py_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
+    )
+    py_bias_shape = (
+        py_params[py_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
+    )
 
     assert (
         cpp_weight_shape == py_weight_shape
@@ -297,12 +304,14 @@ def test_parameter_access(sample_data):
     # Find weight and bias keys
     cpp_weight_key = [k for k in cpp_params.keys() if "weight" in k.lower()][0]
     cpp_bias_key = [k for k in cpp_params.keys() if "bias" in k.lower()][0]
+    py_weight_key = [k for k in py_params.keys() if "weight" in k.lower()][0]
+    py_bias_key = [k for k in py_params.keys() if "bias" in k.lower()][0]
 
     # Extract parameter values
     cpp_weight = cpp_params[cpp_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32)
     cpp_bias = cpp_params[cpp_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32)
-    py_weight = py_params["weight"].to_numpy(ttml.autograd.DataType.FLOAT32)
-    py_bias = py_params["bias"].to_numpy(ttml.autograd.DataType.FLOAT32)
+    py_weight = py_params[py_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32)
+    py_bias = py_params[py_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32)
 
     # Check shapes match
     assert cpp_weight.shape == py_weight.shape
@@ -400,10 +409,11 @@ def test_gradient_flow(sample_data):
     py_params_before = py_model.parameters()
 
     cpp_weight_key = [k for k in cpp_params_before.keys() if "weight" in k.lower()][0]
+    py_weight_key = [k for k in py_params_before.keys() if "weight" in k.lower()][0]
     cpp_weight_before = cpp_params_before[cpp_weight_key].to_numpy(
         ttml.autograd.DataType.FLOAT32
     )
-    py_weight_before = py_params_before["weight"].to_numpy(
+    py_weight_before = py_params_before[py_weight_key].to_numpy(
         ttml.autograd.DataType.FLOAT32
     )
 
@@ -444,7 +454,9 @@ def test_gradient_flow(sample_data):
     cpp_weight_after = cpp_params_after[cpp_weight_key].to_numpy(
         ttml.autograd.DataType.FLOAT32
     )
-    py_weight_after = py_params_after["weight"].to_numpy(ttml.autograd.DataType.FLOAT32)
+    py_weight_after = py_params_after[py_weight_key].to_numpy(
+        ttml.autograd.DataType.FLOAT32
+    )
 
     # Parameters should have changed
     assert not np.allclose(
