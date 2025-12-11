@@ -225,9 +225,9 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   run-profiler-regression:
-    needs: [build-artifact, find-changed-files]
     if: ${{ github.event_name == 'schedule' || inputs.run_bos_tests }}
     needs: build-artifact
+    secrets: inherit
     strategy:
       fail-fast: false
       matrix:
@@ -235,7 +235,6 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
         ]
     uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
