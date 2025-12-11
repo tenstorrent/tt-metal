@@ -17,8 +17,12 @@ namespace ckernel {
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     // TODO NC: used to pass disable_src_zero_flag to hw configure
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            false,
+            EltwiseBinaryReuseDestType::NONE,
+            UnpackToDestEn,
+            true /*disable_src_zero_flag*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init<false>(ocb)));
@@ -39,8 +43,12 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
     // TODO NC: used to pass disable_src_zero_flag to hw configure
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            false,
+            EltwiseBinaryReuseDestType::NONE,
+            UnpackToDestEn,
+            true /*disable_src_zero_flag*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_hw_configure(icb, icb)));
