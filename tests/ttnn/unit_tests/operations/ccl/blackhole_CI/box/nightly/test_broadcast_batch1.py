@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
@@ -247,6 +247,7 @@ def run_broadcast_impl(
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize(
     "num_devices, num_links, sender_idx, output_shape, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
