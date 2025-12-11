@@ -157,7 +157,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -1596,9 +1596,9 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
-                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim
