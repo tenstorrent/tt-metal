@@ -86,20 +86,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # perf wise this makes sense because we dont need to permute to channel last after it
         # we dont need to permute to channel last because this is final output that goes to the host
 
-        # Determine grid configuration based on device compute grid
-        # Use optimized configs for 5x4 grid (20 cores), auto-config for all other grids
         compute_grid = device.compute_with_storage_grid_size()
-        use_optimized_config = compute_grid.x == 5 and compute_grid.y == 4
 
-        if use_optimized_config:
-            logger.debug(f"Using optimized matmul configs for 5x4 grid (20 cores)")
-        else:
-            logger.debug(
-                f"Using auto-config for {compute_grid.x}x{compute_grid.y} grid ({compute_grid.x * compute_grid.y} cores)"
-            )
-
-        if use_optimized_config:
-            # Optimized configs for 5x4 grid (20 cores)
+        if compute_grid.x == 5 and compute_grid.y == 4:
             final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(5, 4),
                 in0_block_w=2,
@@ -133,9 +122,16 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
                 num_global_cb_receivers=0,
                 untilize_out=False,
             )
+        elif compute_grid.x == 13 and compute_grid.y == 10:
+            # TODO Optimized configs for 13x10 grid (130 cores) can be added here
+            final_upsample_mm_config1 = None
+            final_upsample_mm_config2 = None
         else:
-            # Auto-config for all other grid sizes (e.g., 12x10 for 120 cores)
+            # Auto-config for all other grid sizes
             # TTNN will automatically select optimal configuration based on device capabilities
+            logger.debug(
+                f"Using auto-config for {compute_grid.x}x{compute_grid.y} grid ({compute_grid.x * compute_grid.y} cores)"
+            )
             final_upsample_mm_config1 = None
             final_upsample_mm_config2 = None
 
