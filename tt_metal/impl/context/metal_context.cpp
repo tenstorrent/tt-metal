@@ -747,7 +747,24 @@ void MetalContext::initialize_control_plane_impl() {
     // If no custom mesh graph descriptor use auto discovery to generate mesh graph
     log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
-    this->construct_control_plane();
+    if (*distributed_context_->size() == 1) {
+        this->construct_control_plane();
+    } else {
+        auto cluster_type = cluster_->get_cluster_type();
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+        std::filesystem::path mesh_graph_desc_path =
+            tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+                cluster_type, rtoptions_.get_root_dir(), fabric_type);
+
+        log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+
+        TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
+        this->construct_control_plane(mesh_graph_desc_path);
+    }
 }
 
 void MetalContext::reset_cores(ChipId device_id) {
