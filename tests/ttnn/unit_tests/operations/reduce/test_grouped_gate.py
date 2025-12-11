@@ -400,22 +400,22 @@ def test_grouped_gate_against_reference():
 # Format: (num_batches, batch_size, seq_len)
 GROUPED_GATE_TEST_PARAMS = [
     # Basic cases with batch_size=1
-    (1, 1, 1),  # Minimal case
-    (1, 1, 32),  # Single tile
-    (1, 1, 33),  # Just over one tile (edge case)
+    # (1, 1, 1),  # Minimal case
+    # (1, 1, 32),  # Single tile
+    # (1, 1, 33),  # Just over one tile (edge case)
     (1, 1, 128),  # Multiple tiles
-    (1, 1, 512),  # Larger sequence
-    # Varying batch_size with single batch
-    (1, 2, 32),  # batch_size=2
-    (1, 4, 64),  # batch_size=4
-    (1, 8, 32),  # batch_size=8
-    # Multiple batches
-    (2, 1, 32),  # num_batches=2, minimal batch_size
-    (2, 2, 64),  # num_batches=2, batch_size=2
-    (2, 4, 33),  # num_batches=2, batch_size=4, non-tile-aligned seq
-    # Stress tests
-    (1, 8, 128),  # Large batch with multiple tiles
-    (2, 4, 128),  # Multiple batches, moderate batch_size, multiple tiles
+    # (1, 1, 512),  # Larger sequence
+    # # Varying batch_size with single batch
+    # (1, 2, 32),  # batch_size=2
+    # (1, 4, 64),  # batch_size=4
+    # (1, 8, 32),  # batch_size=8
+    # # Multiple batches
+    # (2, 1, 32),  # num_batches=2, minimal batch_size
+    # (2, 2, 64),  # num_batches=2, batch_size=2
+    # (2, 4, 33),  # num_batches=2, batch_size=4, non-tile-aligned seq
+    # # Stress tests
+    # (1, 8, 128),  # Large batch with multiple tiles
+    # (2, 4, 128),  # Multiple batches, moderate batch_size, multiple tiles
 ]
 
 

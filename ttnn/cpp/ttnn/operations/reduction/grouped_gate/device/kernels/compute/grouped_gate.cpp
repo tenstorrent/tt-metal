@@ -293,11 +293,6 @@ void topk(
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_reserve_back(post_sort_transpose_cb_index, 1);
-    pack_reconfig_data_format(post_sort_transpose_cb_index);
-    pack_tile(0, post_sort_transpose_cb_index);
-    cb_push_back(post_sort_transpose_cb_index, 1);
-
     cb_reserve_back(intermediate_local_sort_indices_cb_index, 1);
     pack_reconfig_data_format(intermediate_local_sort_indices_cb_index);
     pack_tile(2, intermediate_local_sort_indices_cb_index);
