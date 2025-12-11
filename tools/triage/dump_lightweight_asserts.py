@@ -100,7 +100,7 @@ def serialize_variables(variables: list[CallstackEntryVariable], assert_code: st
     result = ""
     for var in variables:
         var_name = var.name or "?"
-        var_value = var.value or "?"
+        var_value = var.value if var.value is not None else "?"
         if var_name in assert_code:
             serialized = f"- {BLUE}{var_name}{RST} = {RED}{var_value}{RST}\n"
         else:
@@ -109,7 +109,7 @@ def serialize_variables(variables: list[CallstackEntryVariable], assert_code: st
     return result
 
 
-def dump_callstacks(
+def dump_lightweight_asserts(
     location: OnChipCoordinate,
     risc_name: str,
     callstack_provider: CallstackProvider,
@@ -192,7 +192,7 @@ def dump_callstacks(
             risc_name,
             location,
             False,
-            f"{ORANGE}Failed to dump callstacks: {e}{RST}",
+            f"{ORANGE}Failed to dump lightweight asserts: {e}{RST}",
         )
         return None
 
@@ -204,7 +204,7 @@ def run(args, context: Context):
     callstack_provider = get_callstack_provider(args, context)
 
     callstacks_data = run_checks.run_per_core_check(
-        lambda location, risc_name: dump_callstacks(
+        lambda location, risc_name: dump_lightweight_asserts(
             location,
             risc_name,
             callstack_provider,
