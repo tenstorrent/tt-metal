@@ -65,39 +65,7 @@ inline void accumulate_compute_loop(
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
-        // uint32_t tiles_remaining = num_tiles;
-        // uint32_t num_previous_tiles = 0;
-        // while (tiles_remaining > 0) {
-        //     //const auto num_previous_tiles = pop_input ? 0 : t;
-        //     const auto curr_block_size = std::min(block_size, tiles_remaining);
-        //     cb_wait_front(cb, num_previous_tiles + curr_block_size);
-        //     for (uint32_t j = 0; j < curr_block_size; j++) {
-        //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-        //             cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
-        //     }
-        //     if constexpr (pop_input) {
-        //         cb_pop_front(cb, curr_block_size);
-        //     } else {
-        //         num_previous_tiles += curr_block_size;
-        //     }
-        //     tiles_remaining -= curr_block_size;
-        // }
-        // for (uint32_t t = 0; t < num_tiles; t += std::min(block_size, num_tiles - num_previous_tiles)) {
-        //     //const auto num_previous_tiles = pop_input ? 0 : t;
-        //     const auto curr_block_size = t - num_previous_tiles;
-        //     cb_wait_front(cb, num_previous_tiles + block_size);
-        //     for (uint32_t j = 0; j < curr_block_size; j++) {
-        //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-        //             cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
-        //     }
-        //     if constexpr (pop_input) {
-        //         cb_pop_front(cb, curr_block_size);
-        //     } else {
-        //         num_previous_tiles += curr_block_size;
-        //     }
-        // }
         for (auto block : generic::blocks(num_tiles, block_size)) {
-            // const auto num_previous_tiles = pop_input ? 0 : t;
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             cb_wait_front(cb, num_previous_tiles + block.size());
             for (auto j : block.local()) {
