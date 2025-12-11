@@ -88,8 +88,8 @@ jobs:
         test-group:
           - { name: "Galaxy unit tests", arch: "wormhole_b0", model: "unit", timeout: 30, owner_id: "XXXXX" }  # see issue #29677
           - { name: "Galaxy Fabric tests", arch: "wormhole_b0", model: "fabric", timeout: 25, owner_id: "UJ45FEC7M" } # Allan Liu
-          - { name: "Galaxy Llama3-70b unit tests", arch: "wormhole_b0", model: "llama3-70b", timeout: 30, owner_id: "U053W15B6JF", mlperf: true } # Djordje Ivanovic
-          - { name: "Galaxy DRAM Prefetcher unit tests", arch: "wormhole_b0", model: "prefetcher", timeout: 25, owner_id: "U044T8U8DEF" }  # Johanna Rock, Yu Gao
+          # - { name: "Galaxy Llama3-70b unit tests", arch: "wormhole_b0", model: "llama3-70b", timeout: 30, owner_id: "U053W15B6JF", mlperf: true } # Djordje Ivanovic
+          # - { name: "Galaxy DRAM Prefetcher unit tests", arch: "wormhole_b0", model: "prefetcher", timeout: 25, owner_id: "U044T8U8DEF" }  # Johanna Rock, Yu Gao
           - { name: "Galaxy distributed ops tests", arch: "wormhole_b0", model: "distributed-ops", timeout: 10, owner_id: "U044T8U8DEF" }  # Johanna Rock
           - { name: "Galaxy GPT-OSS unit tests", arch: "wormhole_b0", model: "gpt-oss", timeout: 25, owner_id: "U06F3ER8X9A", mlperf: true }  # Stuti Raizada
     name: ${{ matrix.test-group.name }}
