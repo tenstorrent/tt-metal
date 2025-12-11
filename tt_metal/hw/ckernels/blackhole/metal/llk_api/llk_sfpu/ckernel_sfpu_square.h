@@ -5,8 +5,7 @@
 #pragma once
 
 #include "sfpi.h"
-// NOTE: The following header is from the external 'tt-llk' dependency.
-// The implementation of '_calculate_square_' is provided by 'tt-llk' and not defined in tt-metal
+// NOTE: The following header is from the external tt-llk and not defined in tt-metal
 #include "sfpu/ckernel_sfpu_square.h"
 
 namespace ckernel::sfpu {
