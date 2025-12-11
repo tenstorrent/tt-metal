@@ -115,4 +115,123 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(neighbors102[1], tt::tt_metal::AsicID{103}) << "ASIC 102 should have 2 connections to ASIC 103";
 }
 
+// MappingConstraints Tests
+// Use different types to verify template type checking
+using TestTargetNode = uint32_t;
+using TestGlobalNode = uint64_t;
+
+TEST_F(TopologySolverTest, MappingConstraintsBasicOperations) {
+    // Test empty constraints - should not throw
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+
+    // Test construction from sets - validation happens automatically
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> required = {{1, 10}, {2, 20}};
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> preferred = {{3, 30}};
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints_from_sets(required, preferred);
+    EXPECT_EQ(constraints_from_sets.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints_from_sets.get_preferred_mappings(3).count(30), 1u);
+
+    // Test required constraints - validation happens automatically
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 10));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 20));
+
+    // Test preferred constraints (don't restrict valid mappings)
+    constraints.add_preferred_constraint(1, 20);
+    EXPECT_EQ(constraints.get_preferred_mappings(1).count(20), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);  // Still only 10
+
+    // Test accessors
+    const auto& all_valid = constraints.get_valid_mappings();
+    EXPECT_EQ(all_valid.size(), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsTraitConstraints) {
+    // Test required trait constraint (using string as trait type) - validation happens automatically
+    MappingConstraints<TestTargetNode, TestGlobalNode> required_constraints;
+    std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host0"}, {3, "host1"}};
+    std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}, {21, "host1"}};
+    required_constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    EXPECT_EQ(required_constraints.get_valid_mappings(1).size(), 2u);
+    EXPECT_EQ(required_constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(required_constraints.get_valid_mappings(3).count(20), 1u);
+
+    // Test preferred trait constraint (using int as trait type) - no validation needed
+    MappingConstraints<TestTargetNode, TestGlobalNode> preferred_constraints;
+    std::map<TestTargetNode, int> target_pref = {{1, 100}};
+    std::map<TestGlobalNode, int> global_pref = {{10, 100}, {20, 200}};
+    preferred_constraints.add_preferred_trait_constraint<int>(target_pref, global_pref);
+
+    EXPECT_EQ(preferred_constraints.get_preferred_mappings(1).size(), 1u);
+    EXPECT_EQ(preferred_constraints.get_preferred_mappings(1).count(10), 1u);
+    EXPECT_EQ(preferred_constraints.get_valid_mappings(1).size(), 0u);  // No required constraints
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsIntersection) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Test multiple trait constraints intersection (using uint8_t) - validation happens automatically
+    std::map<TestTargetNode, uint8_t> target_host = {{1, 0}, {2, 0}};
+    std::map<TestGlobalNode, uint8_t> global_host = {{10, 0}, {11, 0}, {20, 1}};
+    constraints.add_required_trait_constraint<uint8_t>(target_host, global_host);
+
+    std::map<TestTargetNode, uint8_t> target_rack = {{1, 0}, {2, 1}};
+    std::map<TestGlobalNode, uint8_t> global_rack = {{10, 0}, {11, 1}, {20, 0}};
+    constraints.add_required_trait_constraint<uint8_t>(target_rack, global_rack);
+
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);  // host=0 AND rack=0 -> {10}
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+
+    // Test trait and explicit constraint intersection - validation happens automatically
+    constraints.add_required_constraint(1, 10);  // Already constrained to 10, should be fine
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+
+    // Test preferred trait constraints intersection
+    MappingConstraints<TestTargetNode, TestGlobalNode> preferred_constraints;
+    std::map<TestTargetNode, uint32_t> target_pref1 = {{1, 100}};
+    std::map<TestGlobalNode, uint32_t> global_pref1 = {{10, 100}, {11, 100}, {20, 200}};
+    preferred_constraints.add_preferred_trait_constraint<uint32_t>(target_pref1, global_pref1);
+
+    std::map<TestTargetNode, uint32_t> target_pref2 = {{1, 0}};
+    std::map<TestGlobalNode, uint32_t> global_pref2 = {{10, 0}, {11, 1}, {20, 0}};
+    preferred_constraints.add_preferred_trait_constraint<uint32_t>(target_pref2, global_pref2);
+
+    EXPECT_EQ(preferred_constraints.get_preferred_mappings(1).size(), 1u);
+    EXPECT_EQ(preferred_constraints.get_preferred_mappings(1).count(10), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsConflictHandling) {
+    // Test conflict in required constraint - should throw automatically
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    EXPECT_THROW(constraints.add_required_constraint(1, 20), std::runtime_error);
+
+    // Test conflict in trait constraint - should throw (no matching global nodes)
+    MappingConstraints<TestTargetNode, TestGlobalNode> trait_constraints;
+    std::map<TestTargetNode, size_t> target_traits = {{1, 999}};
+    std::map<TestGlobalNode, size_t> global_traits = {{10, 100}, {20, 200}};
+    EXPECT_THROW(
+        trait_constraints.add_required_trait_constraint<size_t>(target_traits, global_traits), std::runtime_error);
+
+    // Test conflict in trait constraint - conflicting trait values
+    MappingConstraints<TestTargetNode, TestGlobalNode> conflict_constraints;
+    std::map<TestTargetNode, uint8_t> target_host1 = {{1, 0}};
+    std::map<TestGlobalNode, uint8_t> global_host1 = {{10, 0}, {11, 0}};
+    conflict_constraints.add_required_trait_constraint<uint8_t>(target_host1, global_host1);
+
+    std::map<TestTargetNode, uint8_t> target_host2 = {{1, 1}};
+    std::map<TestGlobalNode, uint8_t> global_host2 = {{20, 1}, {21, 1}};
+    EXPECT_THROW(
+        conflict_constraints.add_required_trait_constraint<uint8_t>(target_host2, global_host2), std::runtime_error);
+
+    // Test conflict in constructor - should throw
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> conflicting_required = {{1, 10}, {1, 20}};
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> empty_preferred;
+    EXPECT_THROW(
+        (MappingConstraints<TestTargetNode, TestGlobalNode>(conflicting_required, empty_preferred)),
+        std::runtime_error);
+}
+
 }  // namespace tt::tt_fabric
