@@ -62,7 +62,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
     try:
         with open(file, "r") as f:
             lines = f.readlines()
-            if line - 1 < 0 or line - 1 >= len(lines):
+            if not (0 <= line - 1 < len(lines)):
                 return "?wrong line number?"
             code_line = lines[line - 1]
             start_index = -1
@@ -75,10 +75,23 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                 return "?ASSERT() not found?"
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
                 start_index -= 1
-            end_index = code_line.find(")", start_index)
-            if end_index == -1:
+            # Find the matching closing parenthesis for ASSERT(
+            open_paren_index = code_line.find("(", start_index)
+            if open_paren_index == -1:
+                return "?ASSERT() not opened?"
+            paren_count = 1
+            i = open_paren_index + 1
+            while i < len(code_line):
+                if code_line[i] == "(":
+                    paren_count += 1
+                elif code_line[i] == ")":
+                    paren_count -= 1
+                    if paren_count == 0:
+                        break
+                i += 1
+            if paren_count != 0:
                 return "?ASSERT() not closed?"
-            return code_line[start_index : end_index + 1].strip()
+            return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
 
@@ -86,12 +99,8 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
 def serialize_variables(variables: list[CallstackEntryVariable], assert_code: str) -> str:
     result = ""
     for var in variables:
-        var_name = var.name
-        var_value = var.value
-        if var_name is None:
-            var_name = "?"
-        if var_value is None:
-            var_value = "?"
+        var_name = var.name or "?"
+        var_value = var.value or "?"
         if var_name in assert_code:
             serialized = f"- {BLUE}{var_name}{RST} = {RED}{var_value}{RST}\n"
         else:
@@ -163,7 +172,8 @@ def dump_callstacks(
                     callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code
                 )
                 for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
-                    assert_code = assert_code.replace(var.name, f"{BLUE}{var.name}{RST}")
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"{BLUE}{var.name}{RST}")
             if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
                 arguments_and_locals += serialize_variables(
