@@ -85,12 +85,8 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
 def serialize_variables(variables: list[CallstackEntryVariable], assert_code: str) -> str:
     result = ""
     for var in variables:
-        var_name = var.name
-        var_value = var.value
-        if var_name is None:
-            var_name = "?"
-        if var_value is None:
-            var_value = "?"
+        var_name = var.name or "?"
+        var_value = var.value or "?"
         if var_name in assert_code:
             serialized = f"- {BLUE}{var_name}{RST} = {RED}{var_value}{RST}\n"
         else:
