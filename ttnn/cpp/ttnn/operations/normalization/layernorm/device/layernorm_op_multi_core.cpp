@@ -146,10 +146,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t block_size =
         fp32_dest_acc_en ? std::min(static_cast<uint32_t>(4), Wt) : std::min(static_cast<uint32_t>(8), Wt);
 
-    // Round the width span up to the block boundary
-    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;
-    // Wt = WtB;
-
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -220,17 +216,17 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     ////////////////////////////////////////////////////////////////////////////
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
+    uint32_t in0_t = Wt;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
     uint32_t out0_t = block_size * 2;
-    uint32_t im0_t = WtB;             // buffer for saving xmm
-    uint32_t im3_t = WtB;             // buffer for xmm^2
-    uint32_t in5_t = WtB;             // buffer for gamma
-    uint32_t in6_t = WtB;             // buffer for beta
+    uint32_t im0_t = Wt;              // buffer for saving xmm
+    uint32_t im3_t = Wt;              // buffer for xmm^2
+    uint32_t in5_t = Wt;              // buffer for gamma
+    uint32_t in6_t = Wt;              // buffer for beta
     uint32_t im6_t = block_size * 2;  // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
-        im6_t = WtB;
-        // cout << "im6_t=WtB=" << WtB << endl;
+        im6_t = Wt;
+        // cout << "im6_t=Wt=" << Wt << endl;
         in0_t = 2 * block_size;
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
@@ -264,45 +260,23 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
-            WtB = with_weights_max_size;
+            Wt = with_weights_max_size;
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
-            WtB = no_weights_max_size;
+            Wt = no_weights_max_size;
         }
     }
     if (large_tensor_needed) {
-        in0_t = WtB;
-        im0_t = WtB;  // buffer for saving xmm
-        im3_t = WtB;  // buffer for xmm^2
-        in5_t = WtB;  // buffer for gamma
-        in6_t = WtB;  // buffer for beta
+        in0_t = Wt;
+        im0_t = Wt;  // buffer for saving xmm
+        im3_t = Wt;  // buffer for xmm^2
+        in5_t = Wt;  // buffer for gamma
+        in6_t = Wt;  // buffer for beta
         if (b) {
-            im6_t = WtB;
+            im6_t = Wt;
             in0_t = 2 * block_size;
         }
     }
-
-    // TT_FATAL(in0_t % block_size == 0, "Buffer size in0_t ({}) must be divisible by block_size ({})", in0_t,
-    // block_size); TT_FATAL(in1_t % block_size == 0, "Buffer size in1_t ({}) must be divisible by block_size ({})",
-    // in1_t, block_size); TT_FATAL(
-    //     out0_t % block_size == 0, "Buffer size out0_t ({}) must be divisible by block_size ({})", out0_t,
-    //     block_size);
-    // TT_FATAL(im0_t % block_size == 0, "Buffer size im0_t ({}) must be divisible by block_size ({})", im0_t,
-    // block_size); TT_FATAL(im3_t % block_size == 0, "Buffer size im3_t ({}) must be divisible by block_size ({})",
-    // im3_t, block_size); TT_FATAL(in5_t % block_size == 0, "Buffer size in5_t ({}) must be divisible by block_size
-    // ({})", in5_t, block_size); TT_FATAL(in6_t % block_size == 0, "Buffer size in6_t ({}) must be divisible by
-    // block_size ({})", in6_t, block_size); TT_FATAL(im6_t % block_size == 0, "Buffer size im6_t ({}) must be divisible
-    // by block_size ({})", im6_t, block_size); TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by
-    // block_size ({})", Wt, block_size); TT_FATAL(
-    //     num_gamma_tiles % block_size == 0,
-    //     "Number of gamma tiles ({}) must be divisible by block_size ({})",
-    //     num_gamma_tiles,
-    //     block_size);
-    // TT_FATAL(
-    //     num_beta_tiles % block_size == 0,
-    //     "Number of beta tiles ({}) must be divisible by block_size ({})",
-    //     num_beta_tiles,
-    //     block_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
