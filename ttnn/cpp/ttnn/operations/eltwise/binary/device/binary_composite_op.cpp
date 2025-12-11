@@ -200,14 +200,14 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = round_mode.has_value() or fast_and_approximate_mode;
+    const auto has_legacy_only_args = round_mode.has_value();
     if (not(use_legacy ? *use_legacy
                        : has_legacy_only_args or
                              binary::is_legacy_only(
                                  input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "round_mode or fast_and_approximate_mode=true are not valid when passing use_legacy=false in div "
+            "round_mode is not valid when passing use_legacy=false in div "
             "(tensor-scalar); binary_ng does not support these features for scalar operations yet");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             input,
@@ -278,9 +278,7 @@ Tensor ExecuteDiv::invoke(
     // Only require legacy mode for round_mode if not INT32
     const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32));
 
-    // Only fast_and_approximate_mode=true forces the legacy path
-    // round_mode with non-INT32 types also forces legacy path (binary_ng only supports round_mode for INT32)
-    const auto has_legacy_only_args = (fast_and_approximate_mode == true) || (round_mode.has_value() && !is_int32);
+    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or output_dtype.has_value();
 
     if (not(use_legacy
                 ? *use_legacy
