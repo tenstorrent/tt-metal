@@ -37,9 +37,13 @@ GroupedGateDeviceOperation::spec_return_value_t GroupedGateDeviceOperation::comp
 
     return std::array<TensorSpec, 2>{
         TensorSpec(
-            output_shape, TensorLayout(scores.dtype(), PageConfig(scores.layout()), attributes.output_mem_config)),
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                scores.dtype(), tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config)),
         TensorSpec(
-            output_shape, TensorLayout(DataType::UINT16, PageConfig(scores.layout()), attributes.output_mem_config))};
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                DataType::UINT16, tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config))};
 }
 
 GroupedGateDeviceOperation::tensor_return_value_t GroupedGateDeviceOperation::create_output_tensors(
