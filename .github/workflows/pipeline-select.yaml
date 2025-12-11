@@ -3,6 +3,14 @@ name: "(Single) Choose your pipeline"
 on:
   workflow_dispatch:
     inputs:
+      trigger_type:
+        description: "Trigger type. 'manual' = custom selection below; other options = predefined configs."
+        type: choice
+        options:
+          - manual
+          - models-mandatory
+          - models-extended
+        default: manual
       build-type:
         required: false
         type: choice
@@ -12,25 +20,20 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-        default: "Release"
+        default: Release
       extra-tag:
         required: true
         type: string
         default: "in-service"
-      build-with-tracy:
-        required: false
-        type: boolean
-        default: false
       single-card-demo:
-        required: false
-        type: boolean
-        default: false
+        description: "Demo tests. Input 'all', 'disabled', or a list of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]"
+        default: disabled
+        type: string
       single-card-perf-models:
         required: false
         type: boolean
         default: false
       single-card-perf-device-models:
-        description: "perf-device (requires tracy build)"
         required: false
         type: boolean
         default: false
@@ -43,8 +46,44 @@ on:
         type: boolean
         default: false
 
-run-name: ${{ inputs.description }}
+run-name: ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
+  # Centralized logic to determine what should run
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-perf-models: ${{ steps.logic.outputs.run-perf-models }}
+      run-perf-device-models: ${{ steps.logic.outputs.run-perf-device-models }}
+      run-ttnn-models-frequent: ${{ steps.logic.outputs.run-ttnn-models-frequent }}
+      run-cpp-unit: ${{ steps.logic.outputs.run-cpp-unit }}
+    steps:
+      - name: Determine test execution
+        id: logic
+        run: |
+          case "${{ inputs.trigger_type }}" in
+            "manual")
+              echo "run-demo=${{ inputs.single-card-demo != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-perf-models=${{ inputs.single-card-perf-models }}" >> $GITHUB_OUTPUT
+              echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
+              echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
+              echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
+              ;;
+            "models-mandatory")
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-perf-models=false" >> $GITHUB_OUTPUT
+              echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
+              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
+              ;;
+            "models-extended")
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-perf-models=true" >> $GITHUB_OUTPUT
+              echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
+              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -53,21 +92,23 @@ jobs:
     with:
       build-type: ${{ inputs.build-type }}
       build-wheel: true
-      tracy: true
+      tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
       version: "22.04"
   single-card-demo-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
-    if: ${{ inputs.single-card-demo }}
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      requested-models: ${{ inputs.trigger_type == 'manual' && inputs.single-card-demo || 'all' }}
       arch: wormhole_b0
   single-card-perf-models-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-perf-models == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
     with:
@@ -75,19 +116,19 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.single-card-perf-models }}
   single-card-perf-device-models-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
-    if: ${{ inputs.single-card-perf-device-models }}
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-ttnn-models-frequent:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     with:
@@ -95,10 +136,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.single-card-ttnn-models-frequent }}
   cpp-unit-tests:
-    if: ${{ inputs.cpp-unit }}
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
