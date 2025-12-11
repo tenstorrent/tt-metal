@@ -165,3 +165,86 @@ def test_binary_pow_sweep_BF16_test(device):
 
     print(f"\nResults saved to {csv_file_path}")
     print(f"ULP mismatch details saved to {output_dir}/")
+
+
+def test_binary_pow_sweep_FP32_test(device):
+    # Generate clean bf16 tensor (tensor A)
+    tensor_a = generate_clean_bf16_tensor(torch.float32)
+    num_values = tensor_a.numel()
+
+    # Output directory for mismatch files
+    output_dir = "binary_pow_ulp_mismatches"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # CSV file path
+    csv_file_path = "binary_pow_results.csv"
+
+    print(f"Testing binary pow with {num_values} B values...")
+    print(f"Each iteration tests {num_values} element-wise A^B operations")
+
+    # Open CSV file for writing results
+    with open(csv_file_path, "w", newline="") as csvfile:
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerow(["Input_B", "Max_ULP", "Failing_Values"])
+
+        # Iterate through each value in tensor_a as the B value
+        for i in range(num_values):
+            # Get the i-th value from tensor_a to use as B
+            b_val = tensor_a[i]
+            b_scalar = b_val.item()
+
+            # Create tensor B filled with this single value
+            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.float32)
+
+            # Convert to ttnn tensors
+            tt_a = ttnn.from_torch(
+                tensor_a,
+                dtype=ttnn.float32,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            tt_b = ttnn.from_torch(
+                tensor_b,
+                dtype=ttnn.float32,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Calculate golden result using torch
+            golden = torch.pow(tensor_a, tensor_b)  # fp32 vs fp32
+            # golden = torch.pow(tensor_a.to(torch.float64), tensor_b.to(torch.float64)) # fp32 vs fp64
+
+            # Run ttnn binary pow
+            tt_result = ttnn.pow(tt_a, tt_b)
+            result = ttnn.to_torch(tt_result)
+
+            # Run comp_ulp_check to get ULP and mismatch info
+            max_ulp, mismatch_file_path, failing_range = comp_ulp_check(
+                input=tensor_a,
+                golden=golden,
+                calculated=result,
+                ulp_threshold=1,
+                allow_nonfinite=True,
+                input_b=b_val,
+                output_dir=output_dir,
+            )
+
+            # Only write to CSV if ULP > 1
+            if max_ulp > 1:
+                # Format failing values column
+                if mismatch_file_path is not None and failing_range is not None:
+                    failing_values = f"File: {mismatch_file_path}, Range: {failing_range}"
+                else:
+                    failing_values = "No mismatches"
+
+                # Write to CSV
+                csv_writer.writerow([b_scalar, max_ulp, failing_values])
+
+            # Print progress every 1000000 iterations
+            if (i + 1) % 1000000 == 0:
+                print(f"Processed {i + 1}/{num_values} B values...")
+
+    print(f"\nResults saved to {csv_file_path}")
+    print(f"ULP mismatch details saved to {output_dir}/")
