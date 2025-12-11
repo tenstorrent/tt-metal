@@ -186,17 +186,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    // uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    // uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
-
-    // // For bert, tensor is packed as RM with width 32
-    // if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-    //     num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
-    // }
-    // if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-    //     num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
-    // }
-
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -237,6 +226,8 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
+    constexpr uint32_t no_weights_max_size = 120;
+    constexpr uint32_t with_weights_max_size = 60;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -258,8 +249,10 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
+            Wt = std::min(Wt, with_weights_max_size);
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
+            Wt = std::min(Wt, no_weights_max_size);
         }
     }
     if (large_tensor_needed) {
