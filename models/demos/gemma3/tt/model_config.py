@@ -831,6 +831,8 @@ class ModelArgs(TTModelArgs):
                 )
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
+            if self.is_multimodal:
+                self.VISION_MAX_MM_SEQ = self.vision_chunk_ntok
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -1099,6 +1101,49 @@ class ModelArgs(TTModelArgs):
                 state_dict.pop(k)
 
         return state_dict
+
+    def create_tokenizer(self):
+        from transformers import AutoTokenizer
+
+        # Mapping of base model names to their known tokenizer paths
+        # These are the original models that have proper tokenizers
+        base_model_tokenizer_mapping = {
+            "gemma-3-4b-it": "google/gemma-3-4b-it",
+        }
+
+        logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
+        logger.info(f"Model name: {self.model_name}")
+        logger.info(f"Base model name: {self.base_model_name}")
+
+        try:
+            # Try to load tokenizer from the original model path
+            # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+
+            # Try to use base model tokenizer as fallback
+            fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+
+            if fallback_tokenizer_path:
+                logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                    )
+                    logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                except Exception as fallback_e:
+                    logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                    raise fallback_e
+            else:
+                logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                raise e
+
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
