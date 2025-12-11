@@ -6,7 +6,7 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
@@ -58,15 +58,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
         }
     }
 
-    auto embeddings = tt::tt_metal::operation::run(
-                          Embeddings{
-                              .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                              .tilized = fused_tilized,
-                              .embeddings_type = embeddings_type,
-                              .pad_token = pad_token,
-                          },
-                          {input_tensor, weight})
-                          .at(0);
+    auto embeddings = ttnn::prim::embedding(
+        input_tensor, weight, fused_tilized, embeddings_type, memory_config, pad_token, optional_output_tensor);
     // Don't include batch_size if there was none
     if (input_tensor_arg.logical_shape().rank() == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));

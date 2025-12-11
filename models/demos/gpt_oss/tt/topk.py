@@ -136,9 +136,22 @@ class TopKRouter:
                 - router_indices: Selected expert indices for each token
                 - router_logits: Raw logits before top-k selection (used for load balancing loss)
         """
+        # Detect decode mode for L1_WIDTH_SHARDED optimization (like tt-transformers MLP)
+        is_decode_mode = hidden_states.shape[1] == 1
+        mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
+
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
         router_logits = ttnn.linear(
-            hidden_states, self.weight, bias=self.bias, compute_kernel_config=self.compute_config
+            hidden_states,
+            self.weight,
+            bias=self.bias,
+            memory_config=mem_config,
+            compute_kernel_config=self.compute_config,
         )
+
+        # TopK doesn't support sharded inputs yet - convert to DRAM if sharded
+        if is_decode_mode:
+            router_logits = ttnn.to_memory_config(router_logits, ttnn.DRAM_MEMORY_CONFIG)
+
         router_scores, _expert_weights, router_indices = topk_router(router_logits, self.top_k)
         return router_scores, router_indices, router_logits

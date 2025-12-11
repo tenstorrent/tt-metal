@@ -17,8 +17,7 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations {
-namespace pool {
+namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {
     struct operation_attributes_t {
@@ -106,8 +105,7 @@ struct Pool2D {
         uint32_t memory_used);
 };
 
-}  // namespace pool
-}  // namespace ttnn::operations
+}  // namespace ttnn::operations::pool
 
 namespace ttnn::prim {
 constexpr auto pool2d = ttnn::register_operation<"ttnn::prim::pool2d", ttnn::operations::pool::Pool2D>();

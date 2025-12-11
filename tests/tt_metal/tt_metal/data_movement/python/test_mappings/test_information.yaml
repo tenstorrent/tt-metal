@@ -119,6 +119,9 @@ tests:
   30:
     name: "One from All Directed Ideal"
 
+  40:
+    name: "DRAM Packet Sizes 2.0"
+
   50:
     name: "One to One Directed Ideal"
 
@@ -317,6 +320,39 @@ tests:
   157:
     name: "One from All Custom"
 
+  170:
+    name: "One to All Unicast 2x2 Packet Sizes 2.0"
+
+  171:
+    name: "One to All Unicast 5x5 Packet Sizes 2.0"
+
+  172:
+    name: "One to All Unicast Packet Sizes 2.0"
+
+  173:
+    name: "One to All Multicast 2x2 Packet Sizes 2.0"
+
+  174:
+    name: "One to All Multicast 5x5 Packet Sizes 2.0"
+
+  175:
+    name: "One to All Multicast Packet Sizes 2.0"
+
+  176:
+    name: "One to All Multicast Linked 2x2 Packet Sizes 2.0"
+
+  177:
+    name: "One to All Multicast Linked 5x5 Packet Sizes 2.0"
+
+  178:
+    name: "One to All Multicast Linked Packet Sizes 2.0"
+
+  179:
+    name: "One to All Multicast Linked Loopback Directed Ideal 2.0"
+
+  180:
+    name: "Multicast Schemes (Loopback Disabled)"
+
   200:
     name: "Deinterleave Single Core"
     comment: |
@@ -456,3 +492,19 @@ tests:
 
   603:
     name: "PCIe Read Bandwidth"
+
+  610:
+    name: "Transaction ID - Write After Read"
+    comment: |
+      This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
+      has an input and output port. We have a core that is sending and receiving data at the same time,
+      with packets circulating around the torus. This does not happen in Read After Write tests because
+      the read requests get stuck behind the larger write requests.
+
+  611:
+    name: "Transaction ID - Write After Read One Packet Stateful"
+    comment: |
+      This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
+      has an input and output port. We have a core that is sending and receiving data at the same time,
+      with packets circulating around the torus. This does not happen in Read After Write tests because
+      the read requests get stuck behind the larger write requests.

@@ -76,6 +76,7 @@ uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
@@ -361,7 +362,6 @@ int main() {
     uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
-    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
     DeviceProfilerInit();
@@ -503,7 +503,7 @@ int main() {
 
             trigger_sync_register_init();
 
-            if constexpr (WATCHER_ASSERT_ENABLED) {
+            if constexpr (ASSERT_ENABLED) {
                 if (noc_mode == DM_DYNAMIC_NOC) {
                     WAYPOINT("NKFW");
                     // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed

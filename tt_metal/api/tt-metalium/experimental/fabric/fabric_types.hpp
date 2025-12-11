@@ -11,13 +11,14 @@ namespace tt::tt_fabric {
 
 enum class FabricConfig : uint32_t {
     DISABLED = 0,
-    FABRIC_1D = 1,           // 1D routing and no deadlock avoidance
-    FABRIC_1D_RING = 2,      // 1D routing and deadlock avoidance using datelines
-    FABRIC_2D = 3,           // 2D routing
-    FABRIC_2D_TORUS_X = 4,   // 2D routing and deadlock avoidance along X axis
-    FABRIC_2D_TORUS_Y = 5,   // 2D routing and deadlock avoidance along Y axis
-    FABRIC_2D_TORUS_XY = 6,  // 2D routing and deadlock avoidance along XY axes
-    CUSTOM = 7
+    FABRIC_1D_NEIGHBOR_EXCHANGE = 1,  // 1D topology with no forwarding between non-adjacent devices
+    FABRIC_1D = 2,                    // 1D routing and no deadlock avoidance
+    FABRIC_1D_RING = 3,               // 1D routing and deadlock avoidance using datelines
+    FABRIC_2D = 4,                    // 2D routing
+    FABRIC_2D_TORUS_X = 5,            // 2D routing and deadlock avoidance along X axis
+    FABRIC_2D_TORUS_Y = 6,            // 2D routing and deadlock avoidance along Y axis
+    FABRIC_2D_TORUS_XY = 7,           // 2D routing and deadlock avoidance along XY axes
+    CUSTOM = 8
 };
 
 // tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router
@@ -25,6 +26,7 @@ enum class FabricConfig : uint32_t {
 enum class FabricTensixConfig : uint32_t {
     DISABLED = 0,  // not using tensix extension
     MUX = 1,       // using mux kernel as tensix extension
+    UDM = 2,       // in udm (unified datamovement) mode, we build both mux and relay kernels as tensix extension
 };
 
 // Unified Datamovement knob for configuring fabric with different parameters

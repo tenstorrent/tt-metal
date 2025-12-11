@@ -10,12 +10,13 @@ namespace tt::tt_metal {
 
 using DeviceAddr = std::uint64_t;
 
+enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
+
 enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, COUNT = 3 };
 
 static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
 
-enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
-
+// TODO: Move to llrt/hal.hpp after device function cleanup
 enum class HalL1MemAddrType : uint8_t {
     BASE,
     BARRIER,
@@ -42,16 +43,13 @@ enum class HalL1MemAddrType : uint8_t {
     CORR_CW,    // Link status - Corrected Codewords count
     UNCORR_CW,  // Link status - Uncorrected Codewords count
     LINK_UP,    // Link status - Link up status
+    FABRIC_TELEMETRY,
     ROUTING_TABLE,
     ETH_FW_MAILBOX,
     TENSIX_FABRIC_CONNECTIONS,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
-enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
-
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
-
-enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 }  // namespace tt::tt_metal
