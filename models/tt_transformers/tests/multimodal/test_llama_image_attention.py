@@ -13,13 +13,10 @@ from transformers.models.mllama.modeling_mllama import MllamaVisionAttention
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import build_encoder_attention_mask
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
-
-
-def get_negative_inf_value(dtype):
-    return torch.finfo(dtype).min
 
 
 def load_partial_weights(weights_path, layer_prefix):
@@ -37,26 +34,20 @@ def load_partial_weights(weights_path, layer_prefix):
     return partial_state_dict
 
 
-def build_encoder_attention_mask(
-    x: torch.Tensor,
-    ar: torch.Tensor,
-    ntok: int,
-    num_chunks: int,
-    n_heads: int,
-):
-    """
-    Build vision encoder attention mask that omits padding tokens.
-    """
-    masks = []
-    for arx in ar:
-        mask_i = torch.ones((num_chunks, x.shape[2], 1), dtype=x.dtype)
-        mask_i[: arx[0] * arx[1], :ntok] = 0
-        mask_i = mask_i.view(num_chunks * x.shape[2], -1)
-        mask_i = mask_i @ mask_i.T * get_negative_inf_value(x.dtype)
-        mask_i = mask_i.unsqueeze(0)
-        masks.append(mask_i)
-    masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
-    return masks
+def expand_num_tokens_to_mult8(tensor):
+    num_padding_patches = (8 - (tensor.shape[-2] % 8)) % 8
+    # Compute padding tuple for pad function
+    padding = (0, 0, 0, num_padding_patches)  # (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
+    # Pad the tensor
+    tensor = F.pad(tensor, padding, mode="constant", value=0)
+    slice_index = -num_padding_patches if num_padding_patches > 0 else 0
+    return tensor, slice_index
+
+
+def contract_num_tokens_from_mult8(tensor, slice_index):
+    if slice_index == 0:
+        return tensor
+    return tensor[:, :, :slice_index, :]
 
 
 @pytest.mark.parametrize(
@@ -86,14 +77,13 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     dim = model_args.vision_dim
     ntok = model_args.vision_chunk_ntok
 
+    model_repo_name = os.getenv("HF_MODEL")
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
-    config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
+    config = AutoConfig.from_pretrained(model_repo_name)
     config.vision_config._attn_implementation = "sdpa"
     reference_model = MllamaVisionAttention(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(
-        os.getenv("HF_MODEL"), "model.vision_model.transformer.layers.0.self_attn."
-    )
+    partial_state_dict = load_partial_weights(model_repo_name, "model.vision_model.transformer.layers.0.self_attn.")
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)
@@ -111,12 +101,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     ar = torch.tensor([[1, 2]])
     pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
     tt_attention_input = pt_block_input.clone()
-    num_padding_patches = (8 - (pt_block_input.shape[-2] % 8)) % 8
-    # Compute padding tuple for pad function
-    padding = (0, 0, 0, num_padding_patches)  # (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
-    # Pad the tensor
-    pt_block_input = F.pad(pt_block_input, padding, mode="constant", value=0)
-    slice_index = -num_padding_patches if num_padding_patches > 0 else None
+    pt_block_input, slice_index = expand_num_tokens_to_mult8(pt_block_input)
     # Create PT attention mask
     mask = build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
@@ -156,7 +141,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
 
     reference_output = reference_model(pt_block_input, attention_mask=mask)[0]
     reference_output = reference_output.reshape(batch, num_chunks, ntok - slice_index, dim)
-    reference_output = reference_output[:, :, :slice_index, :]
+    reference_output = contract_num_tokens_from_mult8(reference_output, slice_index)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
