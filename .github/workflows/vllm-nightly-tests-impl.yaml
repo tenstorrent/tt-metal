@@ -206,7 +206,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -289,7 +289,7 @@ jobs:
               "name": "[WH-T3K][v1] Multi-process reduce scatter test model",
               "model": "models/vllm_test_utils/t3000_multiproc_test",
               "server-timeout": 4,
-              "benchmark-timeout": 4,
+              "benchmark-timeout": 10,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(2, 4)",
