@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -101,7 +102,9 @@ private:
      *
      * Called by connect_routers() after inter-device connections are established.
      */
-    void configure_local_connections();
+    void configure_local_connections(
+        const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>&
+            routers_by_direction_map);
 
     /**
      * Compile kernels for directions that have no router/eth channel.

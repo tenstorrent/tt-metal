@@ -697,7 +697,7 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_2D_WithZ_MultipleTargets) {
     constexpr uint32_t num_intra_mesh_targets = builder_config::num_downstream_edms_2d_vc0;
     constexpr uint32_t num_mesh_to_z_targets = 1;
     constexpr uint32_t total_targets = num_intra_mesh_targets + num_mesh_to_z_targets;
-    
+
     auto targets = mapping.get_downstream_targets(0, 0);  // VC0, receiver channel 0
     ASSERT_EQ(targets.size(), total_targets);
 
@@ -725,14 +725,13 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_2D_WithZ_MultipleTargets) {
             .source_eth_chan = 0,
             .source_vc = 0,
             .source_receiver_channel = 0,
-            .dest_node = (target.type == ConnectionType::MESH_TO_Z) ? 
-                         FabricNodeId(MeshId{0}, 100) : FabricNodeId(MeshId{0}, static_cast<uint32_t>(i)),
+            .dest_node = (target.type == ConnectionType::MESH_TO_Z) ? FabricNodeId(MeshId{0}, 100)
+                                                                    : FabricNodeId(MeshId{0}, static_cast<uint32_t>(i)),
             .dest_direction = target.target_direction.value(),
             .dest_eth_chan = 0,
             .dest_vc = target.target_vc,
             .dest_sender_channel = target.target_sender_channel,
-            .connection_type = target.type
-        };
+            .connection_type = target.type};
         registry_->record_connection(record);
     }
 
@@ -752,7 +751,7 @@ TEST_F(ConnectionRegistryTest, Phase2_ZRouter_VC1_FourTargets) {
 
     // Verify mapping: receiver channel 0 on VC1 has 4 downstream targets
     constexpr uint32_t num_z_targets = builder_config::num_sender_channels_z_router_vc1;
-    
+
     auto targets = mapping.get_downstream_targets(1, 0);  // VC1, receiver channel 0
     ASSERT_EQ(targets.size(), num_z_targets);
 
@@ -825,7 +824,7 @@ TEST_F(ConnectionRegistryTest, Phase2_FullDevice_MappingDriven) {
 
         // Get all targets from receiver channel 0
         auto targets = mapping.get_downstream_targets(0, 0);
-        
+
         // Record all connections from receiver channel 0
         for (size_t t = 0; t < targets.size(); ++t) {
             const auto& target = targets[t];
@@ -906,7 +905,7 @@ TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
 
         // Get all targets from receiver channel 0
         auto targets = mapping.get_downstream_targets(0, 0);
-        
+
         // Find and record MESH_TO_Z connection
         for (const auto& target : targets) {
             if (target.type == ConnectionType::MESH_TO_Z) {

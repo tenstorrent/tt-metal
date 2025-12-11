@@ -79,7 +79,7 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_2D_WithZ_MappingCreation) {
     // Verify mapping has expected structure: receiver channel 0 has 4 targets (3 INTRA_MESH + 1 MESH_TO_Z)
     EXPECT_EQ(conn_mapping.get_total_sender_count(), 4);
     EXPECT_TRUE(conn_mapping.has_targets(0, 0));
-    
+
     auto targets = conn_mapping.get_downstream_targets(0, 0);
     ASSERT_EQ(targets.size(), 4);
 
@@ -104,10 +104,10 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_MappingCreation) {
     // Verify mapping has expected structure: receiver channel 0 on VC1 has 4 targets
     EXPECT_EQ(conn_mapping.get_total_sender_count(), 4);
     EXPECT_TRUE(conn_mapping.has_targets(1, 0));
-    
+
     auto targets = conn_mapping.get_downstream_targets(1, 0);
     ASSERT_EQ(targets.size(), 4);
-    
+
     // Verify all are Z_TO_MESH
     for (const auto& target : targets) {
         EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
@@ -141,7 +141,7 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_ChannelAndConnectionMapping_Cons
         if (num_senders > 0) {
             EXPECT_TRUE(conn_mapping.has_targets(vc, 0))
                 << "VC" << vc << " receiver channel 0 should have targets";
-            
+
             auto targets = conn_mapping.get_downstream_targets(vc, 0);
             EXPECT_EQ(targets.size(), num_senders)
                 << "VC" << vc << " receiver channel 0 should have " << num_senders << " targets";
@@ -170,7 +170,7 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
     // VC1 receiver channel 0 should have 4 targets
     EXPECT_TRUE(conn_mapping.has_targets(1, 0))
         << "Z router VC1 receiver channel 0 should have connection targets";
-    
+
     auto targets = conn_mapping.get_downstream_targets(1, 0);
     EXPECT_EQ(targets.size(), vc1_senders)
         << "Z router VC1 receiver channel 0 should have " << vc1_senders << " targets";
@@ -231,9 +231,9 @@ TEST_F(BuilderConnectionMappingTest, FactoryMethod_AllMeshConfigurations) {
         // Receiver channel 0 should have targets
         EXPECT_TRUE(mapping.has_targets(0, 0))
             << "Receiver channel 0 should have targets";
-        
+
         auto targets = mapping.get_downstream_targets(0, 0);
-        
+
         // If has_z, should have MESH_TO_Z target
         if (has_z) {
             auto mesh_to_z_it = std::find_if(targets.begin(), targets.end(),
@@ -252,7 +252,7 @@ TEST_F(BuilderConnectionMappingTest, FactoryMethod_ZRouter) {
 
     auto targets = mapping.get_downstream_targets(1, 0);
     ASSERT_EQ(targets.size(), 4);
-    
+
     // All should be Z_TO_MESH type
     for (const auto& target : targets) {
         EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);

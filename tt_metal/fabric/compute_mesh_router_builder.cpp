@@ -490,7 +490,7 @@ void ComputeMeshRouterBuilder::configure_connection(
 }
 
 void ComputeMeshRouterBuilder::configure_local_connections(
-    const std::map<RoutingDirection, ComputeMeshRouterBuilder*>& local_routers) {
+    const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) {
     // Establish local connections (MESH_TO_Z or Z_TO_MESH) to routers on same device
     // We need to look up target routers by direction from the map
     auto local_connection_filter = [](ConnectionType type) {
@@ -530,7 +530,9 @@ void ComputeMeshRouterBuilder::configure_local_connections(
                 // Establish connections to this target router (if not already done)
                 if (connected_targets.find(target_dir) == connected_targets.end()) {
                     auto* local_router = local_routers.at(target_dir);
-                    establish_connections_to_router(*local_router, local_connection_filter);
+                    auto* local_compute_router = dynamic_cast<ComputeMeshRouterBuilder*>(local_router);
+                    TT_FATAL(local_compute_router != nullptr, "Local router must be a ComputeMeshRouterBuilder");
+                    establish_connections_to_router(*local_compute_router, local_connection_filter);
                     connected_targets.insert(target_dir);
                 }
             }

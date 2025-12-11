@@ -117,11 +117,9 @@ TEST_F(RouterConnectionMappingTest, MappingDriven_Z_TO_MESH_Connections) {
 
     // Verify all expected directions are present
     for (const auto& expected_dir : expected_directions) {
-        auto it = std::find_if(targets.begin(), targets.end(),
-            [expected_dir](const ConnectionTarget& t) {
-                return t.target_direction.has_value() && 
-                       t.target_direction.value() == expected_dir;
-            });
+        auto it = std::find_if(targets.begin(), targets.end(), [expected_dir](const ConnectionTarget& t) {
+            return t.target_direction.has_value() && t.target_direction.value() == expected_dir;
+        });
         ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
         EXPECT_EQ(it->type, ConnectionType::Z_TO_MESH);
         EXPECT_EQ(it->target_vc, 1);  // Z VC1 → Mesh VC1
@@ -152,7 +150,7 @@ TEST_F(RouterConnectionMappingTest, AsymmetricConnections_MeshToZ_vs_ZToMesh) {
     // Z_TO_MESH: Z VC1 receiver channel 0 has 4 targets (all mesh directions) → Mesh VC1
     auto z_targets = z_mapping.get_downstream_targets(1, 0);
     ASSERT_EQ(z_targets.size(), builder_config::num_mesh_directions_2d);
-    
+
     for (const auto& target : z_targets) {
         EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
         EXPECT_EQ(target.target_vc, 1);  // Different VC!
@@ -199,7 +197,7 @@ TEST_F(RouterConnectionMappingTest, EdgeDevice_TwoMeshRouters_ZMapping) {
     // Receiver channel 0 on VC1 has all mesh direction targets (intent)
     auto targets = z_mapping.get_downstream_targets(1, 0);
     EXPECT_EQ(targets.size(), builder_config::num_mesh_directions_2d);
-    
+
     for (const auto& target : targets) {
         EXPECT_EQ(target.type, ConnectionType::Z_TO_MESH);
     }
@@ -369,11 +367,9 @@ TEST_F(RouterConnectionMappingTest, DirectionBased_ZRouter_ChannelToDirection) {
 
     // Verify each expected direction is present
     for (const auto& [channel_idx, expected_dir] : expected) {
-        auto it = std::find_if(targets.begin(), targets.end(),
-            [expected_dir](const ConnectionTarget& t) {
-                return t.target_direction.has_value() && 
-                       t.target_direction.value() == expected_dir;
-            });
+        auto it = std::find_if(targets.begin(), targets.end(), [expected_dir](const ConnectionTarget& t) {
+            return t.target_direction.has_value() && t.target_direction.value() == expected_dir;
+        });
         ASSERT_NE(it, targets.end());
         EXPECT_EQ(it->target_direction.value(), expected_dir);
     }

@@ -200,7 +200,7 @@ TEST_F(RouterArchetypesTest, CreateMeshRouterArchetype_2D_WithZ) {
     // Verify MESH_TO_Z target exists in receiver channel 0
     auto all_targets = router.connection_mapping.get_downstream_targets(0, 0);
     ASSERT_EQ(all_targets.size(), 4);
-    
+
     auto z_target_it = std::find_if(all_targets.begin(), all_targets.end(),
         [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
     ASSERT_NE(z_target_it, all_targets.end());
@@ -233,10 +233,9 @@ TEST_F(RouterArchetypesTest, CreateZRouterArchetype) {
     };
 
     for (const auto& expected_dir : expected_dirs) {
-        auto it = std::find_if(targets.begin(), targets.end(),
-            [expected_dir](const ConnectionTarget& t) { 
-                return t.target_direction == expected_dir; 
-            });
+        auto it = std::find_if(targets.begin(), targets.end(), [expected_dir](const ConnectionTarget& t) {
+            return t.target_direction == expected_dir;
+        });
         ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
         EXPECT_EQ(it->type, ConnectionType::Z_TO_MESH);
     }
@@ -313,7 +312,7 @@ TEST_F(RouterArchetypesTest, NonZToNonZ_2D_MultipleDirections) {
     // NORTH router receiver channel 0 has 3 targets
     auto targets = north_router.connection_mapping.get_downstream_targets(0, 0);
     ASSERT_EQ(targets.size(), 3);
-    
+
     // Find SOUTH target (opposite)
     auto south_it = std::find_if(targets.begin(), targets.end(),
         [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::S; });
@@ -390,7 +389,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FourMeshRouters) {
     };
 
     std::vector<RouterArchetype> mesh_routers;
-    mesh_routers.reserve(4);    
+    mesh_routers.reserve(4);
     for (size_t i = 0; i < 4; ++i) {
         mesh_routers.push_back(create_mesh_router_archetype(
             Topology::Mesh,
@@ -566,7 +565,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_SingleMeshRouter) {
     // Z router receiver channel 0 has 4 targets, find NORTH
     auto targets = z_router.connection_mapping.get_downstream_targets(1, 0);
     ASSERT_EQ(targets.size(), 4);
-    
+
     auto north_it = std::find_if(targets.begin(), targets.end(),
         [](const ConnectionTarget& t) { return t.target_direction == RoutingDirection::N; });
     ASSERT_NE(north_it, targets.end());
@@ -854,7 +853,7 @@ TEST_F(RouterArchetypesTest, Archetype_ChannelMapping_ConnectionMapping_Consiste
             // Receiver channel 0 should have targets
             EXPECT_TRUE(mesh_router.connection_mapping.has_targets(vc, 0))
                 << "VC" << vc << " receiver channel 0 should have connection targets";
-            
+
             auto targets = mesh_router.connection_mapping.get_downstream_targets(vc, 0);
             EXPECT_EQ(targets.size(), num_senders)
                 << "VC" << vc << " receiver channel 0 should have " << num_senders << " targets";
@@ -871,7 +870,7 @@ TEST_F(RouterArchetypesTest, Archetype_ChannelMapping_ConnectionMapping_Consiste
 
     EXPECT_TRUE(z_router.connection_mapping.has_targets(1, 0))
         << "Z router VC1 receiver channel 0 should have connection targets";
-    
+
     auto z_targets = z_router.connection_mapping.get_downstream_targets(1, 0);
     EXPECT_EQ(z_targets.size(), vc1_senders)
         << "Z router VC1 receiver channel 0 should have " << vc1_senders << " targets";

@@ -57,8 +57,7 @@ public:
      *
      * @param local_routers Map of direction → router builder for all routers on this device
      */
-    void configure_local_connections(
-        const std::map<RoutingDirection, ComputeMeshRouterBuilder*>& local_routers);
+    void configure_local_connections(const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) override;
 
     void configure_for_dispatch() override;
 

@@ -102,6 +102,14 @@ public:
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) = 0;
 
     /**
+     * Configure local connections between routers on the same device (e.g., mesh↔Z)
+     *
+     * @param local_routers Map of direction → router builder for all routers on this device
+     */
+     virtual void configure_local_connections(
+        const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) = 0;
+
+    /**
      * Configure this router for dispatch link operation.
      * Dispatch links require specific settings (e.g., higher context switching frequency).
      * Each router type decides how (or if) to configure for dispatch.

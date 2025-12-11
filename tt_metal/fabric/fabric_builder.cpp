@@ -182,43 +182,35 @@ void FabricBuilder::connect_routers() {
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
+    std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>> routers_by_direction_map{};
     // Connect each pair (inter-device INTRA_MESH connections)
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+
+        routers_by_direction_map[router1.get()].insert({router2->get_location().direction, router2.get()});
+        routers_by_direction_map[router2.get()].insert({router1->get_location().direction, router1.get()});
     }
 
     // Configure local connections between routers on this device
-    configure_local_connections();
+    configure_local_connections(routers_by_direction_map);
 }
 
-void FabricBuilder::configure_local_connections() {
+void FabricBuilder::configure_local_connections(
+    const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>& routers_by_direction_map) {
     // Generic local connection establishment: iterate through all routers and
     // establish connections to local targets based on their connection mappings
 
-    // Build a map of all routers by direction for quick lookup
-    std::map<RoutingDirection, ComputeMeshRouterBuilder*> routers_by_direction;
-    for (const auto& [chan, router] : routers_) {
-        auto* compute_router = dynamic_cast<ComputeMeshRouterBuilder*>(router.get());
-        if (compute_router != nullptr) {
-            routers_by_direction[router->get_location().direction] = compute_router;
-        }
-    }
-
     // For each router, establish its local connections
-    for (auto& [source_dir, source_router] : routers_by_direction) {
+    for (const auto& [source_router, target_routers_by_direction] : routers_by_direction_map) {
         // Build map of potential local targets (all other routers on this device)
-        std::map<RoutingDirection, ComputeMeshRouterBuilder*> local_targets;
-        for (auto& [target_dir, target_router] : routers_by_direction) {
-            if (target_dir != source_dir) {
-                local_targets[target_dir] = target_router;
-            }
+        std::map<RoutingDirection, FabricRouterBuilder*> local_targets;
+        for (const auto& [target_dir, target_router] : target_routers_by_direction) {
+            local_targets[target_dir] = target_router;
         }
 
-        // Let the router establish connections to available local targets
-        // The router's connection mapping determines which targets to connect to
         source_router->configure_local_connections(local_targets);
     }
 }

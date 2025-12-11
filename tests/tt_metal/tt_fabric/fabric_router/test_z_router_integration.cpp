@@ -147,10 +147,9 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_AllDirections) {
 
     // Verify all expected directions are present
     for (const auto& expected_dir : expected_dirs) {
-        auto it = std::find_if(targets.begin(), targets.end(),
-            [expected_dir](const ConnectionTarget& t) { 
-                return t.target_direction == expected_dir; 
-            });
+        auto it = std::find_if(targets.begin(), targets.end(), [expected_dir](const ConnectionTarget& t) {
+            return t.target_direction == expected_dir;
+        });
         ASSERT_NE(it, targets.end()) << "Missing direction: " << static_cast<int>(expected_dir);
         EXPECT_EQ(it->type, ConnectionType::Z_TO_MESH);
         EXPECT_EQ(it->target_vc, 1) << "Should target mesh VC1";
@@ -430,7 +429,7 @@ TEST_F(ZRouterIntegrationTest, ConnectionMapping_ZRouter_VC0_CannotBeDownstreamT
     auto mesh_to_z_it = std::find_if(mesh_targets.begin(), mesh_targets.end(),
         [](const ConnectionTarget& t) { return t.type == ConnectionType::MESH_TO_Z; });
     ASSERT_NE(mesh_to_z_it, mesh_targets.end());
-    
+
     EXPECT_EQ(mesh_to_z_it->target_vc, 0) << "MESH_TO_Z should target Z VC0 (receiver)";
     EXPECT_EQ(mesh_to_z_it->target_direction.value(), RoutingDirection::Z);
 
