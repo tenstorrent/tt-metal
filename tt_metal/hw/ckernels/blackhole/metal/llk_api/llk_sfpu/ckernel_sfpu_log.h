@@ -198,7 +198,9 @@ inline void calculate_log(uint log_base_scale_factor) {
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
-        log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
+        sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
+        sfpi::vConstFloatPrgm1 = -2.0069785118103027;
+        sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
         // _init_sfpu_reciprocal_ sets vConstFloatPrgm0 to 2.0f
         _init_sfpu_reciprocal_</*approximation_mode*/ false>();

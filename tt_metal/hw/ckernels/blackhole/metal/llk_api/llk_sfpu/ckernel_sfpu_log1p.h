@@ -40,8 +40,8 @@ sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
  * 2. For |x| < 0.3: Use 13-term Taylor series to avoid catastrophic cancellation
  * 3. For |x| >= 0.3: Use standard ln(1+x) computation (re-uses blackhole's calculate_log_f32_body logic)
  *
- * The threshold of 0.3 and 13 terms were chosen through systematic optimization
- * to minimize maximum ULP error across the entire domain.
+ * The threshold of 0.3 and 13 terms work well enough to provide good accuracy
+ * across the entire domain.
  *
  * @param val The input value (sfpi::vFloat vector), can be any floating point number > -1
  * @return sfpi::vFloat Result of ln(1+val)
@@ -61,7 +61,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
         result = std::numeric_limits<float>::quiet_NaN();  // returns nan
     }
     v_elseif(val == -1.f) {
-        // Zero input -> -inf
+        // x = -1 input -> -inf
         result = -std::numeric_limits<float>::infinity();
     }
     v_else {
@@ -74,7 +74,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
             // ln(1+x) = x - x²/2 + x³/3 - x⁴/4 + ... + x¹³/13
             // Using PolynomialEvaluator with coefficients in ascending order:
             // ln(1+x) = 0 + x*(1 + x*(-1/2 + x*(1/3 + x*(-1/4 + ...))))
-            result = sfpi::PolynomialEvaluator::eval(
+            result = PolynomialEvaluator::eval(
                 val,
                 sfpi::vConst0,  // c0 = 0
                 sfpi::vConst1,  // c1 = 1
@@ -110,7 +110,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
             // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
             // Use vConstFloatPrgm1 which is set to sqrt(2) in log_init
             v_if(m >= sfpi::vConstFloatPrgm1) {
-                m = m * 0.5f;   // Divide by 2
+                Cnay m = m * 0.5f;  // Divide by 2
                 exp = exp + 1;  // Increment exponent
             }
             v_endif;
@@ -132,7 +132,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
             // Step 4: Polynomial approximation using odd powers
             // ln(m) = 2z(1 + (z**2)/3 + (z**4)/5 + (z**6)/7 + (z**8)/9 + (z**10)/11)
             // Using Horner's method on z² with coefficients
-            sfpi::vFloat p = sfpi::PolynomialEvaluator::eval(
+            sfpi::vFloat p = PolynomialEvaluator::eval(
                 z2,
                 sfpi::vConst1,
                 0.3333333333333333f,
