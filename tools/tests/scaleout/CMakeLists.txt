@@ -61,37 +61,3 @@ target_link_libraries(
 
 # Make sure protobuf files are generated before compiling
 add_dependencies(test_link_retraining scaleout_generated_protos)
-
-# Test for MGD generation from cabling descriptors
-add_executable(test_cabling_descriptor_mgd_generation test_cabling_descriptor_mgd_generation.cpp)
-
-set_target_properties(
-    test_cabling_descriptor_mgd_generation
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tools/scaleout
-)
-
-target_include_directories(
-    test_cabling_descriptor_mgd_generation
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_BINARY_DIR}/tools/scaleout
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
-)
-
-target_link_libraries(
-    test_cabling_descriptor_mgd_generation
-    PRIVATE
-        test_common_libs
-        tt_metal
-        generate_mgd_lib
-        protobuf::libprotobuf
-        gmock_main
-)
-
-# Make sure protobuf files are generated before compiling
-add_dependencies(test_cabling_descriptor_mgd_generation scaleout_generated_protos)
-add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)

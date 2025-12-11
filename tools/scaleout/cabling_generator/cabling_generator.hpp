@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -18,14 +16,6 @@
 
 namespace tt::scaleout_tools::fsd::proto {
     class FactorySystemDescriptor;
-}
-
-namespace tt::scaleout_tools::cabling_generator::proto {
-class ClusterDescriptor;
-}
-
-namespace tt::scaleout_tools::deployment::proto {
-class DeploymentDescriptor;
 }
 
 namespace tt::scaleout_tools {
@@ -115,11 +105,6 @@ public:
     // Constructor with just hostnames (no physical location info)
     CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
 
-    // Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)
-    CablingGenerator(
-        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-        const std::vector<std::string>& hostnames);
-
     CablingGenerator() = default;
 
     // Getters for all data
@@ -136,12 +121,6 @@ public:
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
 private:
-    // Common initialization logic for all constructors
-    void initialize_cluster(
-        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-        std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
-            std::nullopt);
-
     // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
 

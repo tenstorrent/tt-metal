@@ -952,7 +952,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
