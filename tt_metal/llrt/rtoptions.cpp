@@ -170,6 +170,11 @@ enum class EnvVarID {
     TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,  // Enable lightweight kernel asserts
 
     // ========================================
+    // LLK ASSERTIONS
+    // ========================================
+    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+
+    // ========================================
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
@@ -1179,6 +1184,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (disabled)
         // Usage: export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
         case EnvVarID::TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: this->lightweight_kernel_asserts = true; break;
+
+        // TT_METAL_LLK_ASSERTS
+        // Enables LLK assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
 
         // ========================================
         // DEVICE MANAGER
