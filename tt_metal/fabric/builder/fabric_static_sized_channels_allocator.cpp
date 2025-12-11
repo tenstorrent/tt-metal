@@ -325,7 +325,10 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 {4, 8, 0, 0},   // Option 3: VC0 only
                 {4, 8, 2, 4},   // Option 4: supports both VCs
                 {4, 8, 2, 2},   // Option 5: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2}    // Option 6: supports both VCs, smaller overall
+                {2, 4, 2, 2},   // Option 6: supports both VCs, smaller overall
+                {2, 4, 1, 1},   // Option 7: supports both VCs, smaller overall
+                {2, 2, 1, 1},   // Option 8: supports both VCs, smaller overall
+                {1, 1, 1, 1}    // Option 9: supports both VCs, smaller overall
             }};
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0

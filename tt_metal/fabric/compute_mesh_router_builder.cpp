@@ -15,7 +15,6 @@
 #include "metal_soc_descriptor.h"
 #include "tt_metal.hpp"
 #include <tt_stl/assert.hpp>
-#include <algorithm>
 
 namespace tt::tt_fabric {
 

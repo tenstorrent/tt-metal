@@ -5,7 +5,6 @@
 #pragma once
 
 #include <vector>
-#include <memory>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <hostdevcommon/fabric_common.h>
