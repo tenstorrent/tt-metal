@@ -13,6 +13,254 @@ from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
 
 
+def get_valid_group_combinations(group_scores, topk_groups, atol=0.05):
+    """
+    Get all valid combinations of topk_groups groups considering ties.
+
+    Args:
+        group_scores: 1D tensor of group scores
+        topk_groups: Number of groups to select
+        atol: Absolute tolerance for tie detection
+
+    Returns:
+        List of frozensets, each representing a valid group selection
+    """
+    from itertools import combinations
+
+    n_groups = group_scores.shape[0]
+
+    # Sort scores descending
+    sorted_scores, sorted_indices = torch.sort(group_scores, descending=True)
+
+    # Find the threshold (k-th highest score)
+    threshold = sorted_scores[topk_groups - 1].item()
+
+    # Partition groups into: strictly above threshold, at threshold (tied), strictly below
+    above_threshold = []
+    at_threshold = []
+    for g in range(n_groups):
+        score = group_scores[g].item()
+        if score > threshold + atol:
+            above_threshold.append(g)
+        elif score >= threshold - atol:
+            at_threshold.append(g)
+        # else: below threshold, ignore
+
+    # We must select all groups above threshold
+    # Then select remaining from tied groups
+    remaining_to_select = topk_groups - len(above_threshold)
+
+    if remaining_to_select < 0:
+        # More groups above threshold than needed - shouldn't happen with correct threshold
+        raise ValueError(f"More groups ({len(above_threshold)}) above threshold than topk_groups ({topk_groups})")
+
+    if remaining_to_select > len(at_threshold):
+        # Not enough tied groups - shouldn't happen
+        raise ValueError(f"Not enough tied groups ({len(at_threshold)}) to fill remaining ({remaining_to_select})")
+
+    # Generate all valid combinations
+    valid_combos = []
+    for tied_selection in combinations(at_threshold, remaining_to_select):
+        selected = frozenset(above_threshold) | frozenset(tied_selection)
+        valid_combos.append(selected)
+
+    return valid_combos
+
+
+def get_valid_expert_sets(biased_scores_row, selected_groups, n_activated_experts, experts_per_group, atol=0.05):
+    """
+    Get all valid sets of expert indices for a given group selection, considering ties.
+
+    Args:
+        biased_scores_row: 1D tensor of biased scores for one row (all experts)
+        selected_groups: Set of selected group indices
+        n_activated_experts: Number of experts to select
+        experts_per_group: Number of experts per group
+        atol: Absolute tolerance for tie detection
+
+    Returns:
+        List of frozensets, each representing a valid expert selection
+    """
+    from itertools import combinations
+
+    # Mask out non-selected groups
+    masked_scores = biased_scores_row.clone()
+    n_groups = len(biased_scores_row) // experts_per_group
+    for g in range(n_groups):
+        if g not in selected_groups:
+            masked_scores[g * experts_per_group : (g + 1) * experts_per_group] = float("-inf")
+
+    # Find the threshold (k-th highest score among valid experts)
+    valid_scores = masked_scores[masked_scores > float("-inf")]
+    if len(valid_scores) < n_activated_experts:
+        raise ValueError(f"Not enough valid experts ({len(valid_scores)}) for selection ({n_activated_experts})")
+
+    sorted_scores, _ = torch.sort(valid_scores, descending=True)
+    threshold = sorted_scores[n_activated_experts - 1].item()
+
+    # Partition experts into: strictly above threshold, at threshold (tied)
+    above_threshold = []
+    at_threshold = []
+    for e in range(len(masked_scores)):
+        score = masked_scores[e].item()
+        if score > threshold + atol:
+            above_threshold.append(e)
+        elif score >= threshold - atol and score > float("-inf"):
+            at_threshold.append(e)
+
+    remaining_to_select = n_activated_experts - len(above_threshold)
+
+    if remaining_to_select < 0 or remaining_to_select > len(at_threshold):
+        # Edge case: just return the top-k as the only valid set
+        _, top_indices = torch.topk(masked_scores, n_activated_experts)
+        return [frozenset(top_indices.tolist())]
+
+    # Generate all valid combinations
+    valid_sets = []
+    for tied_selection in combinations(at_threshold, remaining_to_select):
+        selected = frozenset(above_threshold) | frozenset(tied_selection)
+        valid_sets.append(selected)
+
+    return valid_sets if valid_sets else [frozenset(above_threshold)]
+
+
+def assert_in_valid_outcomes(
+    ttnn_weights,
+    ttnn_indices,
+    scores,
+    bias,
+    n_groups,
+    summed_experts_per_group,
+    topk_groups,
+    n_activated_experts,
+    route_scale,
+    epsilon,
+    weight_rtol=0.02,
+    weight_atol=0.01,
+):
+    """
+    Verify that TTNN's output is one of the valid outcomes considering all possible
+    tie-breaking decisions at both group and expert levels.
+
+    This function:
+    1. Computes all valid group combinations (considering group score ties)
+    2. For each valid group combo, computes all valid expert selections (considering expert ties)
+    3. Verifies TTNN's result matches one of these valid outcomes
+
+    Args:
+        ttnn_weights: TTNN output weights tensor
+        ttnn_indices: TTNN output indices tensor
+        scores: Original input scores (before sigmoid)
+        bias: Bias tensor added for selection
+        n_groups: Number of expert groups
+        summed_experts_per_group: Number of top experts summed per group
+        topk_groups: Number of top groups to select
+        n_activated_experts: Number of experts to select
+        route_scale: Scale factor for final weights
+        epsilon: Epsilon for normalization stability
+        weight_rtol: Relative tolerance for weight comparison
+        weight_atol: Absolute tolerance for weight comparison
+    """
+    # Compute intermediate values
+    sigmoid_scores = torch.sigmoid(scores)
+    biased_scores = sigmoid_scores + bias
+    experts_per_group = scores.shape[-1] // n_groups
+
+    # Compute group scores
+    grouped_biased = biased_scores.reshape(scores.shape[:-1] + (n_groups, experts_per_group))
+    top_expert_scores, _ = torch.topk(grouped_biased, summed_experts_per_group, dim=-1)
+    group_scores = top_expert_scores.sum(dim=-1)  # [batch, seq, n_groups]
+
+    # Flatten for easier iteration
+    original_shape = ttnn_weights.shape
+    ttnn_weights_2d = ttnn_weights.reshape(-1, n_activated_experts)
+    ttnn_indices_2d = ttnn_indices.reshape(-1, n_activated_experts).to(torch.int64)
+    biased_scores_2d = biased_scores.reshape(-1, scores.shape[-1])
+    sigmoid_scores_2d = sigmoid_scores.reshape(-1, scores.shape[-1])
+    group_scores_2d = group_scores.reshape(-1, n_groups)
+
+    num_rows = ttnn_weights_2d.shape[0]
+    stats = {"exact_match": 0, "group_tie": 0, "expert_tie": 0, "both_tie": 0}
+
+    for row in range(num_rows):
+        row_group_scores = group_scores_2d[row]
+        row_biased_scores = biased_scores_2d[row]
+        row_sigmoid_scores = sigmoid_scores_2d[row]
+        ttnn_expert_set = frozenset(ttnn_indices_2d[row].tolist())
+        ttnn_group_set = frozenset((idx // experts_per_group) for idx in ttnn_indices_2d[row].tolist())
+
+        # Get all valid group combinations
+        valid_group_combos = get_valid_group_combinations(row_group_scores, topk_groups)
+
+        # Check if TTNN's group selection is valid
+        # Note: TTNN's groups may be a SUBSET of a valid combo if not all groups
+        # have experts in the final top-k selection
+        group_selection_valid = any(ttnn_group_set.issubset(combo) for combo in valid_group_combos)
+        if not group_selection_valid:
+            logger.error(f"Row {row}: TTNN group selection not subset of any valid combination")
+            logger.error(f"  TTNN groups: {sorted(ttnn_group_set)}")
+            logger.error(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
+            logger.error(f"  Group scores: {row_group_scores.tolist()}")
+            raise AssertionError(f"Row {row}: Invalid group selection")
+
+        # Find which valid combo(s) contain TTNN's groups
+        matching_combos = [combo for combo in valid_group_combos if ttnn_group_set.issubset(combo)]
+
+        # Get all valid expert sets for each matching group combo
+        # TTNN's selection is valid if it matches any valid expert set from any matching combo
+        all_valid_expert_sets = []
+        for combo in matching_combos:
+            valid_expert_sets = get_valid_expert_sets(row_biased_scores, combo, n_activated_experts, experts_per_group)
+            all_valid_expert_sets.extend(valid_expert_sets)
+
+        # Check if TTNN's expert selection is valid
+        if ttnn_expert_set not in all_valid_expert_sets:
+            logger.error(f"Row {row}: TTNN expert selection not in valid sets")
+            logger.error(f"  TTNN experts: {sorted(ttnn_expert_set)}")
+            logger.error(f"  Matching group combos: {[sorted(c) for c in matching_combos]}")
+            logger.error(f"  Sample valid expert sets: {[sorted(s) for s in all_valid_expert_sets[:5]]}...")
+            raise AssertionError(f"Row {row}: Invalid expert selection for the chosen groups")
+
+        # Compute expected weights for TTNN's selection
+        ttnn_indices_row = ttnn_indices_2d[row]
+        expected_unbiased = row_sigmoid_scores[ttnn_indices_row]
+        expected_normalized = expected_unbiased / (expected_unbiased.sum() + epsilon)
+        expected_weights = expected_normalized * route_scale
+
+        # Sort both by index for comparison
+        ttnn_sort_idx = torch.argsort(ttnn_indices_row)
+        ttnn_weights_sorted = ttnn_weights_2d[row][ttnn_sort_idx]
+        expected_weights_sorted = expected_weights[ttnn_sort_idx]
+
+        if not torch.allclose(
+            ttnn_weights_sorted.float(), expected_weights_sorted.float(), rtol=weight_rtol, atol=weight_atol
+        ):
+            max_diff = (ttnn_weights_sorted.float() - expected_weights_sorted.float()).abs().max()
+            logger.error(f"Row {row}: Weights don't match expected for selected experts")
+            logger.error(f"  TTNN weights:     {ttnn_weights_sorted}")
+            logger.error(f"  Expected weights: {expected_weights_sorted}")
+            logger.error(f"  Max diff: {max_diff}")
+            raise AssertionError(f"Row {row}: Weight mismatch (max_diff={max_diff})")
+
+        # Track statistics
+        is_group_tie = len(valid_group_combos) > 1
+        is_expert_tie = len(all_valid_expert_sets) > 1
+        if is_group_tie and is_expert_tie:
+            stats["both_tie"] += 1
+        elif is_group_tie:
+            stats["group_tie"] += 1
+        elif is_expert_tie:
+            stats["expert_tie"] += 1
+        else:
+            stats["exact_match"] += 1
+
+    logger.info(
+        f"✓ All {num_rows} rows passed exhaustive validation: "
+        f"{stats['exact_match']} exact, {stats['group_tie']} group ties, "
+        f"{stats['expert_tie']} expert ties, {stats['both_tie']} both"
+    )
+
+
 def generate_distinct_sigmoid_inputs(shape, min_val=0.05, max_val=0.95, dtype=torch.bfloat16):
     """
     Generate random bfloat16 tensor where values are guaranteed to be distinct
@@ -148,26 +396,56 @@ def test_grouped_gate_against_reference():
         assert torch.allclose(reference_scores, grouped_fn_scores)
 
 
-def test_grouped_gate(device):
-    torch.manual_seed(0)
-    batch_size = 1
-    num_batches = 1
-    seq_len = 32  # DEBUG: Use 1 tile first to establish baseline
+# Test parameter combinations - curated to avoid combinatorial explosion
+# Format: (num_batches, batch_size, seq_len)
+GROUPED_GATE_TEST_PARAMS = [
+    # Basic cases with batch_size=1
+    (1, 1, 1),  # Minimal case
+    (1, 1, 32),  # Single tile
+    (1, 1, 33),  # Just over one tile (edge case)
+    (1, 1, 128),  # Multiple tiles
+    (1, 1, 512),  # Larger sequence
+    # Varying batch_size with single batch
+    (1, 2, 32),  # batch_size=2
+    (1, 4, 64),  # batch_size=4
+    (1, 8, 32),  # batch_size=8
+    # Multiple batches
+    (2, 1, 32),  # num_batches=2, minimal batch_size
+    (2, 2, 64),  # num_batches=2, batch_size=2
+    (2, 4, 33),  # num_batches=2, batch_size=4, non-tile-aligned seq
+    # Stress tests
+    (1, 8, 128),  # Large batch with multiple tiles
+    (2, 4, 128),  # Multiple batches, moderate batch_size, multiple tiles
+]
+
+
+@pytest.mark.parametrize("num_batches,batch_size,seq_len", GROUPED_GATE_TEST_PARAMS)
+def test_grouped_gate(device, num_batches, batch_size, seq_len):
+    """
+    Test grouped_gate operation with various batch sizes, sequence lengths, and batch counts.
+    Route scale is randomized per test case.
+    """
+    # Create a deterministic seed based on test parameters
+    seed = 0
+    torch.manual_seed(seed)
+
     total_experts = 256
-    # Use generate_distinct_sigmoid_inputs to avoid ties after sigmoid
-    # This ensures deterministic top-k selection regardless of rounding differences
-    scores = generate_distinct_sigmoid_inputs((num_batches, batch_size, seq_len, total_experts), dtype=torch.bfloat16)
-
-    logger.info(f"initial scores: {scores[-1, -1, -1, :]}")
-    bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)  # no bias for simplicity
-    logger.info(f"bias: {bias[-1, -1, -1, :]}")
-
     n_groups = 8
     summed_experts_per_group = 2  # number of experts to sum per group
     topk_groups = 4  # top groups to keep
     n_activated_experts = 8  # chosen experts per token
-    route_scale = 1.5  # scales for the final weights
     epsilon = 1e-20  # epsilon for stability
+
+    # Random route_scale between 0.1 and 1.1
+    route_scale = torch.rand(1).item() + 0.1
+
+    logger.info(
+        f"Testing: num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}, route_scale={route_scale:.4f}"
+    )
+
+    # Use generate_distinct_sigmoid_inputs to avoid ties after sigmoid
+    scores = generate_distinct_sigmoid_inputs((num_batches, batch_size, seq_len, total_experts), dtype=torch.bfloat16)
+    bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)
 
     golden_scores, golden_top_k_experts_indices = grouped_gate_golden(
         scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
@@ -189,7 +467,19 @@ def test_grouped_gate(device):
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
 
-    logger.info(f"golden_weights: {golden_scores}")
-    logger.info(f"ttnn_weights: {ttnn_scores}")
-    logger.info(f"golden_indices: {golden_top_k_experts_indices}")
-    logger.info(f"ttnn_indices: {ttnn_top_k_experts_indices}")
+    # Exhaustive validation: verify TTNN result is one of the valid outcomes
+    # considering all possible tie-breaking decisions at group and expert levels
+    assert_in_valid_outcomes(
+        ttnn_scores,
+        ttnn_top_k_experts_indices,
+        scores,
+        bias,
+        n_groups,
+        summed_experts_per_group,
+        topk_groups,
+        n_activated_experts,
+        route_scale,
+        epsilon,
+        weight_rtol=0.02,
+        weight_atol=0.01,
+    )
