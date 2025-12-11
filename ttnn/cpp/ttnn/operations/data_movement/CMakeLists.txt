@@ -27,7 +27,7 @@ file(
     pad/device/kernels/*
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
-    repeat/device/device/*
+    repeat/device/kernels/repeat_*_rm.cpp
     reshape_view/device/device/*
     scatter/device/kernels/*
     sort/device/kernels/*
@@ -52,6 +52,8 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            copy/device/copy_program_factory.hpp
+            copy/device/copy_device_operation_types.hpp
             fill_pad/fill_pad.hpp
             fill_pad/device/fill_pad_device_operation.hpp
             fill_rm/fill_rm.hpp
@@ -145,14 +147,21 @@ target_sources(
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp
-        pad/device/pad_op.cpp
-        pad/device/pad_program_factory.cpp
+        pad/device/pad_device_operation.cpp
+        pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
+        pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.cpp
+        pad/device/pad_rm_reader_writer_program_factory.cpp
+        pad/device/pad_rm_sharded_height_only_program_factory.cpp
+        pad/device/pad_rm_sharded_width_only_program_factory.cpp
+        pad/device/pad_tile_multicore_program_factory.cpp
+        pad/device/pad_tile_program_factory.cpp
         pad/pad.cpp
         permute/device/permute_device_operation.cpp
         permute/device/permute_rm_program_factory.cpp
         permute/device/permute_tiled_program_factory.cpp
         permute/permute.cpp
-        repeat/device/host/repeat_program_factory.cpp
+        repeat/device/repeat_program_factory_last_dim.cpp
+        repeat/device/repeat_program_factory_higher_dim.cpp
         repeat/device/repeat_device_operation.cpp
         repeat/repeat.cpp
         repeat_interleave/repeat_interleave.cpp
@@ -207,8 +216,15 @@ target_sources(
         tilize_with_val_padding/device/tilize_with_val_padding_op.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_program_factory.cpp
         tilize_with_val_padding/tilize_with_val_padding.cpp
-        transpose/device/transpose_op.cpp
-        transpose/device/transpose_program_factory.cpp
+        transpose/device/transpose_device_operation.cpp
+        transpose/device/transpose_cn_program_factory.cpp
+        transpose/device/transpose_hc_rm_program_factory.cpp
+        transpose/device/transpose_hc_sharded_program_factory.cpp
+        transpose/device/transpose_hc_tiled_interleaved_program_factory.cpp
+        transpose/device/transpose_hc_tiled_program_factory.cpp
+        transpose/device/transpose_wh_program_factory.cpp
+        transpose/device/transpose_wh_sharded_program_factory.cpp
+        transpose/device/transpose_wh_sharded_rm_program_factory.cpp
         transpose/transpose.cpp
         unsqueeze/unsqueeze.cpp
         untilize/device/untilize_op.cpp
