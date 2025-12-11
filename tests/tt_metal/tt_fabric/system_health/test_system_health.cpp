@@ -157,9 +157,10 @@ std::string get_ubb_id_str(ChipId chip_id) {
 
 std::string get_pcie_device_id_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto pci_device_id = cluster.get_pci_device_id(chip_id);
-    if (pci_device_id.has_value()) {
-        return "PCIe: " + std::to_string(*pci_device_id);
+    const auto& chips_with_mmio = cluster.get_chips_with_mmio();
+    auto it = chips_with_mmio.find(chip_id);
+    if (it != chips_with_mmio.end()) {
+        return "PCIe: " + std::to_string(it->second);
     }
     return "";
 }

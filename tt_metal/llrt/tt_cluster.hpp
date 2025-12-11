@@ -103,6 +103,11 @@ public:
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
+
+    const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
+        return this->cluster_desc_->get_chips_with_mmio();
+    }
+
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
@@ -127,8 +132,6 @@ public:
     uint16_t get_bus_id(ChipId chip) const;
 
     std::optional<int> get_physical_slot(ChipId chip) const;
-
-    std::optional<uint16_t> get_pci_device_id(ChipId chip) const;
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
