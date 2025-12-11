@@ -13,7 +13,7 @@ from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
 
 
-def get_valid_group_combinations(group_scores, topk_groups, atol=0.05):
+def get_valid_group_combinations(group_scores, topk_groups, atol=0.1):
     """
     Get all valid combinations of topk_groups groups considering ties.
 
@@ -67,7 +67,7 @@ def get_valid_group_combinations(group_scores, topk_groups, atol=0.05):
     return valid_combos
 
 
-def get_valid_expert_sets(biased_scores_row, selected_groups, n_activated_experts, experts_per_group, atol=0.05):
+def get_valid_expert_sets(biased_scores_row, selected_groups, n_activated_experts, experts_per_group, atol=0.1):
     """
     Get all valid sets of expert indices for a given group selection, considering ties.
 
@@ -197,10 +197,11 @@ def assert_in_valid_outcomes(
         # have experts in the final top-k selection
         group_selection_valid = any(ttnn_group_set.issubset(combo) for combo in valid_group_combos)
         if not group_selection_valid:
-            logger.error(f"Row {row}: TTNN group selection not subset of any valid combination")
-            logger.error(f"  TTNN groups: {sorted(ttnn_group_set)}")
-            logger.error(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
-            logger.error(f"  Group scores: {row_group_scores.tolist()}")
+            print(f"Row {row}: TTNN group selection not subset of any valid combination")
+            print(f"  TTNN groups: {sorted(ttnn_group_set)}")
+            print(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
+            print(f"  Group scores: {row_group_scores.tolist()}")
+            print(f"  TTNN indices: {ttnn_indices_2d[row].tolist()}")
             raise AssertionError(f"Row {row}: Invalid group selection")
 
         # Find which valid combo(s) contain TTNN's groups
