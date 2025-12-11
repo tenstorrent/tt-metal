@@ -164,7 +164,6 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
           "test-in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
         ]
     uses: ./.github/workflows/smoke.yaml
