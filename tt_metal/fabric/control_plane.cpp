@@ -2428,8 +2428,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 auto port_direction = port_id.first;
                 auto logical_chan_id = port_id.second;
 
-                // If this is a Z channel on BLACKHOLE, prefer Z direction ports
-                if (is_blackhole_z_channel && port_direction != RoutingDirection::Z) {
+                // Blackhole Z-channels must be assigned the Z Routing Direction.
+                // All other channels must avoid using the Z-direction (they are used for routing along the X/Y
+                // directions). This is to ensure that logical and physical channel assignments are consistent.
+                bool is_z_direction = (port_direction == RoutingDirection::Z);
+                if (is_blackhole_z_channel != is_z_direction) {
                     continue;
                 }
 
@@ -2966,6 +2969,10 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
 
     const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     return root_dir + std::string(it->second);
+}
+
+tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+    return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
 }
 
 ControlPlane::~ControlPlane() = default;

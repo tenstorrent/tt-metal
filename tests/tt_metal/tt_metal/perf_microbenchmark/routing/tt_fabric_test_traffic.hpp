@@ -298,6 +298,11 @@ struct TestTrafficSenderConfig {
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
 
+struct TestTrafficSyncConfig {
+    uint32_t sync_val;
+    TestTrafficSenderConfig sender_config;
+};
+
 struct TestTrafficReceiverConfig {
     TrafficParameters parameters;
     uint32_t sender_id;

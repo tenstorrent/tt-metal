@@ -14,6 +14,7 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -93,8 +94,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
-            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
-            "Inputs to Joint SDPA must be BF16 or BF8");
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
+                tensor.dtype() == DataType::BFLOAT4_B,
+            "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
@@ -242,12 +244,13 @@ spec_return_value_t RingJointSDPADeviceOperation::compute_output_specs(
 
     return {
         .output = TensorSpec(
-            input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_memory_config)),
+            input.logical_shape(),
+            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         .joint_output = TensorSpec(
             joint_input.logical_shape(),
-            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), args.output_memory_config)),
-        .lse_output =
-            TensorSpec(lse_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_memory_config))};
+            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+        .lse_output = TensorSpec(
+            lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 tensor_return_value_t RingJointSDPADeviceOperation::create_output_tensors(
