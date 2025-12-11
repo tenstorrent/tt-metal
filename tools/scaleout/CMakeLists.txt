@@ -183,10 +183,14 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
-# Generate MGD CLI tool (standalone, includes proto source directly)
+# Generate MGD CLI tool (standalone, links against fabric for protobuf implementation)
 add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
 
-add_dependencies(generate_mgd scaleout_generated_protos)
+add_dependencies(
+    generate_mgd
+    scaleout_generated_protos
+    fabric
+)
 
 set_target_properties(
     generate_mgd
@@ -202,12 +206,15 @@ target_include_directories(
         ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor
 )
 
+# Link against fabric's protobuf object files only
+target_sources(generate_mgd PRIVATE $<TARGET_OBJECTS:fabric>)
+
 target_link_libraries(
     generate_mgd
     PRIVATE
         generate_mgd_lib
         scaleout_tools
-        TT::Metalium::Fabric
+        tt_metal
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
