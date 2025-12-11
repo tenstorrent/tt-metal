@@ -394,7 +394,7 @@ jobs:
             pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
 
-      - name: panoptic_deeplab tests (all cores)
+      - name: panoptic_deeplab tests (130 cores)
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           device_perf_model_name: "panoptic_deeplab_130_cores"

@@ -24,11 +24,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
     preprocess_nchw_input_tensor,
 )
-from models.experimental.panoptic_deeplab.tests.pcc.common import (
-    check_ttnn_output,
-    skip_if_not_blackhole_130_cores,
-    skip_if_not_blackhole_20_cores,
-)
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 def create_panoptic_models(device, weights_path):
@@ -98,25 +94,13 @@ def create_panoptic_models(device, weights_path):
     return pytorch_model, ttnn_model
 
 
-@pytest.mark.parametrize(
-    "pcc_threshold, skip_check",
-    [
-        (0.99, skip_if_not_blackhole_20_cores),
-        (0.99, skip_if_not_blackhole_130_cores),
-    ],
-    ids=["20_cores", "130_cores"],
-)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape_nchw",
     [(1, 3, 512, 1024)],
 )
-def test_resnet_stem_pcc(device, pcc_threshold, skip_check, input_shape_nchw, reset_seeds, model_location_generator):
+def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_generator):
     """Test ResNet stem layer PCC between PyTorch and TTNN implementations."""
-
-    # Skip test if device doesn't match the expected grid configuration
-    skip_check(device)
-
     compute_grid = device.compute_with_storage_grid_size()
     logger.info(
         f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
@@ -145,39 +129,23 @@ def test_resnet_stem_pcc(device, pcc_threshold, skip_check, input_shape_nchw, re
         torch_stem_output = pytorch_model.backbone.stem(torch_input)
 
     ttnn_output_torch = ttnn.to_torch(ttnn_stem_output).permute(0, 3, 1, 2).reshape(torch_stem_output.shape)
-    pcc_passed, pcc_message = assert_with_pcc(torch_stem_output, ttnn_output_torch, pcc_threshold)
+    pcc_passed, pcc_message = assert_with_pcc(torch_stem_output, ttnn_output_torch, 0.99)
 
     logger.info(f"ResNet stem PCC: {pcc_message}")
     assert pcc_passed, f"ResNet stem PCC test failed: {pcc_message}"
 
 
-@pytest.mark.parametrize(
-    "layer_pcc_values, skip_check",
-    [
-        (
-            [("res2", 0.99), ("res3", 0.99), ("res4", 0.99), ("res5", 0.99)],
-            skip_if_not_blackhole_20_cores,
-        ),
-        (
-            [("res2", 0.99), ("res3", 0.99), ("res4", 0.99), ("res5", 0.99)],
-            skip_if_not_blackhole_130_cores,
-        ),
-    ],
-    ids=["20_cores", "130_cores"],
-)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "height,width",
     [(512, 1024)],
 )
+@pytest.mark.parametrize("layer_name, expected_pcc", [("res2", 0.99), ("res3", 0.99), ("res4", 0.99), ("res5", 0.99)])
 def test_resnet_layer_pcc(
-    device, layer_pcc_values, skip_check, batch_size, height, width, reset_seeds, model_location_generator
+    device, batch_size, height, width, layer_name, expected_pcc, reset_seeds, model_location_generator
 ):
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
-
-    # Skip test if device doesn't match the expected grid configuration
-    skip_check(device)
 
     compute_grid = device.compute_with_storage_grid_size()
     logger.info(
@@ -201,98 +169,61 @@ def test_resnet_layer_pcc(
         "res5": (1024, 1 / 16, 1 / 16),
     }
 
-    failed_layers = []
+    in_channels, h_factor, w_factor = layer_specs[layer_name]
+    layer_height = int(height * h_factor)
+    layer_width = int(width * w_factor)
 
-    for layer_name, expected_pcc in layer_pcc_values:
-        in_channels, h_factor, w_factor = layer_specs[layer_name]
-        layer_height = int(height * h_factor)
-        layer_width = int(width * w_factor)
+    torch_layer_input = torch.randn(batch_size, in_channels, layer_height, layer_width, dtype=torch.bfloat16)
+    ttnn_layer_input = ttnn.from_torch(
+        torch_layer_input.permute(0, 2, 3, 1),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
 
-        torch_layer_input = torch.randn(batch_size, in_channels, layer_height, layer_width, dtype=torch.bfloat16)
-        ttnn_layer_input = ttnn.from_torch(
-            torch_layer_input.permute(0, 2, 3, 1),
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+    if layer_name == "res2":
+        for block in ttnn_model.backbone.res2:
+            ttnn_layer_input = block(ttnn_layer_input)
+        ttnn_layer_output = ttnn_layer_input
+    elif layer_name == "res3":
+        for block in ttnn_model.backbone.res3:
+            ttnn_layer_input = block(ttnn_layer_input)
+        ttnn_layer_output = ttnn_layer_input
+    elif layer_name == "res4":
+        for block in ttnn_model.backbone.res4:
+            ttnn_layer_input = block(ttnn_layer_input)
+        ttnn_layer_output = ttnn_layer_input
+    elif layer_name == "res5":
+        for block in ttnn_model.backbone.res5:
+            ttnn_layer_input = block(ttnn_layer_input)
+        ttnn_layer_output = ttnn_layer_input
 
+    with torch.no_grad():
         if layer_name == "res2":
-            for block in ttnn_model.backbone.res2:
-                ttnn_layer_input = block(ttnn_layer_input)
-            ttnn_layer_output = ttnn_layer_input
+            torch_layer_output = pytorch_model.backbone.res2(torch_layer_input)
         elif layer_name == "res3":
-            for block in ttnn_model.backbone.res3:
-                ttnn_layer_input = block(ttnn_layer_input)
-            ttnn_layer_output = ttnn_layer_input
+            torch_layer_output = pytorch_model.backbone.res3(torch_layer_input)
         elif layer_name == "res4":
-            for block in ttnn_model.backbone.res4:
-                ttnn_layer_input = block(ttnn_layer_input)
-            ttnn_layer_output = ttnn_layer_input
+            torch_layer_output = pytorch_model.backbone.res4(torch_layer_input)
         elif layer_name == "res5":
-            for block in ttnn_model.backbone.res5:
-                ttnn_layer_input = block(ttnn_layer_input)
-            ttnn_layer_output = ttnn_layer_input
+            torch_layer_output = pytorch_model.backbone.res5(torch_layer_input)
 
-        with torch.no_grad():
-            if layer_name == "res2":
-                torch_layer_output = pytorch_model.backbone.res2(torch_layer_input)
-            elif layer_name == "res3":
-                torch_layer_output = pytorch_model.backbone.res3(torch_layer_input)
-            elif layer_name == "res4":
-                torch_layer_output = pytorch_model.backbone.res4(torch_layer_input)
-            elif layer_name == "res5":
-                torch_layer_output = pytorch_model.backbone.res5(torch_layer_input)
+    ttnn_output_torch = ttnn.to_torch(ttnn_layer_output).permute(0, 3, 1, 2).reshape(torch_layer_output.shape)
 
-        ttnn_output_torch = ttnn.to_torch(ttnn_layer_output).permute(0, 3, 1, 2).reshape(torch_layer_output.shape)
+    pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, expected_pcc)
 
-        pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, expected_pcc)
-
-        logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
-
-        if not pcc_passed:
-            failed_layers.append(layer_name)
-
-    assert len(failed_layers) == 0, f"ResNet layer PCC tests failed for layers: {failed_layers}"
+    logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
+    assert pcc_passed, f"ResNet {layer_name} PCC test failed: {pcc_message}"
 
 
-@pytest.mark.parametrize(
-    "pcc_values, skip_check",
-    [
-        (
-            {
-                "res2": {"pcc": 0.998, "abs_err": 0.1, "rel_err": 0.3},
-                "res3": {"pcc": 0.997, "abs_err": 0.04, "rel_err": 0.6},
-                "res4": {"pcc": 0.9965, "abs_err": 0.02, "rel_err": 0.3},
-                "res5": {"pcc": 0.9945, "abs_err": 0.01, "rel_err": 0.6},
-            },
-            skip_if_not_blackhole_20_cores,
-        ),
-        (
-            {
-                "res2": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
-                "res3": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.6},
-                "res4": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
-                "res5": {"pcc": 0.992, "abs_err": 0.5, "rel_err": 0.7},
-            },
-            skip_if_not_blackhole_130_cores,
-        ),
-    ],
-    ids=["20_cores", "130_cores"],
-)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "height,width",
     [(512, 1024)],
 )
-def test_resnet_full_pcc(
-    device, pcc_values, skip_check, batch_size, height, width, reset_seeds, model_location_generator
-):
+def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_location_generator):
     """Test full ResNet PCC between PyTorch and TTNN implementations."""
-
-    # Skip test if device doesn't match the expected grid configuration
-    skip_check(device)
-
     compute_grid = device.compute_with_storage_grid_size()
     logger.info(
         f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
@@ -318,16 +249,55 @@ def test_resnet_full_pcc(
         torch_outputs = pytorch_model.backbone(torch_input)
 
     failed_layers = []
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        layer_pcc_thresholds = {
+            "res2": 0.998,
+            "res3": 0.997,
+            "res4": 0.9965,
+            "res5": 0.9945,
+        }
+        layer_exp_abs_err = {
+            "res2": 0.1,
+            "res3": 0.04,
+            "res4": 0.02,
+            "res5": 0.01,
+        }
+        layer_exp_rel_err = {
+            "res2": 0.3,
+            "res3": 0.6,
+            "res4": 0.3,
+            "res5": 0.6,
+        }
+    else:
+        layer_pcc_thresholds = {
+            "res2": 0.999,
+            "res3": 0.999,
+            "res4": 0.999,
+            "res5": 0.992,
+        }
+        layer_exp_abs_err = {
+            "res2": 0.5,
+            "res3": 0.5,
+            "res4": 0.5,
+            "res5": 0.5,
+        }
+        layer_exp_rel_err = {
+            "res2": 0.3,
+            "res3": 0.6,
+            "res4": 0.3,
+            "res5": 0.7,
+        }
 
     for layer_name in ["res2", "res3", "res4", "res5"]:
         torch_output = torch_outputs[layer_name]
         ttnn_output = ttnn_outputs[layer_name]
 
-        # Extract PCC thresholds from parameters
-        layer_vals = pcc_values[layer_name]
-        pcc_threshold = layer_vals["pcc"]
-        exp_abs_err = layer_vals["abs_err"]
-        exp_rel_err = layer_vals["rel_err"]
+        pcc_threshold = layer_pcc_thresholds[layer_name]
+        exp_abs_err = layer_exp_abs_err[layer_name]
+        exp_rel_err = layer_exp_rel_err[layer_name]
 
         passed = check_ttnn_output(
             layer_name,
