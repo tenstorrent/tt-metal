@@ -31,7 +31,12 @@ MassagedTilizeVal build_ndiml_tilize_val(
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             auto unsqueezed_tensor = ttnn::reshape(
-                output, *original_shape, std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
+                output,
+                *original_shape,
+                std::nullopt /*Memory Config*/,
+                std::nullopt /*pad value*/,
+                TileReshapeMapMode::CACHE,
+                sub_core_grids);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
