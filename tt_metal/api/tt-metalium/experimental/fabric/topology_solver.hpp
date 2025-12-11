@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <chrono>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -64,6 +66,12 @@ private:
     AdjacencyMap adj_map_;
     std::vector<NodeId> nodes_cache_;
 };
+
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const MeshGraph& mesh_graph);
+
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
  * @brief Unified constraint system for topology mapping
@@ -199,10 +207,79 @@ private:
     void validate_and_throw() const;
 };
 
-std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const MeshGraph& mesh_graph);
+/**
+ * @brief Result of topology mapping operation
+ *
+ * Contains the mapping result, success status, error messages, and statistics
+ * about the constraint satisfaction process.
+ *
+ * @tparam TargetNode The type used to identify nodes in the target graph
+ * @tparam GlobalNode The type used to identify nodes in the global graph
+ */
+/**
+ * @brief Mode for connection count validation
+ */
+enum class ConnectionValidationMode {
+    STRICT,   ///< Strict mode: require exact channel counts, fail if not met
+    RELAXED,  ///< Relaxed mode: prefer correct channel counts, but allow mismatches with warnings
+    NONE      ///< No validation: only check edge existence, ignore channel counts
+};
 
-std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+template <typename TargetNode, typename GlobalNode>
+struct MappingResult {
+    /// Whether the mapping was successful
+    bool success = false;
+
+    /// Error message if mapping failed
+    std::string error_message;
+
+    /// Warning messages (e.g., relaxed mode connection count mismatches)
+    std::vector<std::string> warnings;
+
+    /// Mapping from target nodes to global nodes
+    std::map<TargetNode, GlobalNode> target_to_global;
+
+    /// Reverse mapping from global nodes to target nodes
+    std::map<GlobalNode, TargetNode> global_to_target;
+
+    /// Statistics about constraint satisfaction
+    struct {
+        size_t required_satisfied = 0;   ///< Number of required constraints satisfied
+        size_t preferred_satisfied = 0;  ///< Number of preferred constraints satisfied
+        size_t preferred_total = 0;      ///< Total number of preferred constraints
+    } constraint_stats;
+
+    /// Statistics about the solving process
+    struct {
+        size_t dfs_calls = 0;                      ///< Number of DFS calls made
+        size_t backtrack_count = 0;                ///< Number of backtracks performed
+        std::chrono::milliseconds elapsed_time{};  ///< Time taken to solve
+    } stats;
+};
+
+/**
+ * @brief Solve topology mapping using constraint satisfaction
+ *
+ * Stateless function that performs constraint satisfaction search to find a valid
+ * mapping from target graph to global graph. Enforces required constraints first,
+ * then optimizes for preferred constraints.
+ *
+ * @tparam TargetNode The type used to identify nodes in the target graph (must be explicitly specified)
+ * @tparam GlobalNode The type used to identify nodes in the global graph (must be explicitly specified)
+ * @param target_graph The target graph (subgraph pattern to find)
+ * @param global_graph The global graph (larger host graph that contains the target)
+ * @param constraints The mapping constraints to satisfy
+ * @param connection_validation_mode How to validate connection counts (default: RELAXED)
+ * @return MappingResult containing success status, bidirectional mappings, and warnings
+ */
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED);
 
 }  // namespace tt::tt_fabric
+
+// Include template implementations
+#include <tt-metalium/experimental/fabric/topology_solver.tpp>
