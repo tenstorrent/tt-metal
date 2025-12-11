@@ -26,6 +26,18 @@ def dropout(hidden_states, p, training):
     return hidden_states
 
 
+def unsqueeze_to_4D_at_dim_1(tensor):
+    rank = len(tensor.shape)
+    if rank == 4:
+        return tensor
+    if rank == 3:
+        return ttnn.unsqueeze(tensor, 1)
+    if rank == 2:
+        return ttnn.unsqueeze(tensor, 1).unsqueeze(tensor, 1)
+    else:
+        raise ValueError(f"Unsupported shape: {tensor.shape}")
+
+
 def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapper, n_layers=None):
     """
     Generates empty KV cache for self-attention and cross-attention, and sends to device.
@@ -70,7 +82,7 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
 
 
 def calculate_key_values(config, key_value_states, *, parameters):
-    bsz, tgt_len, hidden_size = key_value_states.shape
+    hidden_size = key_value_states.shape[-1]
     head_size = hidden_size // config.encoder_attention_heads
 
     compute_grid_size = key_value_states.device().compute_with_storage_grid_size()
@@ -85,7 +97,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
     )
     ttnn.deallocate(key_value_states)
     fused_kv = ttnn.to_memory_config(fused_kv, WHISPER_MEMORY_CONFIG)
-    fused_kv = ttnn.unsqueeze_to_4D(fused_kv)  # 1, 1, S, 2xHxd
+    fused_kv = unsqueeze_to_4D_at_dim_1(fused_kv)  # 1, 1, S, 2xHxd
     key_states = fused_kv[:, :, :, :hidden_size]
     value_states = fused_kv[:, :, :, hidden_size:]
 
@@ -266,6 +278,8 @@ def whisper_attention(
     *,
     parameters,
 ):
+    hidden_states = unsqueeze_to_4D_at_dim_1(hidden_states)
+
     head_size = config.d_model // config.encoder_attention_heads
     scaling = head_size**-0.5
     bsz, *_, tgt_len, _ = hidden_states.shape
@@ -283,7 +297,7 @@ def whisper_attention(
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        query_states = ttnn.unsqueeze_to_4D(query_states)
+        # query_states = ttnn.unsqueeze_to_4D(query_states)
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
@@ -324,7 +338,7 @@ def whisper_attention(
         ttnn.deallocate(hidden_states)
         fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
 
-        fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
+        # fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
 
         (
             query_states,  # 1, H, S, d
@@ -402,6 +416,8 @@ def whisper_attention(
 
 
 def encoder_layer(config, hidden_states, *, parameters):
+    hidden_states = unsqueeze_to_4D_at_dim_1(hidden_states)
+
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
         hidden_states,
@@ -486,6 +502,7 @@ def decoder_layer(
     *,
     parameters,
 ):
+    hidden_states = unsqueeze_to_4D_at_dim_1(hidden_states)
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
         hidden_states,
