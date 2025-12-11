@@ -148,7 +148,8 @@ jobs:
               [ -z "$short_hash" ] && continue
 
               pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
-              clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
+              # Remove trailing PR reference and convert #numbers to tt-llk links
+              clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//' | sed 's/#\([0-9]\+\)/[#\1](https:\/\/github.com\/tenstorrent\/tt-llk\/pull\/\1)/g')
 
               # Format PR column
               if [ -n "$pr_number" ]; then
