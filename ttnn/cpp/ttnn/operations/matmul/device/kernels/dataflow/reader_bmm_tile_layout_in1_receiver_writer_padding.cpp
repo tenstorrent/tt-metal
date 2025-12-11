@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
+    asm volatile("ebreak");
     // READER
     uint32_t rt_args_idx = 0;
     // in1 mcast args

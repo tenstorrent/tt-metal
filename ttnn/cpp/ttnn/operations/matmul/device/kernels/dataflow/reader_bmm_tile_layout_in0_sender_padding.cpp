@@ -12,6 +12,7 @@
 #include "ckernel_defs.h"
 
 void kernel_main() {
+    asm volatile("ebreak");
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);

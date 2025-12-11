@@ -10,6 +10,7 @@
 #include "pad_tile.hpp"
 
 void kernel_main() {
+    asm volatile("ebreak");
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
     constexpr bool core_in_in0_receiver_mcast_grid = (bool)get_compile_time_arg_val(1);
 
