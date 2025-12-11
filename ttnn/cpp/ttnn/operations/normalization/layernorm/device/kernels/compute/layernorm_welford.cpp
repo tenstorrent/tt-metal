@@ -15,12 +15,14 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+
+namespace kutil = norm::kernel_util;
+namespace generic = kutil::generic;
 
 namespace NAMESPACE {
 
 void MAIN {
-    namespace kutil = norm::kernel_util;
-
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -47,7 +49,7 @@ void MAIN {
     constexpr auto cb_fusion = tt::CBIndex::c_22;       // stream gamma/beta
     constexpr auto cb_reciprocals = tt::CBIndex::c_25;  // Pre-computed reciprocals for Welford's algorithm
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-    DPRINT << "Welford" << ENDL();
+
     //  Either in or in + b if doing fused pre-add
     constexpr auto cb_x = []() -> auto {
         if constexpr (fuse_pre_add) {
@@ -64,20 +66,6 @@ void MAIN {
 
     // The number of valid rows in the last tile in width dimension
     constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
-
-    // Compute syncs with the reader based on block size,
-    // but Welford can't compute past the last tile with
-    // data in it. So we invoke this to keep them in sync
-    constexpr uint32_t W_nearest_tile_up = (W + tile_width - 1) / tile_width;
-    auto sync_extra_tiles = [cb_x]() {
-        constexpr uint32_t extra_tiles = Wt - W_nearest_tile_up;
-        DPRINT << "Wt: " << Wt << ", W_nearest_tile_up: " << W_nearest_tile_up << ", extra_tiles: " << extra_tiles
-               << ENDL();
-        if constexpr (extra_tiles > 0) {
-            cb_wait_front(cb_x, extra_tiles);
-            // cb_pop_front(cb_x, extra_tiles);
-        }
-    };
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
@@ -99,24 +87,24 @@ void MAIN {
             add_tiles_init(cb_in, cb_inb);
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_in, blk);
-                cb_wait_front(cb_inb, blk);
+            for (auto block : generic::blocks(Wt, blk)) {
+                cb_wait_front(cb_in, block.size());
+                cb_wait_front(cb_inb, block.size());
                 tile_regs_acquire();
-                for (uint32_t j = 0; j < blk; j++) {
-                    add_tiles(cb_in, cb_inb, j, j, j);
+                for (auto i : block.local()) {
+                    add_tiles(cb_in, cb_inb, i, i, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_in, blk);
-                cb_pop_front(cb_inb, blk);
+                cb_pop_front(cb_in, block.size());
+                cb_pop_front(cb_inb, block.size());
 
-                cb_reserve_back(cb_x, blk);
+                cb_reserve_back(cb_x, block.size());
                 tile_regs_wait();
-                for (uint32_t j = 0; j < blk; j++) {
-                    pack_tile(j, cb_x);
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_x);
                 }
                 tile_regs_release();
-                cb_push_back(cb_x, blk);  // push the sum into the same buffer
+                cb_push_back(cb_x, block.size());  // push the sum into the same buffer
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
         }
@@ -127,7 +115,7 @@ void MAIN {
         tile_regs_acquire();
         welford_init();
         // Process all but the last tile
-        for (uint32_t wt = 0; wt < (W_nearest_tile_up - 1); ++wt) {
+        for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
             cb_wait_front(cb_x, wt + 1);
             // Welford's needs transposed input tile
             transpose_wh_tile(cb_x, wt, input_dst);
@@ -136,11 +124,9 @@ void MAIN {
         }
 
         // Process the last tile
-        cb_wait_front(cb_x, W_nearest_tile_up);
-        transpose_wh_tile(cb_x, W_nearest_tile_up - 1, input_dst);
+        cb_wait_front(cb_x, Wt);
+        transpose_wh_tile(cb_x, Wt - 1, input_dst);
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
-
-        sync_extra_tiles();
 
         // Store the mean and variance to the destination registers
         welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
@@ -191,18 +177,18 @@ void MAIN {
         cb_wait_front(cb_ex, onetile);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+        for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);
+            for (auto i : block.local()) {
+                sub_tiles_bcast_cols(cb_x, cb_ex, block.to_global(i), 0, i);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                pack_tile(wtr, cb_xmm);
+            for (auto i : block.local()) {
+                pack_tile(i, cb_xmm);
             }
             tile_regs_release();
-            cb_push_back(cb_xmm, blk);
+            cb_push_back(cb_xmm, block.size());
         }
         cb_pop_front(cb_ex, 1);
         cb_pop_front(cb_x, Wt);
@@ -236,7 +222,7 @@ void MAIN {
         // where norm(x) is:
         // (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
         cb_wait_front(cb_ex2pe, onetile);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+        for (auto block : generic::blocks(Wt, blk)) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
                 pack_reconfig_data_format(cb_out);
@@ -246,19 +232,20 @@ void MAIN {
 
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             tile_regs_acquire();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+            for (auto i : block.local()) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
-                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);
+                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);
             }
             tile_regs_commit();
 
-            cb_reserve_back(cb_im_or_out, blk);
+            cb_reserve_back(cb_im_or_out, block.size());
             tile_regs_wait();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
+            for (auto i : block.local()) {
+                pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             tile_regs_release();
-            cb_push_back(cb_im_or_out, blk);  // if no gamma/beta are provided, this will be passed on to the writer
+            cb_push_back(
+                cb_im_or_out, block.size());  // if no gamma/beta are provided, this will be passed on to the writer
 
             if constexpr (do_gamma) {
                 if constexpr (do_beta == 0) {
@@ -267,23 +254,23 @@ void MAIN {
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
-                cb_wait_front(cb_fusion, blk);
+                cb_wait_front(cb_gamma, block.start() + block.size());  // we don't pop, TODO: only wait on first ht
+                cb_wait_front(cb_fusion, block.size());
                 tile_regs_acquire();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
+                for (auto i : block.local()) {
+                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                 }
                 tile_regs_commit();
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                cb_pop_front(cb_fusion, blk);
+                cb_pop_front(cb_fusion, block.size());
 
-                cb_reserve_back(cb_outg, blk);
+                cb_reserve_back(cb_outg, block.size());
                 tile_regs_wait();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    pack_tile(wtr, cb_outg);  // pack either to intermediate (cb_fusion or out0)
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
                 tile_regs_release();
-                cb_push_back(cb_outg, blk);
+                cb_push_back(cb_outg, block.size());
             }
             if constexpr (do_beta) {
                 pack_reconfig_data_format(cb_out);
@@ -294,23 +281,23 @@ void MAIN {
                 }
 
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
-                cb_wait_front(cb_fusion, blk);
+                cb_wait_front(cb_beta, block.start() + block.size());  // TODO: optimization - only wait on first ht
+                cb_wait_front(cb_fusion, block.size());
                 tile_regs_acquire();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
+                for (auto i : block.local()) {
+                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_fusion, blk);
+                cb_pop_front(cb_fusion, block.size());
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
 
-                cb_reserve_back(cb_out, blk);
+                cb_reserve_back(cb_out, block.size());
                 tile_regs_wait();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    pack_tile(wtr, cb_out);  // pack either to intermediate (cb_fusion or out0)
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
                 tile_regs_release();
-                cb_push_back(cb_out, blk);
+                cb_push_back(cb_out, block.size());
             }
         }
         cb_pop_front(cb_ex2pe, onetile);
