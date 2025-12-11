@@ -43,6 +43,7 @@ public:
     // Note: cluster and hal must outlive this object (guaranteed by telemetry collector lifecycle)
     FabricTelemetryReader(
         tt::ChipId chip_id,
+        uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
@@ -51,24 +52,22 @@ public:
     FabricTelemetryReader(FabricTelemetryReader&&) = delete;
     FabricTelemetryReader& operator=(FabricTelemetryReader&&) = delete;
 
-    // Returns cached telemetry snapshot for a specific channel
-    // Updates from device if this is a new update cycle
-    // Returns nullptr if channel not found or telemetry unavailable
-    // Note: Returned pointer is valid only until next call to this method
-    const tt::tt_fabric::FabricTelemetrySnapshot* get_fabric_telemetry_for_channel(
-        uint32_t channel, std::chrono::steady_clock::time_point start_of_update_cycle);
+    // Returns cached telemetry snapshot. Updates from device if this is a new update cycle.
+    // Returns nullptr if telemetry unavailable. Note: Returned pointer is valid only until next
+    // call to this method
+    const tt::tt_fabric::FabricTelemetrySnapshot* get_telemetry(
+        std::chrono::steady_clock::time_point start_of_update_cycle);
 
 private:
-    // Reads telemetry for a single channel directly from L1
-    tt::tt_fabric::FabricTelemetrySnapshot read_channel_telemetry(uint32_t channel);
+    // Reads telemetry directly from L1
+    tt::tt_fabric::FabricTelemetrySnapshot read_telemetry();
 
-    tt::ChipId chip_id_;
-    tt::umd::Cluster* cluster_;  // Raw pointer - lifetime guaranteed by caller
-    tt::tt_metal::Hal* hal_;     // Raw pointer - lifetime guaranteed by caller
+    const tt::ChipId chip_id_;
+    const uint32_t channel_;
+    tt::umd::Cluster* cluster_;
+    tt::tt_metal::Hal* hal_;
 
-    std::unordered_map<uint32_t, tt::tt_fabric::FabricTelemetrySnapshot> cached_telemetry_;
-
+    tt::tt_fabric::FabricTelemetrySnapshot cached_telemetry_;
     std::chrono::steady_clock::time_point last_update_cycle_;
-
     mutable std::mutex telemetry_mutex_;
 };
