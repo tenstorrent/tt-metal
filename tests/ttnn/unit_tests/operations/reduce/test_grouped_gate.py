@@ -401,12 +401,12 @@ def test_grouped_gate_against_reference():
 # Format: (num_batches, batch_size, seq_len)
 GROUPED_GATE_TEST_PARAMS = [
     # Basic cases with batch_size=1
-    # (1, 1, 1),  # Minimal case
-    # (1, 1, 33),  # Just over one tile (edge case)
-    # (1, 8, 512),  # Larger sequence
-    # # Varying batch_size
-    # (7, 7, 81),  # batch_size=8 with into second face
-    # # Stress tests
+    (1, 1, 1),  # Minimal case
+    (1, 1, 33),  # Just over one tile (edge case)
+    # Varying batch_size
+    (1, 8, 512),  # Larger sequence
+    (7, 7, 81),  # batch_size=8 with into second face
+    # Stress tests
     (1, 1, 8192),
 ]
 
