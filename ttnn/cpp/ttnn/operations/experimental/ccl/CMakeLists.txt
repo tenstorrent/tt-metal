@@ -81,8 +81,8 @@ target_sources(
         all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp
         all_gather_matmul_async/all_gather_matmul_async.cpp
-        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
-        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_device_operation.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_program_factory.cpp
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
