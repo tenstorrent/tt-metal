@@ -42,8 +42,8 @@ sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
  * 2. For |x| < 0.3: Use 13-term Taylor series to avoid catastrophic cancellation
  * 3. For |x| >= 0.3: Use standard ln(1+x) computation
  *
- * The threshold of 0.3 and 13 terms were chosen through systematic optimization
- * to minimize maximum ULP error across the entire domain.
+ * The threshold of 0.3 and 13 terms work well enough to provide good accuracy
+ * across the entire domain.
  *
  * @param val The input value (sfpi::vFloat vector), can be any floating point number > -1
  * @return sfpi::vFloat Result of ln(1+val)
@@ -63,7 +63,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
         result = std::numeric_limits<float>::quiet_NaN();  // returns nan
     }
     v_elseif(val == -1.f) {
-        // Zero input -> -inf
+        // x = -1 input -> -inf
         result = -std::numeric_limits<float>::infinity();
     }
     v_else {
@@ -96,12 +96,11 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
         }
         v_else {
             // The following is the same approximation as calculate_log_f32_body from ckernel_sfpu_log.h.
-            // Ideally, we would like to call calculate_log_f32_body() directoyl.
-            // However, doing do lead to 'register spilling errors' due to interaction with the
+            // Ideally, we would like to call calculate_log_f32_body() directly.
+            // However, doing so leads to 'register spilling errors' due to interaction with the
             // polynomial evaluation near 0.
 
             // For |x| >= 0.3, use standard ln(1+x) computation
-            // Apply the same algorithm as log-claude.cpp but on (1+x)
             sfpi::vFloat one_plus_x = sfpi::vConst1 + val;
 
             // Extract exponent (debiased) from (1+x)
