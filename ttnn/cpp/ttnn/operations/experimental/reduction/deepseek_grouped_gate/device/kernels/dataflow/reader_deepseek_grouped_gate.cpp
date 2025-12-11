@@ -5,8 +5,8 @@
 #include <cstdint>
 
 void kernel_main() {
-    constexpr uint32_t scores_cb_index = get_named_compile_time_arg_val("scores_cb_index");
-    constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb_index");
+    constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
+    constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
     constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
     constexpr uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
@@ -27,13 +27,13 @@ void kernel_main() {
         uint32_t base_page = height_tile * width_tiles;
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
             uint32_t page = base_page + width_tile;
-            cb_reserve_back(scores_cb_index, 1);
-            cb_reserve_back(bias_cb_index, 1);
-            noc_async_read_page(page, scores_accessor, get_write_ptr(scores_cb_index));
-            noc_async_read_page(page, bias_accessor, get_write_ptr(bias_cb_index));
+            cb_reserve_back(cb_in_scores, 1);
+            cb_reserve_back(cb_in_bias, 1);
+            noc_async_read_page(page, scores_accessor, get_write_ptr(cb_in_scores));
+            noc_async_read_page(page, bias_accessor, get_write_ptr(cb_in_bias));
             noc_async_read_barrier();
-            cb_push_back(scores_cb_index, 1);
-            cb_push_back(bias_cb_index, 1);
+            cb_push_back(cb_in_scores, 1);
+            cb_push_back(cb_in_bias, 1);
         }
     }
 }

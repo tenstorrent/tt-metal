@@ -54,11 +54,12 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
 
     uint32_t remainder_tokens_per_tile = seq_len % tile_height == 0 ? tile_height : seq_len % tile_height;
 
-    auto scores_cb_index = tt::CBIndex::c_0;
-    auto bias_cb_index = tt::CBIndex::c_1;
-    auto weights_cb_index = tt::CBIndex::c_2;
-    auto indices_cb_index = tt::CBIndex::c_3;
-    // input/output circular buffers
+    // Input/output circular buffers
+    auto cb_in_scores = tt::CBIndex::c_0;
+    auto cb_in_bias = tt::CBIndex::c_1;
+    auto cb_out_weights = tt::CBIndex::c_2;
+    auto cb_out_indices = tt::CBIndex::c_3;
+
     auto scores_data_format = tt::tt_metal::datatype_to_dataformat_converter(scores.dtype());
     auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.dtype());
     auto weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_weights.dtype());
@@ -69,170 +70,154 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     // Bias needs width_tiles capacity because add_bias doesn't consume bias until ALL sigmoid tiles are ready,
     // but reader pushes scores+bias together - if bias CB is too small, reader blocks causing deadlock
     tt::tt_metal::create_cb(
-        scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
+        cb_in_scores, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        bias_cb_index, program, all_cores, bias.buffer()->page_size(), 2 * width_tiles, bias_data_format);
+        cb_in_bias, program, all_cores, bias.buffer()->page_size(), 2 * width_tiles, bias_data_format);
     tt::tt_metal::create_cb(
-        weights_cb_index,
+        cb_out_weights,
         program,
         all_cores,
         output_weights.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         weights_data_format);
     tt::tt_metal::create_cb(
-        indices_cb_index,
+        cb_out_indices,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         indices_data_format);
 
-    // sigmoid input + add bias block CBs
-    // Note: sigmoid_input needs width_tiles capacity since add_bias waits for all tiles at once
+    // Sigmoid output and biased scores CBs
+    // Note: cb_sigmoid_scores needs width_tiles capacity since add_bias waits for all tiles at once
     // and writer also needs all tiles. Don't double-buffer - it causes L1 memory pressure.
-    auto sigmoid_input_cb_index = tt::CBIndex::c_4;
-    auto add_bias_cb_index = tt::CBIndex::c_5;
+    auto cb_sigmoid_scores = tt::CBIndex::c_4;
+    auto cb_biased_scores = tt::CBIndex::c_5;
     tt::tt_metal::create_cb(
-        sigmoid_input_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        cb_sigmoid_scores, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        add_bias_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        cb_biased_scores, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
 
-    // topk intermediate CBs
-    // topk_input_cb is consumed one tile at a time by writer's generate_summed_experts_tiles
-    // topk_index_cb is used transiently and popped immediately in process_and_sort_tiles
-    // topk_index_creation_cb needs all width_tiles for generate_winning_group_tiles
-    auto topk_input_cb_index = tt::CBIndex::c_6;
-    auto topk_index_cb_index = tt::CBIndex::c_7;
-    auto topk_index_creation_cb_index = tt::CBIndex::c_8;
+    // Per-group sorting CBs
+    // cb_sorted_group_scores is consumed one tile at a time by writer's generate_summed_experts_tiles
+    // cb_sorted_expert_indices_temp is used transiently and popped immediately in process_and_sort_tiles
+    // cb_expert_index_template needs all width_tiles for generate_winning_group_tiles
+    auto cb_sorted_group_scores = tt::CBIndex::c_6;
+    auto cb_sorted_expert_indices_temp = tt::CBIndex::c_7;
+    auto cb_expert_index_template = tt::CBIndex::c_8;
     tt::tt_metal::create_cb(
-        topk_input_cb_index, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
+        cb_sorted_group_scores, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
     tt::tt_metal::create_cb(
-        topk_index_cb_index, program, all_cores, scores.buffer()->page_size(), 2, tt::DataFormat::UInt16);
+        cb_sorted_expert_indices_temp, program, all_cores, scores.buffer()->page_size(), 2, tt::DataFormat::UInt16);
     tt::tt_metal::create_cb(
-        topk_index_creation_cb_index,
+        cb_expert_index_template,
         program,
         all_cores,
         scores.buffer()->page_size(),
         width_tiles,
         tt::DataFormat::UInt16);
 
-    // Generated group indices, intermediate CB for (summed_experts_per_group - 1) CBs, and one for the final summed
-    // scores
+    // Group selection CBs
     uint32_t num_group_tiles = tt::div_up(operation_attributes.n_groups, 32);
-    auto group_indices_cb_index = tt::CBIndex::c_9;
-    auto group_scores_cb_index = tt::CBIndex::c_10;
-    auto summed_experts_cb_index = tt::CBIndex::c_11;
-    auto sorted_group_indices_cb_index = tt::CBIndex::c_12;
+    auto cb_group_index_template = tt::CBIndex::c_9;
+    auto cb_group_summed_scores = tt::CBIndex::c_10;
+    auto cb_top_experts_per_group = tt::CBIndex::c_11;
+    auto cb_sorted_group_order = tt::CBIndex::c_12;
     tt::tt_metal::create_cb(
-        group_indices_cb_index,
+        cb_group_index_template,
         program,
         all_cores,
         scores.buffer()->page_size(),
         num_group_tiles,
         tt::DataFormat::UInt16);
     tt::tt_metal::create_cb(
-        summed_experts_cb_index,
+        cb_top_experts_per_group,
         program,
         all_cores,
         scores.buffer()->page_size(),
         operation_attributes.summed_experts_per_group,
         scores_data_format);
     tt::tt_metal::create_cb(
-        group_scores_cb_index, program, all_cores, scores.buffer()->page_size(), num_group_tiles, scores_data_format);
+        cb_group_summed_scores, program, all_cores, scores.buffer()->page_size(), num_group_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        sorted_group_indices_cb_index,
+        cb_sorted_group_order,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
         num_group_tiles,
         tt::DataFormat::UInt16);
 
-    // Expert scores and indices in the winning groups
-    auto winning_group_scores_cb_index = tt::CBIndex::c_13;
-    auto winning_group_indices_cb_index = tt::CBIndex::c_14;
+    // Winning group processing CBs
+    auto cb_winning_group_scores = tt::CBIndex::c_13;
+    auto cb_winning_group_indices = tt::CBIndex::c_14;
     tt::tt_metal::create_cb(
-        winning_group_scores_cb_index,
+        cb_winning_group_scores,
         program,
         all_cores,
         output_weights.buffer()->page_size(),
         operation_attributes.topk_groups,
         scores_data_format);
     tt::tt_metal::create_cb(
-        winning_group_indices_cb_index,
+        cb_winning_group_indices,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
         operation_attributes.topk_groups,
         tt::DataFormat::UInt16);
 
-    // IntermediateCBs for sorting the expert scores and indices in the winning groups
-    auto intermediate_local_sort_cb_index = tt::CBIndex::c_15;
-    auto intermediate_local_sort_indices_cb_index = tt::CBIndex::c_16;
+    // Final topk intermediate CBs
+    auto cb_reduce_intermediate = tt::CBIndex::c_15;
+    auto cb_final_indices_transposed = tt::CBIndex::c_16;
     tt::tt_metal::create_cb(
-        intermediate_local_sort_cb_index,
+        cb_reduce_intermediate,
         program,
         all_cores,
         scores.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
     tt::tt_metal::create_cb(
-        intermediate_local_sort_indices_cb_index,
+        cb_final_indices_transposed,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         tt::DataFormat::UInt16);
 
-    // Pre-normalized scores in the winning groups
-    auto pre_normalized_scores_cb_index = tt::CBIndex::c_17;
+    // Normalization scalar CBs
+    auto cb_reduce_ones_scalar = tt::CBIndex::c_17;
     tt::tt_metal::create_cb(
-        pre_normalized_scores_cb_index,
-        program,
-        all_cores,
-        output_weights.buffer()->page_size(),
-        2 * n_activated_expert_tiles,
-        scores_data_format);
+        cb_reduce_ones_scalar, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
 
-    auto reduce_scalar_cb_index = tt::CBIndex::c_18;
+    auto cb_epsilon_scalar = tt::CBIndex::c_18;
+    tt::tt_metal::create_cb(cb_epsilon_scalar, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
+
+    auto cb_route_scale_scalar = tt::CBIndex::c_19;
     tt::tt_metal::create_cb(
-        reduce_scalar_cb_index, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
+        cb_route_scale_scalar, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
 
-    auto epsilon_cb_index = tt::CBIndex::c_19;
-    tt::tt_metal::create_cb(epsilon_cb_index, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
-
-    auto scales_cb_index = tt::CBIndex::c_20;
-    tt::tt_metal::create_cb(scales_cb_index, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
-
-    auto normalized_cb_index = tt::CBIndex::c_21;
+    // Normalization intermediate CBs
+    auto cb_normalized_scores = tt::CBIndex::c_20;
     tt::tt_metal::create_cb(
-        normalized_cb_index,
+        cb_normalized_scores,
         program,
         all_cores,
         scores.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
 
-    auto transpose_cb_index = tt::CBIndex::c_22;
+    auto cb_reciprocal_sums = tt::CBIndex::c_21;
     tt::tt_metal::create_cb(
-        transpose_cb_index,
+        cb_reciprocal_sums,
         program,
         all_cores,
         scores.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
 
-    auto gathered_cb_index = tt::CBIndex::c_23;
+    // Gather CB for selected expert sigmoid scores
+    auto cb_gathered_sigmoid = tt::CBIndex::c_22;
     tt::tt_metal::create_cb(
-        gathered_cb_index,
-        program,
-        all_cores,
-        scores.buffer()->page_size(),
-        2 * n_activated_expert_tiles,
-        scores_data_format);
-
-    auto post_sort_transpose_cb_index = tt::CBIndex::c_24;
-    tt::tt_metal::create_cb(
-        post_sort_transpose_cb_index,
+        cb_gathered_sigmoid,
         program,
         all_cores,
         scores.buffer()->page_size(),
@@ -241,9 +226,9 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
 
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
-        {"scores_cb_index", scores_cb_index},
-        {"bias_cb_index", bias_cb_index},
-        {"scales_cb_index", scales_cb_index},
+        {"cb_in_scores", cb_in_scores},
+        {"cb_in_bias", cb_in_bias},
+        {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"width_tiles", width_tiles},
         {"scores_page_size", scores.buffer()->page_size()},
         {"bias_page_size", bias.buffer()->page_size()},
@@ -263,24 +248,24 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
 
     // Compute kernel compile time arguments
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
-        {"scores_cb_index", scores_cb_index},
-        {"bias_cb_index", bias_cb_index},
-        {"sigmoid_input_cb_index", sigmoid_input_cb_index},
-        {"add_bias_cb_index", add_bias_cb_index},
-        {"weights_cb_index", weights_cb_index},
-        {"indices_cb_index", indices_cb_index},
-        {"group_indices_cb_index", group_indices_cb_index},
-        {"group_scores_cb_index", group_scores_cb_index},
-        {"summed_experts_cb_index", summed_experts_cb_index},
-        {"sorted_group_indices_cb_index", sorted_group_indices_cb_index},
+        {"cb_in_scores", cb_in_scores},
+        {"cb_in_bias", cb_in_bias},
+        {"cb_sigmoid_scores", cb_sigmoid_scores},
+        {"cb_biased_scores", cb_biased_scores},
+        {"cb_out_weights", cb_out_weights},
+        {"cb_out_indices", cb_out_indices},
+        {"cb_group_index_template", cb_group_index_template},
+        {"cb_group_summed_scores", cb_group_summed_scores},
+        {"cb_top_experts_per_group", cb_top_experts_per_group},
+        {"cb_sorted_group_order", cb_sorted_group_order},
         {"width_tiles", width_tiles},
         {"scores_page_size", scores.buffer()->page_size()},
         {"bias_page_size", bias.buffer()->page_size()},
         {"weights_page_size", output_weights.buffer()->page_size()},
         {"indices_page_size", output_indices.buffer()->page_size()},
-        {"topk_input_cb_index", topk_input_cb_index},
-        {"topk_index_cb_index", topk_index_cb_index},
-        {"topk_index_creation_cb_index", topk_index_creation_cb_index},
+        {"cb_sorted_group_scores", cb_sorted_group_scores},
+        {"cb_sorted_expert_indices_temp", cb_sorted_expert_indices_temp},
+        {"cb_expert_index_template", cb_expert_index_template},
         {"group_size", experts / operation_attributes.n_groups},
         {"log_group_size", std::log2(experts / operation_attributes.n_groups)},
         {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
@@ -288,22 +273,20 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         {"n_groups", operation_attributes.n_groups},
         {"log_topk_groups", std::log2(operation_attributes.topk_groups)},
         {"log_n_groups", std::log2(operation_attributes.n_groups)},
-        {"winning_group_scores_cb_index", winning_group_scores_cb_index},
-        {"winning_group_indices_cb_index", winning_group_indices_cb_index},
+        {"cb_winning_group_scores", cb_winning_group_scores},
+        {"cb_winning_group_indices", cb_winning_group_indices},
         {"num_group_tiles", num_group_tiles},
         {"n_activated_experts", operation_attributes.n_activated_experts},
         {"n_activated_expert_tiles", n_activated_expert_tiles},
         {"log_n_activated_experts", std::log2(operation_attributes.n_activated_experts)},
-        {"intermediate_local_sort_cb_index", intermediate_local_sort_cb_index},
-        {"intermediate_local_sort_indices_cb_index", intermediate_local_sort_indices_cb_index},
-        {"pre_normalized_scores_cb_index", pre_normalized_scores_cb_index},
-        {"reduce_scalar_cb_index", reduce_scalar_cb_index},
-        {"epsilon_cb_index", epsilon_cb_index},
-        {"scales_cb_index", scales_cb_index},
-        {"normalized_cb_index", normalized_cb_index},
-        {"transpose_cb_index", transpose_cb_index},
-        {"gathered_cb_index", gathered_cb_index},
-        {"post_sort_transpose_cb_index", post_sort_transpose_cb_index},
+        {"cb_reduce_intermediate", cb_reduce_intermediate},
+        {"cb_final_indices_transposed", cb_final_indices_transposed},
+        {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
+        {"cb_epsilon_scalar", cb_epsilon_scalar},
+        {"cb_route_scale_scalar", cb_route_scale_scalar},
+        {"cb_normalized_scores", cb_normalized_scores},
+        {"cb_reciprocal_sums", cb_reciprocal_sums},
+        {"cb_gathered_sigmoid", cb_gathered_sigmoid},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -325,13 +308,13 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
 
     // Writer kernel compile time arguments
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
-        {"weights_cb_index", weights_cb_index},
-        {"indices_cb_index", indices_cb_index},
-        {"topk_index_creation_cb_index", topk_index_creation_cb_index},
-        {"group_indices_cb_index", group_indices_cb_index},
-        {"summed_experts_cb_index", summed_experts_cb_index},
-        {"gathered_cb_index", gathered_cb_index},
-        {"topk_input_cb_index", topk_input_cb_index},
+        {"cb_out_weights", cb_out_weights},
+        {"cb_out_indices", cb_out_indices},
+        {"cb_expert_index_template", cb_expert_index_template},
+        {"cb_group_index_template", cb_group_index_template},
+        {"cb_top_experts_per_group", cb_top_experts_per_group},
+        {"cb_gathered_sigmoid", cb_gathered_sigmoid},
+        {"cb_sorted_group_scores", cb_sorted_group_scores},
         {"weights_page_size", output_weights.buffer()->page_size()},
         {"indices_page_size", output_indices.buffer()->page_size()},
         {"experts", experts},
@@ -342,22 +325,22 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         {"topk_groups", operation_attributes.topk_groups},
         {"n_groups", operation_attributes.n_groups},
         {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
-        {"winning_group_scores_cb_index", winning_group_scores_cb_index},
-        {"winning_group_indices_cb_index", winning_group_indices_cb_index},
+        {"cb_winning_group_scores", cb_winning_group_scores},
+        {"cb_winning_group_indices", cb_winning_group_indices},
         {"num_group_tiles", num_group_tiles},
-        {"sorted_group_indices_cb_index", sorted_group_indices_cb_index},
-        {"scores_cb_index", scores_cb_index},
-        {"sigmoid_input_cb_index", sigmoid_input_cb_index},
-        {"add_bias_cb_index", add_bias_cb_index},
-        {"reduce_scalar_cb_index", reduce_scalar_cb_index},
+        {"cb_sorted_group_order", cb_sorted_group_order},
+        {"cb_in_scores", cb_in_scores},
+        {"cb_sigmoid_scores", cb_sigmoid_scores},
+        {"cb_biased_scores", cb_biased_scores},
+        {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
         {"n_activated_experts", operation_attributes.n_activated_experts},
         {"packed_one_scalar", static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(1.0f))) << 16},
         {"packed_epsilon",
          static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.epsilon))) << 16},
         {"packed_route_scale",
          static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.route_scale))) << 16},
-        {"epsilon_cb_index", epsilon_cb_index},
-        {"scales_cb_index", scales_cb_index},
+        {"cb_epsilon_scalar", cb_epsilon_scalar},
+        {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},
         {"remainder_tokens_per_tile", remainder_tokens_per_tile},
         {"n_activated_expert_tiles", n_activated_expert_tiles},

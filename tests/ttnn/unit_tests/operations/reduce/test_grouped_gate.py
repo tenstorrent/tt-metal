@@ -324,10 +324,6 @@ def grouped_gate_golden(
 
     # then add bias (used for selection only)
     biased_scores = scores + bias
-    # index3 = 3
-    # logger.info(f"group 3 scores: {biased_scores[:, :, :, index3*32:(index3+1)*32]}")
-    # index6 = 6
-    # logger.info(f"group 6 scores: {biased_scores[:, :, :, index6*32:(index6+1)*32]}")
 
     # then reshape based on number of groups
     grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
