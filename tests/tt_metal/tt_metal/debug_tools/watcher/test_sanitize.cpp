@@ -396,7 +396,7 @@ void RunTestOnCore(
                 virtual_core.y,
                 risc_name,
                 l1_overflow_addr,
-                1);
+                sizeof(std::uint32_t));
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
