@@ -53,6 +53,7 @@ target_sources(
         builder/fabric_router_recipe.cpp
         builder/channel_to_pool_mapping.cpp
         builder/multi_pool_channel_allocator.cpp
+        builder/connection_registry.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
