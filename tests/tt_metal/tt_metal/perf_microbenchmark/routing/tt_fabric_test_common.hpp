@@ -1884,7 +1884,7 @@ private:
     }
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
-        if (topology_ == Topology::Ring || topology_ == Topology::Torus) {
+        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
             auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
             switch (fabric_type) {
                 case tt::tt_fabric::FabricType::TORUS_X:
