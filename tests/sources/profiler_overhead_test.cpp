@@ -4,10 +4,6 @@
 
 #include <cstdint>
 
-// Globals
-uint32_t unp_cfg_context        = 0;
-uint32_t pack_sync_tile_dst_ptr = 0;
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "profiler.h"
@@ -38,24 +34,6 @@ void run_kernel()
             asm volatile goto("bgtu %0, zero, %l1" : : "r"(cnt) : : loop);
         }
     }
-}
-
-#endif
-
-#ifdef LLK_TRISC_MATH
-
-void run_kernel()
-{
-    // Only unpack kernel is measuring profiler overhead
-}
-
-#endif
-
-#ifdef LLK_TRISC_PACK
-
-void run_kernel()
-{
-    // Only unpack kernel is measuring profiler overhead
 }
 
 #endif
