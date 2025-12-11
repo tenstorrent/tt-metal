@@ -441,7 +441,7 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            cluster_axis = 0 if self.args.is_galaxy else None
+            cluster_axis = None  # 0 if self.args.is_galaxy else None # PP Warning: Broken on Galaxy in data_parallel!
             num_links = 2 if self.args.is_galaxy else 1
             tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,

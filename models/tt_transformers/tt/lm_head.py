@@ -71,7 +71,10 @@ class LMHead(LightweightModule):
             memory_config = (
                 ttnn.DRAM_MEMORY_CONFIG
                 if args.dim == 2048
-                else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
+                else args.create_dram_sharded_mem_config(
+                    k=args.dim // args.cluster_shape[1],
+                    n=self.padded_vocab_size // args.cluster_shape[0],
+                )
             )
             self.output_weights.append(  # (2k, 16k) 128* 1024
                 ttnn.as_tensor(
@@ -129,7 +132,7 @@ class LMHead(LightweightModule):
                     if args.dim == 2048
                     else args.dram_matmul_config(
                         args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
-                        args.dim // 4,
+                        args.dim // args.cluster_shape[1],
                         16 * 1024,
                         args.lm_head_core_grid.num_cores,
                     )
@@ -173,7 +176,9 @@ class LMHead(LightweightModule):
             output,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=0 if self.args.is_galaxy else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
+            cluster_axis=0
+            if self.args.is_galaxy
+            else 1,  # PP Warning: 1 will skip on mesh_device[1, X] (T3K, N300 or Galaxy in DP=4)!
             dim=3 if self.args.is_galaxy else 0,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,

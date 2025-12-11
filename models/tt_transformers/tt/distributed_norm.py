@@ -47,7 +47,7 @@ class DistributedNorm(LightweightModule):
 
     def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
-        if self.TG:
+        if False:  # self.TG: PP Warning: Broken on Galaxy, data_parallel!
             if mode == "decode":
                 return tt_sharded_distributed_rmsnorm(
                     x,
@@ -77,6 +77,7 @@ class DistributedNorm(LightweightModule):
                 x,
                 dim=3,
                 num_links=1,
+                cluster_axis=None,
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
             )
@@ -91,6 +92,7 @@ class DistributedNorm(LightweightModule):
                 x,
                 dim=3,
                 num_links=1,
+                cluster_axis=None,
                 topology=self.args.ccl_topology(),
                 memory_config=x.memory_config(),
             )

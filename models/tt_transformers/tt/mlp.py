@@ -93,7 +93,7 @@ class MLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        TG = self.args.is_galaxy
+        TG = False  # self.args.is_galaxy # PP Warning: Broken on Galaxy in data_parallel!
         layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION

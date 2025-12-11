@@ -32,7 +32,7 @@ class Attention(LightweightModule):
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
-        self.TG = self.num_devices == 32
+        self.TG = False  # configuration.is_galaxy # PP Warning: Broken on Galaxy in data_parallel!
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -415,7 +415,9 @@ class Attention(LightweightModule):
             xqkv_fused_sharded,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=0 if self.TG else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
+            cluster_axis=0
+            if self.TG
+            else 1,  # PP Warning: 1 will skip on mesh_device[1, X] (T3K, N300 or Galaxy in DP=4)!
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
@@ -597,7 +599,9 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 dim=2,
-                cluster_axis=0 if self.TG else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
+                cluster_axis=0
+                if self.TG
+                else 1,  # PP Warning: 1 will skip on mesh_device[1, X] (T3K, N300 or Galaxy in DP=4)!
                 num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
@@ -698,7 +702,9 @@ class Attention(LightweightModule):
             xqkv_fused,
             self.mesh_device,
             self.tt_ccl,
-            cluster_axis=0 if self.TG else 1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
+            cluster_axis=0
+            if self.TG
+            else 1,  # PP Warning: 1 will skip on mesh_device[1, X] (T3K, N300 or Galaxy in DP=4)!
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

@@ -465,10 +465,11 @@ class ModelArgs:
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.is_galaxy = ttnn.cluster.get_cluster_type() in [
-            ttnn.cluster.ClusterType.GALAXY,
-            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
-        ]
+        self.is_galaxy = False
+        # ttnn.cluster.get_cluster_type() in [
+        #    ttnn.cluster.ClusterType.GALAXY,
+        #    ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        # ]
 
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -846,7 +847,7 @@ class ModelArgs:
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
-            if self.num_devices == 32:
+            if self.is_galaxy:
                 lm_head_num_rows = 4
                 while self.dim % (32 * 32 * lm_head_num_rows) != 0:
                     lm_head_num_rows -= 1

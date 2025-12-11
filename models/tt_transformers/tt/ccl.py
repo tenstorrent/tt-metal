@@ -75,7 +75,7 @@ def tt_all_reduce(
     dim=0,
     num_reduce_scatter_links=1,
     num_all_gather_links=2,
-    topology=ttnn.Topology.Linear,
+    topology=ttnn.Topology.Ring,
     memory_config=None,
     sharded=False,
     dtype=ttnn.bfloat16,
@@ -179,7 +179,7 @@ def tt_all_gather(
     num_links=2,
     memory_config=None,
     sharded=False,
-    topology=ttnn.Topology.Linear,
+    topology=ttnn.Topology.Ring,
     dtype=ttnn.bfloat16,
 ):
     # N150
@@ -214,23 +214,22 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_ker
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
     padded_shape = (1, 1, inp.shape[-2], 32)
     tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape))  # TODO: Figure out why we need this
-    tt_stats_gathered = tt_all_gather(
+    tt_stats = tt_all_gather(
         tt_stats,
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
+        cluster_axis=1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
         dim=3,
-        num_links=1,
+        num_links=4,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tt_stats.deallocate(True)
-
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
-        inp, tt_stats_gathered, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
+        inp, tt_stats, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
     )
 
-    tt_stats_gathered.deallocate(True)
+    tt_stats.deallocate(True)
     # inp.deallocate(True)
 
     return tt_out
@@ -245,12 +244,11 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
-    cluster_axis = 0
     tt_stats = ttnn.all_gather(
         tt_stats,
         dim=3,
-        num_links=1,
-        cluster_axis=cluster_axis,
+        num_links=4,
+        cluster_axis=1,  # Warning: Skipping on mesh_device[1, X] (T3K, N300)!
         topology=ttnn.Topology.Ring,
         memory_config=ln_sharded_stats_memcfg,
     )
