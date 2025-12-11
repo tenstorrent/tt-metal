@@ -7,7 +7,7 @@
 #include "tt-metalium/core_coord.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-namespace ttnn::operations::matmul::config {
+namespace ttnn::operations::matmul {
 
 // TODO: Uplift this to support fused activation and bias
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
@@ -69,4 +69,4 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>;
 
-}  // namespace ttnn::operations::matmul::config
+}  // namespace ttnn::operations::matmul

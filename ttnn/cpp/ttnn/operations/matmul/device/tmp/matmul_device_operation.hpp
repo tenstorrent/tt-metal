@@ -54,7 +54,7 @@ struct MatmulDeviceOperation {
         const Tensor& input_tensor_b,
         const std::optional<Tensor>& bias = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<ttnn::operations::matmul::config::MatmulProgramConfig>& program_config = std::nullopt,
+        const std::optional<ttnn::operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<bool>& bcast_batch = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<DataType>& output_dtype = std::nullopt,

@@ -11,21 +11,21 @@ namespace ttnn::operations::matmul::program {
 
 struct MatmulMultiCoreReuseMcast2DProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle mm_kernel_in0_sender_id;
+        tt::tt_metal::KernelHandle mm_kernel_in0_sender_id{};
         std::vector<CoreCoord> in0_sender_interleaved_cores;
-        tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id;
+        tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id{};
         std::vector<CoreCoord> in1_sender_cores;
-        tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id;
+        tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id{};
         std::vector<CoreCoord> in1_receiver_cores;
-        tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id;
+        tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id{};
         std::vector<CoreCoord> in1_receiver_other_cores;
-        tt::tt_metal::CBHandle cb_src2;
-        tt::tt_metal::CBHandle cb_output;
-        uint32_t num_cores_with_work_r;
-        uint32_t num_cores_with_work_c;
-        uint32_t start_core_x;
-        uint32_t start_core_y;
-        bool transpose_mcast;
+        tt::tt_metal::CBHandle cb_src2{};
+        tt::tt_metal::CBHandle cb_output{};
+        uint32_t num_cores_with_work_r{};
+        uint32_t num_cores_with_work_c{};
+        uint32_t start_core_x{};
+        uint32_t start_core_y{};
+        bool transpose_mcast{};
         std::vector<CoreCoord> cores;
     };
 

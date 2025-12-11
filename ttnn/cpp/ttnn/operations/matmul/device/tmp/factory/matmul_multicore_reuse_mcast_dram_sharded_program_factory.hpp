@@ -13,8 +13,8 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
         std::vector<CoreCoord> all_worker_cores_ordered;
-        tt::tt_metal::CBHandle cb_src2;
-        tt::tt_metal::CBHandle cb_output_reshard;
+        tt::tt_metal::CBHandle cb_src2{};
+        tt::tt_metal::CBHandle cb_output_reshard{};
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

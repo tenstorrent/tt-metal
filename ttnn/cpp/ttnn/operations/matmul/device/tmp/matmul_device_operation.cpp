@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/tmp/config/matmul_program_config.hpp"
-
+#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/unreachable.hpp"
 
@@ -24,59 +24,6 @@ void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
             shard_grid,
             range);
     }
-}
-
-ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    const auto& input_shape_a = input_tensor_a.logical_shape();
-    const auto& input_shape_b = input_tensor_b.logical_shape();
-
-    const auto a_rank = input_shape_a.rank();
-    const auto b_rank = input_shape_b.rank();
-
-    // Rank difference will be used to align batch dimensions
-    const int32_t out_rank = std::max<int32_t>(a_rank, b_rank) - (a_rank == 1 || b_rank == 1);
-    const int32_t rank_difference = std::max<int32_t>(0, out_rank - a_rank);
-
-    // Initialize output shape based on the tensor with higher rank
-    ttnn::Shape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
-
-    // Handle batch dimensions for the case where b_rank > a_rank
-    for (auto index = 0; index < rank_difference; ++index) {
-        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
-        output_shape[index] = input_shape_b[index];
-    }
-
-    // Copy dimensions from input_shape_a except the last one
-    for (auto index = 0; index < a_rank - 1; ++index) {
-        output_shape[rank_difference + index] = input_shape_a[index];
-    }
-
-    // The last dimension comes from input_tensor_b
-    output_shape[-1] = input_shape_b[-1];
-
-    // Handle the vector matmul case: if a_rank == 1, remove the second-to-last dimension
-    if (a_rank == 1 && output_shape.rank() > 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
-        // Copy all elements except the second-to-last dimension
-        size_t dst_idx = 0;
-        for (size_t src_idx = 0; src_idx < output_shape.rank(); ++src_idx) {
-            if (src_idx != output_shape.rank() - 2) {
-                new_shape[dst_idx++] = output_shape[src_idx];
-            }
-        }
-        output_shape = ttnn::Shape(new_shape);
-    }
-
-    // Handle the case where b_rank == 1, remove the last dimension
-    if (b_rank == 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
-        for (auto index = 0; index < output_shape.rank() - 1; ++index) {
-            new_shape[index] = output_shape[index];
-        }
-        output_shape = ttnn::Shape(new_shape);
-    }
-
-    return output_shape;
 }
 
 bool get_broadcast_batch(
@@ -1014,7 +961,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     const auto& input_tensor_b = input_tensors.at(1);
 
     // Use the compute_matmul_output_shape function to get the output shape
-    const auto output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+    const auto output_shape = utilities::compute_matmul_output_shape(input_tensor_a, input_tensor_b);
 
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
@@ -1256,7 +1203,7 @@ MatmulDeviceOperation::invoke(
     const Tensor& input_tensor_b,
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<ttnn::operations::matmul::config::MatmulProgramConfig>& program_config,
+    const std::optional<ttnn::operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<bool>& bcast_batch,
     const std::optional<const MemoryConfig>& optional_memory_config,
     const std::optional<DataType>& output_dtype,

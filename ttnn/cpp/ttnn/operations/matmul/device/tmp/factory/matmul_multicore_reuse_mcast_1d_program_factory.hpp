@@ -8,21 +8,16 @@
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-// TODO [migration]: Remove `using` aliases and the `tmp` namespace after migrating all dependent ops from the old
-// infra. Once complete, the old infra code can be deleted. #33531
-
-using namespace ttnn::operations::matmul::tmp;
-
 namespace ttnn::operations::matmul::program {
 
 struct matmul_mcast_1d_common_override_variables_t {
     std::vector<tt::tt_metal::KernelHandle> kernels;
     std::vector<tt::tt_metal::CBHandle> cbs;
-    bool extract_shard_sub_blocks;
+    bool extract_shard_sub_blocks{};
     CoreCoord start_core;
     std::vector<CoreCoord> cores;
-    uint32_t num_cores_with_work;
-    Matmul1DType type;
+    uint32_t num_cores_with_work{};
+    Matmul1DType type{};
 };
 
 struct MatmulMultiCoreReuseMcast1DProgramFactory {
