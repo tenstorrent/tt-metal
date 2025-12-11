@@ -50,8 +50,8 @@ struct MeshDeviceData {
 };
 
 struct MeshWorkloadRuntimeIdEntry {
-    uint64_t workload_id;
-    uint64_t runtime_id;
+    uint64_t workload_id = 0;
+    uint64_t runtime_id = 0;
 };
 
 struct MeshWorkloadData {
