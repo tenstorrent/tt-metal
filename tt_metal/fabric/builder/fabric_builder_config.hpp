@@ -64,7 +64,8 @@ static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
-static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms_1d, num_downstream_edms_2d);
+// Reserve space for all possible sender channels (8) for future expansion
+static constexpr std::size_t max_downstream_edms = 8;
 
 uint32_t get_sender_channel_count(bool is_2D_routing);
 

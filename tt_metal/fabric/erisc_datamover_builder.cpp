@@ -975,12 +975,17 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0 && !isInterMesh;
     uint32_t num_vcs = needs_vc1 ? 2 : 1;
 
+    // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
+    uint32_t num_vc1_downstream_edms =
+        (needs_vc1 && is_2D_routing) ? builder_config::get_vc1_downstream_edm_count(is_2D_routing) : 0;
+
     const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
         num_receiver_channels,
         config.num_fwd_paths,
         num_vc0_downstream_edms,
-        num_vcs,  // NUM_VCS: 2 if VC1 runtime args are passed, 1 otherwise
+        num_vc1_downstream_edms,  // NUM_DOWNSTREAM_SENDERS_VC1: number of VC1 downstream senders
+        num_vcs,                  // NUM_VCS: 2 if VC1 runtime args are passed, 1 otherwise
         this->wait_for_host_signal ? 1 : 0,
 
         this->firmware_context_switch_interval,
@@ -1336,6 +1341,17 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                 config.receiver_channels_downstream_flow_control_semaphore_address[i];
             receiver_channels_downstream_teardown_semaphore_id[i] =
                 config.receiver_channels_downstream_teardown_semaphore_address[i];
+        }
+
+        // Setup VC1 downstream edm semaphore settings (only for 2D routing)
+        if (is_2D_routing) {
+            uint32_t num_vc1_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+            for (uint32_t i = 0; i < num_vc1_downstream_edms; i++) {
+                receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms + i] =
+                    config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms + i];
+                receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms + i] =
+                    config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms + i];
+            }
         }
 
         uint32_t num_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);

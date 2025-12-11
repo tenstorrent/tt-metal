@@ -216,11 +216,21 @@ void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(ComputeMesh
         connect_vc(0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
     } else if (vc == 1) {
         // VC1 is only needed for 2D routing AND if the data mover is NOT an inter-mesh router
-        TT_FATAL(is_2D_routing, "VC1 connections are only supported for 2D routing. Got vc: {}", vc);
+        if (!is_2D_routing) {
+            log_debug(tt::LogFabric, "VC1 not needed (1D routing), skipping VC1 connection setup");
+            return;
+        }
 
         // VC1 connections are only made for intra-mesh routers (not inter-mesh routers)
         if (erisc_builder_->isInterMesh) {
             log_debug(tt::LogFabric, "VC1 not needed (inter-mesh router), skipping VC1 connection setup");
+            return;
+        }
+
+        // VC1 connections should not be made to downstream inter-mesh EDMs (they don't support VC1)
+        if (other.erisc_builder_->isInterMesh) {
+            log_info(
+                tt::LogFabric, "VC1 not needed (downstream EDM is inter-mesh router), skipping VC1 connection setup");
             return;
         }
 
@@ -463,6 +473,11 @@ void ComputeMeshRouterBuilder::configure_connection(
     // Establish bidirectional VC0 connections
     this->connect_to_downstream_router_over_noc(peer_compute, 0);
     peer_compute.connect_to_downstream_router_over_noc(*this, 0);
+
+    // Establish bidirectional VC1 connections if needed
+    // connect_to_downstream_router_over_noc() will check if VC1 is needed and skip if not
+    this->connect_to_downstream_router_over_noc(peer_compute, 1);
+    peer_compute.connect_to_downstream_router_over_noc(*this, 1);
 
     // Configure NOC VC based on link index (must be same for both routers)
     auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);

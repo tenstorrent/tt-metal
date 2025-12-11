@@ -370,6 +370,27 @@ constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32
         return sender_channel_free_slots_stream_ids[(1 + my_direction)];
     }
 }
+
+// VC1 downstream sender channel mapping (for inter-mesh routing)
+// Compact indices 0, 1, 2 map to sender channels 4, 5, 6 (VC1 channels)
+// Direction rules are identical to VC0, but offset by 3 to skip VC0's channels 1-3
+//
+// VC1 sender channel mapping:
+//   [4] → VC1 channel 0 (compact index varies by direction)
+//   [5] → VC1 channel 1 (compact index varies by direction)
+//   [6] → VC1 channel 2 (compact index varies by direction)
+constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id(uint32_t compact_index) {
+    auto ds_edm_direction = edm_index_to_edm_direction[my_direction][compact_index];
+    if (my_direction > ds_edm_direction) {
+        // downstream sender channel = 3 + my_direction (maps to channels 4-6)
+        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
+        return sender_channel_free_slots_stream_ids[3 + my_direction];
+    } else {
+        // downstream sender channel = 4 + my_direction (maps to channels 4-6)
+        // stream id = sender_channel_free_slots_stream_ids[downstream sender channel]
+        return sender_channel_free_slots_stream_ids[4 + my_direction];
+    }
+}
 #endif
 
 FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t compact_index) {
@@ -431,6 +452,12 @@ static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_
     vc_0_free_slots_from_downstream_edge_1_stream_id,
     vc_0_free_slots_from_downstream_edge_2_stream_id,
     vc_0_free_slots_from_downstream_edge_3_stream_id,
+    0};
+
+static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_1_free_slots_stream_ids = {
+    vc_1_free_slots_from_downstream_edge_1_stream_id,
+    vc_1_free_slots_from_downstream_edge_2_stream_id,
+    vc_1_free_slots_from_downstream_edge_3_stream_id,
     0};
 
 enum PacketLocalForwardType : uint8_t {
@@ -2040,6 +2067,24 @@ void
             local_sender_connection_info_addresses,
             local_sender_channel_worker_interfaces);
     }
+    if constexpr (NUM_SENDER_CHANNELS > 4) {
+        init_sender_channel_worker_interface<4, NUM_SENDER_CHANNELS>(
+            local_sender_connection_live_semaphore_addresses,
+            local_sender_connection_info_addresses,
+            local_sender_channel_worker_interfaces);
+    }
+    if constexpr (NUM_SENDER_CHANNELS > 5) {
+        init_sender_channel_worker_interface<5, NUM_SENDER_CHANNELS>(
+            local_sender_connection_live_semaphore_addresses,
+            local_sender_connection_info_addresses,
+            local_sender_channel_worker_interfaces);
+    }
+    if constexpr (NUM_SENDER_CHANNELS > 6) {
+        init_sender_channel_worker_interface<6, NUM_SENDER_CHANNELS>(
+            local_sender_connection_live_semaphore_addresses,
+            local_sender_connection_info_addresses,
+            local_sender_channel_worker_interfaces);
+    }
 #endif
 }
 
@@ -2267,29 +2312,29 @@ void kernel_main() {
 #endif
 
 #if defined(FABRIC_2D)
-    uint32_t has_downstream_edm_vc1_buffer_connection;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_buffer_base_addresses;
+    uint32_t has_downstream_edm_vc1_buffer_connection = 0;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_buffer_base_addresses;
     uint32_t downstream_edm_vc1_noc_x;
     uint32_t downstream_edm_vc1_noc_y;
 
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_worker_registration_ids;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_worker_location_info_addresses;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc1_buffer_index_semaphore_addresses;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_worker_registration_ids;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_worker_location_info_addresses;
+    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC1> downstream_edm_vc1_buffer_index_semaphore_addresses;
 
     if constexpr (NUM_VCS == 2) {
         has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC1; i++) {
             downstream_edm_vc1_buffer_base_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
         }
         downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
         downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
-        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC1; i++) {
             downstream_edm_vc1_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
         }
-        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC1; i++) {
             downstream_edm_vc1_worker_location_info_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
         }
-        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
+        for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC1; i++) {
             downstream_edm_vc1_buffer_index_semaphore_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
         }
     }
@@ -2297,6 +2342,7 @@ void kernel_main() {
     // unused - to be deleted
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
+    const auto downstream_vc1_noc_interface_buffer_index_local_addr = 0;
 
     // Read MAX_NUM_SENDER_CHANNELS teardown semaphores (host packs builder_config::num_max_sender_channels = 8)
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
@@ -2561,6 +2607,54 @@ void kernel_main() {
         }
     }
 
+#if defined(FABRIC_2D)
+    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>, NUM_DOWNSTREAM_SENDERS_VC1>
+        downstream_edm_noc_interfaces_vc1;
+    if constexpr (NUM_VCS == 2) {
+        if (has_downstream_edm_vc1_buffer_connection) {
+            uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0x7;  // 3-bit mask
+            uint32_t compact_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    const auto teardown_sem_address =
+                        local_sem_for_teardown_from_downstream_edm[compact_index + NUM_DOWNSTREAM_SENDERS_VC0];
+                    // reset the handshake addresses to 0 (this is for router -> router handshake for connections over
+                    // noc)
+                    *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
+                    auto receiver_channel_free_slots_stream_id = StreamId{vc_1_free_slots_stream_ids[compact_index]};
+                    new (&downstream_edm_noc_interfaces_vc1[compact_index])
+                        RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                            is_persistent_fabric,
+                            (downstream_edm_vc1_noc_x >> (compact_index * 8)) & 0xFF,
+                            (downstream_edm_vc1_noc_y >> (compact_index * 8)) & 0xFF,
+                            downstream_edm_vc1_buffer_base_addresses[compact_index],
+                            DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                            downstream_edm_vc1_worker_registration_ids[compact_index],
+                            downstream_edm_vc1_worker_location_info_addresses[compact_index],
+                            channel_buffer_size,
+                            downstream_edm_vc1_buffer_index_semaphore_addresses[compact_index],
+                            0,
+                            reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
+                            downstream_vc1_noc_interface_buffer_index_local_addr,
+                            get_vc1_downstream_sender_channel_free_slots_stream_id(compact_index),
+                            receiver_channel_free_slots_stream_id,
+                            receiver_channel_forwarding_data_cmd_buf_ids[1],
+                            receiver_channel_forwarding_sync_cmd_buf_ids[1]);
+                    // Only receiver channel servicing cores should be setting up the noc cmd buf.
+                    if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
+                        downstream_edm_noc_interfaces_vc1[compact_index]
+                            .template setup_edm_noc_cmd_buf<
+                                tt::tt_fabric::edm_to_downstream_noc,
+                                tt::tt_fabric::forward_and_local_write_noc_vc>();
+                    }
+                }
+                compact_index++;
+                has_downstream_edm >>= 1;
+            }
+        }
+    }
+#endif
+
     // Setup local tensix relay connection (UDM mode only)
     // This is a separate connection path from downstream EDM connections
     // Relay handles forwarding packets to local chip workers
@@ -2717,22 +2811,32 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
-        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0x7;  // 3-bit mask
-        uint32_t edm_index = 0;
-        if constexpr (is_receiver_channel_serviced[0]) {
-            while (has_downstream_edm) {
-                if (has_downstream_edm & 0x1) {
-                    // open connections with available downstream edms
-                    downstream_edm_noc_interfaces_vc0[edm_index]
-                        .template open<
-                            false,
-                            use_posted_writes_for_connection_open,
-                            tt::tt_fabric::worker_handshake_noc>();
+        // Helper function to open downstream EDM connections, works for both VC0 and VC1
+        auto open_downstream_edm_connections =
+            [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm, int receiver_channel_idx) {
+                uint32_t edm_index = 0;
+                if (is_receiver_channel_serviced[receiver_channel_idx]) {
+                    while (has_downstream_edm) {
+                        if (has_downstream_edm & 0x1) {
+                            // open connections with available downstream edms
+                            downstream_edm_noc_interfaces[edm_index]
+                                .template open<
+                                    false,
+                                    use_posted_writes_for_connection_open,
+                                    tt::tt_fabric::worker_handshake_noc>();
+                        }
+                        edm_index++;
+                        has_downstream_edm >>= 1;
+                    }
                 }
-                edm_index++;
-                has_downstream_edm >>= 1;
-            }
-        }
+            };
+
+        open_downstream_edm_connections(
+            downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0x7, 0);
+#if defined(FABRIC_2D)
+        open_downstream_edm_connections(
+            downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0x7, 1);
+#endif
         if constexpr (udm_mode) {
             if (has_local_tensix_relay_connection) {
                 // open connection here to relay kernel
@@ -2777,6 +2881,28 @@ void kernel_main() {
             }
         }
     }
+#if defined(FABRIC_2D)
+    if constexpr (is_receiver_channel_serviced[1] and NUM_ACTIVE_ERISCS > 1) {
+        // Two erisc mode requires us to reorder the cmd buf programming/state setting
+        // because we need to reshuffle some of our cmd_buf/noc assignments around for
+        // just the fabric bringup phase. These calls are also located earlier for the
+        // single erisc mode
+        if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
+            uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0x7;  // 3-bit mask
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    downstream_edm_noc_interfaces_vc1[edm_index]
+                        .template setup_edm_noc_cmd_buf<
+                            tt::tt_fabric::edm_to_downstream_noc,
+                            tt::tt_fabric::forward_and_local_write_noc_vc>();
+                }
+                edm_index++;
+                has_downstream_edm >>= 1;
+            }
+        }
+    }
+#endif
     std::array<uint8_t, num_eth_ports> port_direction_table;
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {

@@ -63,19 +63,22 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
         return;
     }
 
-    // VC2: [0-2] for 2D, [0-3] for 2D+Z
-    // For now, we'll map to erisc/tensix builder channels
-    // The exact mapping depends on intermesh implementation details
-    // This is a placeholder - actual implementation may vary
-    uint32_t num_vc1_channels = 3;  // Default for 2D, could be 4 for 2D+Z
+    // VC1: [0-2] for 2D (inter-mesh channels)
+    // VC1 channels map to absolute sender channel indices 4-6
+    // The internal_sender_channel_id is VC-relative (0-2), which will be translated to absolute indices (4-6)
+    // in build_connection_to_fabric_channel()
+    uint32_t num_vc1_channels = 3;  // VC1 has 3 sender channels for 2D routing
 
     for (uint32_t i = 0; i < num_vc1_channels; ++i) {
-        // Map to erisc builder for now - tensix mapping would be added if needed
-        sender_channel_map_[LogicalSenderChannelKey{2, i}] =
-            InternalSenderChannelMapping{BuilderType::ERISC, i};  // VC2 is externally-facing (intermesh)
+        // Map to ERISC builder (VC1 is always ERISC, not TENSIX)
+        // internal_sender_channel_id is VC-relative (0-2), will be translated to absolute (4-6) later
+        sender_channel_map_[LogicalSenderChannelKey{1, i}] = InternalSenderChannelMapping{BuilderType::ERISC, i};
 
-        receiver_channel_map_[LogicalReceiverChannelKey{2, i}] =
-            InternalReceiverChannelMapping{BuilderType::ERISC, i};
+        // VC1 receiver channel (only one receiver channel per VC)
+        if (i == 0) {
+            receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
+                InternalReceiverChannelMapping{BuilderType::ERISC, 0};
+        }
     }
 }
 
