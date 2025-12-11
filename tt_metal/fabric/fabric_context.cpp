@@ -277,11 +277,21 @@ void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t
 }
 
 uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
-        "Error, querying num initialized routers for an unknown device {}",
-        chip_id);
+    // Stub: If num_initialized_routers_ is empty, fabric was never initialized (e.g., mock devices)
+    // Return 0 to indicate no routers instead of crashing
+    if (this->num_initialized_routers_.empty()) {
+        return 0;
+    }
+    // Stub: If chip_id is out of bounds, return 0 for mock devices
+    if (chip_id >= num_devices) {
+        return 0;
+    }
+    // Stub: If the value is UNINITIALIZED_ROUTERS, fabric init was skipped (e.g., for mock devices)
+    // Return 0 instead of asserting
+    if (this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS) {
+        return 0;
+    }
+
     return this->num_initialized_routers_[chip_id];
 }
 

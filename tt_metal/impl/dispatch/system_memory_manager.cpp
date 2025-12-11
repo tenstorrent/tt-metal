@@ -32,6 +32,11 @@ namespace tt::tt_metal {
 
 namespace {
 
+// Helper to check if running on mock device
+inline bool is_mock_device() {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+}
+
 bool wrap_ge(uint32_t a, uint32_t b) {
     // SIgned Diff uses 2's Complement to handle wrap
     // Works as long as a and b are 2^31 apart
@@ -82,7 +87,25 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
     this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
-    // Split hugepage into however many pieces as there are CQs
+    // Stub for mock devices: skip hardware initialization, just set dummy values
+    if (is_mock_device()) {
+        this->cq_size = 0x10000;          // 64KB dummy size
+        this->cq_sysmem_start = nullptr;  // No real hugepage
+        this->channel_offset = 0;
+        this->cq_to_event.resize(num_hw_cqs, 0);
+        this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
+        // Initialize mutexes using swap (can't resize mutex vectors)
+        std::vector<std::mutex> temp_mutexes(num_hw_cqs);
+        this->cq_to_event_locks.swap(temp_mutexes);
+        // Initialize dummy cq_interfaces with placeholder values
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0);
+        }
+        log_debug(tt::LogMetal, "SystemMemoryManager: Initialized with stubs for mock device");
+        return;
+    }
+
+    // Real hardware initialization below
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
@@ -175,6 +198,9 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return ++this->cq_to_event[cq_id];  // Stub: simple increment without lock
+    }
     cq_to_event_locks[cq_id].lock();
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
     cq_to_event_locks[cq_id].unlock();
@@ -182,18 +208,30 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        this->cq_to_event[cq_id] = 0;
+        return;
+    }  // Stub: no lock needed
     cq_to_event_locks[cq_id].lock();
     this->cq_to_event[cq_id] = 0;
     cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::increment_event_id(const uint8_t cq_id, const uint32_t val) {
+    if (is_mock_device()) {
+        this->cq_to_event[cq_id] += val;
+        return;
+    }  // Stub: no lock needed
     cq_to_event_locks[cq_id].lock();
     this->cq_to_event[cq_id] += val;
     cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
+    if (is_mock_device()) {
+        this->cq_to_last_completed_event[cq_id] = event_id;
+        return;
+    }  // Stub: no validation
     TT_ASSERT(
         wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
@@ -206,6 +244,9 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
 }
 
 uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return this->cq_to_last_completed_event[cq_id];  // Stub: no lock needed
+    }
     cq_to_event_locks[cq_id].lock();
     uint32_t last_completed_event = this->cq_to_last_completed_event[cq_id];
     cq_to_event_locks[cq_id].unlock();
@@ -213,6 +254,11 @@ uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::reset(const uint8_t cq_id) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
     cq_interface.issue_fifo_wr_toggle = false;
@@ -221,6 +267,11 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.issue_fifo_size = (issue_queue_size >> 4);
     cq_interface.issue_fifo_limit = (cq_interface.cq_start + cq_interface.offset + issue_queue_size) >> 4;
@@ -239,22 +290,37 @@ bool SystemMemoryManager::get_bypass_mode() { return this->bypass_enable; }
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 
 uint32_t SystemMemoryManager::get_issue_queue_size(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0x10000;  // Stub: 64KB
+    }
     return this->cq_interfaces[cq_id].issue_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_limit(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0x10000;  // Stub: 64KB
+    }
     return this->cq_interfaces[cq_id].issue_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_size(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0x10000;  // Stub: 64KB
+    }
     return this->cq_interfaces[cq_id].completion_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0x10000;  // Stub: 64KB
+    }
     return this->cq_interfaces[cq_id].completion_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0;  // Stub: always 0
+    }
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
     } else {
@@ -263,20 +329,37 @@ uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) con
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0;  // Stub: always 0
+    }
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0;  // Stub: always 0
+    }
     return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
 }
 
-uint32_t SystemMemoryManager::get_cq_size() const { return this->cq_size; }
+uint32_t SystemMemoryManager::get_cq_size() const {
+    if (is_mock_device()) {
+        return 0x10000;  // Stub: 64KB
+    }
+    return this->cq_size;
+}
 
 chip_id_t SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+    // Stub for mock devices: return dummy buffer
+    if (is_mock_device()) {
+        static std::vector<char> dummy_buffer(0x10000);  // 64KB dummy
+        return dummy_buffer.data();
+    }
+
     if (this->bypass_enable) {
         uint32_t curr_size = this->bypass_buffer.size();
         uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
@@ -311,6 +394,11 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
 }
 
 void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     // Currently read / write pointers on host and device assumes contiguous ranges for each channel
     // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command
     // queue
@@ -331,6 +419,11 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
 // TODO: RENAME issue_queue_stride ?
 void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
@@ -367,6 +460,11 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
 }
 
 void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) const {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
@@ -389,6 +487,11 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
 }
 
 void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     if (this->bypass_enable) {
         return;
     }
@@ -441,6 +544,11 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
+    // Stub for mock devices: return 0
+    if (is_mock_device()) {
+        return 0;
+    }
+
     uint32_t write_ptr_and_toggle;
     uint32_t write_ptr;
     uint32_t write_toggle;
@@ -482,6 +590,11 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 }
 
 void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     if (this->bypass_enable) {
         return;
     }
@@ -491,12 +604,22 @@ void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::wrap_completion_queue_rd_ptr(const uint8_t cq_id) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
 }
 
 void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, const uint8_t cq_id) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     uint32_t data_read_B = num_pages_read * DispatchSettings::TRANSFER_PAGE_SIZE;
     uint32_t data_read_16B = data_read_B >> 4;
 
@@ -512,6 +635,11 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
 }
 
 void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
+    // Stub for mock devices: no-op
+    if (is_mock_device()) {
+        return;
+    }
+
     uint32_t max_command_size_B = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,

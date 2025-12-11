@@ -265,12 +265,13 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::init_command_queue_host() {
-    // Mock devices don't have system memory managers or real command queues, skip initialization
+    // SystemMemoryManager now has internal stubs for mock devices
+    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+
+    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
-
-    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
@@ -661,15 +662,20 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     if (!using_fast_dispatch_) {
         return *(CommandQueue*)(IDevice*)this;
     }
-    // For mock devices, command_queues_ may be empty - return a dummy reference
-    // Mock devices don't actually dispatch to hardware
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return *(CommandQueue*)(IDevice*)this;
-    }
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
+}
+
+SystemMemoryManager& Device::sysmem_manager() {
+    // For mock devices, return a singleton mock SystemMemoryManager with stubs
+    // This centralizes mock handling in one place instead of guards everywhere
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        static SystemMemoryManager mock_sysmem_manager(this->id_, 1);  // 1 CQ for mock
+        return mock_sysmem_manager;
+    }
+    return *sysmem_manager_;
 }
 
 void Device::enable_program_cache() {
@@ -712,10 +718,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_dat
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    // Mock devices don't have command queues initialized, return a stub dispatch core
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return CoreCoord{0, 0};  // Stub core for mock devices
-    }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 

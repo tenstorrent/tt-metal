@@ -715,11 +715,6 @@ void write_to_device_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
 
-    // Mock devices don't have real hardware to write to, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
-    }
-
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
@@ -820,11 +815,6 @@ template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
     Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
-        return;
-    }
-
-    // Mock devices don't have real hardware to read from, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 

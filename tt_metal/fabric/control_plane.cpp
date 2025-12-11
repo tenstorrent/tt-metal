@@ -1215,6 +1215,13 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(chip_id_t ph
             return fabric_node_id;
         }
     }
+
+    // Stub: For mock devices, return a synthetic FabricNodeId for any unmapped chip
+    // Mock devices don't have real fabric topology, so synthesize one based on chip_id
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return FabricNodeId(MeshId{0}, physical_chip_id);
+    }
+
     TT_FATAL(
         false,
         "Physical chip id {} not found in control plane chip mapping. You are calling for a chip outside of the fabric "

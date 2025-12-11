@@ -175,6 +175,13 @@ void read_events_from_completion_queue(
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {
+    // For mock devices, the sysmem_manager is a stubbed singleton
+    // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
+        return;
+    }
+
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
     thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));

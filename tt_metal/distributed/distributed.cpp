@@ -15,12 +15,6 @@
 namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
-    // Mock devices don't execute programs - skip enqueue entirely
-    // Mock devices are for testing memory layout/allocation, not execution
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
-    }
-
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
