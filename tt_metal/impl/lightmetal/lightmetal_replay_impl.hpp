@@ -22,7 +22,7 @@ struct TraceDescriptor;
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct Command;
+class Command;
 struct ReplayTraceCommand;
 struct EnqueueTraceCommand;
 struct LoadTraceCommand;

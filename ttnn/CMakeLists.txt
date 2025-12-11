@@ -20,6 +20,9 @@ endif()
 add_library(ttnn_core ${LIB_TYPE})
 add_library(TTNN::Core ALIAS ttnn_core)
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(ttnn_core)
+
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
