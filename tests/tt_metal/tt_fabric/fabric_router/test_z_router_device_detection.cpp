@@ -146,8 +146,11 @@ TEST_F(ZRouterDeviceDetectionTest, MeshRouter_WithZ_CorrectChannelCounts) {
     uint32_t intra_mesh_count = 0;
     uint32_t mesh_to_z_count = 0;
     for (const auto& target : targets) {
-        if (target.type == ConnectionType::INTRA_MESH) intra_mesh_count++;
-        else if (target.type == ConnectionType::MESH_TO_Z) mesh_to_z_count++;
+        if (target.type == ConnectionType::INTRA_MESH) {
+            intra_mesh_count++;
+        } else if (target.type == ConnectionType::MESH_TO_Z) {
+            mesh_to_z_count++;
+        }
     }
     EXPECT_EQ(intra_mesh_count, 3);
     EXPECT_EQ(mesh_to_z_count, 1);
