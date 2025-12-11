@@ -292,7 +292,6 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             }
             sfpi::vFloat result = _sfpu_exp_improved_<is_fp32_dest_acc_en>(val);
             sfpi::dst_reg[0] = result;
-
             sfpi::dst_reg++;
         }
     }
