@@ -5,7 +5,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
-#include "ttnn/operations/data_movement/pad/device/pad_op.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/run_operation.hpp"
 
@@ -141,19 +141,14 @@ ttnn::Tensor pad_impl(
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         ttnn::Shape output_shape{output_padded_shape};
-        auto output_tensor = tt::tt_metal::operation::run(
-                                 Pad{output_shape,
-                                     output_shape,
-                                     ttnn::Shape{input_tensor_start},
-                                     value,
-                                     output_memory_config,
-                                     use_multicore},
-                                 {input_tensor},
-                                 {},
-                                 {})
-                                 .front();
-
-        return output_tensor;
+        return ttnn::prim::pad(
+            input_tensor,
+            output_shape,
+            output_shape,
+            ttnn::Shape{input_tensor_start},
+            value,
+            output_memory_config,
+            use_multicore);
     }
 }
 

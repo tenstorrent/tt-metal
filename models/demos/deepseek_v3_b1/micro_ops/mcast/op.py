@@ -86,17 +86,14 @@ class McastSingleCore:
         num_output_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
         # Create semaphores
-        # Note: semaphore_ids 0 and 1 are used for sender and receiver respectively
-        # TODO: Add semaphore_ids to semaphore descriptor to ensure we are using the correct semaphore ids (#33711)
-        data_sender_semaphore_id = 0
-        data_receiver_semaphore_id = 1
-
         sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=0,
             core_ranges=all_cores,
             initial_value=0,
         )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=1,
             core_ranges=all_cores,
             initial_value=0,
         )
@@ -111,8 +108,8 @@ class McastSingleCore:
             ("mcast_num_cores", num_output_cores),
             ("mcast_loopback", 1 if loopback else 0),
             ("mcast_is_part_of_receiver_grid", 1 if is_part_of_receiver_grid else 0),
-            ("mcast_data_sender_semaphore", data_sender_semaphore_id),
-            ("mcast_data_receiver_semaphore", data_receiver_semaphore_id),
+            ("mcast_data_sender_semaphore", sender_semaphore_descriptor.id),
+            ("mcast_data_receiver_semaphore", receiver_semaphore_descriptor.id),
             # MCAST0: DEFINE_MCAST_SENDER_VARS
             ("mcast0_num_cores", num_output_cores),
             ("mcast0_data_size_bytes", total_size),
@@ -138,7 +135,7 @@ class McastSingleCore:
 
         # Receiver kernel - use opposite NOC
         receiver_noc = ttnn.NOC.NOC_0 if noc == ttnn.NOC.NOC_1 else ttnn.NOC.NOC_1
-        receiver_compile_time_args = [data_receiver_semaphore_id]
+        receiver_compile_time_args = [receiver_semaphore_descriptor.id]
 
         receiver_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/mcast/kernels/mcast_receiver.cpp",
