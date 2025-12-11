@@ -15,13 +15,14 @@
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
 #include "api/tt-metalium/experimental/host_api.hpp"
+#include "context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "program/program_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include "llrt.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
@@ -336,7 +337,11 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {}
+        config_(config) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "QuasarDataMovementKernel is only supported on Quasar");
+    }
 
     ~QuasarDataMovementKernel() override = default;
 
@@ -348,6 +353,8 @@ public:
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
 
     std::string_view get_compiler_opt_level() const override;
 

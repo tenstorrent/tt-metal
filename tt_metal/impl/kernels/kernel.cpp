@@ -775,15 +775,13 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     std::vector<const ll_api::memory*> binaries;
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     for (const DataMovementProcessor& processor : this->config_.processors) {
         const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, riscv_id);
-        auto load_type = MetalContext::instance()
-                             .hal()
-                             .get_jit_build_config(tensix_core_type, compute_class_idx, riscv_id)
-                             .memory_load;
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        auto load_type =
+            MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
         const ll_api::memory& binary_mem =
             llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
@@ -792,11 +790,18 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key(), std::move(binaries));
 }
 
+void QuasarDataMovementKernel::process_defines(
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
+    Kernel::process_defines(callback);
+    callback("NOC_INDEX", std::to_string(NOC::NOC_0));
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+}
+
 bool QuasarDataMovementKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
-    if (!is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
-    }
+    TT_FATAL(
+        is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
+    log_info(tt::LogMetal, "Configuring Quasar Data Movement kernel on core {}", logical_core.str());
     const ChipId device_id = device->id();
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
