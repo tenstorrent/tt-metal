@@ -350,14 +350,8 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-                reduce_c<
-                    PoolType::MAX,
-                    ReduceDim::REDUCE_ROW,
-                    cb_qk_im,
-                    cb_identity_scale_in,
-                    Sq_chunk_t,
-                    Sk_chunk_t_dynamic,
-                    vector_mode>(cb_cur_max, cb_prev_max, k_chunk > k_chunk_start);
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
+                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
@@ -367,8 +361,8 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t_dynamic, scale_fp32, vector_mode>(
-                    cb_cur_max, cb_cur_sum);
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, vector_mode>(
+                    cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
                 /* OUT_IM = QK @ V_CHUNK */
@@ -407,7 +401,7 @@ void MAIN {
                     pack_reconfig_data_format(cb_exp_max_diff);
 
                     /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
 
                     /* PREV_SUM *= EXP_MAX_DIFF */
@@ -512,13 +506,13 @@ void MAIN {
                 max_block<vector_mode>(cb_attention_sink, cb_prev_max, cb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
                 mul_block_inplace(cb_cur_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
-                sub_exp_block<scale_fp32, vector_mode>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                 cb_pop_front(cb_cur_max, Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
@@ -530,7 +524,7 @@ void MAIN {
 
             reconfig_data_format(cb_cur_sum, cb_cur_sum);
             pack_reconfig_data_format(cb_cur_sum);
-            recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
+            recip_block_inplace(cb_cur_sum, Sq_chunk_t);
 
             /* OUT_ACC *= CUR_SUM */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);

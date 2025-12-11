@@ -54,9 +54,8 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
-    uint32_t cols,
     int vector_mode = static_cast<int>(VectorMode::C)>
-void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
+void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -175,11 +174,10 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 template <
     uint32_t in0_cb,
     uint32_t rows,
-    uint32_t cols,
     uint32_t scale_fp32,
     bool write_result_inplace = true,
     int vector_mode = (int)VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -1109,8 +1107,8 @@ void sdpa_inner_loop(
              *  cur_max = max(qk, dim=-1)
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, k_chunk > iter_k_chunk_start);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, k_chunk > iter_k_chunk_start);
             /**
              * sub_exp fuses a few operations.
              * In-place it performs `QK = exp((QK - cur_max) * scale)`
@@ -1199,8 +1197,8 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(cb_attention_sink, cb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t, 1>(
-                alias_cur_max, alias_prev_max, true);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, 1, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
@@ -1210,8 +1208,8 @@ void sdpa_inner_loop(
             mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
             // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
             //    This adds the attention sink's contribution to the softmax denominator
-            sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, 1, scale_fp32, false>(
-                alias_cur_max, alias_cur_sum);
+            sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, scale_fp32, false>(
+                alias_cur_max, alias_cur_sum, 1);
 
             // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
             add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
