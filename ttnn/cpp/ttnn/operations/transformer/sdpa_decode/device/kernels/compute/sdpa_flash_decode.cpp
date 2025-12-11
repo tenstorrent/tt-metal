@@ -360,7 +360,7 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, vector_mode>(
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, vector_mode>(
                     cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 

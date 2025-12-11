@@ -60,6 +60,31 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 }
 
 /**
+ * out_cb = eltwise_max(in0, in1)
+ */
+template <int vector_mode = (int)VectorMode::RC>
+void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
+    // inputs come in full, outputs go out full
+    copy_tile_to_dst_init_short(in0);
+    max_tile_init();
+
+    constexpr uint32_t dst_reg_0 = 0;
+    constexpr uint32_t dst_reg_1 = 1;
+    cb_wait_front(in0, num_tiles);
+    cb_wait_front(in1, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        acquire_dst();
+        copy_tile(in0, i, dst_reg_0);
+        copy_tile(in1, i, dst_reg_1);
+        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(vector_mode));
+        pack_tile(dst_reg_0, out_cb, i);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
+}
+
+/**
  * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
  */
 template <
@@ -68,8 +93,9 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
+    uint32_t cols,
     int vector_mode = static_cast<int>(VectorMode::C)>
-void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
+void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -80,8 +106,13 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 
     constexpr uint32_t num_tiles = rows * cols;
 
+#if defined REDUCE_GRANULARITY
     constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
     constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows >> LOG2_REDUCE_GRANULARITY) : 1;
+#else
+    constexpr uint32_t dst_tiles = rows;
+    constexpr uint32_t granularity = 1;
+#endif
 
     cb_wait_front(scale_cb, 1);
     cb_reserve_back(out_cb, rows);
@@ -128,6 +159,55 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 
         row_start_idx += dst_tiles;
         in0_wait_tiles += num_tiles_to_wait;
+    }
+
+    cb_push_back(out_cb, rows);
+}
+
+/**
+ * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
+ *
+ * In this version cols does not have to be a compile-time constant.
+ */
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t in0_cb,
+    uint32_t scale_cb,
+    uint32_t rows,
+    int vector_mode = static_cast<int>(VectorMode::C)>
+void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
+    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
+    // Precondition: scale_cb has 1 produced
+    // Precondition: out_cb has rows free
+    // Postcondition: in0_cb has rows*cols produced
+    // Precondition: scale_cb has 1 produced
+    // Postcondition: out_cb has rows produced
+
+    uint32_t num_tiles = rows * cols;
+    cb_wait_front(scale_cb, 1);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_reserve_back(out_cb, rows);
+
+    max_tile_init();
+    constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1;
+
+    for (uint32_t i = 0; i < rows; i++) {
+        acquire_dst();
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_uninit();
+        if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, vector_mode);
+        }
+
+        pack_tile(reduce_dst_idx, out_cb);
+        release_dst();
     }
 
     cb_push_back(out_cb, rows);
@@ -235,8 +315,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     }
 
 #ifdef SUB_EXP_GRANULARITY
-    constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
-    constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
+    uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
+    uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
 #else
     uint32_t dst_tiles = cols;
     uint32_t granularity = 1;
@@ -1173,8 +1253,8 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
-            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum);
+            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
