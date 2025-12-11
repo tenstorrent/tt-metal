@@ -22,7 +22,7 @@ class SDXLConfig:
     is_galaxy: bool = False  # T3K uses False (Galaxy uses True)
 
     # Device parameters
-    l1_small_size: int = 23000  # Match tt-media-server (from test_common.py at base commit)
+    l1_small_size: int = 30500  # Match test_common.py (increased for VAE encoder/decoder support)
     trace_region_size: int = 34541598  # Match tt-media-server (extra space for VAE trace)
 
     # Model settings

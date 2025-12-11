@@ -126,7 +126,7 @@ class SDXLRunner:
 
         tt_latents, tt_prompts, tt_texts = self.tt_sdxl.generate_input_tensors(prompt_embeds, text_embeds)
 
-        self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[0], tt_texts[0]])
+        self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts, tt_texts])
 
         # NOTE: DO NOT set guidance_rescale before trace capture.
         # tt-media-server traces with default 0.0 - device tensor values can be
@@ -181,16 +181,14 @@ class SDXLRunner:
             prompt_embeds, text_embeds, start_latent_seed=seed
         )
 
-        # Process batch
+        # Process full batch at once
+        self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts, tt_texts])
+        img_tensors = self.tt_sdxl.generate_images()
+
         images = []
-        for i in range(len(prompts)):
-            self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[i], tt_texts[i]])
-            img_tensors = self.tt_sdxl.generate_images()
-
-            for img_tensor in img_tensors:
-                pil_img = tensor_to_pil(img_tensor, self.pipeline.image_processor)
-                images.append(pil_img)
-
+        for img_tensor in img_tensors:
+            pil_img = tensor_to_pil(img_tensor, self.pipeline.image_processor)
+            images.append(pil_img)
         return images
 
     def close_device(self):
