@@ -6,6 +6,7 @@ from typing import Optional
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    BroadcastType,
     DestAccumulation,
     MathFidelity,
     MathOperation,
@@ -701,135 +702,127 @@ class MatmulGolden(FidelityMasking):
 
 
 @register_golden
-class ScalarBroadcastGolden:
+class BroadcastGolden:
     """
-    Golden generator for scalar broadcast operations.
-    Takes the first element of the input tensor and broadcasts it across the entire output tile.
-    Output size = num_faces * (face_r_dim * 16) elements, all with the same scalar value.
+    Golden generator for broadcast operations (Scalar, Column, Row).
+
+    Broadcasts operand values according to the specified broadcast type:
+    - Scalar: Takes first element of each tile and broadcasts it across entire output tile
+    - Column: Broadcasts column values across rows (Faces 0-1 use Face 0's column, Faces 2-3 use Face 2's column)
+    - Row: Broadcasts row values down columns (first row of Face 0/1)
+
+    Output size = tile_cnt * num_faces * (face_r_dim * 16) elements.
     """
+
+    def __init__(self):
+        self.broadcast_handlers = {
+            BroadcastType.Scalar: self._broadcast_scalar,
+            BroadcastType.Column: self._broadcast_column,
+            BroadcastType.Row: self._broadcast_row,
+        }
 
     def __call__(
         self,
-        operand1,
+        broadcast_type,
+        operand,
         data_format,
         num_faces: int = 4,
-        input_dimensions: list[int] = [32, 32],
-        face_r_dim: int = 16,  # Default to 16 for backward compatibility
+        tile_cnt: int = 1,
+        face_r_dim: int = 16,
     ):
+        if broadcast_type not in self.broadcast_handlers:
+            raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
+
         torch_format = format_dict[data_format]
 
         # Convert input to tensor
-        if not isinstance(operand1, torch.Tensor):
-            operand1 = torch.tensor(operand1)
-
-        # Take the first element as the scalar value to broadcast
-        scalar_value = operand1.flatten()[0]
+        if isinstance(operand, torch.Tensor):
+            input_flat = operand.flatten().to(torch_format)
+        else:
+            input_flat = torch.tensor(operand, dtype=torch_format).flatten()
 
         # Calculate output size based on variable face dimensions
         elements_per_tile = face_r_dim * FACE_DIM * num_faces
 
-        # Create output tensor with scalar value replicated across all elements
-        result = torch.full((elements_per_tile,), scalar_value, dtype=torch_format)
+        results = []
+        for tile_idx in range(tile_cnt):
+            tile_start = tile_idx * elements_per_tile
+            tile_end = tile_start + elements_per_tile
+            tile_data = input_flat[tile_start:tile_end]
 
-        return result
+            tile_result = self.broadcast_handlers[broadcast_type](
+                tile_data, num_faces=num_faces, face_r_dim=face_r_dim
+            )
+            results.append(tile_result)
 
+        return torch.cat(results)
 
-@register_golden
-class ColumnBroadcastGolden:
-    """
-    Golden generator for column broadcast operations.
-    Hardware behavior: Faces 0-1 use Face 0's column, Faces 2-3 use Face 2's column
-    (See llk_math_eltwise_binary_broadcast.h lines 136-141)
+    def _broadcast_scalar(self, tile_data, **kwargs):
+        """Broadcast first element of each tile across the entire output tile."""
+        scalar_value = tile_data[0]
 
-    For a face_r_dim x 16 face: input has face_r_dim unique values (one per row),
-    each value is replicated 16 times across its row.
-    Output pattern: [row0_val]*16, [row1_val]*16, ..., [row(face_r_dim-1)_val]*16
-    """
+        return torch.full_like(tile_data, scalar_value)
 
-    def __call__(
+    def _broadcast_column(
         self,
-        operand1,
-        data_format,
-        num_faces: int = 4,
-        input_dimensions: list[int] = [32, 32],
-        face_r_dim: int = 16,  # Default to 16 for backward compatibility
+        tile_data,
+        num_faces: int,
+        face_r_dim: int,
     ):
-        torch_format = format_dict[data_format]
+        """
+        Process a single tile for column broadcast.
 
-        # Convert input to tensor
-        if isinstance(operand1, torch.Tensor):
-            input_flat = operand1.flatten().to(torch_format)
-        else:
-            # Direct conversion avoids intermediate tensor
-            input_flat = torch.tensor(operand1, dtype=torch_format).flatten()
-
-        # Each face is face_r_dim x 16 elements
+        For a face_r_dim x 16 face: input has face_r_dim unique values (one per row),
+        each value is replicated 16 times across its row.
+        Output pattern: [row0_val]*16, [row1_val]*16, ..., [row(face_r_dim-1)_val]*16
+        """
         face_size = face_r_dim * FACE_DIM
 
         # Process face 0 (used by faces 0-1)
-        source_face_0 = input_flat[:face_size]
+        source_face_0 = tile_data[:face_size]
         col_values_0 = source_face_0[::FACE_DIM]
         face_0_broadcast = col_values_0.repeat_interleave(FACE_DIM)
 
-        # Handle different face counts efficiently
+        # Handle different face counts: 1, 2, 4
         if num_faces == 1:
-            output = face_0_broadcast
+            return face_0_broadcast
         elif num_faces == 2:
             # Both faces use face 0 - use repeat instead of cat
-            output = face_0_broadcast.repeat(2)
+            return face_0_broadcast.repeat(2)
         else:  # num_faces == 4
             # Process face 2 (used by faces 2-3)
-            source_face_2 = input_flat[2 * face_size : 3 * face_size]
+            source_face_2 = tile_data[2 * face_size : 3 * face_size]
             col_values_2 = source_face_2[::FACE_DIM]
             face_2_broadcast = col_values_2.repeat_interleave(FACE_DIM)
 
-            # Concatenate: face0, face0, face2, face2
-            output = torch.cat(
+            return torch.cat(
                 [face_0_broadcast, face_0_broadcast, face_2_broadcast, face_2_broadcast]
             )
 
-        return output
-
-
-@register_golden
-class RowBroadcastGolden:
-    """Golden generator for row broadcast operations with variable face dimensions."""
-
-    def __call__(
+    def _broadcast_row(
         self,
-        operand1,
-        data_format,
-        num_faces: int = 4,
-        input_dimensions: list[int] = [32, 32],
-        face_r_dim: int = 16,  # Default to 16 for backward compatibility
+        tile_data,
+        num_faces: int,
+        face_r_dim: int,
     ):
-        torch_format = format_dict[data_format]
-
-        # Convert input to tensor
-        if isinstance(operand1, torch.Tensor):
-            input_flat = operand1.flatten().to(torch_format)
-        else:
-            # Direct conversion avoids intermediate tensor
-            input_flat = torch.tensor(operand1, dtype=torch_format).flatten()
-
-        # Each face is face_r_dim x 16 elements
+        """Process a single tile for row broadcast."""
         face_size = face_r_dim * FACE_DIM
 
         # Process face 0: take first row and repeat to fill face
-        face_0_row = input_flat[:FACE_DIM]
+        face_0_row = tile_data[:FACE_DIM]
         face_0_broadcast = face_0_row.repeat(face_r_dim)
 
         if num_faces == 1:
-            output = face_0_broadcast
+            return face_0_broadcast
         elif num_faces in (2, 4):
             # Extract and repeat face 1 row
-            face_1_row = input_flat[face_size : face_size + FACE_DIM]
+            face_1_row = tile_data[face_size : face_size + FACE_DIM]
             face_1_broadcast = face_1_row.repeat(face_r_dim)
 
             if num_faces == 2:
-                output = torch.cat([face_0_broadcast, face_1_broadcast])
+                return torch.cat([face_0_broadcast, face_1_broadcast])
             else:  # num_faces == 4
-                output = torch.cat(
+                return torch.cat(
                     [
                         face_0_broadcast,
                         face_1_broadcast,
@@ -837,8 +830,6 @@ class RowBroadcastGolden:
                         face_1_broadcast,
                     ]
                 )
-
-        return output
 
 
 @register_golden
