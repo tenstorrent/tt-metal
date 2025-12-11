@@ -27,7 +27,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
-from models.demos.whisper.tt import whisper_generator
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_L1_SMALL_SIZE,
     convert_to_ttnn,
@@ -36,7 +35,7 @@ from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
     init_kv_cache,
     preprocess_encoder_inputs,
 )
-from models.demos.whisper.tt.whisper_generator import GenerationParams
+from models.demos.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
@@ -143,6 +142,9 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
     the callable returns the full decoded output.
 
+    This function now uses the WhisperGenerator class which maintains persistent traces across
+    multiple generation calls, eliminating trace capture overhead after the first generation.
+
     Args:
         mesh_device: The target device
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
@@ -156,6 +158,22 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     )
     parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper
+    )
+
+    # Create WhisperGenerator instance with persistent trace support
+    generator = WhisperGenerator(
+        config=config,
+        mesh_device=mesh_device,
+        parameters=parameters,
+        processor=processor,
+        feature_extractor=feature_extractor,
+        ttnn_linear_weight=ttnn_linear_weight,
+        generation_config=hf_ref_model.generation_config,
+        input_mesh_mapper=input_mesh_mapper,
+        output_mesh_composer=output_mesh_composer,
+        weights_mesh_mapper=weights_mesh_mapper,
+        kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
     )
 
     def _model_pipeline(
@@ -172,22 +190,8 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             f"Running model on batch of {len(current_batch)} samples with durations: {['{:.3f}s'.format(d) for d in durations]}"
         )
 
-        return whisper_generator.generate(
-            config,
-            mesh_device,
-            (input_mesh_mapper, weights_mesh_mapper),
-            current_batch,
-            feature_extractor,
-            parameters=parameters,
-            processor=processor,
-            ttnn_linear_weight=ttnn_linear_weight,
-            mesh_device=mesh_device,
-            generation_config=hf_ref_model.generation_config,
-            input_mesh_mapper=input_mesh_mapper,
-            output_mesh_composer=output_mesh_composer,
-            weights_mesh_mapper=weights_mesh_mapper,
-            kv_cache=kv_cache,
-            cross_attn_cache=cross_attn_cache,
+        return generator.generate(
+            current_batch=current_batch,
             generation_params=params,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,

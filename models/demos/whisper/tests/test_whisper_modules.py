@@ -15,7 +15,6 @@ from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
-from models.demos.whisper.tt.whisper_executor import TracedWhisperDecoderExecutor
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
@@ -353,8 +352,8 @@ def test_decoder_layer(
         ttnn_encoder_hidden_states,
         kv_cache=kv_cache if use_kv_cache else None,
         cross_attn_cache=cross_attn_cache if use_kv_cache else None,
+        cross_attn_cache_valid=False,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
-        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
@@ -449,8 +448,8 @@ def test_decoder(
         encoder_hidden_states=ttnn_encoder_hidden_states,
         kv_cache=kv_cache if use_kv_cache else None,
         cross_attn_cache=cross_attn_cache if use_kv_cache else None,
+        cross_attn_cache_valid=False,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
-        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
@@ -530,7 +529,6 @@ def test_ttnn_whisper(
         kv_cache=kv_cache if use_kv_cache else None,
         cross_attn_cache=cross_attn_cache if use_kv_cache else None,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
-        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
@@ -560,20 +558,19 @@ def test_traced_decoder_executor(
     num_decode_iterations,
 ):
     """
-    Test that TracedWhisperDecoderExecutor produces correct outputs compared to non-traced execution.
+    Test that traced decoder execution produces correct outputs compared to HF reference model.
 
     This test:
     1. Sets up decoder with KV cache and cross-attention cache
     2. Runs first iteration to populate cross-attention cache (non-traced)
-    3. Compiles the trace after first iteration
+    3. Captures the trace after first iteration
     4. Runs subsequent iterations using traced execution
-    5. Compares traced outputs with non-traced baseline
+    5. Compares traced outputs with HF reference model outputs
     """
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = transformers.WhisperConfig.from_pretrained(model_name)
-    model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
     embed_dim = config.d_model
 
     # Create encoder hidden states (simulating encoder output)
@@ -586,16 +583,20 @@ def test_traced_decoder_executor(
     ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
     ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, mesh_device)
 
-    # Preprocess model parameters
+    # Create HF reference model
+    hf_model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
+    hf_past_key_values = EncoderDecoderCache.from_legacy_cache(None)
+
+    # Preprocess model parameters for TTNN
     ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
+        initialize_model=lambda: hf_model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
         custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=mesh_device,
         prefix="decoder",
     )
 
-    # Initialize KV cache and cross-attention cache
+    # Initialize KV cache and cross-attention cache for TTNN
     kv_cache, cross_attn_cache = init_kv_cache(
         config,
         mesh_device,
@@ -607,25 +608,29 @@ def test_traced_decoder_executor(
         torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
     )
 
-    # For comparison: create separate caches for non-traced baseline
-    kv_cache_baseline, cross_attn_cache_baseline = init_kv_cache(
-        config,
-        mesh_device,
-        max_batch_size=batch_size_per_device,
-        max_seq_len=512,
-        weights_mesh_mapper=weights_mesh_mapper,
-    )
-    current_decode_pos_baseline = ttnn.from_torch(
-        torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-    )
-
-    trace_executor = None
+    # Trace management variables
+    trace_id_decoder = None
+    trace_input_decoder = None
+    trace_output_decoder = None
     trace_compiled = False
+    cross_attn_cache_valid = False
 
     for i in range(num_decode_iterations):
         # Create decoder input for this iteration
         decoder_input_ids = torch.ones(batch_size, 1).type(torch.int32) * (config.decoder_start_token_id + i)
 
+        # Run HF reference model
+        hf_output = hf_model(
+            decoder_input_ids,
+            attention_mask=None,
+            encoder_hidden_states=torch_encoder_hidden_states,
+            past_key_values=hf_past_key_values,
+            use_cache=True,
+        )
+        hf_reference_output = hf_output.last_hidden_state
+        hf_past_key_values = hf_output.past_key_values
+
+        # Preprocess decoder inputs for TTNN
         decoder_hidden_states, _ = ttnn_model.preprocess_decoder_inputs(
             config,
             decoder_input_ids,
@@ -637,36 +642,17 @@ def test_traced_decoder_executor(
             input_mesh_mapper=input_mesh_mapper,
         )
 
-        # Create a copy for baseline (non-traced) execution
-        decoder_hidden_states_baseline, _ = ttnn_model.preprocess_decoder_inputs(
-            config,
-            decoder_input_ids,
-            attention_mask=None,
-            parameters=ttnn_parameters,
-            device=mesh_device,
-            decode_pos=i,
-            create_attention_mask=False,
-            input_mesh_mapper=input_mesh_mapper,
-        )
-
-        # Run baseline (non-traced) decoder
-        baseline_output = ttnn_model.decoder(
-            config,
-            hidden_states=decoder_hidden_states_baseline,
-            decoder_attention_mask=None,
-            encoder_hidden_states=ttnn_encoder_hidden_states,
-            kv_cache=kv_cache_baseline,
-            current_decode_pos=current_decode_pos_baseline,
-            cross_attn_cache=cross_attn_cache_baseline,
-            parameters=ttnn_parameters,
-        )
-        baseline_output_torch = ttnn.to_torch(baseline_output, mesh_composer=output_mesh_composer)
-        ttnn.plus_one(current_decode_pos_baseline)
-
-        # Run traced or non-traced execution for comparison
-        if trace_compiled and trace_executor is not None:
-            # Use traced execution (pass device tensor directly)
-            traced_output = trace_executor.execute(decoder_hidden_states)
+        if trace_compiled and trace_id_decoder is not None:
+            # Use traced execution
+            # Copy new input to persistent L1 tensor
+            trace_input_decoder = ttnn.to_memory_config(
+                decoder_hidden_states,
+                ttnn.L1_MEMORY_CONFIG,
+                output_tensor=trace_input_decoder,
+            )
+            # Execute trace
+            ttnn.execute_trace(mesh_device, trace_id_decoder, cq_id=0, blocking=False)
+            traced_output = trace_output_decoder
         else:
             # Non-traced execution (first iteration populates cross-attention cache)
             traced_output = ttnn_model.decoder(
@@ -675,14 +661,19 @@ def test_traced_decoder_executor(
                 decoder_attention_mask=None,
                 encoder_hidden_states=ttnn_encoder_hidden_states,
                 kv_cache=kv_cache,
-                current_decode_pos=current_decode_pos,
                 cross_attn_cache=cross_attn_cache,
+                cross_attn_cache_valid=cross_attn_cache_valid,
+                current_decode_pos=current_decode_pos,
                 parameters=ttnn_parameters,
             )
 
-            # After first iteration, compile the trace
+            # After first iteration, cross_attn_cache is populated
             if i == 0:
-                logger.info("Compiling decoder trace after first iteration")
+                cross_attn_cache_valid = True
+
+            # After first iteration, capture the trace
+            if i == 0:
+                logger.info("Capturing decoder trace after first iteration")
 
                 # Create a decoder function that captures the required parameters
                 def traced_decoder_fn(hidden_states):
@@ -692,37 +683,55 @@ def test_traced_decoder_executor(
                         decoder_attention_mask=None,
                         encoder_hidden_states=ttnn_encoder_hidden_states,
                         kv_cache=kv_cache,
-                        current_decode_pos=current_decode_pos,
                         cross_attn_cache=cross_attn_cache,
+                        cross_attn_cache_valid=True,  # Cache is now populated
+                        current_decode_pos=current_decode_pos,
                         parameters=ttnn_parameters,
                     )
 
-                # Create and compile trace executor (pass device tensor directly)
-                trace_executor = TracedWhisperDecoderExecutor(
-                    model_fn=traced_decoder_fn,
-                    device=mesh_device,
-                    l1_input_memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                trace_executor.compile(decoder_hidden_states)
+                # Move input to L1 for trace capture
+                l1_memory_config = ttnn.L1_MEMORY_CONFIG
+                l1_input = ttnn.to_memory_config(decoder_hidden_states, l1_memory_config)
+
+                # Compile run
+                compile_output = traced_decoder_fn(l1_input)
+                ttnn.deallocate(compile_output, force=True)
+                ttnn.deallocate(l1_input)
+                logger.info("Decoder trace compile run complete")
+
+                # Allocate L1 input for trace capture
+                l1_input = ttnn.to_memory_config(decoder_hidden_states, l1_memory_config)
+
+                # Capture trace
+                trace_id_decoder = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                trace_output_decoder = traced_decoder_fn(l1_input)
+
+                # Deallocate and reallocate L1 input inside trace
+                ttnn.deallocate(l1_input, force=True)
+                trace_input_decoder = ttnn.allocate_tensor_on_device(l1_input.spec, mesh_device)
+
+                ttnn.end_trace_capture(mesh_device, trace_id_decoder, cq_id=0)
+                ttnn.synchronize_device(mesh_device)
+
                 trace_compiled = True
-                logger.info("Trace compilation complete")
+                logger.info("Decoder trace capture complete")
 
         traced_output_torch = ttnn.to_torch(traced_output, mesh_composer=output_mesh_composer)
         ttnn.plus_one(current_decode_pos)
 
-        # Compare outputs
-        pcc_passed, pcc_message = comp_pcc(baseline_output_torch, traced_output_torch, 0.999)
-        logger.info(f"[iteration={i}] Traced vs Baseline PCC: {pcc_message}")
+        # Compare traced output with HF reference output
+        pcc_passed, pcc_message = comp_pcc(hf_reference_output, traced_output_torch, 0.999)
+        logger.info(f"[iteration={i}] Traced vs HF Reference PCC: {pcc_message}")
 
         if not pcc_passed:
             # Cleanup before assertion
-            if trace_executor is not None:
-                trace_executor.cleanup()
+            if trace_id_decoder is not None:
+                ttnn.release_trace(mesh_device, trace_id_decoder)
             assert pcc_passed, f"[iteration={i}] PCC check failed: {pcc_message}"
 
-    # Cleanup trace executor
-    if trace_executor is not None:
-        trace_executor.cleanup()
-        logger.info("Trace executor cleaned up successfully")
+    # Cleanup trace
+    if trace_id_decoder is not None:
+        ttnn.release_trace(mesh_device, trace_id_decoder)
+        logger.info("Trace released successfully")
 
     logger.info(f"All {num_decode_iterations} iterations passed PCC checks!")
