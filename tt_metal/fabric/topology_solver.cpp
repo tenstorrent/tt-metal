@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <sstream>
 #include <unordered_set>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt_stl/assert.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -86,5 +89,24 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physi
 
     return adjacency_map;
 }
+
+// Explicit template instantiations for common types
+// These instantiate non-template methods (like intersect_sets, validate_and_throw, etc.)
+template class MappingConstraints<uint32_t, uint64_t>;  // Test types
+template class MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>;
+
+// Explicit instantiations for trait constraint methods with various trait types
+// These are needed because the template methods are implemented in the .cpp file
+// and require explicit instantiation for each trait type used.
+template void MappingConstraints<uint32_t, uint64_t>::add_required_trait_constraint<std::string>(
+    const std::map<uint32_t, std::string>&, const std::map<uint64_t, std::string>&);
+template void MappingConstraints<uint32_t, uint64_t>::add_preferred_trait_constraint<int>(
+    const std::map<uint32_t, int>&, const std::map<uint64_t, int>&);
+template void MappingConstraints<uint32_t, uint64_t>::add_required_trait_constraint<uint8_t>(
+    const std::map<uint32_t, uint8_t>&, const std::map<uint64_t, uint8_t>&);
+template void MappingConstraints<uint32_t, uint64_t>::add_preferred_trait_constraint<uint32_t>(
+    const std::map<uint32_t, uint32_t>&, const std::map<uint64_t, uint32_t>&);
+template void MappingConstraints<uint32_t, uint64_t>::add_required_trait_constraint<size_t>(
+    const std::map<uint32_t, size_t>&, const std::map<uint64_t, size_t>&);
 
 }  // namespace tt::tt_fabric
