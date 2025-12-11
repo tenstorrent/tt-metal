@@ -1,68 +1,83 @@
 # Topology Solver Implementation Order
 
-## Current Status
+## Implementation Steps (Piece by Piece)
 
-✅ **Already Implemented:**
-- GraphIndexData - Complete
-- ConstraintIndexData - Complete
-- NodeSelector - Complete
-- CandidateGenerator - Complete
-- ConsistencyChecker - Complete
-- PathGraphDetector - Complete
-- DFSSearchEngine - Complete
-- MappingValidator - Complete
-- solve_topology_mapping() - Complete
+### ✅ Phase 1.1: Create Internal Header File
+**Status**: COMPLETE
+- ✅ Create `tt_metal/fabric/topology_solver_internal.hpp`
+- ✅ Set up namespace and forward declarations
+- ✅ Include necessary headers
 
-✅ **Tests Passing:**
-- BuildAdjacencyMapLogical
-- BuildAdjacencyMapPhysical
-- MappingConstraintsBasicOperations
-- MappingConstraintsTraitConstraints
-- MappingConstraintsIntersection
-- MappingConstraintsConflictHandling
+### ✅ Phase 1.2: Implement GraphIndexData
+**Status**: COMPLETE - Ready for Review
+- ✅ Declare GraphIndexData struct
+- ✅ Implement build_graph_index_data()
+- ✅ Basic unit tests (GraphIndexDataBasic, GraphIndexDataEmpty)
 
-❌ **Test Failing:**
-- SolveTopologyMappingPlaceholder - This is expected! The test expects failure but solver succeeds.
+### ⏳ Phase 1.3: Implement ConstraintIndexData
+**Status**: Pending Phase 1.2
+- Declare ConstraintIndexData struct
+- Implement build_constraint_index_data()
+- Basic unit tests
 
-## Implementation Plan
+### ⏳ Phase 2.1: Implement NodeSelector
+**Status**: Pending Phase 1.3
+- Declare NodeSelector struct
+- Implement select_next_target()
+- Basic unit tests
 
-### Phase 1: Fix Placeholder Test ✅ (DONE - solver works!)
-- [x] Update test to verify solver actually works
-- [x] Test should verify successful mapping
+### ⏳ Phase 2.2: Implement CandidateGenerator
+**Status**: Pending Phase 2.1
+- Declare CandidateGenerator struct
+- Implement generate_candidates()
+- Basic unit tests
 
-### Phase 2: Add Basic Module Tests
-- [ ] GraphIndexData tests (simple cases)
-- [ ] ConstraintIndexData tests (simple cases)
-- [ ] NodeSelector tests (MRV heuristic)
-- [ ] CandidateGenerator tests (filtering)
-- [ ] ConsistencyChecker tests (local/forward)
-- [ ] PathGraphDetector tests (detection + mapping)
-- [ ] DFSSearchEngine tests (simple search)
-- [ ] MappingValidator tests (validation + warnings)
+### ⏳ Phase 2.3: Implement ConsistencyChecker
+**Status**: Pending Phase 2.2
+- Declare ConsistencyChecker struct
+- Implement consistency checking functions
+- Basic unit tests
 
-### Phase 3: Add Integration Tests
-- [ ] Simple 2-node mapping
-- [ ] Simple 3-node path mapping
-- [ ] Simple 4-node cycle mapping
-- [ ] Constraint scenarios (required/preferred)
-- [ ] Connection validation modes (STRICT/RELAXED/NONE)
+### ⏳ Phase 3.1: Implement PathGraphDetector
+**Status**: Pending Phase 2.3
+- Declare PathGraphDetector struct
+- Implement path detection and fast path
+- Basic unit tests
 
-### Phase 4: Edge Cases
-- [ ] Empty graphs
-- [ ] Single node
-- [ ] Over-constrained (no solution)
-- [ ] Under-constrained (many solutions)
+### ⏳ Phase 3.2: Implement DFSSearchEngine
+**Status**: Pending Phase 3.1
+- Declare DFSSearchEngine class
+- Implement search functions
+- Basic unit tests
 
-## Next Steps
+### ⏳ Phase 4.1: Implement MappingValidator
+**Status**: Pending Phase 3.2
+- Declare MappingValidator struct
+- Implement validation functions
+- Basic unit tests
 
-1. **Fix the placeholder test** - Update it to verify the solver works correctly
-2. **Add basic module tests** - One test per module to verify basic functionality
-3. **Add integration tests** - Test end-to-end scenarios
-4. **Test edge cases** - Ensure robustness
+### ⏳ Phase 4.2: Implement solve_topology_mapping()
+**Status**: Pending Phase 4.1
+- Integrate all modules
+- Implement main solver function
+- Integration tests
 
 ## Testing Strategy
 
-- **Minimal tests**: Just enough to cover each category
-- **Focus on correctness**: Verify each module works as expected
-- **Incremental**: Test each module before moving to next
-- **Integration**: Test full solver with real scenarios
+For each module:
+1. Create minimal unit tests covering:
+   - Basic functionality
+   - Edge cases (empty, single node)
+   - Error conditions
+2. Run tests before moving to next module
+3. Fix any issues before proceeding
+
+## Build and Test Commands
+
+```bash
+# Build
+./build_metal.sh --build-metal-tests --debug
+
+# Run tests
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySolverTest.*"
+```
