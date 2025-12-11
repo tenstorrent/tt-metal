@@ -288,28 +288,27 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const Tile output_tile =
         (out_sharded && tile_h <= 16) ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w});
 
-    const ttnn::operations::matmul::Matmul matmul_params(
-        program_config,
-        /*bcast_batch=*/std::nullopt,
-        out_mem_config,
-        dtype,
-        compute_kernel_config,
-        /*untilize_out=*/false,
-        /*user_core_coord=*/std::nullopt,
-        /*user_fused_activation=*/std::nullopt,
-        /*user_run_batched=*/false,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        output_tile);
-
     ttnn::Tensor output_tensor;
     // Warmup iterations
     for (int iter = 0; iter < num_warmup_iterations; ++iter) {
-        output_tensor = ttnn::operations::matmul::matmul(
-            input_tensor_0,
-            input_tensor_1,
-            /*bias=*/std::nullopt,
-            /*parameters=*/matmul_params);
+        output_tensor = ttnn::prim::matmul(
+                            input_tensor_0,
+                            input_tensor_1,
+                            /*bias=*/std::nullopt,
+                            /*output_tensor*/ std::nullopt,
+                            program_config,
+                            /*bcast_batch=*/std::nullopt,
+                            out_mem_config,
+                            dtype,
+                            compute_kernel_config,
+                            /*untilize_out=*/false,
+                            /*user_core_coord=*/std::nullopt,
+                            /*user_fused_activation=*/std::nullopt,
+                            /*user_run_batched=*/false,
+                            /*transpose_a=*/false,
+                            /*transpose_b=*/false,
+                            output_tile)
+                            .at(0);
         tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         output_tensor.deallocate();
     }
