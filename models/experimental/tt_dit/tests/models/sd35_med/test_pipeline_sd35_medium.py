@@ -225,9 +225,9 @@ def test_sd35_medium_pipeline_performance(
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
-        [(1, 1), 0, 1, 1],  # Minimal configuration for functional test
+        [(1, 2), 0, 1, 1],  # N300 configuration - 2 devices with CFG parallel
     ],
-    ids=["1x1"],
+    ids=["1x2_n300"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -240,19 +240,19 @@ def test_sd35_medium_pipeline_functional(
     tp_axis: int,
     num_links: int,
 ) -> None:
-    """Functional test for SD3.5 Medium pipeline - validates correctness without performance checks."""
+    """Functional test for SD3.5 Medium pipeline on N300 with CFG enabled."""
 
     parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        cfg_parallel=ParallelFactor(factor=2, mesh_axis=1),  # CFG parallel on axis 1 for N300
         tensor_parallel=ParallelFactor(factor=1, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=1, mesh_axis=sp_axis),
     )
 
-    # Create pipeline with minimal configuration
+    # Create pipeline with N300 CFG configuration
     tt_pipe = TTSD35MediumPipeline(
         mesh_device=mesh_device,
         enable_t5_text_encoder=False,
-        guidance_cond=1,
+        guidance_cond=2,  # CFG enabled: positive + negative prompt
         parallel_config=parallel_config,
         num_links=num_links,
         height=512,  # Smaller image for faster test
@@ -261,13 +261,13 @@ def test_sd35_medium_pipeline_functional(
         use_cache=False,
     )
 
-    # Prepare with guidance_scale=1.0 to disable CFG (single device doesn't support batched CFG)
+    # Prepare with guidance_scale=4.5 for CFG on N300
     tt_pipe.prepare(
         batch_size=1,
         num_images_per_prompt=1,
         width=512,
         height=512,
-        guidance_scale=1.0,  # Disable CFG for single device
+        guidance_scale=4.5,  # CFG enabled with guidance scale 4.5
         max_t5_sequence_length=256,
         prompt_sequence_length=333,
         spatial_sequence_length=1024,
@@ -301,7 +301,7 @@ def test_sd35_medium_pipeline_functional(
     # ```
     # from diffusers import StableDiffusion3Pipeline
     # pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-medium", torch_dtype=torch.bfloat16).to("cuda")
-    # pipe(prompt="A red circle on a white background, digital art, clean lines", num_inference_steps=28, height=512, width=512, guidance_scale=1.0, generator=torch.Generator().manual_seed(123)).images[0].save("diffusers_ref.png")
+    # pipe(prompt="a cat with a hat and pink nose", num_inference_steps=28, height=512, width=512, guidance_scale=4.5, generator=torch.Generator().manual_seed(123)).images[0].save("diffusers_ref.png")
     # ```
     logger.info("TT image generation complete. Check test_sd35_medium_tt_output.png")
 
