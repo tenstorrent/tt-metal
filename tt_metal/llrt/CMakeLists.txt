@@ -14,6 +14,10 @@ set(LLRT_SRC
 
 add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(llrt)
+
 add_subdirectory(hal)
 add_dependencies(llrt hal_generate_dev_msgs_header)
 
