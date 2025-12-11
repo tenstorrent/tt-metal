@@ -73,6 +73,7 @@ private:
 template <typename Struct>
 class StructBuffer;
 
+// NOLINTNEXTLINE(bugprone-crtp-constructor-accessibility)
 template <bool Const, typename Struct>
 class BaseStructView {
 private:

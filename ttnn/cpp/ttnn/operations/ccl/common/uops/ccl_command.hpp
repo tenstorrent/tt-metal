@@ -221,6 +221,11 @@ struct CclCommandArg {};
 using args_elem_t = uint32_t;
 template <typename T, CclCommandArgCode CODE>
 struct CclCommandArgBase {
+private:
+    CclCommandArgBase() = default;
+    friend T;
+
+public:
     // Let the user override
     using field_type = typename command_arg_field<CODE>::type;  // Ensure T::type is accessible
     static constexpr std::size_t size_in_words() { return (sizeof(T) + sizeof(uint32_t) - 1) / sizeof(uint32_t); }
