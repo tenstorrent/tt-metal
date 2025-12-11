@@ -53,7 +53,7 @@ void pack_main() {
 void unpack_main() {
     int __outer_loop_iter;
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()));
-    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(0)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(0, 0)));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_wait_tiles(0, 1);
