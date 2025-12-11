@@ -12,9 +12,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.common.sampling.generator import SamplingGenerator
 
@@ -109,10 +110,11 @@ class TtTransformer(LightweightModule):
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
             ),
             args,
-            args.is_galaxy,
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
+
+        state_dict_prefix = args.get_state_dict_prefix("", None)
 
         self.lm_head = LMHead(
             args=args,
@@ -128,7 +130,8 @@ class TtTransformer(LightweightModule):
             # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
             # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
             self.switch_mode("prefill")
-            self.setup_prefill()
+            if not self.args.is_qwen:
+                self.setup_prefill()
             self.is_prefill_setup = True
 
         if mode == "decode":
@@ -153,6 +156,7 @@ class TtTransformer(LightweightModule):
                 self.prefetcher_setup.worker_sub_device_id,
                 mode="prefill",
                 allocate_prefill_buffers=self.allocate_prefill_buffers,
+                is_qwen=True if self.args.is_qwen else False,
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -170,7 +174,12 @@ class TtTransformer(LightweightModule):
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
         if mesh_sub_device_manager_id_decode is None:
-            self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
+            self.tt_ccl = TT_CCL(
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                is_qwen=True if self.args.is_qwen else False,
+            )
             self.sampling = SamplingGenerator(
                 args=self.args,
                 mesh_device=self.mesh_device,
@@ -199,13 +208,22 @@ class TtTransformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
-            tt_rot_mats_prefill = get_prefill_rot_mat(
-                self.args.head_dim,
-                self.args.max_seq_len,
-                self.mesh_device,
-                seq_len=self.args.max_seq_len,
-                scale_factor=self.args.rope_scaling_factor,
-            )
+            if self.args.is_qwen:
+                tt_rot_mats_prefill = get_rot_mats(
+                    head_dim=self.args.head_dim,
+                    device=self.mesh_device,
+                    seq_len=self.args.max_seq_len,
+                    theta=self.args.rope_theta,
+                    rope_scaling=self.args.rope_scaling_factor,
+                )
+            else:
+                tt_rot_mats_prefill = get_prefill_rot_mat(
+                    self.args.head_dim,
+                    self.args.max_seq_len,
+                    self.mesh_device,
+                    seq_len=self.args.max_seq_len,
+                    scale_factor=self.args.rope_scaling_factor,
+                )
             self.tt_rot_mats_prefill = tt_rot_mats_prefill
         else:
             tt_rot_mats_prefill = self.tt_rot_mats_prefill
@@ -377,7 +395,7 @@ class TtTransformer(LightweightModule):
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, cur_pos_shard_dim) if (self.args.is_galaxy and B > 1) else (None, None),
+                dims=(None, cur_pos_shard_dim) if (B > 1) else (None, None),
                 mesh_shape=self.args.cluster_shape,
             ),
         )
@@ -395,7 +413,7 @@ class TtTransformer(LightweightModule):
                 dtype=ttnn.uint16 if is_page_table_sharded else ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+                    dims=(None, -2) if (B > 1) else (None, None),
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
@@ -475,6 +493,10 @@ class TtTransformer(LightweightModule):
         Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
+            tt_out = tt_out[0]
+
+        if isinstance(tt_out, tuple):
+            # Get logits and skip log-probs
             tt_out = tt_out[0]
 
         tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
@@ -574,7 +596,8 @@ class TtTransformer(LightweightModule):
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
             )
-            tt_out_logits = tt_out_logits[0, 0, 0, :128256]
+            tt_out_logits = tt_out_logits[0, 0, 0, : self.args.vocab_size]
+
             tt_out_logits_saved.copy_(tt_out_logits)
 
         if capture_sampling_trace:
@@ -643,9 +666,6 @@ class TtTransformer(LightweightModule):
                 enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
-
-        if mode == "decode" and not self.args.is_galaxy:
-            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor

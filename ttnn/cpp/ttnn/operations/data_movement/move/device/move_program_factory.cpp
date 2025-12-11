@@ -7,7 +7,8 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_program_factory.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_device_operation_types.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -64,7 +65,7 @@ std::vector<CoreRange> get_multicast_regions(
 // This variant of move is invoked when the input buffer and output buffer overlap, which is possible because input
 // buffer is deallocated before the op runs. In this case, data in each core needs to be moved to a temporary local
 // location before being copied into the output buffer
-operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
+tt::tt_metal::operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
@@ -292,8 +293,44 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
 }
 
 operation::ProgramWithCallbacks move_multi_core(const Tensor& input, Tensor& output) {
-    bool src_and_dst_in_l1 = input.memory_config().is_l1() && output.memory_config().is_l1();
-    return copy_multi_core(input, output, src_and_dst_in_l1);
+    // Move operation uses copy factory under the hood
+    // Note: The backwards/src_and_dst_in_l1 parameter was never actually used in the implementation
+    using namespace ttnn::operations::data_movement::copy;
+
+    const copy::operation_attributes_t operation_attributes{output.memory_config(), output.dtype()};
+    const copy::tensor_args_t tensor_args{input, std::make_optional(output)};
+
+    copy::program::CopyProgramFactory::cached_program_t cached_program =
+        copy::program::CopyProgramFactory::create(operation_attributes, tensor_args, output);
+
+    // Extract shared variables for the callback
+    const tt::tt_metal::KernelHandle unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    const tt::tt_metal::KernelHandle unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    const std::vector<CoreCoord> cores = cached_program.shared_variables.cores;
+
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
+                                              const void* operation,
+                                              tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        using namespace tt::tt_metal;
+        Buffer* const src_buffer = input_tensors.at(0).buffer();
+        Buffer* const dst_buffer = output_tensors.at(0).buffer();
+
+        for (const CoreCoord& core : cores) {
+            {
+                RuntimeArgsData& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+            }
+            {
+                RuntimeArgsData& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
+
+    return {std::move(cached_program.program), override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::data_movement

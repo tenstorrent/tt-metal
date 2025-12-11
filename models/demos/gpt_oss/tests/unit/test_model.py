@@ -104,7 +104,7 @@ def run_accuracy(
     for i in range(1, len(reference_tokens)):
         # Use decode for subsequent tokens with teacher forcing (use reference tokens)
         with torch.no_grad():
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward_text(
                 out_tok,  # out_tok (current token)
                 current_pos,  # current_pos
                 enable_trace=False,  # enable_trace
