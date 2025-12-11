@@ -83,10 +83,11 @@ def generate_clean_bf16_tensor(dtype=torch.bfloat16):
     return fp32.to(dtype)
 
 
-def test_binary_pow_sweep(device):
-    # Generate clean bf16 tensor (tensor A) - contains ~65k values (2^16 bf16 bit patterns)
-    tensor_a = generate_clean_bf16_tensor()
-    num_values = tensor_a.numel()  # Should be 65536 (2^16)
+def test_binary_pow_sweep_BF16_test(device):
+    # Generate clean bf16 tensor (tensor A)
+    # tensor_a = generate_clean_bf16_tensor() # bf16 vs bf16
+    tensor_a = generate_clean_bf16_tensor(torch.float32)  # bf16 vs fp32
+    num_values = tensor_a.numel()
 
     # Output directory for mismatch files
     output_dir = "binary_pow_ulp_mismatches"
@@ -109,19 +110,20 @@ def test_binary_pow_sweep(device):
             b_val = tensor_a[i]
             b_scalar = b_val.item()
 
-            # Create tensor B filled with this single value (same shape as A: 65k elements)
-            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.bfloat16)
+            # Create tensor B filled with this single value
+            # tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.bfloat16) # bf16 vs bf16
+            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.float32)  # bf16 vs fp32
 
             # Convert to ttnn tensors
             tt_a = ttnn.from_torch(
-                tensor_a,
+                tensor_a.to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             tt_b = ttnn.from_torch(
-                tensor_b,
+                tensor_b.to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
@@ -157,26 +159,9 @@ def test_binary_pow_sweep(device):
                 # Write to CSV
                 csv_writer.writerow([b_scalar, max_ulp, failing_values])
 
-            # Print progress every 1000 iterations
-            if (i + 1) % 1000 == 0:
+            # Print progress every 1000000 iterations
+            if (i + 1) % 1000000 == 0:
                 print(f"Processed {i + 1}/{num_values} B values...")
 
     print(f"\nResults saved to {csv_file_path}")
     print(f"ULP mismatch details saved to {output_dir}/")
-
-
-def main():
-    """Main function to run binary pow sweep test standalone."""
-    import ttnn
-
-    # Initialize device
-    device = ttnn.open_device(device_id=0)
-
-    try:
-        test_binary_pow_sweep(device)
-    finally:
-        ttnn.close_device(device)
-
-
-if __name__ == "__main__":
-    main()
