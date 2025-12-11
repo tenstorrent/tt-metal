@@ -875,7 +875,9 @@ class ModelArgs(TTModelArgs):
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = self.max_prefill_chunk_size
+        DEFAULT_VALUE = (
+            self.max_prefill_chunk_size if self.max_prefill_chunk_size < self.max_seq_len else self.max_seq_len
+        )
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "gemma-3-4b": 4096
@@ -920,12 +922,12 @@ class ModelArgs(TTModelArgs):
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size, self.max_seq_len)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size, self.max_seq_len)
 
         # No supported sequence lengths found, return empty list
         return []
