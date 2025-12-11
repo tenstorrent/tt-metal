@@ -1,3 +1,4 @@
+# force merge gate to run
 enable_testing()
 include(GoogleTest)
 add_library(test_common_libs INTERFACE)
