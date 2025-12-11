@@ -978,7 +978,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     return std::get<0>(conv2d_result);
 }
 
-Conv2dSliceConfig determine_dram_slice_config_for_prepare_weights(
+op_slicing::OpSliceAttr* get_conv2d_slice_attr(
     uint32_t batch_size,
     uint32_t input_height,
     uint32_t input_width,
@@ -992,40 +992,14 @@ Conv2dSliceConfig determine_dram_slice_config_for_prepare_weights(
     Layout input_layout,
     DataType input_dtype,
     DataType conv_output_dtype,
-    bool has_bias,
+    Tensor& weight_tensor,
+    std::optional<std::reference_wrapper<Tensor>> bias_tensor,
     const Conv2dConfig& conv_config_,
     const DeviceComputeKernelConfig& compute_config,
-    MeshDevice* device,
-    std::optional<Conv2dSliceConfig> input_dram_slice_config) {
+    MeshDevice* device) {
     Conv2dConfig conv_config = conv_config_;
-    Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
-            tt::tt_metal::TensorLayout(
-                conv_config.weights_dtype.value(),
-                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                MemoryConfig{
-                    TensorMemoryLayout::INTERLEAVED,
-                    BufferType::DRAM,
-                })),
-        device);
-    std::optional<Tensor> dummy_bias_tensor = std::nullopt;
-    if (has_bias) {
-        dummy_bias_tensor = tt::tt_metal::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape({1, 1, 1, out_channels}),
-                tt::tt_metal::TensorLayout(
-                    conv_config.weights_dtype.value(),
-                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                    MemoryConfig{
-                        TensorMemoryLayout::INTERLEAVED,
-                        BufferType::DRAM,
-                    })),
-            device);
-    }
-    auto [output_height, output_width] =
-        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
-    auto op_slice_attr = Conv2dSliceAttr(
+
+    Conv2dSliceAttr* op_slice_attr = new Conv2dSliceAttr(
         batch_size,
         {input_height, input_width},
         in_channels,
@@ -1038,23 +1012,12 @@ Conv2dSliceConfig determine_dram_slice_config_for_prepare_weights(
         input_layout,
         input_dtype,
         conv_output_dtype,
-        std::ref(dummy_weight_tensor),
-        has_bias ? std::make_optional(std::ref(dummy_bias_tensor.value())) : std::nullopt,
+        weight_tensor,
+        bias_tensor,
         conv_config,
         compute_config,
         device);
-    auto dram_slice_config = determine_slice_config(
-        &op_slice_attr,
-        ttnn::Shape{batch_size, input_height, input_width, in_channels},
-        ttnn::Shape{batch_size, output_height, output_width, out_channels},
-        input_dram_slice_config,
-        conv_config.output_layout,
-        device);
-    log_info(
-        tt::LogOp,
-        "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
-        dram_slice_config,
-        op_slice_attr.name());
-    return dram_slice_config;
+
+    return op_slice_attr;
 }
 }  // namespace ttnn::operations::conv::conv2d
