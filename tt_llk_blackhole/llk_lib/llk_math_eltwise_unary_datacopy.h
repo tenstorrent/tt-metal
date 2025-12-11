@@ -380,9 +380,7 @@ template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(transpose_of_faces == 0, "transpose_of_faces: this parameter is unused");
-    LLK_ASSERT(within_face_16x16_transpose == 0, "within_face_16x16_transpose: this parameter is unused");
-    eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
+    eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D && src_b_bcast_type == BroadcastType::NONE)
     {
