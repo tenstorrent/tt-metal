@@ -225,11 +225,11 @@ ttnn::Tensor reshape_tiled(
             tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
             typecast_back = true;
         }
-        auto untilize_tensor =
-            ttnn::to_layout(tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config());
+        auto untilize_tensor = ttnn::to_layout(
+            tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config(), sub_core_grid);
         auto reshaped_tensor = ttnn::reshape(untilize_tensor, requested_shape_3d);
-        output_tensor_3d =
-            ttnn::to_layout(reshaped_tensor, ttnn::TILE_LAYOUT, reshaped_tensor.dtype(), working_output_memory_config);
+        output_tensor_3d = ttnn::to_layout(
+            reshaped_tensor, ttnn::TILE_LAYOUT, reshaped_tensor.dtype(), working_output_memory_config, sub_core_grid);
         if (typecast_back) {
             output_tensor_3d = ttnn::typecast(output_tensor_3d, DataType::FLOAT32);
         }
