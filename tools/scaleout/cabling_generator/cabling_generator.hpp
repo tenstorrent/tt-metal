@@ -100,10 +100,20 @@ CableLength calc_cable_length(
 class CablingGenerator {
 public:
     // Constructor with full deployment descriptor (includes physical location info)
+    // cluster_descriptor_path can be a single file or a directory containing multiple .textproto files
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
 
     // Constructor with just hostnames (no physical location info)
+    // cluster_descriptor_path can be a single file or a directory containing multiple .textproto files
     CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
+
+    // Constructor with multiple explicit descriptor paths and deployment descriptor
+    CablingGenerator(
+        const std::vector<std::string>& cluster_descriptor_paths, const std::string& deployment_descriptor_path);
+
+    // Constructor with multiple explicit descriptor paths and hostnames
+    CablingGenerator(
+        const std::vector<std::string>& cluster_descriptor_paths, const std::vector<std::string>& hostnames);
 
     CablingGenerator() = default;
 
@@ -116,6 +126,9 @@ public:
 
     // Method to generate factory system descriptor as protobuf object
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generate_factory_system_descriptor() const;
+
+    // Method to save factory system descriptor to file
+    void save_factory_system_descriptor(const std::string& output_path) const;
 
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
