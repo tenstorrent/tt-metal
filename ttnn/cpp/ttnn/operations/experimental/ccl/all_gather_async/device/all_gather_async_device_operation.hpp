@@ -52,6 +52,13 @@ struct AllGatherAsyncDeviceOperation {
         const MeshDevice* mesh_device);
 };
 
+enum class AllGatherAsyncVersion {
+    LLAMA_MINIMAL_SHARDED = 0,
+    MINIMAL_DEFAULT = 1,
+};
+
+AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes);
+
 }  // namespace ttnn::operations::experimental::ccl::all_gather_async
 
 namespace ttnn {

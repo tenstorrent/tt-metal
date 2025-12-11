@@ -19,21 +19,6 @@ using namespace ccl;
 
 namespace operations::experimental::ccl::all_gather_async {
 
-AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes) {
-    // Check for minimal sharded case
-    if (operation_attributes.use_all_gather_async_llama_sharded) {
-        TT_FATAL(
-            !operation_attributes.reverse_order,
-            "Reversed all-gather (reverse_order=true) is not yet supported with llama-optimized variants "
-            "(use_all_gather_async_llama_sharded=true). Please use the regular all_gather_async API instead of "
-            "all_gather_async_reversed.");
-        return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
-    } else {
-        TT_FATAL(operation_attributes.semaphore.size() == 2, "Default implementation requires 2 semaphores");
-        return AllGatherAsyncVersion::MINIMAL_DEFAULT;
-    }
-}
-
 LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -56,14 +41,12 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    [[maybe_unused]] AllGatherAsyncVersion version = select_version(operation_attributes);
     const auto& sender_device_coord = mesh_coordinate;  // coord
     const auto& forward_coord = get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     const auto& backward_coord = get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     const auto& num_links = operation_attributes.num_links;
     const auto& ring_size = operation_attributes.ring_size;
@@ -403,14 +386,12 @@ DefaultMeshWorkloadFactory::cached_program_t DefaultMeshWorkloadFactory::create_
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    [[maybe_unused]] AllGatherAsyncVersion version = select_version(operation_attributes);
     const auto& sender_device_coord = mesh_coordinate;  // coord
     const auto& forward_coord = get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     const auto& backward_coord = get_physical_neighbor_from_physical_coord(
         input_tensor, sender_device_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     const auto& dim = operation_attributes.dim;
     const auto& num_links = operation_attributes.num_links;

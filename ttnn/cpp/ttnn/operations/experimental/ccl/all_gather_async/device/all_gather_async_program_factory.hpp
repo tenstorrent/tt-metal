@@ -9,11 +9,6 @@
 
 namespace ttnn::operations::experimental::ccl::all_gather_async {
 
-enum class AllGatherAsyncVersion {
-    LLAMA_MINIMAL_SHARDED = 0,
-    MINIMAL_DEFAULT = 1,
-};
-
 struct AllGatherProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
@@ -79,7 +74,5 @@ private:
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 };
-
-AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes);
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_async

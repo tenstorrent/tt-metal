@@ -82,11 +82,25 @@ uint32_t default_workers(
 
 namespace operations::experimental::ccl::all_gather_async {
 
+AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes) {
+    // Check for minimal sharded case
+    if (operation_attributes.use_all_gather_async_llama_sharded) {
+        TT_FATAL(
+            !operation_attributes.reverse_order,
+            "Reversed all-gather (reverse_order=true) is not yet supported with llama-optimized variants "
+            "(use_all_gather_async_llama_sharded=true). Please use the regular all_gather_async API instead of "
+            "all_gather_async_reversed.");
+        return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
+    } else {
+        TT_FATAL(operation_attributes.semaphore.size() == 2, "Default implementation requires 2 semaphores");
+        return AllGatherAsyncVersion::MINIMAL_DEFAULT;
+    }
+}
+
 AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    AllGatherAsyncVersion version = args.use_all_gather_async_llama_sharded
-                                        ? AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED
-                                        : AllGatherAsyncVersion::MINIMAL_DEFAULT;
+    AllGatherAsyncVersion version = select_version(args);
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     switch (version) {
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED: {
             return LlamaShardedMeshWorkloadFactory{};
