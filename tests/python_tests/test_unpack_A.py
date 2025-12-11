@@ -10,10 +10,8 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
-    ColumnBroadcastGolden,
+    BroadcastGolden,
     DataCopyGolden,
-    RowBroadcastGolden,
-    ScalarBroadcastGolden,
     TransposeGolden,
     get_golden_generator,
 )
@@ -347,24 +345,20 @@ def test_unpack_comprehensive(
 
     # generate golden tensor with proper broadcast and transpose handling
     # PRIORITY: Broadcast types take precedence over transpose operations
-    if broadcast_type == BroadcastType.Scalar:
-        # Scalar broadcast: replicate first element across entire tile
-        # Transpose operations don't change uniform data
-        generate_golden = get_golden_generator(ScalarBroadcastGolden)
-        golden_tensor = generate_golden(
-            src_A, formats.output_format, num_faces, input_dimensions, face_r_dim
-        )
-    elif broadcast_type == BroadcastType.Column:
-        # Column broadcast: broadcast column values across rows
-        generate_golden = get_golden_generator(ColumnBroadcastGolden)
-        golden_tensor = generate_golden(
-            src_A, formats.output_format, num_faces, input_dimensions, face_r_dim
-        )
-    elif broadcast_type == BroadcastType.Row:
-        # Row broadcast: broadcast row values down columns
-        generate_golden = get_golden_generator(RowBroadcastGolden)
-        golden_tensor = generate_golden(
-            src_A, formats.output_format, num_faces, input_dimensions, face_r_dim
+    if broadcast_type in (
+        BroadcastType.Scalar,
+        BroadcastType.Column,
+        BroadcastType.Row,
+    ):
+        # Broadcast: replicate values according to broadcast type
+        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+        golden_tensor = generate_broadcast_golden(
+            broadcast_type,
+            src_A,
+            formats.output_format,
+            num_faces=num_faces,
+            tile_cnt=tile_cnt,
+            face_r_dim=face_r_dim,
         )
     elif transpose_of_faces == Transpose.Yes:
         # Both transpose flags are ALWAYS on together (mutually inclusive constraint)
