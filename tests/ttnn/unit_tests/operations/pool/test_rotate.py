@@ -1,216 +1,258 @@
-#!/usr/bin/env python3
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
-
-"""
-Tests for rotate operation - Stages 4-6 verification.
-
-Stage 4: Device operation validation and factory selection
-Stage 5: Program factory with CBs and work distribution
-Stage 6: Kernel compilation and execution
-"""
 
 import pytest
 import torch
 import ttnn
+import torchvision.transforms.functional as TF
 
 
-@pytest.fixture
-def device():
-    """Open and close device for each test."""
-    dev = ttnn.open_device(device_id=0)
-    yield dev
-    ttnn.close_device(dev)
+def run_rotate_test(
+    device,
+    input_shape,
+    angle,
+    center=None,
+    fill=0.0,
+    interpolation_mode="nearest",
+    input_dtype=ttnn.bfloat16,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    check_values=True,
+):
+    """Common function to run rotate tests with specified parameters."""
+    torch.manual_seed(0)
 
+    # Generate input tensor
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        input_torch, device=device, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config
+    )
 
-# ============================================================================
-# Stage 4 Tests: Device Operation
-# ============================================================================
+    # Run TTNN rotate
+    if center is not None:
+        ttnn_result = ttnn.rotate(input_tensor, angle, center=center, fill=fill, interpolation_mode=interpolation_mode)
+    else:
+        ttnn_result = ttnn.rotate(input_tensor, angle, fill=fill, interpolation_mode=interpolation_mode)
 
+    # Verify output properties
+    assert ttnn_result is not None
+    assert list(ttnn_result.shape) == list(input_tensor.shape)
+    assert ttnn_result.dtype == input_tensor.dtype
 
-class TestStage4DeviceOperation:
-    """Tests for device operation structure and factory selection."""
+    # Convert TTNN result back to torch
+    ttnn_result_torch = ttnn.to_torch(ttnn_result)
 
-    def test_operation_callable(self, device):
-        """Operation should be callable (may fail at kernel but not at Python level)."""
-        # Create input tensor with NHWC format and proper alignment
-        # C=32 ensures 64-byte alignment for bfloat16
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # Perform value comparison against torch reference if requested
+    if check_values:
+        # Prepare input for torch reference - convert to float and NCHW format
+        # input_shape is (N, H, W, C), torch expects (N, C, H, W)
+        input_nchw = input_torch.permute(0, 3, 1, 2).float()
 
-        # Call should succeed or fail at program/kernel level, not validation
-        try:
-            result = ttnn.rotate(input_tensor, 45.0)
-            # If we get here, the operation executed
-            assert result is not None
-        except RuntimeError as e:
-            # This is acceptable - kernel/program errors are expected at early stages
-            error_str = str(e).lower()
-            # Should not fail at validation or Python level
-            assert "validation" not in error_str or "kernel" in error_str or "program" in error_str
+        # Run torch reference implementation
+        if interpolation_mode == "nearest":
+            torch_interp = TF.InterpolationMode.NEAREST
+        else:
+            torch_interp = TF.InterpolationMode.BILINEAR
 
-    def test_validation_rejects_wrong_rank(self, device):
-        """Operation should reject tensors with wrong rank."""
-        # 3D tensor (should fail validation)
-        input_3d = torch.randn(32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_3d, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if center is not None:
+            torch_result_nchw = TF.rotate(input_nchw, angle, interpolation=torch_interp, fill=fill, center=center)
+        else:
+            torch_result_nchw = TF.rotate(input_nchw, angle, interpolation=torch_interp, fill=fill)
 
-        with pytest.raises(RuntimeError) as exc:
-            ttnn.rotate(input_tensor, 45.0)
+        # Convert torch result back to NHWC format and bfloat16
+        torch_result = torch_result_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-        assert "4D" in str(exc.value) or "rank" in str(exc.value).lower()
+        # Compare TTNN result against torch reference
+        if angle % 360.0 == 0.0:
+            # Identity rotation - use stricter tolerance
+            is_close = torch.allclose(ttnn_result_torch, torch_result, rtol=1e-3, atol=1e-4)
+            assert is_close, f"Identity rotation comparison failed for angle {angle} degrees"
+        else:
+            # Non-identity rotation - use looser tolerances
+            if input_dtype == ttnn.bfloat16:
+                is_close = torch.allclose(ttnn_result_torch, torch_result, rtol=0.1, atol=0.1)
+            else:  # float32
+                is_close = torch.allclose(ttnn_result_torch, torch_result, rtol=0.1, atol=0.1)
+            assert is_close, f"TTNN vs Torch comparison failed for angle {angle} degrees"
 
-    def test_validation_rejects_expand_true(self, device):
-        """Operation should reject expand=True."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-        with pytest.raises(RuntimeError) as exc:
-            ttnn.rotate(input_tensor, 45.0, expand=True)
-
-        assert "expand" in str(exc.value).lower()
-
-
-# ============================================================================
-# Stage 5 Tests: Program Factory Structure
-# ============================================================================
-
-
-class TestStage5ProgramFactory:
-    """Tests for program factory with CBs and work distribution."""
-
-    def test_program_creates_without_cb_error(self, device):
-        """Program should create CBs without errors."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-        try:
-            result = ttnn.rotate(input_tensor, 45.0)
-        except RuntimeError as e:
-            error_str = str(e).lower()
-            # Should not fail at CB creation
-            assert "circular" not in error_str
-            assert "cb" not in error_str or "kernel" in error_str
-
-    def test_various_tensor_sizes(self, device):
-        """Work distribution should handle various tensor sizes."""
-        test_cases = [
-            (1, 32, 32, 32),  # Small square
-            (1, 64, 64, 32),  # Medium square
-            (1, 32, 64, 32),  # Non-square
-            (2, 32, 32, 32),  # Batch > 1
-        ]
-
-        for shape in test_cases:
-            input_data = torch.randn(*shape, dtype=torch.bfloat16)
-            input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-            try:
-                result = ttnn.rotate(input_tensor, 45.0)
-                # Verify output shape matches input shape
-                assert list(result.shape) == list(input_tensor.shape), f"Shape mismatch for input {shape}"
-            except RuntimeError:
-                # Kernel errors at this stage are acceptable
-                pass
+    return input_torch, ttnn_result_torch
 
 
 # ============================================================================
-# Stage 6 Tests: Kernel Compilation and Execution
+# Basic Functionality Tests
 # ============================================================================
 
 
-class TestStage6KernelCompilation:
-    """Tests for kernel compilation and basic execution."""
+def test_identity_rotation(device):
+    """Test that 0-degree rotation exactly preserves the input."""
+    input_torch, result_torch = run_rotate_test(device, (1, 32, 32, 32), 0.0)
 
-    def test_kernels_compile_at_runtime(self, device):
-        """Kernels should compile without errors when operation runs."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # For identity rotation with nearest neighbor, expect exact equality
+    # Since it's just data movement without interpolation
+    torch.testing.assert_close(result_torch, input_torch, rtol=0, atol=0)
 
-        try:
-            result = ttnn.rotate(input_tensor, 45.0)
-        except RuntimeError as e:
-            error_str = str(e)
-            # Check if this is a kernel compilation error
-            if ".cpp" in error_str or "error:" in error_str.lower():
-                pytest.fail(f"Kernel compilation failed: {e}")
-            # Re-raise if it's a different runtime error
-            raise
 
-    def test_program_executes(self, device):
-        """Program should execute without hanging."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+def test_various_angles(device):
+    """Test various rotation angles."""
+    angles = [0.0, 45.0, 90.0, 180.0, -45.0, 360.0, 23.7, 142.8, 201.3]
 
-        # Should complete without hanging
-        result = ttnn.rotate(input_tensor, 45.0)
+    for angle in angles:
+        run_rotate_test(device, (1, 32, 32, 32), angle)
+        # Just verify the operation succeeds and maintains shape
 
-        # Basic sanity checks
-        assert result is not None
-        assert list(result.shape) == list(input_tensor.shape)
 
-    def test_output_tensor_properties(self, device):
-        """Output tensor should have correct shape and dtype."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+def test_custom_center(device):
+    """Test rotation with custom center points."""
+    test_cases = [
+        (0.0, 0.0),  # Top-left corner
+        (16.0, 16.0),  # Center of 32x32 image
+        (31.0, 31.0),  # Bottom-right corner
+        (10.5, 20.5),  # Non-integer center
+    ]
 
-        result = ttnn.rotate(input_tensor, 45.0)
+    for center in test_cases:
+        run_rotate_test(device, (1, 32, 32, 32), 45.0, center=center)
 
-        # Shape should match input
-        assert list(result.shape) == list(input_tensor.shape)
 
-        # Dtype should match input
-        assert result.dtype == input_tensor.dtype
+def test_custom_fill_values(device):
+    """Test different fill values for out-of-bounds pixels."""
+    fill_values = [0.0, 1.0, -1.0, 0.5]
 
-    def test_identity_rotation(self, device):
-        """Rotation by 0 degrees should return approximately same values."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    for fill in fill_values:
+        run_rotate_test(device, (1, 32, 32, 32), 45.0, fill=fill)
 
-        result = ttnn.rotate(input_tensor, 0.0)
 
-        # Convert back to torch for comparison
-        result_torch = ttnn.to_torch(result)
+# ============================================================================
+# Shape and Size Tests
+# ============================================================================
 
-        # With 0 degree rotation, output should approximately match input
-        # (bilinear interpolation may introduce small differences)
-        assert result_torch.shape == input_data.shape
-        # Note: Exact comparison may fail due to bilinear interpolation at pixel centers
-        # For now, just verify shape is correct
 
-    def test_various_angles(self, device):
-        """Operation should handle various rotation angles."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+def test_various_tensor_sizes(device):
+    """Test various tensor shapes and sizes."""
+    test_shapes = [
+        (1, 32, 32, 32),  # Small square
+        (1, 64, 64, 32),  # Medium square
+        (1, 32, 64, 32),  # Rectangle
+        (2, 32, 32, 32),  # Batch size > 1
+        (1, 96, 96, 64),  # Larger tensor
+        (4, 48, 48, 16),  # Multiple batch, different dims
+    ]
 
-        angles = [0.0, 45.0, 90.0, 180.0, -45.0, 360.0]
+    for shape in test_shapes:
+        run_rotate_test(device, shape, 45.0)
 
-        for angle in angles:
-            result = ttnn.rotate(input_tensor, angle)
-            assert result is not None
-            assert list(result.shape) == list(input_tensor.shape)
 
-    def test_custom_center(self, device):
-        """Operation should accept custom center point."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+def test_channel_alignment(device):
+    """Test different channel sizes that meet alignment requirements."""
+    # Channels must align to 32 bytes for bfloat16 (16 channels = 32 bytes)
+    channel_sizes = [16, 32, 48, 64, 96, 128]
 
-        # Custom center (top-left corner)
-        result = ttnn.rotate(input_tensor, 45.0, center=(0.0, 0.0))
+    for channels in channel_sizes:
+        run_rotate_test(device, (1, 32, 32, channels), 90.0)
 
-        assert result is not None
-        assert list(result.shape) == list(input_tensor.shape)
 
-    def test_custom_fill_value(self, device):
-        """Operation should accept custom fill value."""
-        input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+# ============================================================================
+# Memory Configuration Tests
+# ============================================================================
 
-        # Non-zero fill value
-        result = ttnn.rotate(input_tensor, 45.0, fill=1.0)
 
-        assert result is not None
-        assert list(result.shape) == list(input_tensor.shape)
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_memory_configs(device, memory_config):
+    """Test different memory configurations."""
+    run_rotate_test(device, (1, 32, 32, 32), 45.0, memory_config=memory_config)
+
+
+# ============================================================================
+# Data Type Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_data_types(device, dtype):
+    """Test different data types."""
+    run_rotate_test(device, (1, 32, 32, 32), 45.0, input_dtype=dtype)
+
+
+# ============================================================================
+# Validation Tests
+# ============================================================================
+
+
+def test_validation_wrong_rank(device):
+    """Test that wrong tensor rank is rejected."""
+    input_3d = torch.randn(32, 32, 32, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_3d, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError, match="4D"):
+        ttnn.rotate(input_tensor, 45.0)
+
+
+def test_validation_expand_true(device):
+    """Test that expand=True is rejected."""
+    input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError, match="expand"):
+        ttnn.rotate(input_tensor, 45.0, expand=True)
+
+
+def test_validation_interpolation_mode(device):
+    """Test that only 'nearest' interpolation mode is accepted."""
+    input_data = torch.randn(1, 32, 32, 32, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Should accept "nearest"
+    result = ttnn.rotate(input_tensor, 45.0, interpolation_mode="nearest")
+    assert result is not None
+
+    # Should reject "bilinear" (now that it's removed)
+    with pytest.raises(RuntimeError, match="interpolation_mode"):
+        ttnn.rotate(input_tensor, 45.0, interpolation_mode="bilinear")
+
+
+def test_validation_channel_alignment(device):
+    """Test that unaligned channel dimensions are rejected."""
+    # Create tensor with 15 channels (15 * 2 bytes = 30 bytes, not aligned to 32)
+    input_data = torch.randn(1, 32, 32, 15, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    with pytest.raises(RuntimeError, match="Channel dimension must be aligned"):
+        ttnn.rotate(input_tensor, 45.0)
+
+
+# ============================================================================
+# Edge Cases
+# ============================================================================
+
+
+def test_full_rotation(device):
+    """Test 360-degree rotation should be exactly equal to identity."""
+    input_torch, result_torch = run_rotate_test(device, (1, 32, 32, 32), 360.0)
+
+    # 360-degree rotation should be exactly equal to identity for data movement
+    torch.testing.assert_close(result_torch, input_torch, rtol=0, atol=0)
+
+
+def test_negative_angles(device):
+    """Test negative rotation angles."""
+    angles = [-45.0, -90.0, -180.0, -270.0]
+
+    for angle in angles:
+        run_rotate_test(device, (1, 32, 32, 32), angle)
+
+
+def test_large_angles(device):
+    """Test angles greater than 360 degrees."""
+    angles = [405.0, 720.0, -450.0]
+
+    for angle in angles:
+        run_rotate_test(device, (1, 32, 32, 32), angle)
+
+
+def test_small_tensor(device):
+    """Test minimal tensor size."""
+    # Test with minimum practical size
+    run_rotate_test(device, (1, 32, 32, 16), 45.0)
 
 
 if __name__ == "__main__":
