@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    asm volatile("ebreak");
     // out tensor args
     uint32_t out_tensor_addr = get_arg_val<uint32_t>(0);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(1);

@@ -9,6 +9,7 @@
 #include "pad_tile.hpp"
 
 void kernel_main() {
+    asm volatile("ebreak");
     // COMPILE TIME ARGS
     // in0 block args
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);

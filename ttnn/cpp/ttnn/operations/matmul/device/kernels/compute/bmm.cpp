@@ -13,6 +13,7 @@ using std::uint32_t;
 //
 namespace NAMESPACE {
 void MAIN {
+    asm volatile("ebreak");
     constexpr int onetile = 1;
 
     int dst_tile_index = 0;
