@@ -565,7 +565,7 @@ def get_all_padded_prefill_lengths(max_len):
 
 
 def calculate_prefill_warmup_seq_lens(
-    max_seq_len_to_warmup, trace_supported_seq_lens, model_args_max_prefill_chunk_size
+    max_seq_len_to_warmup, trace_supported_seq_lens, model_args_max_prefill_chunk_size, max_seq_len
 ):
     max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
     to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
@@ -574,12 +574,12 @@ def calculate_prefill_warmup_seq_lens(
             to_warmup_seq_lens.append(trace_supported_seq_len)
     to_warmup_seq_lens.sort()
 
-    return cap_seq_lens_to_max_prefill_chunk_size(to_warmup_seq_lens, model_args_max_prefill_chunk_size)
+    return cap_seq_lens_to_max_prefill_chunk_size(to_warmup_seq_lens, model_args_max_prefill_chunk_size, max_seq_len)
 
 
-def cap_seq_lens_to_max_prefill_chunk_size(seq_lens, max_prefill_chunk_size):
+def cap_seq_lens_to_max_prefill_chunk_size(seq_lens, max_prefill_chunk_size, max_seq_len):
     for seq_len in seq_lens:
-        if seq_len > max_prefill_chunk_size:
+        if seq_len > max_prefill_chunk_size or seq_len > max_seq_len:
             seq_lens = seq_lens[: seq_lens.index(seq_len)]
             break
     return seq_lens

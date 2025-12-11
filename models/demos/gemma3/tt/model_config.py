@@ -886,7 +886,7 @@ class ModelArgs(TTModelArgs):
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
 
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size, self.max_seq_len
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
