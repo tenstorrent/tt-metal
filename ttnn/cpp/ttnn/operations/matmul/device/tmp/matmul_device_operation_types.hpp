@@ -9,15 +9,9 @@
 #include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-// TODO [migration]: Remove `using` aliases and the `tmp` namespace after migrating all dependent ops from the old
-// infra. Once complete, the old infra code can be deleted. #33531
-using namespace ttnn::operations::matmul::config;
-namespace ttnn::operations::matmul::tmp {
+namespace ttnn::operations::matmul {
 
 enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
-}
-
-namespace ttnn::operations::matmul {
 
 // from struct Matrix which is used but run
 struct operation_attributes_t {

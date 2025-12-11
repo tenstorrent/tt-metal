@@ -13,6 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
 
 namespace ttnn {
 
@@ -21,8 +22,6 @@ namespace operations {
 namespace matmul {
 
 // shared variables between override and program
-
-enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
 
 struct matmul_mcast_1d_common_override_variables_t {
     std::vector<tt::tt_metal::KernelHandle> kernels;
