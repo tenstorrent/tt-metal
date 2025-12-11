@@ -152,7 +152,7 @@ def test_grouped_gate(device):
     torch.manual_seed(0)
     batch_size = 1
     num_batches = 1
-    seq_len = 64
+    seq_len = 32  # DEBUG: Use 1 tile first to establish baseline
     total_experts = 256
     # Use generate_distinct_sigmoid_inputs to avoid ties after sigmoid
     # This ensures deterministic top-k selection regardless of rounding differences

@@ -194,34 +194,44 @@ FORCE_INLINE void generate_summed_experts_tiles(
         cb_wait_front(topk_input_cb_index, 1);
         // offset to relevant tile in topk_input_cb_index
         uint64_t group_sorted_tile_ptr = get_noc_addr(get_read_ptr(topk_input_cb_index));
+
         if (width_tile % 2 == 0) {
-            // even width tiles are in the first face lines
+            // even width tiles are sorted descending, best at row 0
             for (uint32_t i = 0; i < summed_experts_per_group; i++) {
-                // read first face line to summed_experts_cb_index
+                // Source: Face 0 row i (tokens 0-15 after transpose)
+                // Dest: Face 0 of tile i, row = width_tile
                 noc_async_read(
                     group_sorted_tile_ptr + i * face_line_bytes,
                     get_write_ptr(summed_experts_cb_index) + i * tile_size_bytes + width_tile * face_line_bytes,
                     face_line_bytes);
                 if (tokens_per_tile > 16) {
+                    // Source: Face 1 row i (tokens 16-31 after transpose)
+                    // Dest: Face 1 of tile i, row = width_tile (layout is [groups, tokens])
                     noc_async_read(
                         group_sorted_tile_ptr + face_size_bytes + i * face_line_bytes,
-                        get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes,
+                        get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes +
+                            width_tile * face_line_bytes,
                         face_line_bytes);
                 }
             }
         } else {
-            // odd width tiles are in the last face lines
-            // offset to face 3
+            // odd width tiles are sorted ascending, best at row 15
+            // offset to Face 2 for source reads
             group_sorted_tile_ptr += face_size_bytes * 2;
             for (uint32_t i = 0; i < summed_experts_per_group; i++) {
+                // Source: Face 2 row (15-i) for tokens 0-15
+                // Dest: Face 0 of tile i, row = width_tile
                 noc_async_read(
                     group_sorted_tile_ptr + (15 - i) * face_line_bytes,
                     get_write_ptr(summed_experts_cb_index) + i * tile_size_bytes + width_tile * face_line_bytes,
                     face_line_bytes);
                 if (tokens_per_tile > 16) {
+                    // Source: Face 3 row (15-i) for tokens 16-31
+                    // Dest: Face 1 of tile i, row = width_tile (layout is [groups, tokens])
                     noc_async_read(
                         group_sorted_tile_ptr + face_size_bytes + (15 - i) * face_line_bytes,
-                        get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes,
+                        get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes +
+                            width_tile * face_line_bytes,
                         face_line_bytes);
                 }
             }
@@ -285,7 +295,6 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
 #pragma GCC unroll 16
         for (uint32_t t = 0; t < limit_part1; t++) {
             uint16_t winning_group_idx = sorted_indices_ptr[k_indices_offset_0_15 + t];
-            DPRINT << "winning_group_idx: " << winning_group_idx << ENDL();
             uint64_t src_tile_offset = winning_group_idx * tile_size_bytes;
 
             uint32_t ro_p1 = t * face_line_bytes;
@@ -368,8 +377,6 @@ FORCE_INLINE void gather(uint32_t tokens_per_tile) {
     volatile tt_l1_ptr uint16_t* sigmoid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sigmoid_base_addr);
     volatile tt_l1_ptr uint16_t* gathered_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(gathered_addr);
 
-    DPRINT << "=== Gather Debug ===" << ENDL();
-
     for (uint32_t token = 0; token < tokens_per_tile; token++) {
         // Token's row position within tile faces
         uint32_t token_face_row = token % 16;
@@ -407,14 +414,8 @@ FORCE_INLINE void gather(uint32_t tokens_per_tile) {
                 gathered_face * (face_size_bytes / 2) + token_face_row * elements_per_face_row + gathered_face_col;
 
             gathered_ptr[gathered_offset] = sigmoid_val;
-
-            // Debug print: show index and gathered value
-            DPRINT << "t=" << token << " e=" << expert << " idx=" << expert_idx << " sigmoid_val=" << BF16(sigmoid_val)
-                   << ENDL();
         }
     }
-
-    DPRINT << "=== Gather Complete ===" << ENDL();
 
     // Pop the sigmoid input now that we're done gathering from it
     cb_pop_front(sigmoid_input_cb_index, width_tiles);

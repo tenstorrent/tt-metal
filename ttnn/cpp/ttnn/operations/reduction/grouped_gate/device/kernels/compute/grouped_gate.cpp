@@ -56,7 +56,6 @@ namespace blocks {
 void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t width_tiles) {
     // Perform sigmoid on scores
     // Reconfigure pack/unpack for bfloat16 after topk operations used UInt16
-    DPRINT << "Sigmoid" << ENDL();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_wait_front(scores_cb_index, 1);
         tile_regs_acquire();
@@ -112,7 +111,6 @@ void process_and_sort_tiles(
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     cb_wait_front(index_cb_index, Wt);
     cb_wait_front(input_cb_index, Wt);
-    PACK(DPRINT << "Process and sort tiles" << ENDL();)
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         acquire_dst();
         // transpose and unpack into dest regs
@@ -244,7 +242,6 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
 void topk(
     const uint32_t winning_group_scores_cb_index,
     const uint32_t winning_group_indices_cb_index,
-    const uint32_t unnormalized_scores_cb_index,
     const uint32_t intermediate_local_sort_indices_cb_index,
     const uint32_t output_indices_cb_index,
     const uint32_t post_sort_transpose_cb_index,
@@ -307,7 +304,6 @@ void topk(
     tile_regs_release();
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
-    // transpose_and_pack(post_sort_transpose_cb_index, unnormalized_scores_cb_index, 1);
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
 
     cb_pop_front(winning_group_scores_cb_index, tiles);
@@ -461,7 +457,6 @@ void MAIN {
     binary_op_init_common(scores_cb_index, bias_cb_index, add_bias_cb_index);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        DPRINT << "Height tile: " << height_tile << ENDL();
         blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
@@ -488,7 +483,6 @@ void MAIN {
         blocks::topk(
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
-            pre_normalized_scores_cb_index,
             intermediate_local_sort_indices_cb_index,
             indices_cb_index,
             post_sort_transpose_cb_index,
