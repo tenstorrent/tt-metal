@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import InterpolationMode
 from loguru import logger
@@ -28,8 +27,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "angle",
     [0, 15, 30, 45, 60, 90, 135, 180, 270, -30, -90],
 )
-def test_image_rotate_various_angles(device, input_shape, angle):
-    """Test image_rotate with various rotation angles"""
+def test_rotate_various_angles(device, input_shape, angle):
+    """Test rotate with various rotation angles"""
 
     torch.manual_seed(42)
 
@@ -38,12 +37,12 @@ def test_image_rotate_various_angles(device, input_shape, angle):
 
     # PyTorch reference (expects NCHW)
     torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.BILINEAR)
+    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.NEAREST)
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=float(angle))
+    ttnn_output = ttnn.rotate(ttnn_input, angle=float(angle))
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Verify shapes match
@@ -71,7 +70,7 @@ def test_image_rotate_various_angles(device, input_shape, angle):
         (2, 16, 16, 32),
     ],
 )
-def test_image_rotate_identity(device, input_shape):
+def test_rotate_identity(device, input_shape):
     """Test that 0-degree rotation returns the same image"""
 
     torch.manual_seed(42)
@@ -80,7 +79,7 @@ def test_image_rotate_identity(device, input_shape):
 
     # TTNN rotation by 0 degrees
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=0.0)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=0.0)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Should be nearly identical
@@ -106,7 +105,7 @@ def test_image_rotate_identity(device, input_shape):
     "angle",
     [90, 180, 270, -90, -180],
 )
-def test_image_rotate_exact_multiples_of_90(device, input_shape, angle):
+def test_rotate_exact_multiples_of_90(device, input_shape, angle):
     """Test 90-degree multiples which should be exact (within bfloat16 precision)"""
 
     torch.manual_seed(42)
@@ -115,12 +114,12 @@ def test_image_rotate_exact_multiples_of_90(device, input_shape, angle):
 
     # PyTorch reference
     torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.BILINEAR)
+    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.NEAREST)
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=float(angle))
+    ttnn_output = ttnn.rotate(ttnn_input, angle=float(angle))
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # 90-degree rotations should be very accurate
@@ -146,7 +145,7 @@ def test_image_rotate_exact_multiples_of_90(device, input_shape, angle):
     "fill_value",
     [0.0],  # Only test default fill value for now
 )
-def test_image_rotate_with_fill_value(device, input_shape, fill_value):
+def test_rotate_with_fill_value(device, input_shape, fill_value):
     """Test rotation with different fill values for out-of-bounds areas"""
 
     torch.manual_seed(42)
@@ -157,13 +156,13 @@ def test_image_rotate_with_fill_value(device, input_shape, fill_value):
     # PyTorch reference
     torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
     torch_output_nchw = TF.rotate(
-        torch_input_nchw, angle=angle, interpolation=InterpolationMode.BILINEAR, fill=[fill_value]
+        torch_input_nchw, angle=angle, interpolation=InterpolationMode.NEAREST, fill=[fill_value]
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle, fill=fill_value)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, fill=fill_value)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
@@ -192,7 +191,7 @@ def test_image_rotate_with_fill_value(device, input_shape, fill_value):
         (0.0, 0.0),  # Corner center - fixed!
     ],
 )
-def test_image_rotate_with_custom_center(device, input_shape, center):
+def test_rotate_with_custom_center(device, input_shape, center):
     """Test rotation around custom center points"""
 
     torch.manual_seed(42)
@@ -202,14 +201,12 @@ def test_image_rotate_with_custom_center(device, input_shape, center):
 
     # PyTorch reference
     torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(
-        torch_input_nchw, angle=angle, interpolation=InterpolationMode.BILINEAR, center=center
-    )
+    torch_output_nchw = TF.rotate(torch_input_nchw, angle=angle, interpolation=InterpolationMode.NEAREST, center=center)
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle, center=center)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, center=center)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
@@ -230,7 +227,7 @@ def test_image_rotate_with_custom_center(device, input_shape, center):
         (4, 16, 16, 32),
     ],
 )
-def test_image_rotate_batch_consistency(device, input_shape):
+def test_rotate_batch_consistency(device, input_shape):
     """Test that each batch item rotates independently and consistently"""
 
     torch.manual_seed(42)
@@ -241,14 +238,14 @@ def test_image_rotate_batch_consistency(device, input_shape):
 
     # TTNN batch rotation
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Compare each batch item with individual rotation
     for b in range(batch_size):
         single_input = torch_input_nhwc[b : b + 1]
         ttnn_single = ttnn.from_torch(single_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        ttnn_single_output = ttnn.image_rotate(ttnn_single, angle=angle)
+        ttnn_single_output = ttnn.rotate(ttnn_single, angle=angle)
         ttnn_single_torch = ttnn.to_torch(ttnn_single_output)
 
         # Should be identical
@@ -270,7 +267,7 @@ def test_image_rotate_batch_consistency(device, input_shape):
     "angle",
     [10, 45, 90],
 )
-def test_image_rotate_multichannel_consistency(device, input_shape, angle):
+def test_rotate_multichannel_consistency(device, input_shape, angle):
     """Test that all channels rotate identically"""
 
     torch.manual_seed(42)
@@ -283,7 +280,7 @@ def test_image_rotate_multichannel_consistency(device, input_shape, angle):
 
     # TTNN rotation
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=float(angle))
+    ttnn_output = ttnn.rotate(ttnn_input, angle=float(angle))
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Channels 0 and 1 should remain identical
@@ -303,7 +300,7 @@ def test_image_rotate_multichannel_consistency(device, input_shape, angle):
         (1, 20, 20, 64),
     ],
 )
-def test_image_rotate_small_angles(device, input_shape):
+def test_rotate_small_angles(device, input_shape):
     """Test rotation with very small angles (precision check)"""
 
     torch.manual_seed(42)
@@ -313,12 +310,12 @@ def test_image_rotate_small_angles(device, input_shape):
     for angle in [0.1, 1.0, 5.0]:
         # PyTorch reference
         torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-        torch_output_nchw = TF.rotate(torch_input_nchw, angle=angle, interpolation=InterpolationMode.BILINEAR)
+        torch_output_nchw = TF.rotate(torch_input_nchw, angle=angle, interpolation=InterpolationMode.NEAREST)
         torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
         # TTNN
         ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle)
+        ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
         ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
         pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
@@ -334,7 +331,7 @@ def test_image_rotate_small_angles(device, input_shape):
         (2, 24, 24, 64),
     ],
 )
-def test_image_rotate_large_angles(device, input_shape):
+def test_rotate_large_angles(device, input_shape):
     """Test rotation with large angles (equivalence check)"""
 
     torch.manual_seed(42)
@@ -344,10 +341,10 @@ def test_image_rotate_large_angles(device, input_shape):
     # 360 degrees should be equivalent to 0 degrees
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    ttnn_output_360 = ttnn.image_rotate(ttnn_input, angle=360.0)
+    ttnn_output_360 = ttnn.rotate(ttnn_input, angle=360.0)
     ttnn_output_360_torch = ttnn.to_torch(ttnn_output_360)
 
-    ttnn_output_0 = ttnn.image_rotate(ttnn_input, angle=0.0)
+    ttnn_output_0 = ttnn.rotate(ttnn_input, angle=0.0)
     ttnn_output_0_torch = ttnn.to_torch(ttnn_output_0)
 
     # Should be very similar
@@ -375,7 +372,7 @@ def test_image_rotate_large_angles(device, input_shape):
         (90, -90),  # Keep 90-degree round-trip as it's more exact
     ],
 )
-def test_image_rotate_opposite_angles(device, input_shape, angle_pair):
+def test_rotate_opposite_angles(device, input_shape, angle_pair):
     """Test that rotating by +theta then -theta returns near-original"""
 
     torch.manual_seed(42)
@@ -386,14 +383,14 @@ def test_image_rotate_opposite_angles(device, input_shape, angle_pair):
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     # Rotate positive
-    ttnn_rotated = ttnn.image_rotate(ttnn_input, angle=float(angle_pos))
+    ttnn_rotated = ttnn.rotate(ttnn_input, angle=float(angle_pos))
 
     # Rotate negative
-    ttnn_restored = ttnn.image_rotate(ttnn_rotated, angle=float(angle_neg))
+    ttnn_restored = ttnn.rotate(ttnn_rotated, angle=float(angle_neg))
     ttnn_restored_torch = ttnn.to_torch(ttnn_restored)
 
-    # Should be close to original (with some bilinear interpolation loss)
-    pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_restored_torch, pcc=0.95)
+    # Should be close to original
+    pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_restored_torch, pcc=0.99)
     logger.info(f"Rotate {angle_pos}° then {angle_neg}°: {pcc_message}")
 
     # Allow more tolerance due to double interpolation
@@ -422,8 +419,8 @@ def test_image_rotate_opposite_angles(device, input_shape, angle_pair):
     "angle",
     [0, 15, 30, 45, 60, 90, 135, 180, 270, -30, -90],
 )
-def test_image_rotate_nearest_various_angles(device, input_shape, angle):
-    """Test image_rotate with nearest interpolation for various rotation angles"""
+def test_rotate_nearest_various_angles(device, input_shape, angle):
+    """Test rotate with nearest interpolation for various rotation angles"""
 
     torch.manual_seed(42)
 
@@ -437,7 +434,7 @@ def test_image_rotate_nearest_various_angles(device, input_shape, angle):
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=float(angle), interpolation_mode="nearest")
+    ttnn_output = ttnn.rotate(ttnn_input, angle=float(angle), interpolation_mode="nearest")
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Verify shapes match
@@ -470,7 +467,7 @@ def test_image_rotate_nearest_various_angles(device, input_shape, angle):
         (2, 16, 16, 32),
     ],
 )
-def test_image_rotate_nearest_identity(device, input_shape):
+def test_rotate_nearest_identity(device, input_shape):
     """Test that 0-degree rotation with nearest returns the same image"""
 
     torch.manual_seed(42)
@@ -479,7 +476,7 @@ def test_image_rotate_nearest_identity(device, input_shape):
 
     # TTNN rotation by 0 degrees with nearest
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=0.0, interpolation_mode="nearest")
+    ttnn_output = ttnn.rotate(ttnn_input, angle=0.0, interpolation_mode="nearest")
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Check accuracy - nearest implementation currently has issues with larger tensors
@@ -510,9 +507,9 @@ def test_image_rotate_nearest_identity(device, input_shape):
 )
 @pytest.mark.parametrize(
     "interpolation_mode",
-    ["bilinear", "nearest"],
+    ["nearest"],
 )
-def test_image_rotate_interpolation_mode_comparison(device, input_shape, interpolation_mode):
+def test_rotate_interpolation_mode_comparison(device, input_shape, interpolation_mode):
     """Compare bilinear vs nearest interpolation modes"""
 
     torch.manual_seed(42)
@@ -528,7 +525,7 @@ def test_image_rotate_interpolation_mode_comparison(device, input_shape, interpo
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode=interpolation_mode)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Verify shapes match
@@ -568,7 +565,7 @@ def test_image_rotate_interpolation_mode_comparison(device, input_shape, interpo
     "fill_value",
     [0.0, 1.0, -1.0, 0.5],
 )
-def test_image_rotate_nearest_fill_values(device, input_shape, fill_value):
+def test_rotate_nearest_fill_values(device, input_shape, fill_value):
     """Test nearest rotation with different fill values for out-of-bounds areas"""
 
     torch.manual_seed(42)
@@ -585,7 +582,7 @@ def test_image_rotate_nearest_fill_values(device, input_shape, fill_value):
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode="nearest", fill=fill_value)
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, interpolation_mode="nearest", fill=fill_value)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Nearest implementation currently has issues with larger tensors
@@ -631,7 +628,7 @@ def test_image_rotate_nearest_fill_values(device, input_shape, fill_value):
     "rotation_angle",
     [0.0, -6.64, -1.33, 1.33, 4.80, 25.0],
 )
-def test_image_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
+def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
     """Test vadv2-specific rotation use case: BEV feature rotation with custom center"""
 
     torch.manual_seed(42)
@@ -667,11 +664,11 @@ def test_image_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_a
         torch_outputs.append(torch_spatial_out)
 
         # TTNN (should match the vadv2 pattern):
-        # Convert flattened to NHWC format for ttnn.image_rotate
+        # Convert flattened to NHWC format for ttnn.rotate
         ttnn_spatial = prev_bev_single.view(bev_h, bev_w, embed_dims).unsqueeze(0)  # Add batch dim
         ttnn_input = ttnn.from_torch(ttnn_spatial, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        # Rotate using ttnn.image_rotate with custom center
-        ttnn_rotated = ttnn.image_rotate(
+        # Rotate using ttnn.rotate with custom center
+        ttnn_rotated = ttnn.rotate(
             ttnn_input,
             angle=rotation_angle,
             center=(float(rotate_center[1]), float(rotate_center[0])),  # ttnn expects (x, y)
@@ -705,64 +702,12 @@ def test_image_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_a
 @pytest.mark.parametrize(
     "input_shape",
     [
-        (1, 16, 16, 32),
-        (2, 24, 24, 64),
-    ],
-)
-def test_image_rotate_nearest_vs_bilinear_performance(device, input_shape):
-    """Performance comparison test (informational) - nearest should be faster"""
-
-    import time
-
-    torch.manual_seed(42)
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
-    angle = 30.0
-    num_runs = 5
-
-    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    # Warm up
-    _ = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode="bilinear")
-    _ = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode="nearest")
-
-    # Time bilinear
-    start_time = time.time()
-    for _ in range(num_runs):
-        ttnn_output_bilinear = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode="bilinear")
-    bilinear_time = (time.time() - start_time) / num_runs
-
-    # Time nearest
-    start_time = time.time()
-    for _ in range(num_runs):
-        ttnn_output_nearest = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode="nearest")
-    nearest_time = (time.time() - start_time) / num_runs
-
-    speedup = bilinear_time / nearest_time if nearest_time > 0 else float("inf")
-
-    logger.info(f"Performance comparison (shape={input_shape}):")
-    logger.info(f"  Bilinear: {bilinear_time*1000:.2f}ms")
-    logger.info(f"  Nearest:  {nearest_time*1000:.2f}ms")
-    logger.info(f"  Speedup:  {speedup:.2f}x")
-
-    # Due to implementation issues, nearest may not be faster than bilinear
-    # This is informational only - performance will improve when implementation is fixed
-    # Allow 2x slower for now due to implementation inefficiencies
-    if speedup < 0.5:
-        logger.warning(
-            f"Nearest interpolation is slower than bilinear ({speedup:.2f}x) - implementation needs optimization"
-        )
-    # Don't fail the test - this is informational
-
-
-@pytest.mark.parametrize(
-    "input_shape",
-    [
         (1, 8, 8, 32),
         (2, 16, 16, 64),
         (4, 16, 16, 32),
     ],
 )
-def test_image_rotate_nearest_batch_consistency(device, input_shape):
+def test_rotate_nearest_batch_consistency(device, input_shape):
     """Test that nearest rotation is consistent across batches"""
 
     torch.manual_seed(42)
@@ -773,14 +718,14 @@ def test_image_rotate_nearest_batch_consistency(device, input_shape):
 
     # TTNN batch rotation
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.image_rotate(ttnn_input, angle=angle, interpolation_mode="nearest")
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, interpolation_mode="nearest")
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Compare each batch item with individual rotation
     for b in range(batch_size):
         single_input = torch_input_nhwc[b : b + 1]
         ttnn_single = ttnn.from_torch(single_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        ttnn_single_output = ttnn.image_rotate(ttnn_single, angle=angle, interpolation_mode="nearest")
+        ttnn_single_output = ttnn.rotate(ttnn_single, angle=angle, interpolation_mode="nearest")
         ttnn_single_torch = ttnn.to_torch(ttnn_single_output)
 
         # Due to implementation issues, allow larger differences
@@ -798,7 +743,7 @@ def test_image_rotate_nearest_batch_consistency(device, input_shape):
         (1, 16, 16, 64),
     ],
 )
-def test_image_rotate_mode_validation(device, input_shape):
+def test_rotate_mode_validation(device, input_shape):
     """Test that invalid interpolation modes are rejected"""
 
     torch.manual_seed(42)
@@ -806,12 +751,11 @@ def test_image_rotate_mode_validation(device, input_shape):
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     # Valid modes should work
-    _ = ttnn.image_rotate(ttnn_input, angle=30.0, interpolation_mode="bilinear")
-    _ = ttnn.image_rotate(ttnn_input, angle=30.0, interpolation_mode="nearest")
+    _ = ttnn.rotate(ttnn_input, angle=30.0, interpolation_mode="nearest")
 
     # Invalid modes should raise an error
     with pytest.raises(Exception):  # Should be a validation error
-        _ = ttnn.image_rotate(ttnn_input, angle=30.0, interpolation_mode="invalid_mode")
+        _ = ttnn.rotate(ttnn_input, angle=30.0, interpolation_mode="invalid_mode")
 
     with pytest.raises(Exception):  # Should be a validation error
-        _ = ttnn.image_rotate(ttnn_input, angle=30.0, interpolation_mode="bicubic")
+        _ = ttnn.rotate(ttnn_input, angle=30.0, interpolation_mode="bicubic")
