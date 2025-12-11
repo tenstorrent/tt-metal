@@ -10,7 +10,7 @@
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
-#include <telemetry/ethernet/fabric_telemetry_reader.hpp>
+#include <telemetry/ethernet/caching_fabric_telemetry_reader.hpp>
 #include <topology/topology.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -114,8 +114,8 @@ void create_ethernet_metrics(
         }
 
         if (hal->get_arch() == tt::ARCH::WORMHOLE_B0 || hal->get_arch() == tt::ARCH::BLACKHOLE) {
-            std::shared_ptr<FabricTelemetryReader> telemetry_reader =
-                std::make_shared<FabricTelemetryReader>(chip_id, channel, cluster, hal);
+            std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader =
+                std::make_shared<CachingFabricTelemetryReader>(chip_id, channel, cluster, hal);
 
             tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
             tt::ChipId pcie_chip_id = cluster_descriptor->get_closest_mmio_capable_chip(chip_id);
@@ -579,7 +579,7 @@ FabricMeshIdMetric::FabricMeshIdMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -614,7 +614,7 @@ FabricDeviceIdMetric::FabricDeviceIdMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -649,7 +649,7 @@ FabricDirectionMetric::FabricDirectionMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -684,7 +684,7 @@ FabricConfigMetric::FabricConfigMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -719,7 +719,7 @@ FabricTxWordsMetric::FabricTxWordsMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -754,7 +754,7 @@ FabricRxWordsMetric::FabricRxWordsMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -789,7 +789,7 @@ FabricTxPacketsMetric::FabricTxPacketsMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -824,7 +824,7 @@ FabricRxPacketsMetric::FabricRxPacketsMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -859,7 +859,7 @@ FabricSupportedStatsMetric::FabricSupportedStatsMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -894,7 +894,7 @@ FabricTxBandwidthMetric::FabricTxBandwidthMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper,
     tt::umd::FirmwareInfoProvider* firmware_info_provider,
     tt::ARCH arch) :
@@ -947,7 +947,7 @@ FabricRxBandwidthMetric::FabricRxBandwidthMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper,
     tt::umd::FirmwareInfoProvider* firmware_info_provider,
     tt::ARCH arch) :
@@ -1000,7 +1000,7 @@ FabricTxPeakBandwidthMetric::FabricTxPeakBandwidthMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper,
     tt::umd::FirmwareInfoProvider* firmware_info_provider,
     tt::ARCH arch) :
@@ -1053,7 +1053,7 @@ FabricRxPeakBandwidthMetric::FabricRxPeakBandwidthMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper,
     tt::umd::FirmwareInfoProvider* firmware_info_provider,
     tt::ARCH arch) :
@@ -1107,7 +1107,7 @@ FabricTxHeartbeatMetric::FabricTxHeartbeatMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     size_t erisc_core,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -1148,7 +1148,7 @@ FabricRxHeartbeatMetric::FabricRxHeartbeatMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     size_t erisc_core,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
@@ -1189,7 +1189,7 @@ FabricRouterStateMetric::FabricRouterStateMetric(
     tt::tt_metal::ASICLocation asic_location,
     uint32_t channel,
     size_t erisc_core,
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
     const std::unique_ptr<TopologyHelper>& topology_helper) :
     UIntMetric(),
     tray_id_(tray_id),
