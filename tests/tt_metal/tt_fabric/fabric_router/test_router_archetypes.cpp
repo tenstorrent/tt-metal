@@ -146,12 +146,12 @@ protected:
             .source_direction = source.direction,
             .source_eth_chan = source.eth_chan,
             .source_vc = source_vc,
-            .source_sender_channel = source_sender_ch,
+            .source_receiver_channel = source_sender_ch,
             .dest_node = dest.node_id,
             .dest_direction = dest.direction,
             .dest_eth_chan = dest.eth_chan,
             .dest_vc = dest_vc,
-            .dest_receiver_channel = dest_receiver_ch,
+            .dest_sender_channel = dest_receiver_ch,
             .connection_type = conn_type
         };
 
@@ -364,7 +364,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_SingleMeshRouter) {
 
     auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
     EXPECT_EQ(mesh_to_z.size(), 1);
-    EXPECT_EQ(mesh_to_z[0].source_sender_channel, 4);
+    EXPECT_EQ(mesh_to_z[0].source_receiver_channel, 4);
     EXPECT_EQ(mesh_to_z[0].dest_direction, RoutingDirection::Z);
 }
 
@@ -415,7 +415,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FourMeshRouters) {
     // All should target Z router VC0, receiver channel 0 (multi-target receiver)
     for (const auto& conn : z_incoming) {
         EXPECT_EQ(conn.dest_vc, 0);
-        EXPECT_EQ(conn.dest_receiver_channel, 0);
+        EXPECT_EQ(conn.dest_sender_channel, 0);
     }
 }
 
@@ -474,7 +474,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FourMeshRouters_VC1_Connections) {
     std::set<uint32_t> receiver_channels;
     for (const auto& conn : z_incoming) {
         EXPECT_EQ(conn.dest_vc, 1);
-        receiver_channels.insert(conn.dest_receiver_channel);
+        receiver_channels.insert(conn.dest_sender_channel);
     }
     EXPECT_EQ(receiver_channels.size(), 4);  // All 4 channels used
 }
@@ -617,7 +617,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_FourMeshRouters_AllDirections) {
     std::set<uint32_t> sender_channels;
     for (const auto& conn : z_outgoing) {
         EXPECT_EQ(conn.source_vc, 1);
-        sender_channels.insert(conn.source_sender_channel);
+        sender_channels.insert(conn.source_receiver_channel);
     }
     EXPECT_EQ(sender_channels.size(), 4);  // Channels 0, 1, 2, 3
 }

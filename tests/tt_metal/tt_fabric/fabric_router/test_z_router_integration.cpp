@@ -46,12 +46,12 @@ protected:
             .source_direction = src_dir,
             .source_eth_chan = src_chan,
             .source_vc = src_vc,
-            .source_sender_channel = src_sender,
+            .source_receiver_channel = src_sender,
             .dest_node = dst_node,
             .dest_direction = dst_dir,
             .dest_eth_chan = dst_chan,
             .dest_vc = dst_vc,
-            .dest_receiver_channel = dst_receiver,
+            .dest_sender_channel = dst_receiver,
             .connection_type = type
         });
     }
@@ -123,7 +123,7 @@ TEST_F(ZRouterIntegrationTest, FullDevice_4Mesh1Z_BidirectionalConnectivity) {
     // Validate multi-target receiver: all MESH_TO_Z target same Z receiver
     for (const auto& conn : mesh_to_z) {
         EXPECT_EQ(conn.dest_vc, 0) << "MESH_TO_Z should target Z VC0";
-        EXPECT_EQ(conn.dest_receiver_channel, 0) << "All MESH_TO_Z should target same receiver (multi-target)";
+        EXPECT_EQ(conn.dest_sender_channel, 0) << "All MESH_TO_Z should target same receiver (multi-target)";
     }
 
     // Validate Z_TO_MESH uses VC1
@@ -259,12 +259,12 @@ TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
                 .source_direction = all_dirs[i],
                 .source_eth_chan = static_cast<uint8_t>(i),
                 .source_vc = 0,
-                .source_sender_channel = builder_config::num_sender_channels_2d_mesh,
+                .source_receiver_channel = builder_config::num_sender_channels_2d_mesh,
                 .dest_node = device0,
                 .dest_direction = RoutingDirection::Z,
                 .dest_eth_chan = 4,
                 .dest_vc = 0,
-                .dest_receiver_channel = 0,
+                .dest_sender_channel = 0,
                 .connection_type = ConnectionType::MESH_TO_Z
             });
 
@@ -274,12 +274,12 @@ TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
                 .source_direction = RoutingDirection::Z,
                 .source_eth_chan = 4,
                 .source_vc = 1,
-                .source_sender_channel = static_cast<uint32_t>(i),
+                .source_receiver_channel = static_cast<uint32_t>(i),
                 .dest_node = device0,
                 .dest_direction = all_dirs[i],
                 .dest_eth_chan = static_cast<uint8_t>(i),
                 .dest_vc = 1,
-                .dest_receiver_channel = 0,
+                .dest_sender_channel = 0,
                 .connection_type = ConnectionType::Z_TO_MESH
             });
         }
@@ -471,10 +471,10 @@ TEST_F(ZRouterIntegrationTest, ZRouter_VC0_NoDownstreamReceiverConnections) {
 
     const auto& conn = connections[0];
     EXPECT_EQ(conn.dest_vc, 0) << "MESH_TO_Z should target Z VC0";
-    EXPECT_EQ(conn.dest_receiver_channel, 0) << "Should target receiver channel, not sender";
+    EXPECT_EQ(conn.dest_sender_channel, 0) << "Should target receiver channel, not sender";
 
     // Note: There's no explicit "sender vs receiver" flag in the connection record,
-    // but the semantic is clear: dest_receiver_channel refers to the receiver side
+    // but the semantic is clear: dest_sender_channel refers to the receiver side
 }
 
 TEST_F(ZRouterIntegrationTest, MultiTargetReceiver_SingleZReceiverChannel) {
@@ -500,7 +500,7 @@ TEST_F(ZRouterIntegrationTest, MultiTargetReceiver_SingleZReceiverChannel) {
     // All should target same receiver
     for (const auto& conn : mesh_to_z) {
         EXPECT_EQ(conn.dest_vc, 0);
-        EXPECT_EQ(conn.dest_receiver_channel, 0);
+        EXPECT_EQ(conn.dest_sender_channel, 0);
     }
 }
 

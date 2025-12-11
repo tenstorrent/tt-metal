@@ -95,7 +95,7 @@ TEST_F(RouterConnectionMappingTest, EmptyMapping_NoTargets) {
 TEST_F(RouterConnectionMappingTest, GetAllSenderKeys_ReturnsCorrectKeys) {
     RouterConnectionMapping mapping = RouterConnectionMapping::for_z_router();
 
-    auto keys = mapping.get_all_sender_keys();
+    auto keys = mapping.get_all_receiver_keys();
 
     // Z router has 4 sender channels on VC1
     EXPECT_EQ(keys.size(), 4);
@@ -103,8 +103,8 @@ TEST_F(RouterConnectionMappingTest, GetAllSenderKeys_ReturnsCorrectKeys) {
     // Verify all keys are VC1, channels 0-3
     for (const auto& key : keys) {
         EXPECT_EQ(key.vc, 1);
-        EXPECT_GE(key.sender_channel, 0);
-        EXPECT_LE(key.sender_channel, 3);
+        EXPECT_GE(key.receiver_channel, 0);
+        EXPECT_LE(key.receiver_channel, 3);
     }
 }
 
@@ -342,11 +342,11 @@ TEST_F(RouterConnectionMappingTest, ConnectionTarget_Construction) {
     EXPECT_EQ(target.target_direction.value(), RoutingDirection::Z);
 }
 
-TEST_F(RouterConnectionMappingTest, SenderChannelKey_Comparison) {
-    SenderChannelKey key1{0, 1};
-    SenderChannelKey key2{0, 2};
-    SenderChannelKey key3{1, 0};
-    SenderChannelKey key4{0, 1};
+TEST_F(RouterConnectionMappingTest, ReceiverChannelKey_Comparison) {
+    ReceiverChannelKey key1{0, 1};
+    ReceiverChannelKey key2{0, 2};
+    ReceiverChannelKey key3{1, 0};
+    ReceiverChannelKey key4{0, 1};
 
     // Ordering
     EXPECT_TRUE(key1 < key2);  // Same VC, lower channel

@@ -15,9 +15,9 @@
 namespace tt::tt_fabric {
 
 /**
- * @brief Represents a single downstream connection target for a sender channel
+ * @brief Represents a single downstream connection target for a receiver channel
  *
- * This struct defines where a sender channel should connect to, including:
+ * This struct defines where a receiver channel should connect to, including:
  * - The connection type (INTRA_MESH, MESH_TO_Z, Z_TO_MESH)
  * - The target virtual channel (VC)
  * - The target sender channel index
@@ -41,40 +41,39 @@ struct ConnectionTarget {
 };
 
 /**
- * @brief Key for identifying a sender channel (VC + channel index)
+ * @brief Key for identifying a receiver channel (VC + channel index)
  */
-struct SenderChannelKey {
+struct ReceiverChannelKey {
     uint32_t vc;
-    uint32_t sender_channel;
+    uint32_t receiver_channel;
 
-    bool operator<(const SenderChannelKey& other) const {
-        if (vc != other.vc) return vc < other.vc;
-        return sender_channel < other.sender_channel;
+    bool operator<(const ReceiverChannelKey& other) const {
+        if (vc != other.vc) {
+            return vc < other.vc;
+        }
+        return receiver_channel < other.receiver_channel;
     }
 
-    bool operator==(const SenderChannelKey& other) const {
-        return vc == other.vc && sender_channel == other.sender_channel;
+    bool operator==(const ReceiverChannelKey& other) const {
+        return vc == other.vc && receiver_channel == other.receiver_channel;
     }
 };
 
 /**
- * @brief Defines sender channel to downstream target mappings for a router
+ * @brief Defines receiver channel to downstream target mappings for a router
  *
- * This class encapsulates the connection logic for routers, mapping each sender
+ * This class encapsulates the connection logic for routers, mapping each receiver
  * channel to its downstream connection targets. It supports:
  * - Mesh routers with 1D/2D topologies
  * - Mesh routers with MESH_TO_Z connections (when Z router present on device)
  * - Z routers with multi-target VC1 connections
- *
- * Key insight: Mapping is for SENDER channels, not receivers. A sender channel
- * may have multiple downstream targets (e.g., Z router VC1 connecting to 2-4 mesh routers).
  */
 class RouterConnectionMapping {
 public:
     RouterConnectionMapping() = default;
 
     /**
-     * @brief Get downstream connection targets for a sender channel
+     * @brief Get downstream connection targets for a receiver channel
      *
      * @param vc Virtual channel index
      * @param sender_channel Sender channel index within the VC
@@ -112,28 +111,28 @@ public:
     static RouterConnectionMapping for_z_router();
 
     /**
-     * @brief Check if a sender channel has any downstream targets
+     * @brief Check if a receiver channel has any downstream targets
      */
-    bool has_targets(uint32_t vc, uint32_t sender_channel) const;
+    bool has_targets(uint32_t vc, uint32_t receiver_channel) const;
 
     /**
      * @brief Get total number of configured sender channels across all VCs
      */
-    size_t get_total_sender_count() const { return sender_to_targets_.size(); }
+    size_t get_total_sender_count() const { return receiver_to_targets_.size(); }
 
     /**
-     * @brief Get all sender channel keys (for iteration/testing)
+     * @brief Get all receiver channel keys (for iteration/testing)
      */
-    std::vector<SenderChannelKey> get_all_sender_keys() const;
+    std::vector<ReceiverChannelKey> get_all_receiver_keys() const;
 
 private:
     // Maps (VC, sender_channel) → list of downstream targets
-    std::map<SenderChannelKey, std::vector<ConnectionTarget>> sender_to_targets_;
+    std::map<ReceiverChannelKey, std::vector<ConnectionTarget>> receiver_to_targets_;
 
     /**
-     * @brief Add a connection target for a sender channel
+     * @brief Add a connection target for a receiver channel
      */
-    void add_target(uint32_t vc, uint32_t sender_channel, const ConnectionTarget& target);
+    void add_target(uint32_t vc, uint32_t receiver_channel, const ConnectionTarget& target);
 
     /**
      * @brief Helper to compute opposite direction for mesh routers

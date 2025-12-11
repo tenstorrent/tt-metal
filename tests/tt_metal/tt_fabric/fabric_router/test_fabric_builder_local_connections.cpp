@@ -98,10 +98,10 @@ protected:
     // Helper to simulate local connection establishment
     void establish_local_connections(MockRouter& source, const std::map<RoutingDirection, MockRouter*>& targets) {
         // Iterate through all sender keys in connection mapping
-        auto all_sender_keys = source.connection_mapping.get_all_sender_keys();
+        auto all_receiver_keys = source.connection_mapping.get_all_receiver_keys();
 
-        for (const auto& key : all_sender_keys) {
-            auto conn_targets = source.connection_mapping.get_downstream_targets(key.vc, key.sender_channel);
+        for (const auto& key : all_receiver_keys) {
+            auto conn_targets = source.connection_mapping.get_downstream_targets(key.vc, key.receiver_channel);
 
             for (const auto& target : conn_targets) {
                 if (target.type == ConnectionType::MESH_TO_Z || target.type == ConnectionType::Z_TO_MESH) {
@@ -120,12 +120,12 @@ protected:
                         .source_direction = source.direction,
                         .source_eth_chan = 0,
                         .source_vc = key.vc,
-                        .source_sender_channel = key.sender_channel,
+                        .source_receiver_channel = key.receiver_channel,
                         .dest_node = dest_router->node_id,
                         .dest_direction = dest_router->direction,
                         .dest_eth_chan = 0,
                         .dest_vc = target.target_vc,
-                        .dest_receiver_channel = 0,
+                        .dest_sender_channel = 0,
                         .connection_type = target.type
                     };
 

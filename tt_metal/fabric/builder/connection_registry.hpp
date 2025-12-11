@@ -16,6 +16,7 @@ namespace tt::tt_fabric {
  * ConnectionType - Categorizes the type of connection between routers
  */
 enum class ConnectionType {
+    INVALID,
     INTRA_MESH,   // Connection between mesh routers on different devices
     MESH_TO_Z,    // Connection from mesh router to Z router (same device)
     Z_TO_MESH,    // Connection from Z router to mesh router (same device)
@@ -30,20 +31,20 @@ enum class ConnectionType {
 struct RouterConnectionRecord {
     // Source router information
     FabricNodeId source_node;
-    RoutingDirection source_direction;
-    chan_id_t source_eth_chan;
-    uint32_t source_vc;
-    uint32_t source_sender_channel;
+    RoutingDirection source_direction = RoutingDirection::NONE;
+    chan_id_t source_eth_chan = -1;
+    uint32_t source_vc = -1;
+    uint32_t source_receiver_channel = -1;
 
     // Destination router information
     FabricNodeId dest_node;
-    RoutingDirection dest_direction;
-    chan_id_t dest_eth_chan;
-    uint32_t dest_vc;
-    uint32_t dest_receiver_channel;
+    RoutingDirection dest_direction = RoutingDirection::NONE;
+    chan_id_t dest_eth_chan = -1;
+    uint32_t dest_vc = -1;
+    uint32_t dest_sender_channel = -1;
 
     // Connection metadata
-    ConnectionType connection_type;
+    ConnectionType connection_type = ConnectionType::INVALID;
 };
 
 /**

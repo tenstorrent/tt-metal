@@ -89,12 +89,12 @@ void record_test_connection(
         .source_direction = source_dir,
         .source_eth_chan = source_eth_chan,
         .source_vc = source_vc,
-        .source_sender_channel = source_sender_ch,
+        .source_receiver_channel = source_sender_ch,
         .dest_node = dest_node,
         .dest_direction = dest_dir,
         .dest_eth_chan = dest_eth_chan,
         .dest_vc = dest_vc,
-        .dest_receiver_channel = dest_receiver_ch,
+        .dest_sender_channel = dest_receiver_ch,
         .connection_type = conn_type
     };
 
@@ -294,7 +294,7 @@ TEST_F(RouterConnectionsTest, MeshToZ_MultipleMeshRouters) {
     // All should target VC1 receiver channel 0 (multi-target receiver)
     for (const auto& conn : z_incoming) {
         EXPECT_EQ(conn.dest_vc, 1);
-        EXPECT_EQ(conn.dest_receiver_channel, 0);  // All target same receiver
+        EXPECT_EQ(conn.dest_sender_channel, 0);  // All target same receiver
         EXPECT_EQ(conn.connection_type, ConnectionType::MESH_TO_Z);
     }
 
@@ -353,7 +353,7 @@ TEST_F(RouterConnectionsTest, ZToMesh_VC1_Connection) {
     const auto& conn = z_to_mesh[0];
     EXPECT_EQ(conn.source_direction, RoutingDirection::Z);
     EXPECT_EQ(conn.source_vc, 1);
-    EXPECT_EQ(conn.source_sender_channel, 0);
+    EXPECT_EQ(conn.source_receiver_channel, 0);
     EXPECT_EQ(conn.dest_direction, RoutingDirection::N);
     EXPECT_EQ(conn.dest_vc, 1);
     EXPECT_EQ(conn.connection_type, ConnectionType::Z_TO_MESH);
@@ -391,7 +391,7 @@ TEST_F(RouterConnectionsTest, ZToMesh_AllFourDirections) {
     std::set<uint32_t> sender_channels;
     for (const auto& conn : z_outgoing) {
         EXPECT_EQ(conn.source_vc, 1);
-        sender_channels.insert(conn.source_sender_channel);
+        sender_channels.insert(conn.source_receiver_channel);
     }
     EXPECT_EQ(sender_channels.size(), 4);  // All 4 channels used
 }
@@ -592,7 +592,7 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
     // Critical validation: All 4 connections target the SAME receiver
     for (const auto& conn : z_incoming) {
         EXPECT_EQ(conn.dest_vc, 1);
-        EXPECT_EQ(conn.dest_receiver_channel, 0);  // Same receiver for all!
+        EXPECT_EQ(conn.dest_sender_channel, 0);  // Same receiver for all!
         EXPECT_EQ(conn.dest_direction, RoutingDirection::Z);
     }
 
@@ -636,7 +636,7 @@ TEST_F(RouterConnectionsTest, Phase1_5_EdgeDevice_VariableTargetCount) {
 
     // Both target same receiver (multi-target with count=2)
     for (const auto& conn : z_incoming) {
-        EXPECT_EQ(conn.dest_receiver_channel, 0);
+        EXPECT_EQ(conn.dest_sender_channel, 0);
     }
 }
 
@@ -687,13 +687,13 @@ TEST_F(RouterConnectionsTest, Phase1_5_Bidirectional_ZAndMesh) {
 
     // All incoming target same receiver (multi-target)
     for (const auto& conn : z_in) {
-        EXPECT_EQ(conn.dest_receiver_channel, 0);
+        EXPECT_EQ(conn.dest_sender_channel, 0);
     }
 
     // All outgoing use different sender channels
     std::set<uint32_t> sender_channels;
     for (const auto& conn : z_out) {
-        sender_channels.insert(conn.source_sender_channel);
+        sender_channels.insert(conn.source_receiver_channel);
     }
     EXPECT_EQ(sender_channels.size(), 4);  // Channels 0, 1, 2, 3
 }
@@ -854,7 +854,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_MeshToZ) {
 
     auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
     EXPECT_EQ(mesh_to_z.size(), 1);
-    EXPECT_EQ(mesh_to_z[0].source_sender_channel, 4);
+    EXPECT_EQ(mesh_to_z[0].source_receiver_channel, 4);
 }
 
 TEST_F(RouterConnectionsTest, Phase2_MappingDriven_ZToMesh_AllDirections) {

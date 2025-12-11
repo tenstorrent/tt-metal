@@ -9,36 +9,36 @@
 namespace tt::tt_fabric {
 
 std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(
-    uint32_t vc, uint32_t sender_channel) const {
-    SenderChannelKey key{vc, sender_channel};
-    auto it = sender_to_targets_.find(key);
+    uint32_t vc, uint32_t receiver_channel) const {
+    ReceiverChannelKey key{vc, receiver_channel};
+    auto it = receiver_to_targets_.find(key);
 
-    if (it != sender_to_targets_.end()) {
+    if (it != receiver_to_targets_.end()) {
         return it->second;
     }
 
     return {};  // No targets for this sender channel
 }
 
-bool RouterConnectionMapping::has_targets(uint32_t vc, uint32_t sender_channel) const {
-    SenderChannelKey key{vc, sender_channel};
-    return sender_to_targets_.find(key) != sender_to_targets_.end();
+bool RouterConnectionMapping::has_targets(uint32_t vc, uint32_t receiver) const {
+    ReceiverChannelKey key{vc, receiver};
+    return receiver_to_targets_.find(key) != receiver_to_targets_.end();
 }
 
-std::vector<SenderChannelKey> RouterConnectionMapping::get_all_sender_keys() const {
-    std::vector<SenderChannelKey> keys;
-    keys.reserve(sender_to_targets_.size());
+std::vector<ReceiverChannelKey> RouterConnectionMapping::get_all_receiver_keys() const {
+    std::vector<ReceiverChannelKey> keys;
+    keys.reserve(receiver_to_targets_.size());
 
-    for (const auto& [key, _] : sender_to_targets_) {
+    for (const auto& [key, _] : receiver_to_targets_) {
         keys.push_back(key);
     }
 
     return keys;
 }
 
-void RouterConnectionMapping::add_target(uint32_t vc, uint32_t sender_channel, const ConnectionTarget& target) {
-    SenderChannelKey key{vc, sender_channel};
-    sender_to_targets_[key].push_back(target);
+void RouterConnectionMapping::add_target(uint32_t vc, uint32_t receiver_channel, const ConnectionTarget& target) {
+    ReceiverChannelKey key{vc, receiver_channel};
+    receiver_to_targets_[key].push_back(target);
 }
 
 RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirection dir) {
@@ -57,7 +57,7 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     Topology topology, RoutingDirection direction, bool has_z) {
     RouterConnectionMapping mapping;
 
-    // VC0 sender channels for mesh routers
+    // VC0 receiver_channel channels for mesh routers
     // Channel 0: Reserved for local/internal use
     // Channel 1: Primary inter-router connection (opposite direction)
     // Channels 2-3: Additional directions for 2D topology
@@ -68,11 +68,11 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         RoutingDirection opposite = get_opposite_direction(direction);
         mapping.add_target(
             0,  // VC0
-            1,  // Sender channel 1
+            0,  // receiver channel 1
             ConnectionTarget(
                 ConnectionType::INTRA_MESH,
                 0,  // Target VC0
-                0,  // Target sender channel (will be resolved by peer)
+                1,  // Target sender channel (will be resolved by peer)
                 opposite));
 
     } else if (topology == Topology::Mesh || topology == Topology::Torus) {
@@ -116,17 +116,15 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         //    continue to use VC0, while inter-mesh connections use VC1
         // 5. The VC assignment is determined by the connection type, not the router capabilities
         //
-        // Future work: If VC1 needs to support intra-mesh traffic (e.g., for QoS or priority routing),
-        // a new ConnectionType would need to be introduced (e.g., INTRA_MESH_VC1) to explicitly
-        // distinguish it from standard INTRA_MESH (VC0) connections.
-        for (size_t i = 0; i < outbound_directions.size() && i < 3; ++i) {
+        TT_FATAL(outbound_directions.size() <= builder_config::num_downstream_edms_2d_vc0, "Outbound directions size must be less than or equal to num_downstream_edms_2d_vc0");
+        for (size_t i = 0; i < outbound_directions.size(); ++i) {
             mapping.add_target(
                 0,  // VC0 - hardcoded for INTRA_MESH (see documentation above)
-                1 + i,  // Sender channels 1, 2, 3
+                0,  // Receiver channel 0
                 ConnectionTarget(
                     ConnectionType::INTRA_MESH,
                     0,  // Target VC0 - hardcoded for INTRA_MESH (see documentation above)
-                    0,  // Target sender channel (resolved by peer)
+                    i + 1,  // Target sender channel 
                     outbound_directions[i]));
         }
     }
@@ -143,11 +141,11 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
 
         mapping.add_target(
             0,  // VC0
-            mesh_to_z_channel,
+            0,  // Receiver channel 0
             ConnectionTarget(
                 ConnectionType::MESH_TO_Z,
                 0,  // Target Z router VC0
-                0,  // Target sender channel (resolved by Z router)
+                mesh_to_z_channel,  // Target sender channel (resolved by Z router)
                 RoutingDirection::Z));  // Target is Z router
     }
 
@@ -176,11 +174,11 @@ RouterConnectionMapping RouterConnectionMapping::for_z_router() {
     for (size_t i = 0; i < mesh_directions.size(); ++i) {
         mapping.add_target(
             1,  // VC1
-            i,  // Sender channels 0-3
+            0,  // Receiver channels 0-3
             ConnectionTarget(
                 ConnectionType::Z_TO_MESH,
                 1,  // Target mesh router VC1
-                0,  // Target receiver channel (resolved by mesh router)
+                i,  // Target receiver channel (resolved by mesh router)
                 mesh_directions[i]));
     }
 

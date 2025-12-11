@@ -79,12 +79,12 @@ TEST_F(ConnectionRegistryTest, RecordSingleConnection) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = FabricNodeId(MeshId{0}, 1),
         .dest_direction = RoutingDirection::S,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
 
@@ -100,12 +100,12 @@ TEST_F(ConnectionRegistryTest, RecordSingleConnection) {
     EXPECT_EQ(retrieved.source_direction, record.source_direction);
     EXPECT_EQ(retrieved.source_eth_chan, record.source_eth_chan);
     EXPECT_EQ(retrieved.source_vc, record.source_vc);
-    EXPECT_EQ(retrieved.source_sender_channel, record.source_sender_channel);
+    EXPECT_EQ(retrieved.source_receiver_channel, record.source_receiver_channel);
     EXPECT_EQ(retrieved.dest_node, record.dest_node);
     EXPECT_EQ(retrieved.dest_direction, record.dest_direction);
     EXPECT_EQ(retrieved.dest_eth_chan, record.dest_eth_chan);
     EXPECT_EQ(retrieved.dest_vc, record.dest_vc);
-    EXPECT_EQ(retrieved.dest_receiver_channel, record.dest_receiver_channel);
+    EXPECT_EQ(retrieved.dest_sender_channel, record.dest_sender_channel);
     EXPECT_EQ(retrieved.connection_type, record.connection_type);
 }
 
@@ -118,12 +118,12 @@ TEST_F(ConnectionRegistryTest, RecordMultipleConnections) {
             .source_direction = RoutingDirection::N,
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 1,
+            .source_receiver_channel = 1,
             .dest_node = FabricNodeId(MeshId{0}, i + 1),
             .dest_direction = RoutingDirection::S,
             .dest_eth_chan = static_cast<uint8_t>(i),
             .dest_vc = 0,
-            .dest_receiver_channel = 1,
+            .dest_sender_channel = 1,
             .connection_type = ConnectionType::INTRA_MESH
         };
         registry_->record_connection(record);
@@ -142,12 +142,12 @@ TEST_F(ConnectionRegistryTest, ClearRemovesAllConnections) {
             .source_direction = RoutingDirection::E,
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 0,
+            .source_receiver_channel = 0,
             .dest_node = FabricNodeId(MeshId{0}, i + 1),
             .dest_direction = RoutingDirection::W,
             .dest_eth_chan = static_cast<uint8_t>(i),
             .dest_vc = 0,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = ConnectionType::INTRA_MESH
         };
         registry_->record_connection(record);
@@ -173,12 +173,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsFromSource_SingleMatch) {
         .source_direction = source_dir,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = FabricNodeId(MeshId{0}, 1),
         .dest_direction = RoutingDirection::S,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(target);
@@ -189,12 +189,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsFromSource_SingleMatch) {
         .source_direction = RoutingDirection::E,
         .source_eth_chan = 1,
         .source_vc = 0,
-        .source_sender_channel = 0,
+        .source_receiver_channel = 0,
         .dest_node = FabricNodeId(MeshId{0}, 3),
         .dest_direction = RoutingDirection::W,
         .dest_eth_chan = 1,
         .dest_vc = 0,
-        .dest_receiver_channel = 0,
+        .dest_sender_channel = 0,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(noise);
@@ -218,12 +218,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsFromSource_MultipleMatches) {
             .source_direction = source_dir,
             .source_eth_chan = 0,
             .source_vc = 0,
-            .source_sender_channel = static_cast<uint32_t>(i),
+            .source_receiver_channel = static_cast<uint32_t>(i),
             .dest_node = FabricNodeId(MeshId{0}, i + 1),
             .dest_direction = RoutingDirection::S,
             .dest_eth_chan = static_cast<uint8_t>(i),
             .dest_vc = 0,
-            .dest_receiver_channel = static_cast<uint32_t>(i),
+            .dest_sender_channel = static_cast<uint32_t>(i),
             .connection_type = ConnectionType::INTRA_MESH
         };
         registry_->record_connection(record);
@@ -245,12 +245,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsFromSource_NoMatches) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = FabricNodeId(MeshId{0}, 1),
         .dest_direction = RoutingDirection::S,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(record);
@@ -273,12 +273,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsToDest_SingleMatch) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = dest_node,
         .dest_direction = dest_dir,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(target);
@@ -302,12 +302,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsToDest_MultipleMatches) {
             .source_direction = static_cast<RoutingDirection>(i),
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 1,
-            .source_sender_channel = static_cast<uint32_t>(i),
+            .source_receiver_channel = static_cast<uint32_t>(i),
             .dest_node = dest_node,
             .dest_direction = dest_dir,
             .dest_eth_chan = 0,
             .dest_vc = 0,
-            .dest_receiver_channel = static_cast<uint32_t>(i),
+            .dest_sender_channel = static_cast<uint32_t>(i),
             .connection_type = ConnectionType::Z_TO_MESH
         };
         registry_->record_connection(record);
@@ -332,12 +332,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsByType_IntraMesh) {
             .source_direction = RoutingDirection::N,
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 1,
+            .source_receiver_channel = 1,
             .dest_node = FabricNodeId(MeshId{0}, i + 1),
             .dest_direction = RoutingDirection::S,
             .dest_eth_chan = static_cast<uint8_t>(i),
             .dest_vc = 0,
-            .dest_receiver_channel = 1,
+            .dest_sender_channel = 1,
             .connection_type = ConnectionType::INTRA_MESH
         };
         registry_->record_connection(record);
@@ -349,12 +349,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsByType_IntraMesh) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 2,
+        .source_receiver_channel = 2,
         .dest_node = FabricNodeId(MeshId{0}, 0),
         .dest_direction = RoutingDirection::Z,
         .dest_eth_chan = 4,
         .dest_vc = 1,
-        .dest_receiver_channel = 0,
+        .dest_sender_channel = 0,
         .connection_type = ConnectionType::MESH_TO_Z
     };
     registry_->record_connection(mesh_to_z);
@@ -379,12 +379,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsByType_AllTypes) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = FabricNodeId(MeshId{0}, 1),
         .dest_direction = RoutingDirection::S,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(intra_mesh);
@@ -394,12 +394,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsByType_AllTypes) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 2,
+        .source_receiver_channel = 2,
         .dest_node = FabricNodeId(MeshId{0}, 0),
         .dest_direction = RoutingDirection::Z,
         .dest_eth_chan = 4,
         .dest_vc = 1,
-        .dest_receiver_channel = 0,
+        .dest_sender_channel = 0,
         .connection_type = ConnectionType::MESH_TO_Z
     };
     registry_->record_connection(mesh_to_z);
@@ -409,12 +409,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsByType_AllTypes) {
         .source_direction = RoutingDirection::Z,
         .source_eth_chan = 4,
         .source_vc = 1,
-        .source_sender_channel = 0,
+        .source_receiver_channel = 0,
         .dest_node = FabricNodeId(MeshId{0}, 0),
         .dest_direction = RoutingDirection::N,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 2,
+        .dest_sender_channel = 2,
         .connection_type = ConnectionType::Z_TO_MESH
     };
     registry_->record_connection(z_to_mesh);
@@ -432,12 +432,12 @@ TEST_F(ConnectionRegistryTest, GetConnectionsByType_NoMatches) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = FabricNodeId(MeshId{0}, 1),
         .dest_direction = RoutingDirection::S,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(record);
@@ -469,12 +469,12 @@ TEST_F(ConnectionRegistryTest, ComplexScenario_MixedConnections) {
             .source_direction = mesh_dirs[i],
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 1,
+            .source_receiver_channel = 1,
             .dest_node = FabricNodeId(MeshId{0}, 1),
             .dest_direction = mesh_dirs[(i + 1) % 4],
             .dest_eth_chan = static_cast<uint8_t>((i + 1) % 4),
             .dest_vc = 0,
-            .dest_receiver_channel = 1,
+            .dest_sender_channel = 1,
             .connection_type = ConnectionType::INTRA_MESH
         };
         registry_->record_connection(record);
@@ -488,12 +488,12 @@ TEST_F(ConnectionRegistryTest, ComplexScenario_MixedConnections) {
             .source_direction = mesh_dirs[i],
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 2,
+            .source_receiver_channel = 2,
             .dest_node = device_node,
             .dest_direction = RoutingDirection::Z,
             .dest_eth_chan = 4,
             .dest_vc = 1,
-            .dest_receiver_channel = static_cast<uint32_t>(i),
+            .dest_sender_channel = static_cast<uint32_t>(i),
             .connection_type = ConnectionType::MESH_TO_Z
         };
         registry_->record_connection(record);
@@ -506,12 +506,12 @@ TEST_F(ConnectionRegistryTest, ComplexScenario_MixedConnections) {
             .source_direction = RoutingDirection::Z,
             .source_eth_chan = 4,
             .source_vc = 1,
-            .source_sender_channel = static_cast<uint32_t>(i),
+            .source_receiver_channel = static_cast<uint32_t>(i),
             .dest_node = device_node,
             .dest_direction = mesh_dirs[i],
             .dest_eth_chan = static_cast<uint8_t>(i),
             .dest_vc = 0,
-            .dest_receiver_channel = 2,
+            .dest_sender_channel = 2,
             .connection_type = ConnectionType::Z_TO_MESH
         };
         registry_->record_connection(record);
@@ -559,12 +559,12 @@ TEST_F(ConnectionRegistryTest, Phase1_5_MultiTargetReceiver_SameDestination) {
             .source_direction = mesh_dirs[i],
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 2,
+            .source_receiver_channel = 2,
             .dest_node = device0,
             .dest_direction = z_dir,
             .dest_eth_chan = z_eth_chan,
             .dest_vc = z_vc,
-            .dest_receiver_channel = z_receiver_ch,  // SAME for all!
+            .dest_sender_channel = z_receiver_ch,  // SAME for all!
             .connection_type = ConnectionType::MESH_TO_Z
         };
         registry_->record_connection(record);
@@ -578,7 +578,7 @@ TEST_F(ConnectionRegistryTest, Phase1_5_MultiTargetReceiver_SameDestination) {
 
     // Verify all target the same receiver channel (multi-target)
     for (const auto& conn : to_z) {
-        EXPECT_EQ(conn.dest_receiver_channel, z_receiver_ch);
+        EXPECT_EQ(conn.dest_sender_channel, z_receiver_ch);
         EXPECT_EQ(conn.dest_vc, z_vc);
     }
 
@@ -603,12 +603,12 @@ TEST_F(ConnectionRegistryTest, Phase1_5_QueryMultiTargetByType) {
             .source_direction = static_cast<RoutingDirection>(i),
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 2,
+            .source_receiver_channel = 2,
             .dest_node = device0,
             .dest_direction = RoutingDirection::Z,
             .dest_eth_chan = 4,
             .dest_vc = 1,
-            .dest_receiver_channel = 0,  // Same receiver
+            .dest_sender_channel = 0,  // Same receiver
             .connection_type = ConnectionType::MESH_TO_Z
         };
         registry_->record_connection(record);
@@ -620,12 +620,12 @@ TEST_F(ConnectionRegistryTest, Phase1_5_QueryMultiTargetByType) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = 1,
+        .source_receiver_channel = 1,
         .dest_node = FabricNodeId(MeshId{0}, 1),
         .dest_direction = RoutingDirection::S,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 1,
+        .dest_sender_channel = 1,
         .connection_type = ConnectionType::INTRA_MESH
     };
     registry_->record_connection(intra_mesh);
@@ -639,7 +639,7 @@ TEST_F(ConnectionRegistryTest, Phase1_5_QueryMultiTargetByType) {
 
     // Verify MESH_TO_Z connections all target same receiver
     for (const auto& conn : mesh_to_z) {
-        EXPECT_EQ(conn.dest_receiver_channel, 0);
+        EXPECT_EQ(conn.dest_sender_channel, 0);
     }
 }
 
@@ -669,12 +669,12 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_1D_ConnectionMapping) {
             .source_direction = RoutingDirection::N,
             .source_eth_chan = 0,
             .source_vc = 0,
-            .source_sender_channel = sender_channel,
+            .source_receiver_channel = sender_channel,
             .dest_node = dest,
             .dest_direction = target.target_direction.value(),
             .dest_eth_chan = 0,
             .dest_vc = target.target_vc,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = target.type
         };
         registry_->record_connection(record);
@@ -713,12 +713,12 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_2D_WithZ_MultipleTargets) {
             .source_direction = RoutingDirection::N,
             .source_eth_chan = 0,
             .source_vc = 0,
-            .source_sender_channel = ch,
+            .source_receiver_channel = ch,
             .dest_node = FabricNodeId(MeshId{0}, ch),
             .dest_direction = targets[0].target_direction.value(),
             .dest_eth_chan = 0,
             .dest_vc = 0,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = ConnectionType::INTRA_MESH
         };
         registry_->record_connection(record);
@@ -735,12 +735,12 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_2D_WithZ_MultipleTargets) {
         .source_direction = RoutingDirection::N,
         .source_eth_chan = 0,
         .source_vc = 0,
-        .source_sender_channel = mesh_to_z_channel,
+        .source_receiver_channel = mesh_to_z_channel,
         .dest_node = FabricNodeId(MeshId{0}, 100),  // Z router
         .dest_direction = RoutingDirection::Z,
         .dest_eth_chan = 0,
         .dest_vc = 0,
-        .dest_receiver_channel = 0,
+        .dest_sender_channel = 0,
         .connection_type = ConnectionType::MESH_TO_Z
     };
     registry_->record_connection(z_record);
@@ -784,12 +784,12 @@ TEST_F(ConnectionRegistryTest, Phase2_ZRouter_VC1_FourTargets) {
             .source_direction = RoutingDirection::Z,
             .source_eth_chan = 0,
             .source_vc = 1,
-            .source_sender_channel = ch,
+            .source_receiver_channel = ch,
             .dest_node = FabricNodeId(MeshId{0}, ch),
             .dest_direction = expected_directions[ch],
             .dest_eth_chan = 0,
             .dest_vc = 0,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = ConnectionType::Z_TO_MESH
         };
         registry_->record_connection(record);
@@ -837,12 +837,12 @@ TEST_F(ConnectionRegistryTest, Phase2_FullDevice_MappingDriven) {
                     .source_direction = mesh_directions[i],
                     .source_eth_chan = static_cast<uint8_t>(i),
                     .source_vc = 0,
-                    .source_sender_channel = ch,
+                    .source_receiver_channel = ch,
                     .dest_node = FabricNodeId(MeshId{0}, (i + ch) % 4),
                     .dest_direction = targets[0].target_direction.value(),
                     .dest_eth_chan = 0,
                     .dest_vc = 0,
-                    .dest_receiver_channel = 0,
+                    .dest_sender_channel = 0,
                     .connection_type = ConnectionType::INTRA_MESH
                 };
                 registry_->record_connection(record);
@@ -858,12 +858,12 @@ TEST_F(ConnectionRegistryTest, Phase2_FullDevice_MappingDriven) {
             .source_direction = mesh_directions[i],
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 4,
+            .source_receiver_channel = 4,
             .dest_node = FabricNodeId(MeshId{0}, 100),  // Z router
             .dest_direction = RoutingDirection::Z,
             .dest_eth_chan = 0,
             .dest_vc = 0,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = ConnectionType::MESH_TO_Z
         };
         registry_->record_connection(z_record);
@@ -882,12 +882,12 @@ TEST_F(ConnectionRegistryTest, Phase2_FullDevice_MappingDriven) {
             .source_direction = RoutingDirection::Z,
             .source_eth_chan = 0,
             .source_vc = 1,
-            .source_sender_channel = ch,
+            .source_receiver_channel = ch,
             .dest_node = FabricNodeId(MeshId{0}, ch),
             .dest_direction = targets[0].target_direction.value(),
             .dest_eth_chan = 0,
             .dest_vc = 0,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = ConnectionType::Z_TO_MESH
         };
         registry_->record_connection(record);
@@ -933,12 +933,12 @@ TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
             .source_direction = mesh_directions[i],
             .source_eth_chan = static_cast<uint8_t>(i),
             .source_vc = 0,
-            .source_sender_channel = 4,
+            .source_receiver_channel = 4,
             .dest_node = FabricNodeId(MeshId{0}, 100),
             .dest_direction = RoutingDirection::Z,
             .dest_eth_chan = 0,
             .dest_vc = 0,
-            .dest_receiver_channel = 0,
+            .dest_sender_channel = 0,
             .connection_type = ConnectionType::MESH_TO_Z
         };
         registry_->record_connection(z_record);
@@ -966,12 +966,12 @@ TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
                 .source_direction = RoutingDirection::Z,
                 .source_eth_chan = 0,
                 .source_vc = 1,
-                .source_sender_channel = ch,
+                .source_receiver_channel = ch,
                 .dest_node = FabricNodeId(MeshId{0}, ch),
                 .dest_direction = targets[0].target_direction.value(),
                 .dest_eth_chan = 0,
                 .dest_vc = 0,
-                .dest_receiver_channel = 0,
+                .dest_sender_channel = 0,
                 .connection_type = ConnectionType::Z_TO_MESH
             };
             registry_->record_connection(record);

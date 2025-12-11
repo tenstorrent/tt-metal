@@ -173,7 +173,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Use unique_ptr constructor directly since ComputeMeshRouterBuilder constructor is private
     auto router_builder = std::unique_ptr<ComputeMeshRouterBuilder>(new ComputeMeshRouterBuilder(
-        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), std::move(connection_mapping), connection_registry));
+        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), std::move(connection_mapping), std::move(connection_registry)));
 
     // Setup the local relay kernel connection if in UDM mode
     if (fabric_tensix_extension_udm_mode && router_builder->has_tensix_builder()) {
@@ -424,12 +424,12 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                         .source_direction = location_.direction,
                         .source_eth_chan = location_.eth_chan,
                         .source_vc = vc,
-                        .source_sender_channel = sender_ch,
+                        .source_receiver_channel = sender_ch,
                         .dest_node = downstream_router.local_node_,
                         .dest_direction = downstream_router.location_.direction,
                         .dest_eth_chan = downstream_router.location_.eth_chan,
                         .dest_vc = target.target_vc,
-                        .dest_receiver_channel = internal_channel_id,
+                        .dest_sender_channel = internal_channel_id,
                         .connection_type = target.type
                     };
 
