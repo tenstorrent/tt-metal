@@ -8,8 +8,7 @@
 
 #include "ttnn/operation.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 enum class PoolType { AVG };
 
@@ -18,16 +17,15 @@ Tensor global_avg_pool2d(
     const MemoryConfig& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<DataType>& output_dtype = std::nullopt);
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace pool {
+
+namespace operations::pool {
 
 struct GlobalAveragePool2D {
     static Tensor invoke(
@@ -39,8 +37,7 @@ struct GlobalAveragePool2D {
         return result;
     }
 };
-}  // namespace pool
-}  // namespace operations
+}  // namespace operations::pool
 
 constexpr auto global_avg_pool2d =
     ttnn::register_operation<"ttnn::global_avg_pool2d", ttnn::operations::pool::GlobalAveragePool2D>();
