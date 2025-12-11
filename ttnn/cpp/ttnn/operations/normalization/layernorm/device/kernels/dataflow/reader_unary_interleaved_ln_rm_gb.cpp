@@ -66,7 +66,7 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         for (auto block : generic::blocks(Wt, blk)) {
-            cb_reserve_back(cb_id_in0, blk);
+            cb_reserve_back(cb_id_in0, block.size());
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
             for (auto r : block.local()) {
@@ -91,7 +91,7 @@ void kernel_main() {
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            for (auto block : generic::blocks(Wt, blk)) {
 #ifdef FUSE_GAMMA
                 {
                     cb_reserve_back(cb_id_gamma, block.size());
