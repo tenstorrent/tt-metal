@@ -76,7 +76,8 @@ def run_all_to_all_impl(
     layout,
     topology,
     num_iters=1,
-    mem_config=None,
+    input_mem_config=None,
+    output_mem_config=None,
     trace_mode=False,
     do_check=True,
     reuse_inputs=False,
@@ -117,7 +118,7 @@ def run_all_to_all_impl(
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
-            memory_config=mem_config,
+            memory_config=output_mem_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         for _ in range(num_iters)
@@ -155,7 +156,7 @@ def run_all_to_all_impl(
             device=mesh_device,
             layout=layout,
             dtype=dtype,
-            memory_config=mem_config,
+            memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_config),
         )
 
@@ -171,7 +172,7 @@ def run_all_to_all_impl(
             in_dim,
             out_dim,
             num_links,
-            mem_config,
+            output_mem_config,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
             cluster_axis=cluster_axis,
@@ -184,7 +185,7 @@ def run_all_to_all_impl(
                 in_dim=in_dim,
                 out_dim=out_dim,
                 num_links=num_links,
-                memory_config=mem_config,
+                memory_config=output_mem_config,
                 topology=topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
@@ -220,14 +221,86 @@ def run_all_to_all_impl(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, cluster_axis, logical_shape, in_dim, out_dim",
+    "mesh_device, cluster_axis, logical_shape, in_dim, out_dim, input_mem_config, output_mem_config",
     [
-        ((1, 8), None, [1, 128, 128, 512], 1, 2),  # test 1-2
-        ((2, 4), 1, [1, 32, 128, 576], 2, 1),  # test 2-1
-        ((2, 4), 1, [3, 1, 256, 768], 2, 3),  # test 2-3
-        ((2, 4), 0, [1, 2, 256, 768], 3, 2),  # test 3-2
+        (
+            (1, 8),
+            None,
+            [1, 128, 128, 512],
+            1,
+            2,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),  # test 1-2
+        (
+            (2, 4),
+            1,
+            [1, 32, 128, 576],
+            2,
+            1,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 7))}),
+                    (64, 192),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),  # test 2-1
+        (
+            (2, 4),
+            1,
+            [3, 1, 256, 768],
+            2,
+            3,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3))}),
+                    (32, 384),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(5, 6))}),
+                    (64, 96),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),  # test 2-3
+        (
+            (2, 4),
+            0,
+            [1, 2, 256, 768],
+            3,
+            2,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 4))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 4))}),
+                    (64, 64),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),  # test 3-2
     ],
-    ids=["test1-2:mesh1x8", "test2-1:mesh2x4:1", "test2-3:mesh2x4:1", "test3-2:mesh2x4:0"],
+    ids=["test1-2:mesh1x8:dram", "test2-1:mesh2x4:1:block", "test2-3:mesh2x4:1:l1_h", "test3-2:mesh2x4:0:l1_w"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -241,6 +314,8 @@ def test_all_to_all(
     function_level_defaults,
     is_ci_env,
     cluster_axis,
+    input_mem_config,
+    output_mem_config,
 ):
     run_all_to_all_impl(
         mesh_device,
@@ -253,7 +328,8 @@ def test_all_to_all(
         layout=ttnn.TILE_LAYOUT,
         topology=ttnn.Topology.Linear,
         num_iters=2,
-        mem_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
         do_check=True,
         trace_mode=False,
         reuse_inputs=False,
