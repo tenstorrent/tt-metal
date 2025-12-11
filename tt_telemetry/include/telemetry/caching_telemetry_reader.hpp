@@ -47,7 +47,7 @@ protected:
     virtual TelemetryContainer read_telemetry() = 0;
 
 private:
-    tt::tt_fabric::FabricTelemetrySnapshot cached_telemetry_;
+    TelemetryContainer cached_telemetry_;
     std::chrono::steady_clock::time_point last_update_cycle_;
     mutable std::mutex mtx_;
 };

@@ -566,8 +566,16 @@ static void telemetry_thread(
 
                 create_ethernet_metrics(
                     bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
+                auto arc_telemetry_reader_by_chip_id = create_arc_telemetry_readers(cluster);
                 create_arc_metrics(
-                    bool_metrics_, uint_metrics_, double_metrics_, string_metrics_, cluster, topology_translation, hal);
+                    bool_metrics_,
+                    uint_metrics_,
+                    double_metrics_,
+                    string_metrics_,
+                    cluster,
+                    topology_translation,
+                    hal,
+                    arc_telemetry_reader_by_chip_id);
                 log_info(tt::LogAlways, "Initialized metrics");
 
                 // Update TelemetryRunning metric to success state
