@@ -375,7 +375,7 @@ struct ConvDRAMParamters {
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 
 namespace conv2d {
-op_slicing::OpSliceAttr* get_conv2d_slice_attr(
+std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     uint32_t batch_size,
     uint32_t input_height,
     uint32_t input_width,

@@ -978,7 +978,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     return std::get<0>(conv2d_result);
 }
 
-op_slicing::OpSliceAttr* get_conv2d_slice_attr(
+std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     uint32_t batch_size,
     uint32_t input_height,
     uint32_t input_width,
@@ -1018,6 +1018,6 @@ op_slicing::OpSliceAttr* get_conv2d_slice_attr(
         compute_config,
         device);
 
-    return op_slice_attr;
+    return std::unique_ptr<op_slicing::OpSliceAttr>(op_slice_attr);
 }
 }  // namespace ttnn::operations::conv::conv2d
