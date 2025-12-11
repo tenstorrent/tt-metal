@@ -244,7 +244,7 @@ def test_gpt_oss_demo(
         raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     enable_decode_trace = True
-    enable_prefill_trace = False
+    enable_prefill_trace = True
 
     logger.info(f"Running GPT-OSS demo with tt_transformers generation pipeline")
 
