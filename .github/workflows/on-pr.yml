@@ -141,9 +141,10 @@ jobs:
     name: "🌀 Perform checks (Wormhole)"
     uses: ./.github/workflows/setup-and-test.yml
     needs: [build-images, detect-changes]
-    if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
-            needs.detect-changes.outputs.tests == 'true' ||
-            needs.detect-changes.outputs.github == 'true' }}
+    if: ${{ github.event_name != 'push' &&
+            (needs.detect-changes.outputs.wormhole == 'true' ||
+             needs.detect-changes.outputs.tests == 'true' ||
+             needs.detect-changes.outputs.github == 'true') }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
@@ -154,9 +155,10 @@ jobs:
     name: "🕳️ Perform checks (Blackhole)"
     uses: ./.github/workflows/setup-and-test.yml
     needs: [build-images, detect-changes]
-    if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
-            needs.detect-changes.outputs.tests == 'true' ||
-            needs.detect-changes.outputs.github == 'true' }}
+    if: ${{ github.event_name != 'push' &&
+            (needs.detect-changes.outputs.blackhole == 'true' ||
+             needs.detect-changes.outputs.tests == 'true' ||
+             needs.detect-changes.outputs.github == 'true') }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
@@ -167,7 +169,8 @@ jobs:
     name: "⚡ Performance tests (${{ matrix.target }})"
     uses: ./.github/workflows/setup-and-test.yml
     needs: [build-images, detect-changes]
-    if: ${{ needs.detect-changes.outputs.performance == 'true' }}
+    if: ${{ github.event_name != 'push' &&
+            needs.detect-changes.outputs.performance == 'true' }}
     strategy:
       fail-fast: false
       matrix:
