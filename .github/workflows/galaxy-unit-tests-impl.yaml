@@ -89,22 +89,8 @@ jobs:
       - name: Generate test matrix
         id: generate
         run: |
-          # Define test matrix with owner comments
-          # Djordje Ivanovic - llama3
-          # Miguel Tairum - llama3_long_context, llama3_evals
-          # Radoica Draskic - llama3_8b_dp, llama3_70b_dp
-          # Salar Hosseini - falcon7b (For Falcon7b, please see issue #31939)
-          # Ashai Reddy - sentence_bert
-          # Aniruddha Tupe - whisper
-          # Colman Glagovich - sd35, wan22
-          # Samuel Adesoye - flux1, motif
-          # Stuti Raizada - gpt-oss
-          # Stephen Osborne - mochi
-          # Rico Zhu - qwen3_32b, qwen3_32b_long_context
-          # Yousef Al Rawwash - deepseek
-
           # Owners for the following tests:
-          Galaxy unit tests: X, see issue #29677
+          Galaxy unit tests: None, see issue #29677
           Fabric tests: Allan Liu
           Llama3-70b unit tests: Djordje Ivanovic
           DRAM Prefetcher unit tests: Johanna Rock, Yu Gao
@@ -112,13 +98,13 @@ jobs:
           GPT-OSS unit tests: Stuti Raizada
 
           all_tests='[
-            { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 30, "owner_id": "XXXXX" }  # see issue #29677
-            { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 25, "owner_id": "UJ45FEC7M" } # Allan Liu
-            { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true } # Djordje Ivanovic
-            { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" }  # Johanna Rock, Yu Gao
-            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" }  # Johanna Rock
-            { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U06F3ER8X9A", "mlperf": true }  # Stuti Raizada
-          ]'    
+            { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 30, "owner_id": "XXXXX" },
+            { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 25, "owner_id": "UJ45FEC7M" },
+            { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
+            { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
+            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" },
+            { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U06F3ER8X9A", "mlperf": true }
+          ]'
 
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
