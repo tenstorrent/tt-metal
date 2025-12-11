@@ -16,7 +16,7 @@ training_config:
 
 device_config:
   enable_tp: true
-  mesh_shape: [1, 32]
+  mesh_shape: [1, 8]
 
 eval_config:
   repetition_penalty: 1.0

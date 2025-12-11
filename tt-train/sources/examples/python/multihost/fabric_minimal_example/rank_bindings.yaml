@@ -1,0 +1,9 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+  - rank: 1
+    mesh_id: 1
+
+global_env:
+  TT_METAL_HOME: "/data/rreece/tt-metal"
+mesh_graph_desc_path: "/data/rreece/tt-metal/tt-train/sources/examples/python/multihost/fabric_minimal_example/configurations/2loudboxes/mgd.textproto"
