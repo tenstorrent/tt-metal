@@ -321,6 +321,8 @@ AllGatherAsyncDeviceOperation::invoke(
     // 3. has all three
 
     uint32_t num_devices = 0;
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
+
     // Prioritize mesh_device_opt first, then check device of input_tensor
     bool using_mesh_device = mesh_device != nullptr;
     if (using_mesh_device) {
@@ -342,17 +344,17 @@ AllGatherAsyncDeviceOperation::invoke(
             dim);
 
     } else {
-        auto* mesh_device_ = input_tensor.device();
-        TT_FATAL(mesh_device_ != nullptr, "Mesh device is required");
+        TT_FATAL(input_tensor.device() != nullptr, "Mesh device is required");
+
         num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 
         TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
 
-        log_debug(tt::LogOp, "creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
-        log_debug(tt::LogOp, "line_fabric is created");
+        if (using_persistent_buffers) {
+            log_debug(tt::LogOp, "creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
+            log_debug(tt::LogOp, "line_fabric is created");
+        }
     }
-
-    bool using_persistent_buffers = persistent_output_buffer.has_value();
 
     return {
         operation_attributes_t(
