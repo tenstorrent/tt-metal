@@ -44,6 +44,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable-llk-asserts:
+        description: "Enable LLK asserts"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   parse-tests-json:
@@ -93,6 +98,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   fast-dispatch-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -113,6 +119,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   fabric-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -133,6 +140,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   ttnn-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -153,6 +161,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   models-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -173,6 +182,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   cpp-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -193,6 +203,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   tt-train-cpp-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -213,6 +224,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   run-profiler-regression:
     needs: [parse-tests-json, build-artifact]
@@ -234,6 +246,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   t3000-apc-fast-tests:
     needs: [parse-tests-json, build-artifact]
@@ -246,6 +259,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]
@@ -266,6 +280,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   triage-tests:
     needs: [parse-tests-json, build-artifact]
@@ -286,3 +301,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

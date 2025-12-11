@@ -27,6 +27,10 @@ on:
         description: 'Enable lightweight kernel asserts'
         default: false
         type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
 
 jobs:
   fd-tests:
@@ -78,6 +82,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
