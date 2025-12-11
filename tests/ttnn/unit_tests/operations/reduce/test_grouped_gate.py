@@ -13,7 +13,7 @@ from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
 
 
-def get_valid_group_combinations(group_scores, topk_groups, atol=0.1):
+def get_valid_group_combinations(group_scores, topk_groups, atol=0.075):
     """
     Get all valid combinations of topk_groups groups considering ties.
 
@@ -197,11 +197,11 @@ def assert_in_valid_outcomes(
         # have experts in the final top-k selection
         group_selection_valid = any(ttnn_group_set.issubset(combo) for combo in valid_group_combos)
         if not group_selection_valid:
-            print(f"Row {row}: TTNN group selection not subset of any valid combination")
-            print(f"  TTNN groups: {sorted(ttnn_group_set)}")
-            print(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
-            print(f"  Group scores: {row_group_scores.tolist()}")
-            print(f"  TTNN indices: {ttnn_indices_2d[row].tolist()}")
+            logger.info(f"Row {row}: TTNN group selection not subset of any valid combination")
+            logger.info(f"  TTNN groups: {sorted(ttnn_group_set)}")
+            logger.info(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
+            logger.info(f"  Group scores: {row_group_scores.tolist()}")
+            logger.info(f"  TTNN indices: {ttnn_indices_2d[row].tolist()}")
             raise AssertionError(f"Row {row}: Invalid group selection")
 
         # Find which valid combo(s) contain TTNN's groups
@@ -216,10 +216,10 @@ def assert_in_valid_outcomes(
 
         # Check if TTNN's expert selection is valid
         if ttnn_expert_set not in all_valid_expert_sets:
-            logger.error(f"Row {row}: TTNN expert selection not in valid sets")
-            logger.error(f"  TTNN experts: {sorted(ttnn_expert_set)}")
-            logger.error(f"  Matching group combos: {[sorted(c) for c in matching_combos]}")
-            logger.error(f"  Sample valid expert sets: {[sorted(s) for s in all_valid_expert_sets[:5]]}...")
+            logger.info(f"Row {row}: TTNN expert selection not in valid sets")
+            logger.info(f"  TTNN experts: {sorted(ttnn_expert_set)}")
+            logger.info(f"  Matching group combos: {[sorted(c) for c in matching_combos]}")
+            logger.info(f"  Sample valid expert sets: {[sorted(s) for s in all_valid_expert_sets[:5]]}...")
             raise AssertionError(f"Row {row}: Invalid expert selection for the chosen groups")
 
         # Compute expected weights for TTNN's selection
@@ -237,10 +237,10 @@ def assert_in_valid_outcomes(
             ttnn_weights_sorted.float(), expected_weights_sorted.float(), rtol=weight_rtol, atol=weight_atol
         ):
             max_diff = (ttnn_weights_sorted.float() - expected_weights_sorted.float()).abs().max()
-            logger.error(f"Row {row}: Weights don't match expected for selected experts")
-            logger.error(f"  TTNN weights:     {ttnn_weights_sorted}")
-            logger.error(f"  Expected weights: {expected_weights_sorted}")
-            logger.error(f"  Max diff: {max_diff}")
+            logger.info(f"Row {row}: Weights don't match expected for selected experts")
+            logger.info(f"  TTNN weights:     {ttnn_weights_sorted}")
+            logger.info(f"  Expected weights: {expected_weights_sorted}")
+            logger.info(f"  Max diff: {max_diff}")
             raise AssertionError(f"Row {row}: Weight mismatch (max_diff={max_diff})")
 
         # Track statistics
@@ -415,8 +415,8 @@ GROUPED_GATE_TEST_PARAMS = [
     (2, 2, 64),  # num_batches=2, batch_size=2
     (2, 4, 33),  # num_batches=2, batch_size=4, non-tile-aligned seq
     # Stress tests
-    (1, 8, 128),  # Large batch with multiple tiles
-    (2, 4, 128),  # Multiple batches, moderate batch_size, multiple tiles
+    (1, 8, 129),  # Large batch with multiple tiles
+    (2, 4, 146),  # Multiple batches, moderate batch_size, multiple tiles
 ]
 
 
