@@ -7,6 +7,7 @@
 #include <device.hpp>
 #include <distributed.hpp>
 #include "llrt/hal.hpp"
+#include "mesh_device.hpp"
 #include "thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
@@ -995,26 +996,20 @@ void dumpDeviceResultsToCSV(
     log_file_ofs.close();
 }
 
-bool isGalaxyMMIODevice(IDevice* device) {
-    // This is wrapped in a try-catch block because get_mesh_device() can throw a std::bad_weak_ptr if profiler read is
-    // called during MeshDevice::close()
-    try {
-        if (auto mesh_device = device->get_mesh_device()) {
-            return false;
-        } else {
-            return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
-                   device->is_mmio_capable();
-        }
-    } catch (const std::bad_weak_ptr& e) {
+bool isGalaxyMMIODevice(distributed::MeshDevice* mesh_device, IDevice* device) {
+    if (mesh_device) {
         return false;
+    } else {
+        return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+                device->is_mmio_capable();
     }
 }
 
-bool useFastDispatch(IDevice* device) {
-    return tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device);
+bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device) {
+    return tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(mesh_device, device);
 }
 
-void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
+void writeToCoreControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
     ZoneScoped;
 
     const auto& hal = MetalContext::instance().hal();
@@ -1023,8 +1018,8 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
     DeviceAddr control_vector_addr =
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                 dev_msgs::profiler_msg_t::Field::control_vector);
-    if (useFastDispatch(device)) {
-        if (auto mesh_device = device->get_mesh_device()) {
+    if (useFastDispatch(mesh_device, device)) {
+        if (mesh_device) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
@@ -1040,7 +1035,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
     }
 }
 
-void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
+void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(distributed::MeshDevice* mesh_device, IDevice* device) {
     ZoneScoped;
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -1050,7 +1045,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     for (uint32_t x = 0; x < dram_grid_size.x; ++x) {
         for (uint32_t y = 0; y < dram_grid_size.y; ++y) {
             const CoreCoord dram_core = device->virtual_core_from_logical_core({x, y}, CoreType::DRAM);
-            if (auto mesh_device = device->get_mesh_device()) {
+            if (mesh_device) {
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
                     .enqueue_read_shard_from_core(
@@ -1085,8 +1080,8 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     }
 }
 
-void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(distributed::MeshDevice* mesh_device,
+    const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
@@ -1099,7 +1094,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                                 dev_msgs::profiler_msg_t::Field::buffer);
     const uint32_t num_risc_processors = hal.get_num_risc_processors(core_type);
     core_l1_data_buffer.resize(kernel_profiler::PROFILER_L1_VECTOR_SIZE * num_risc_processors);
-    if (auto mesh_device = device->get_mesh_device()) {
+    if (mesh_device) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
         dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
             .enqueue_read_shard_from_core(
@@ -1129,26 +1124,26 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
         kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
 }
 
-void DeviceProfiler::readL1DataBufferForCore(
+void DeviceProfiler::readL1DataBufferForCore(distributed::MeshDevice* mesh_device,
     IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
-    if (useFastDispatch(device)) {
-        issueFastDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
+    if (useFastDispatch(mesh_device, device)) {
+        issueFastDispatchReadFromL1DataBuffer(mesh_device, virtual_core, core_l1_data_buffer);
     } else {
         issueSlowDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
     }
 }
 
-void DeviceProfiler::readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::readL1DataBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     ZoneScoped;
 
     for (const CoreCoord& virtual_core : virtual_cores) {
         std::vector<uint32_t>& core_l1_data_buffer = core_l1_data_buffers[virtual_core];
-        readL1DataBufferForCore(device, virtual_core, core_l1_data_buffer);
+        readL1DataBufferForCore(mesh_device, device, virtual_core, core_l1_data_buffer);
     }
 }
 
-void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core) {
+void DeviceProfiler::readControlBufferForCore(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core) {
     ZoneScoped;
     const auto& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, virtual_core);
@@ -1156,8 +1151,8 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
     DeviceAddr control_vector_addr =
         profiler_msg + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                            dev_msgs::profiler_msg_t::Field::control_vector);
-    if (useFastDispatch(device)) {
-        if (auto mesh_device = device->get_mesh_device()) {
+    if (useFastDispatch(mesh_device, device)) {
+        if (mesh_device) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
@@ -1177,14 +1172,14 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
     }
 }
 
-void DeviceProfiler::readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::readControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     ZoneScoped;
     for (const CoreCoord& virtual_core : virtual_cores) {
-        readControlBufferForCore(device, virtual_core);
+        readControlBufferForCore(mesh_device, device, virtual_core);
     }
 }
 
-void DeviceProfiler::resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::resetControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     ZoneScoped;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffer_resets;
     for (const CoreCoord& virtual_core : virtual_cores) {
@@ -1200,14 +1195,14 @@ void DeviceProfiler::resetControlBuffers(IDevice* device, const std::vector<Core
     }
 
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
-        writeToCoreControlBuffer(device, virtual_core, control_buffer_reset);
+        writeToCoreControlBuffer(mesh_device, device, virtual_core, control_buffer_reset);
     }
 }
 
-void DeviceProfiler::readProfilerBuffer(IDevice* device) {
+void DeviceProfiler::readProfilerBuffer(distributed::MeshDevice* mesh_device, IDevice* device) {
     ZoneScoped;
-    if (useFastDispatch(device)) {
-        issueFastDispatchReadFromProfilerBuffer(device);
+    if (useFastDispatch(mesh_device, device)) {
+        issueFastDispatchReadFromProfilerBuffer(mesh_device, device);
     } else {
         issueSlowDispatchReadFromProfilerBuffer(device);
     }
@@ -1879,6 +1874,7 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
 }
 
 void DeviceProfiler::readResults(
+    distributed::MeshDevice* mesh_device,
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     const ProfilerReadState state,
@@ -1899,26 +1895,25 @@ void DeviceProfiler::readResults(
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
     if (data_source == ProfilerDataBufferSource::DRAM) {
-        readControlBuffers(device, virtual_cores);
+        readControlBuffers(mesh_device, device, virtual_cores);
 
-        readProfilerBuffer(device);
+        readProfilerBuffer(mesh_device, device);
 
-        resetControlBuffers(device, virtual_cores);
+        resetControlBuffers(mesh_device, device, virtual_cores);
     } else if (data_source == ProfilerDataBufferSource::L1) {
-        readControlBuffers(device, virtual_cores);
+        readControlBuffers(mesh_device, device, virtual_cores);
 
-        resetControlBuffers(device, virtual_cores);
-
-        readL1DataBuffers(device, virtual_cores);
+        resetControlBuffers(mesh_device, device, virtual_cores);
+        readL1DataBuffers(mesh_device, device, virtual_cores);
     } else {
         TT_ASSERT(data_source == ProfilerDataBufferSource::DRAM_AND_L1);
-        readControlBuffers(device, virtual_cores);
+        readControlBuffers(mesh_device, device, virtual_cores);
 
-        readProfilerBuffer(device);
+        readProfilerBuffer(mesh_device, device);
 
-        readL1DataBuffers(device, virtual_cores);
+        readL1DataBuffers(mesh_device, device, virtual_cores);
 
-        resetControlBuffers(device, virtual_cores);
+        resetControlBuffers(mesh_device, device, virtual_cores);
     }
 #endif
 }

@@ -211,7 +211,7 @@ void DevicePool::init_profiler() const {
         }
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        detail::InitDeviceProfiler(dev);
+        detail::InitDeviceProfiler(nullptr, dev);
         log_info(tt::LogMetal, "Profiler started on device {}", mmio_device_id);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
@@ -219,7 +219,7 @@ void DevicePool::init_profiler() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* mmio_device = get_device(mmio_controlled_device_id);
-                    detail::InitDeviceProfiler(mmio_device);
+                    detail::InitDeviceProfiler(nullptr, mmio_device);
                     log_info(tt::LogMetal, "Profiler started on remote device {}", mmio_device->id());
                 }
             }
@@ -366,7 +366,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
-    detail::ClearProfilerControlBuffer(dev);
+    detail::ClearProfilerControlBuffer(nullptr, dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
@@ -887,7 +887,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const ChipId device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
+        detail::ReadDeviceProfilerResults(device->get_mesh_device().get(), device, ProfilerReadState::LAST_FD_READ);
     }
 
     dispatch_firmware_active_ = false;
@@ -971,7 +971,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
     for (const ChipId device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::ONLY_DISPATCH_CORES);
+        detail::ReadDeviceProfilerResults(device->get_mesh_device().get(), device, ProfilerReadState::ONLY_DISPATCH_CORES);
     }
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);

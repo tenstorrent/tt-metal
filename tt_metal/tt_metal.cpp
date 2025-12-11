@@ -753,7 +753,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        detail::ReadDeviceProfilerResults(device);
+        detail::ReadDeviceProfilerResults(device->get_mesh_device().get(), device);
     }
 }
 
@@ -772,7 +772,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
     }
     llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
     if (read_device_profiler_results) {
-        detail::ReadDeviceProfilerResults(device);
+        detail::ReadDeviceProfilerResults(device->get_mesh_device().get(), device);
     }
 }
 
