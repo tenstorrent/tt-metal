@@ -23,10 +23,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 struct Add1DTensorAndScalarParam {
     float scalar;
@@ -56,7 +53,4 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
 INSTANTIATE_TEST_SUITE_P(
     Add1DTensorAndScalarTests, Add1DTensorAndScalarFixture, ::testing::Values(Add1DTensorAndScalarParam{3.0f, 32, 64}));
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test

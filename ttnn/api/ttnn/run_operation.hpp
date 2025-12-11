@@ -12,9 +12,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt_stl/type_name.hpp>
 
-namespace tt::tt_metal {
-
-namespace operation {
+namespace tt::tt_metal::operation {
 
 template <class OutputTensors = Tensors>
 OutputTensors run(
@@ -43,6 +41,4 @@ distributed::MeshDevice* get_device(
     const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
 }
 
-}  // namespace operation
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::operation
