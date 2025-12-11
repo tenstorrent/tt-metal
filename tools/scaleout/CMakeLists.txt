@@ -174,6 +174,7 @@ target_include_directories(
     PUBLIC
         ${CMAKE_CURRENT_BINARY_DIR}
         ${CMAKE_BINARY_DIR}/tt_metal/fabric
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor
 )
 
 target_link_libraries(
