@@ -23,8 +23,14 @@
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false,  // is_int_fpu_en
+          false   // tilize
+          >(cbid)));
 }
 
 template <uint32_t num_tiles>
