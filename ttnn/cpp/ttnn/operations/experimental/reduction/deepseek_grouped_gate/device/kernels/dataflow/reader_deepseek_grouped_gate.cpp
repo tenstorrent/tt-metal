@@ -4,35 +4,6 @@
 
 #include <cstdint>
 
-void print_tile(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = true,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
-
 void kernel_main() {
     constexpr uint32_t scores_cb_index = get_named_compile_time_arg_val("scores_cb_index");
     constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb_index");

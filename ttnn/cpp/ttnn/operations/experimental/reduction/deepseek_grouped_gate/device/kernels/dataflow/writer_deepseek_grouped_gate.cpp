@@ -4,35 +4,6 @@
 
 #include <cstdint>
 
-void print_tile(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = true,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
-
 FORCE_INLINE void generate_index_tile(
     const uint32_t topk_index_creation_cb_index, const uint32_t index_write_addr, uint32_t start_expert_index) {
     constexpr uint32_t face_line = 16;
