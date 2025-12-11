@@ -168,15 +168,14 @@ Tensor to_layout_impl(
                 } else {
                     pad_value_variant = (uint32_t)0;
                 }
-                TT_FATAL(
-                    !sub_core_grids.has_value(), "Tilize with Val Padding OP does not currently support sub core grid");
                 tensor = ttnn::tilize_with_val_padding(
                     tensor,
                     Shape(padded_output_shape),
                     pad_value_variant,
                     output_memory_config,
                     dtype,
-                    use_multicore_tilize);
+                    use_multicore_tilize,
+                    sub_core_grids);
             }
             if (original_rank == 1) {
                 return ttnn::reshape(

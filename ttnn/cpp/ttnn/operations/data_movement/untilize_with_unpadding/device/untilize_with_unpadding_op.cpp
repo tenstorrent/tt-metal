@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensors.at(0).memory_config().is_sharded()) {
-        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded tilize does not support sub core grid specification");
+        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded untilize does not support sub core grid specification");
         return detail::untilize_with_unpadding_multi_core_sharded(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
