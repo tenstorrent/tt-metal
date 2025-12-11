@@ -399,14 +399,13 @@ def test_atan2(device):
     logger.info(f"Atan2 result: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_gcd(device):
     # Create two integer tensors for greatest common divisor
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     # Compute greatest common divisor for each pair of elements
@@ -414,14 +413,13 @@ def test_gcd(device):
     logger.info(f"Greatest common divisor result: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_lcm(device):
     # Create two integer tensors for least common multiple
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     # Compute least common multiple for each pair of elements
