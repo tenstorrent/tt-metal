@@ -279,8 +279,8 @@ Tensor ExecuteDiv::invoke(
     const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32));
 
     // Only fast_and_approximate_mode=true forces the legacy path
-    // round_mode and output_dtype can be used with both legacy and new (binary_ng) paths
-    const auto has_legacy_only_args = (fast_and_approximate_mode == true);
+    // round_mode with non-INT32 types also forces legacy path (binary_ng only supports round_mode for INT32)
+    const auto has_legacy_only_args = (fast_and_approximate_mode == true) || (round_mode.has_value() && !is_int32);
 
     if (not(use_legacy
                 ? *use_legacy
