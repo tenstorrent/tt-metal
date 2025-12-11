@@ -43,6 +43,9 @@ DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) :
 
 template <bool hugepage_write>
 DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(const DeviceCommand& other) {
+    if (this == &other) {
+        return *this;
+    }
     this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
     this->cmd_write_offsetB = other.cmd_write_offsetB;
     this->cmd_region_vector = other.cmd_region_vector;
@@ -825,7 +828,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
     for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
         uint32_t offset = 0;
-        for (auto& data : data_collection[i]) {
+        for (const auto& data : data_collection[i]) {
             this->memcpy(
                 (char*)this->cmd_region + this->cmd_write_offsetB + offset, std::get<0>(data), std::get<1>(data));
             offset += std::get<2>(data);

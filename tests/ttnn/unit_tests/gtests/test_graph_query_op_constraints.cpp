@@ -45,17 +45,13 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 namespace detail {
 static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorMemoryLayout& tensor_memory_layout) {
@@ -872,7 +868,4 @@ INSTANTIATE_TEST_SUITE_P(
     Conv2dOpIfTest,
     ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test

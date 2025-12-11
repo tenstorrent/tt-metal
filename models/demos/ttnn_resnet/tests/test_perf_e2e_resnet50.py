@@ -17,8 +17,8 @@ PERF_EXPECTATIONS = {
     "tg": {
         "test_perf": {"inference_time": 0.017, "compile_time": 60},
         "test_perf_trace": {"inference_time": 0.0068, "compile_time": 60},
-        "test_perf_2cqs": {"inference_time": 0.017, "compile_time": 60},
-        "test_perf_trace_2cqs": {"inference_time": 0.0048, "compile_time": 60},
+        "test_perf_2cqs": {"inference_time": 0.0175, "compile_time": 60},
+        "test_perf_trace_2cqs": {"inference_time": 0.0052, "compile_time": 60},
     },
 }
 

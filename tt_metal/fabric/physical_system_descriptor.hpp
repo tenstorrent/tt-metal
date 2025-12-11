@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/utils/semver.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -195,6 +195,7 @@ public:
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
+    std::string get_hostname_for_rank(uint32_t rank) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
 
     // Generic Getters

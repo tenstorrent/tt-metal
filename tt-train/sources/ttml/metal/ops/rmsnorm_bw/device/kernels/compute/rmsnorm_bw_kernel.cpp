@@ -13,7 +13,7 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/reg_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "tt-train/sources/ttml/metal/ops/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 namespace NAMESPACE {
 
@@ -225,8 +225,7 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reduced_scale_register,
-        /* transpose */ 0);
+        reduced_scale_register);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
@@ -304,8 +303,7 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reduced_scale_register,
-        /* transpose */ 0);
+        reduced_scale_register);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.

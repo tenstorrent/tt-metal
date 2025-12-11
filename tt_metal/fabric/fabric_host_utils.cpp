@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "fabric_host_utils.hpp"
 
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/metal_soc_descriptor.h>
@@ -119,8 +119,9 @@ void set_routing_mode(uint16_t routing_mode) {
     // Validate topology flags are orthogonal
     TT_FATAL(
         __builtin_popcount(
-            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) == 1,
-        "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
+            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
+                            ROUTING_MODE_TORUS)) == 1,
+        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
 
     // Validate 1D can't be used with MESH or TORUS
     TT_FATAL(
@@ -129,8 +130,9 @@ void set_routing_mode(uint16_t routing_mode) {
 
     // Validate 2D can't be used with LINE or RING
     TT_FATAL(
-        !(routing_mode & ROUTING_MODE_2D) || !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
-        "2D routing mode cannot be combined with LINE or RING topology");
+        !(routing_mode & ROUTING_MODE_2D) ||
+            !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
+        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     control_plane.set_routing_mode(routing_mode);
@@ -148,6 +150,8 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
     } else if (topology == Topology::Linear) {
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
+    } else if (topology == Topology::NeighborExchange) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     } else if (topology == Topology::Torus) {

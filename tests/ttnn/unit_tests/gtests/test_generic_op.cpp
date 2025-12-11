@@ -5,6 +5,7 @@
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
@@ -21,6 +22,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace ttnn::operations::generic::test {
 
@@ -74,8 +76,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    const auto src_buffer = device_input_tensor.buffer();
-    const auto dst_buffer = device_output_tensor.buffer();
+    auto* const src_buffer = device_input_tensor.buffer();
+    auto* const dst_buffer = device_output_tensor.buffer();
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
@@ -883,6 +885,119 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
         this->device_->num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit with new addresses, got {}",
         this->device_->num_program_cache_entries());
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
+    // Test that valid semaphore IDs work correctly
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 1,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
+    };
+
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
+    // Test that semaphore ID exceeding NUM_SEMAPHORES (16) throws an error
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+
+    SemaphoreDescriptor invalid_sem_descriptor = {
+        .id = NUM_SEMAPHORES,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 0,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {invalid_sem_descriptor},
+        .cbs = {},
+    };
+
+    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
+    // Test that duplicate semaphore IDs on overlapping cores throw an error
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    // Overlap on core (0, 0)
+    CoreRange core_range_1 = {CoreCoord(0, 0), CoreCoord(0, 1)};
+    CoreRange core_range_2 = {CoreCoord(0, 0), CoreCoord(1, 0)};
+
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_1),
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_2),
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
+    };
+
+    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
+    // Test that same semaphore ID on non-overlapping cores is allowed
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreRangeSet cores_0 = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    CoreRangeSet cores_1 = CoreRangeSet(CoreRange({1, 0}, {1, 0}));
+
+    SemaphoreDescriptor sem_on_core_0 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = cores_0,
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_on_core_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = cores_1,
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_on_core_0, sem_on_core_1},
+        .cbs = {},
+    };
+
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
 }  // namespace ttnn::operations::generic::test

@@ -6,8 +6,7 @@
 
 #include <cstdint>
 
-namespace tt {
-namespace constants {
+namespace tt::constants {
 
 using std::uint32_t;
 
@@ -21,5 +20,4 @@ constexpr uint32_t BFLOAT8_B_TILE_HW = TILE_HW + 64;  // Value is in bytes - 1B 
 constexpr uint32_t BFLOAT4_B_TILE_HW =
     (TILE_HW / 2) + 64;  // Value is in bytes - 0.5B per BFP4 datum + 4x16B exponent section
 
-}  // namespace constants
-}  // namespace tt
+}  // namespace tt::constants
