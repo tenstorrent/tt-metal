@@ -12,6 +12,7 @@ using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
+    DPRINT << "send started\n";
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -83,10 +84,16 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
+                const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx);
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
+                volatile tt_l1_ptr uint16_t* dst_noc = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(packet_base_addr);
+                for (uint16_t value = 0; value < payload_size_bytes / 2; value++) {
+                    DPRINT << "value at pkt cb " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc[value])
+                           << ENDL();
+                }
                 perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
+                DPRINT << "packet sent with size: " << (uint32_t)payload_size_bytes << " bytes\n";
 
                 // reset counters
                 packet_page_idx = 0;
@@ -112,4 +119,5 @@ void kernel_main() {
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
+    DPRINT << "send complete\n";
 }

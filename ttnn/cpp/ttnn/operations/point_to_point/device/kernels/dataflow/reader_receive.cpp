@@ -28,11 +28,13 @@ void kernel_main() {
     const auto page_size_bytes = get_arg_val<uint32_t>(5);
     const auto page_segments = get_arg_val<uint32_t>(6);
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(7);
-    const uint8_t sender_num_hops = get_arg_val<uint32_t>(8);
-    const bool sender_is_forward = get_arg_val<uint32_t>(9);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(8);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(9);
+    const uint8_t sender_num_hops = get_arg_val<uint32_t>(10);
+    const bool sender_is_forward = get_arg_val<uint32_t>(11);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 9;
+    size_t conn_arg_idx = 11;  // Updated to account for new argument
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
@@ -41,7 +43,7 @@ void kernel_main() {
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
+    const uint64_t sender_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr);
 
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
@@ -66,6 +68,7 @@ void kernel_main() {
 
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
+
     uint32_t packet_idx = page_idx_start / max_pages_per_packet;
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
@@ -74,9 +77,15 @@ void kernel_main() {
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = get_noc_addr(packet_idx, packet_buffer, 0, 0);
+                const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx);
                 noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
                 noc_async_read_barrier();
+
+                volatile tt_l1_ptr uint16_t* dst_noc = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(packet_l1_addr);
+                for (uint16_t value = 0; value < packet_size_bytes / 2; value++) {
+                    DPRINT << "value at pkt cb " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc[value])
+                           << ENDL();
+                }
 
                 packet_page_idx = 0;
                 curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);

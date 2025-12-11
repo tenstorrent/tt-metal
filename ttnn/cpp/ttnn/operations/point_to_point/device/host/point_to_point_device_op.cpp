@@ -103,7 +103,7 @@ using cached_workload_t = device_operation::CachedProgram<PointToPointOp::SendRe
 
 void PointToPointOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
+    // TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
     auto* mesh_device = input_tensor.device();
 
