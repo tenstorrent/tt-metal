@@ -66,97 +66,36 @@ jobs:
   # Wormhole N300 - Fabric tests
   wh-n300-fabric-tests:
     if: ${{ inputs.run-wh-n300-fabric-tests }}
-    name: Wormhole N300 Fabric Unit Tests
-    runs-on: tt-ubuntu-2204-N300-viommu-stable
-    container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        ARCH_NAME: wormhole_b0
-        LOGURU_LEVEL: INFO
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
-        TT_METAL_HOME: /work
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher }}
-      - name: fabric unit tests
-        timeout-minutes: 10
-        run: |
-          ./tests/scripts/run_cpp_fabric_tests.sh
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06CXU895AP # Michael Chiou
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Wormhole T3K - Fabric tests
   wh-t3k-fabric-tests:
     if: ${{ inputs.run-wh-t3k-fabric-tests }}
-    name: Wormhole T3K fabric tests
-    runs-on:
-      - tt-ubuntu-2204-N300-llmbox-stable
-    container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
-        LOGURU_LEVEL: INFO
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher }}
-      - name: Run t3k fabric tests
-        id: t3k-fabric-tests
-        timeout-minutes: 20
-        run: |
-          mkdir -p generated/test_reports
-          source tests/scripts/t3000/run_t3000_unit_tests.sh
-          run_t3000_ttfabric_tests
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 17
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout: 20
+      run-fabric-tests: 'true'
+      run-multiprocess-tests: 'false'
+      run-ccl-tests: 'false'
 
   # Wormhole 6U - Galaxy Quick Health (most of quick-6u-health, skipping 2 tests)
   wh-6u-fabric-tests:
