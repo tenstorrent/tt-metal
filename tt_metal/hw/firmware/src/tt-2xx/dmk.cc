@@ -38,11 +38,12 @@ uint32_t _start() {
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     extern uint32_t __tdata_lma[];
-    if (hartid == 0) {
-        extern uint32_t __ldm_tdata_start[];
-        extern uint32_t __ldm_tdata_end[];
-        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-    }
+    // for now this works for legacy kernels, we need to revisit this for new kernels
+    // if (hartid == /* leading core */ 0) {
+    extern uint32_t __ldm_tdata_start[];
+    extern uint32_t __ldm_tdata_end[];
+    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+    // }
     do_thread_crt1(__tdata_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {

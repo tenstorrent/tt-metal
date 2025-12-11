@@ -98,6 +98,7 @@ constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
+constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE = 0;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;

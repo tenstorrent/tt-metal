@@ -11,13 +11,8 @@
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 
-#if (defined(ARCH_QUASAR))
-extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
-extern thread_local uint32_t tt_l1_ptr* crta_l1_base;
-#else
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
-#endif
 
 // clang-format off
 /**

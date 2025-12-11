@@ -25,9 +25,9 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
-thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
-thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
-thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -80,7 +80,7 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (mailboxes->subordinate_sync.allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    while (mailboxes->subordinate_sync.allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE);
     WAYPOINT("NTD");
 }
 
@@ -249,7 +249,7 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                trigger_sync_register_init();
+                // trigger_sync_register_init();
 
                 if constexpr (ASSERT_ENABLED) {
                     if (noc_mode == DM_DYNAMIC_NOC) {
@@ -309,7 +309,7 @@ extern "C" uint32_t _start1() {
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
+        uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
         int index = hartid;
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
@@ -327,7 +327,7 @@ extern "C" uint32_t _start1() {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R1");
-        while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_GO) {
+        while (*((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
         asm("FENCE.i");
@@ -336,7 +336,7 @@ extern "C" uint32_t _start1() {
         record_stack_usage(stack_free);
         WAYPOINT("D1");
 
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_DONE;
+        *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }
 
     return 0;
