@@ -20,8 +20,8 @@ on:
           - whisper
           - sd35
           - flux1
-          - motif
           - gpt-oss
+          - motif
           - wan22
           - mochi
           - qwen3_32b
