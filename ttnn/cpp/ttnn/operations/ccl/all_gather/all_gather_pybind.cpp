@@ -67,7 +67,8 @@ void py_bind_all_gather(py::module& module) {
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               bool use_small_shape_versions) {
                 return self(
                     input_tensor,
                     dim,
@@ -77,7 +78,8 @@ void py_bind_all_gather(py::module& module) {
                     optional_output_tensor,
                     num_links,
                     topology,
-                    sub_core_grids);
+                    sub_core_grids,
+                    use_small_shape_versions);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -88,7 +90,8 @@ void py_bind_all_gather(py::module& module) {
             py::arg("output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("topology").noconvert() = std::nullopt,
-            py::arg("sub_core_grids") = std::nullopt});
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("use_small_shape_versions") = false});
 }
 
 }  // namespace ttnn::operations::ccl

@@ -255,7 +255,8 @@ Tensor all_gather_async(
     bool use_all_gather_async_llama_sharded = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool use_small_shape_versions = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -274,7 +275,8 @@ Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool use_small_shape_versions = false);
 
 // same as above but for vector of mesh
 std::vector<Tensor> all_gather_async(
@@ -294,7 +296,8 @@ std::vector<Tensor> all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool use_small_shape_versions = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -311,7 +314,8 @@ Tensor all_gather_async(
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool use_small_shape_versions = false);
 
 }  // namespace operations::experimental::ccl
 

@@ -26,7 +26,8 @@ ttnn::Tensor ExecuteAllGather::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool use_small_shape_versions) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -48,7 +49,8 @@ ttnn::Tensor ExecuteAllGather::invoke(
                     optional_output_tensor,
                     num_links,
                     topology,
-                    sub_core_grid);
+                    sub_core_grid,
+                    use_small_shape_versions);
             }
             return tensor;
         }
