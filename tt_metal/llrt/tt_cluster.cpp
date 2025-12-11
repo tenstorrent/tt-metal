@@ -670,7 +670,7 @@ std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
 
 std::optional<uint16_t> Cluster::get_pci_device_id(ChipId chip) const {
     if (this->target_type_ != tt::TargetDevice::Silicon) {
-        log_warning(tt::LogDevice, "get_pci_device_id is not supported for non-silicon devices");
+        log_warning(tt::LogDevice, "get_pci_device_id is only supported for Silicon devices");
         return std::nullopt;
     }
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_device;
