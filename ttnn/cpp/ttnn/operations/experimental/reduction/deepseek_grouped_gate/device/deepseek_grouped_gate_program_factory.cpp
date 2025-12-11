@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "grouped_gate_device_operation.hpp"
+#include "deepseek_grouped_gate_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::experimental::reduction {
 
-GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOperation::ProgramFactory::create(
+DeepseekGroupedGateDeviceOperation::ProgramFactory::cached_program_t
+DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -20,10 +22,6 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto& output_weights = tensor_return_value[0];
     auto& output_indices = tensor_return_value[1];
 
-    TT_FATAL(scores.dtype() == DataType::BFLOAT16, "Scores tensor must be BFLOAT16");
-    TT_FATAL(scores.layout() == Layout::TILE, "Scores tensor must be TILE layout");
-    TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must be BFLOAT16");
-    TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(output_weights.dtype() == DataType::BFLOAT16, "Output weights tensor must be BFLOAT16");
     TT_FATAL(output_weights.layout() == Layout::TILE, "Output weights tensor must be TILE layout");
     TT_FATAL(output_indices.dtype() == DataType::UINT16, "Output indices tensor must be UINT16");
@@ -252,13 +250,14 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
 
     // Reader kernel
     auto reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/dataflow/reader_grouped_gate.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/dataflow/"
+        "reader_deepseek_grouped_gate.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
@@ -314,7 +313,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         false;  // has to be false otherwise transpose_wh_tile of the index tiles corrupts dest reg 1 bfp16 somehow?
     auto compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/compute/grouped_gate.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/"
+        "deepseek_grouped_gate.cpp",
         all_cores,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -364,12 +364,13 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/dataflow/writer_grouped_gate.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/dataflow/"
+        "writer_deepseek_grouped_gate.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
@@ -411,7 +412,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, cores}};
 }
 
-void GroupedGateDeviceOperation::ProgramFactory::override_runtime_arguments(
+void DeepseekGroupedGateDeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -431,4 +432,4 @@ void GroupedGateDeviceOperation::ProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::experimental::reduction

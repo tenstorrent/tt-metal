@@ -8,9 +8,9 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::experimental::reduction {
 
-struct GroupedGateDeviceOperation {
+struct DeepseekGroupedGateDeviceOperation {
     struct operation_attributes_t {
         uint32_t n_groups;
         uint32_t summed_experts_per_group;
@@ -80,9 +80,10 @@ struct GroupedGateDeviceOperation {
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::experimental::reduction
 
 namespace ttnn::prim {
-constexpr auto grouped_gate =
-    ttnn::register_operation<"ttnn::prim::grouped_gate", ttnn::operations::reduction::GroupedGateDeviceOperation>();
+constexpr auto deepseek_grouped_gate = ttnn::register_operation<
+    "ttnn::prim::deepseek_grouped_gate",
+    ttnn::operations::experimental::reduction::DeepseekGroupedGateDeviceOperation>();
 }  // namespace ttnn::prim

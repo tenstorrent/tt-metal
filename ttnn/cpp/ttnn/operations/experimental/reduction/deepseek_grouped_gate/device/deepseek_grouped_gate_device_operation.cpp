@@ -2,30 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "grouped_gate_device_operation.hpp"
+#include "deepseek_grouped_gate_device_operation.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::experimental::reduction {
 
-void GroupedGateDeviceOperation::validate_on_program_cache_miss(
+void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& scores = tensor_args.scores;
     const auto& bias = tensor_args.bias;
 
+    // Basic validation
     TT_FATAL(scores.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
+    TT_FATAL(bias.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
+    TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
+
     TT_FATAL(scores.dtype() == DataType::BFLOAT16, "Scores tensor must be BFLOAT16");
     TT_FATAL(scores.layout() == Layout::TILE, "Scores tensor must be TILE layout");
+    TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must be BFLOAT16");
+    TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must be TILE layout");
+    TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
 
-    // Basic validation for other tensors
-    TT_FATAL(bias.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
+    TT_FATAL(
+        attributes.summed_experts_per_group == 2,
+        "summed_experts_per_group must be 2 at the moment. Got {}",
+        attributes.summed_experts_per_group);
+    TT_FATAL(
+        scores.logical_shape()[-1] / attributes.n_groups == 32,
+        "Experts per group must be 32. Got {}, with experts {} and n_groups {}",
+        scores.logical_shape()[-1] / attributes.n_groups,
+        scores.logical_shape()[-1],
+        attributes.n_groups);
 }
 
-void GroupedGateDeviceOperation::validate_on_program_cache_hit(
+void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attributes, tensor_args);
 }
 
-GroupedGateDeviceOperation::spec_return_value_t GroupedGateDeviceOperation::compute_output_specs(
+DeepseekGroupedGateDeviceOperation::spec_return_value_t DeepseekGroupedGateDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& scores = tensor_args.scores;
     auto shape = scores.logical_shape();
@@ -46,7 +61,7 @@ GroupedGateDeviceOperation::spec_return_value_t GroupedGateDeviceOperation::comp
                 DataType::UINT16, tt::tt_metal::PageConfig(scores.layout()), attributes.output_mem_config))};
 }
 
-GroupedGateDeviceOperation::tensor_return_value_t GroupedGateDeviceOperation::create_output_tensors(
+DeepseekGroupedGateDeviceOperation::tensor_return_value_t DeepseekGroupedGateDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(attributes, tensor_args);
     return std::array<Tensor, 2>{
@@ -54,17 +69,18 @@ GroupedGateDeviceOperation::tensor_return_value_t GroupedGateDeviceOperation::cr
         create_device_tensor(specs[1], tensor_args.scores.device())};
 }
 
-std::tuple<GroupedGateDeviceOperation::operation_attributes_t, GroupedGateDeviceOperation::tensor_args_t>
-GroupedGateDeviceOperation::invoke(
-    const Tensor& scores,
-    const Tensor& bias,
-    uint32_t n_groups,
-    uint32_t summed_experts_per_group,
-    uint32_t topk_groups,
-    uint32_t n_activated_experts,
-    float route_scale,
-    float epsilon,
-    const std::optional<MemoryConfig>& output_mem_config) {
+std::
+    tuple<DeepseekGroupedGateDeviceOperation::operation_attributes_t, DeepseekGroupedGateDeviceOperation::tensor_args_t>
+    DeepseekGroupedGateDeviceOperation::invoke(
+        const Tensor& scores,
+        const Tensor& bias,
+        uint32_t n_groups,
+        uint32_t summed_experts_per_group,
+        uint32_t topk_groups,
+        uint32_t n_activated_experts,
+        float route_scale,
+        float epsilon,
+        const std::optional<MemoryConfig>& output_mem_config) {
     return {
         operation_attributes_t{
             n_groups,
@@ -77,9 +93,9 @@ GroupedGateDeviceOperation::invoke(
         tensor_args_t{scores, bias}};
 }
 
-GroupedGateDeviceOperation::program_factory_t GroupedGateDeviceOperation::select_program_factory(
+DeepseekGroupedGateDeviceOperation::program_factory_t DeepseekGroupedGateDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     return ProgramFactory{};
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::experimental::reduction

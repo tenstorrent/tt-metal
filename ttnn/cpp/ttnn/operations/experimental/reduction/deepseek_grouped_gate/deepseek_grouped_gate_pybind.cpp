@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/reduction/grouped_gate/grouped_gate_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_pybind.hpp"
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/reduction/grouped_gate/grouped_gate.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::experimental::reduction::detail {
 
 namespace py = pybind11;
 
-void py_bind_grouped_gate(py::module& module) {
+void bind_deepseek_grouped_gate(py::module& module) {
     ttnn::bind_registered_operation(
         module,
-        ttnn::grouped_gate,
+        ttnn::experimental::deepseek_grouped_gate,
         R"doc(
             Gating mechanism for routing inputs in a mixture-of-experts (MoE) model, specifically optimized for DeepSeek.
 
@@ -32,7 +32,7 @@ void py_bind_grouped_gate(py::module& module) {
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores and selected expert indices.
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::grouped_gate)& self,
+            [](const decltype(ttnn::experimental::deepseek_grouped_gate)& self,
                const ttnn::Tensor& scores,
                const ttnn::Tensor& bias,
                uint32_t n_groups,
@@ -53,15 +53,16 @@ void py_bind_grouped_gate(py::module& module) {
                     epsilon,
                     memory_config);
             },
-            py::arg("scores"),
-            py::arg("bias"),
-            py::arg("n_groups"),
-            py::arg("summed_experts_per_group"),
-            py::arg("topk_groups"),
-            py::arg("n_activated_experts"),
-            py::arg("route_scale") = 1.0f,
-            py::arg("epsilon") = 1e-20f,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("scores").noconvert(),
+            py::arg("bias").noconvert(),
+            py::kw_only(),
+            py::arg("n_groups").noconvert(),
+            py::arg("summed_experts_per_group").noconvert(),
+            py::arg("topk_groups").noconvert(),
+            py::arg("n_activated_experts").noconvert(),
+            py::arg("route_scale").noconvert() = 1.0f,
+            py::arg("epsilon").noconvert() = 1e-20f,
+            py::arg("memory_config").noconvert() = std::nullopt});
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::experimental::reduction::detail

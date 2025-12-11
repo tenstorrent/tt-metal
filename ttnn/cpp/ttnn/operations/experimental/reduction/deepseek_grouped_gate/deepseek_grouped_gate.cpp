@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "grouped_gate.hpp"
-#include "device/grouped_gate_device_operation.hpp"
+#include "deepseek_grouped_gate.hpp"
+#include "device/deepseek_grouped_gate_device_operation.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::experimental::reduction {
 
-std::array<Tensor, 2> GroupedGateOperation::invoke(
+std::array<Tensor, 2> DeepseekGroupedGateOperation::invoke(
     const Tensor& scores,
     const Tensor& bias,
     uint32_t n_groups,
@@ -17,7 +17,7 @@ std::array<Tensor, 2> GroupedGateOperation::invoke(
     float route_scale,
     float epsilon,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::prim::grouped_gate(
+    return ttnn::prim::deepseek_grouped_gate(
         scores,
         bias,
         n_groups,
@@ -29,4 +29,4 @@ std::array<Tensor, 2> GroupedGateOperation::invoke(
         output_mem_config);
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::experimental::reduction
