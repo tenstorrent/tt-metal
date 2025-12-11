@@ -1,7 +1,7 @@
 # Panoptic DeepLab
 
 ## Platforms:
-    Made for BOS chips, tested on Blackhole with both 20-core (5x4 grid) and all-core configurations.
+    Made for BOS chips, tested on Blackhole with both 20-core (5x4 grid) and P150 all-core (13x10 grid - 130 cores) configurations.
 
 ## Introduction
 Panoptic DeepLab is a unified model for panoptic segmentation that combines semantic segmentation and instance segmentation into a single framework. The model uses a shared ResNet backbone with separate heads for semantic segmentation and instance embedding prediction, enabling comprehensive scene understanding by simultaneously identifying both "stuff" (background regions like road, sky) and "things" (countable objects like cars, people).
@@ -21,18 +21,20 @@ Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panop
 
 ## How to Run
 
-The model supports both optimized 20-core (5x4 grid) and all-core configurations:
+The model supports both optimized 20-core (5x4 grid) and all-core (13x10 grid) configurations:
 - **20 cores (optimized)**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`
-- **All cores**: Omit/Unset `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE` for device default core grid
+- **130 cores**: Omit/Unset `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE` for P150 device to use all cores (13x10 grid)
+
 
 ### Run the Full Model Test
 ```bash
 # 20-core optimized configuration
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 
-# All cores full grid configuration (13x10 on blackhole)
+# 130-core grid configuration (13x10 on Blackhole P150)
 pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 ```
+**Note**: All following tests can be run with or without TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
 
 ### Run Component Tests
 ```bash
@@ -48,8 +50,6 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panopti
 # Test instance embedding head
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_insemb.py
 ```
-
-**Note**: All tests automatically adapt to the available core grid. The 20-core configuration uses optimized matmul configs, while other configurations use auto-config for flexibility.
 
 ### Run Device Performance Tests
 ```bash
