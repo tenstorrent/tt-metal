@@ -13,10 +13,10 @@ namespace ckernel {
 template <
     bool APPROXIMATE,
     bool FAST_APPROX,
+    bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     bool SKIP_POSITIVE_CHECK = false,
-    int ITERATIONS = 8,
-    bool is_fp32_dest_acc_en = false>
+    int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_exponential(
     uint dst_index,
     int vector_mode = (int)VectorMode::RC,
@@ -25,10 +25,10 @@ inline void llk_math_eltwise_unary_sfpu_exponential(
         ckernel::sfpu::calculate_exponential<
             APPROXIMATE,
             FAST_APPROX,
+            is_fp32_dest_acc_en,
             SCALE_EN,
             ITERATIONS,
-            SKIP_POSITIVE_CHECK,
-            is_fp32_dest_acc_en>,
+            SKIP_POSITIVE_CHECK>,
         dst_index,
         vector_mode,
         param0);
