@@ -399,55 +399,440 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
     // Close device
     ttnn::device::close_device(*device);
 }
+namespace BFloat16_Tests {
+const auto configs = std::vector<MatmulTestConfig>{
+    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/true},
+    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/true}};
+const auto shapes = std::vector<MatmulShape>{
+    {/*m=*/512,
+     /*k=*/512,
+     /*n=*/512,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/512,
+     /*k=*/1024,
+     /*n=*/1024,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/512,
+     /*k=*/1024,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/1024,
+     /*n=*/1024,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/1024,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/2048,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/2048,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/2048,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/3072,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/3072,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/4,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/3072,
+     /*n=*/4096,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/4096,
+     /*n=*/4096,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/4096,
+     /*k=*/4096,
+     /*n=*/4096,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/2,
+     /*num_out_blocks_w=*/2},
+    {/*m=*/8192,
+     /*k=*/8192,
+     /*n=*/8192,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/4,
+     /*num_out_blocks_w=*/4},
+    {/*m=*/16384,
+     /*k=*/16384,
+     /*n=*/16384,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/4,
+     /*num_out_blocks_h=*/8,
+     /*num_out_blocks_w=*/8}};
 
-// BFLOAT16 benchmarks
-void BM_Matmul_BFLOAT16_HiFi2_512x512x512(benchmark::State& state) {
-    MatmulTestConfig config{ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, false};
-    MatmulShape shape{512, 512, 512, true, true, 1, 1, 1};
-    for (auto _ : state) {
-        RunMatmulBenchmark(state, config, shape);
-    }
-}
+// Benchmark function
+void BM_Matmul_BFLOAT16(benchmark::State& state) {
+    const int config_index = static_cast<int>(state.range(0));
+    const int shape_index = static_cast<int>(state.range(1));
 
-void BM_Matmul_BFLOAT16_HiFi2_512x1024x1024(benchmark::State& state) {
-    MatmulTestConfig config{ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, false};
-    MatmulShape shape{512, 1024, 1024, true, true, 1, 1, 1};
-    for (auto _ : state) {
-        RunMatmulBenchmark(state, config, shape);
-    }
-}
+    const MatmulTestConfig& test_config = configs[config_index];
+    const MatmulShape& matmul_shape = shapes[shape_index];
 
-void BM_Matmul_BFLOAT16_HiFi2_1024x1024x1024(benchmark::State& state) {
-    MatmulTestConfig config{ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, false};
-    MatmulShape shape{1024, 1024, 1024, true, true, 1, 1, 1};
-    for (auto _ : state) {
-        RunMatmulBenchmark(state, config, shape);
-    }
+    RunMatmulBenchmark(state, test_config, matmul_shape);
 }
+}  // namespace BFloat16_Tests
 
-void BM_Matmul_BFLOAT16_HiFi2_2048x2048x2048(benchmark::State& state) {
-    MatmulTestConfig config{ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, false};
-    MatmulShape shape{2048, 2048, 2048, true, true, 1, 1, 1};
-    for (auto _ : state) {
-        RunMatmulBenchmark(state, config, shape);
-    }
-}
+namespace BFloat8_B_Tests {
+const auto configs = std::vector<MatmulTestConfig>{
+    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/true},
+    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi4, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi4, /*enable_tracing=*/true}};
+const auto shapes = std::vector<MatmulShape>{
+    {/*m=*/512,
+     /*k=*/512,
+     /*n=*/512,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/512,
+     /*k=*/1024,
+     /*n=*/1024,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/512,
+     /*k=*/1024,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/1024,
+     /*n=*/1024,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/1024,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/2048,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/2048,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/2048,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/3072,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/3072,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/3072,
+     /*n=*/4096,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/4096,
+     /*k=*/4096,
+     /*n=*/4096,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/2,
+     /*num_out_blocks_w=*/2},
+    {/*m=*/8192,
+     /*k=*/8192,
+     /*n=*/8192,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/4,
+     /*num_out_blocks_w=*/4},
+    {/*m=*/16384,
+     /*k=*/16384,
+     /*n=*/16384,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/4,
+     /*num_out_blocks_h=*/8,
+     /*num_out_blocks_w=*/8}};
 
-void BM_Matmul_BFLOAT16_HiFi2_4096x4096x4096(benchmark::State& state) {
-    MatmulTestConfig config{ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, false};
-    MatmulShape shape{4096, 4096, 4096, false, false, 1, 2, 2};
-    for (auto _ : state) {
-        RunMatmulBenchmark(state, config, shape);
-    }
+// Benchmark function
+void BM_Matmul_BFLOAT8_B(benchmark::State& state) {
+    const int config_index = static_cast<int>(state.range(0));
+    const int shape_index = static_cast<int>(state.range(1));
+
+    const MatmulTestConfig& test_config = configs[config_index];
+    const MatmulShape& matmul_shape = shapes[shape_index];
+
+    RunMatmulBenchmark(state, test_config, matmul_shape);
 }
+}  // namespace BFloat8_B_Tests
+
+namespace BFloat4_B_Tests {
+const auto configs = std::vector<MatmulTestConfig>{
+    {ttnn::DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/true}};
+const auto shapes = std::vector<MatmulShape>{
+    {/*m=*/512,
+     /*k=*/512,
+     /*n=*/512,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/512,
+     /*k=*/1024,
+     /*n=*/1024,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/512,
+     /*k=*/1024,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/1024,
+     /*n=*/1024,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/1024,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/1024,
+     /*k=*/2048,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/2048,
+     /*n=*/2048,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/2048,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/2048,
+     /*k=*/3072,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/3072,
+     /*n=*/3072,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/3072,
+     /*n=*/4096,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/1,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/3072,
+     /*k=*/4096,
+     /*n=*/4096,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/4096,
+     /*k=*/4096,
+     /*n=*/4096,
+     /*in0_sharded=*/true,
+     /*out_sharded=*/true,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/1,
+     /*num_out_blocks_w=*/1},
+    {/*m=*/8192,
+     /*k=*/8192,
+     /*n=*/8192,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/2,
+     /*num_out_blocks_h=*/2,
+     /*num_out_blocks_w=*/2},
+    {/*m=*/16384,
+     /*k=*/16384,
+     /*n=*/16384,
+     /*in0_sharded=*/false,
+     /*out_sharded=*/false,
+     /*in0_block_w_div=*/4,
+     /*num_out_blocks_h=*/4,
+     /*num_out_blocks_w=*/4}};
+
+// Benchmark function
+void BM_Matmul_BFLOAT4_B(benchmark::State& state) {
+    const int config_index = static_cast<int>(state.range(0));
+    const int shape_index = static_cast<int>(state.range(1));
+
+    const MatmulTestConfig& test_config = configs[config_index];
+    const MatmulShape& matmul_shape = shapes[shape_index];
+
+    RunMatmulBenchmark(state, test_config, matmul_shape);
+}
+}  // namespace BFloat4_B_Tests
 
 // Register benchmarks
-BENCHMARK(BM_Matmul_BFLOAT16_HiFi2_512x512x512)->Unit(benchmark::kMillisecond)->UseManualTime();
-BENCHMARK(BM_Matmul_BFLOAT16_HiFi2_512x1024x1024)->Unit(benchmark::kMillisecond)->UseManualTime();
-BENCHMARK(BM_Matmul_BFLOAT16_HiFi2_1024x1024x1024)->Unit(benchmark::kMillisecond)->UseManualTime();
-BENCHMARK(BM_Matmul_BFLOAT16_HiFi2_2048x2048x2048)->Unit(benchmark::kMillisecond)->UseManualTime();
-BENCHMARK(BM_Matmul_BFLOAT16_HiFi2_4096x4096x4096)->Unit(benchmark::kMillisecond)->UseManualTime();
+BENCHMARK(BFloat16_Tests::BM_Matmul_BFLOAT16)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        benchmark::CreateDenseRange(0, BFloat16_Tests::configs.size() - 1, /*step=*/1),  // config indices
+        benchmark::CreateDenseRange(0, BFloat16_Tests::shapes.size() - 1, /*step=*/1)    // shape indices
+    })
+    ->UseManualTime();
 
+BENCHMARK(BFloat8_B_Tests::BM_Matmul_BFLOAT8_B)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        benchmark::CreateDenseRange(0, BFloat8_B_Tests::configs.size() - 1, /*step=*/1),  // config indices
+        benchmark::CreateDenseRange(0, BFloat8_B_Tests::shapes.size() - 1, /*step=*/1)    // shape indices
+    })
+    ->UseManualTime();
+
+BENCHMARK(BFloat4_B_Tests::BM_Matmul_BFLOAT4_B)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        benchmark::CreateDenseRange(0, BFloat4_B_Tests::configs.size() - 1, /*step=*/1),  // config indices
+        benchmark::CreateDenseRange(0, BFloat4_B_Tests::shapes.size() - 1, /*step=*/1)    // shape indices
+    })
+    ->UseManualTime();
 }  // namespace
 
 BENCHMARK_MAIN();
