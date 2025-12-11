@@ -15,7 +15,7 @@ Sender kernel performs atomic semaphore increments with an atomic barrier after 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:
 ```
-./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*OneFromOne*"
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*AtomicSemaphore*"
 ```
 
 ## Test Parameters
@@ -33,7 +33,7 @@ The tests use the Mesh Device API with fast dispatch mode:
 
 - **`AtomicSemaphoreAdjacentIncrementValueSweep`**: Comprehensive sweep testing different:
   - NOC configurations (NOC_0, NOC_1)
-  - Transaction counts (16 to 1024)
+  - Transaction counts (16 to 64)
   - Atomic increment values (1, 2, 3, 4)
   - Tests delay between adjacent cores ( 0,1 -> 0,0 )
 

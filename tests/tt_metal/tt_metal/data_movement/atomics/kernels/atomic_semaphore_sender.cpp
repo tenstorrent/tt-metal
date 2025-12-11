@@ -16,7 +16,7 @@ void kernel_main() {
     const uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(4);
     const uint32_t semaphore_addr_offset = get_compile_time_arg_val(5);
 
-    // Runtime arguments - unpack coordinates
+    // Unpack coordinates
     uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
     uint32_t receiver_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
 
@@ -39,5 +39,6 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("NoC Index", noc_index);
     DeviceTimestampedData("Number of transactions", num_of_transactions);
+    // Even though this is the atomic increment value, printing "Transaction size in bytes" is required for the existing parsing scripts.
     DeviceTimestampedData("Transaction size in bytes", atomic_inc_value);
 }

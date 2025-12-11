@@ -32,7 +32,7 @@ struct AtomicSemaphoreConfig {
 /// @param test_config - Configuration of the test
 /// @return true if test passes, false otherwise
 bool run_atomic_semaphore_test(
-    shared_ptr<distributed::MeshDevice> mesh_device, const AtomicSemaphoreConfig& test_config) {
+    const shared_ptr<distributed::MeshDevice> mesh_device, const AtomicSemaphoreConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
 
@@ -48,10 +48,6 @@ bool run_atomic_semaphore_test(
 
     // Buffer Parameters
     const size_t total_data_size = test_config.semaphore_addr_offset + sizeof(uint32_t);
-
-    // Core coordinates and ranges
-    CoreRangeSet sender_core_set({CoreRange(test_config.sender_core_coord)});
-    CoreRangeSet receiver_core_set({CoreRange(test_config.receiver_core_coord)});
 
     // Obtain L1 Address for Storing Data
     L1AddressInfo sender_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sender_core_coord);
@@ -191,7 +187,7 @@ bool run_atomic_semaphore_test(
 
 /// @brief Bandwidth sweep test that varies transaction sizes and counts
 void increment_value_sweep_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 1},
     CoreCoord receiver_core = {0, 0}) {
@@ -214,6 +210,7 @@ void increment_value_sweep_test(
                     .atomic_inc_value = atomic_inc_value,
                     .noc_id = noc_id};
 
+                // Passing in atomic_inc_value twice: Once for "Pages" and once for "AtomicInc" to maintain consistency
                 log_info(
                     LogTest,
                     "Testing: NOC={}, Transactions={}, Pages={}, AtomicInc={}",
@@ -275,6 +272,8 @@ TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) 
     uint32_t test_id = 320;
 
     auto logical_grid_size = get_mesh_device()->logical_grid_size();
+
+    TT_FATAL(logical_grid_size.x > 2 && logical_grid_size.y > 2, "Test assumes grid size is at least 3x3");
 
     // Sender core is pulled in 1 row & 1 column from opposite corner to avoid dispatch cores
     auto sender_core = CoreCoord(logical_grid_size.x - 2, logical_grid_size.y - 2);

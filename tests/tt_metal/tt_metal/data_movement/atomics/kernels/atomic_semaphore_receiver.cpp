@@ -22,8 +22,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_local_addr + semaphore_addr_offset);
 
     DeviceTimestampedData("Receiver Initial semaphore value", *local_semaphore);
-    uint32_t expected_semaphore_value = 0;
-    expected_semaphore_value = num_of_transactions * expected_atomic_inc_value;
+    uint32_t expected_semaphore_value = num_of_transactions * expected_atomic_inc_value;
     {
         DeviceZoneScopedN("RISCV0");
 
