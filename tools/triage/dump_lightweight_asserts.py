@@ -12,6 +12,7 @@ Description:
 """
 
 
+import os
 from dataclasses import dataclass
 from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
@@ -55,7 +56,6 @@ class LightweightAssertInfo:
 def extract_assert_code(file: str | None, line: int | None, column: int | None) -> str:
     if file is None or line is None:
         return "?"
-    import os
 
     if not os.path.exists(file):
         return "?file not found?"
