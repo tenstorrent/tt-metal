@@ -128,12 +128,12 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
-    uint32_t num_trids = 4;
+    uint32_t num_trids = 2;
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
 
-        scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
+        scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
 
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_trids * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
