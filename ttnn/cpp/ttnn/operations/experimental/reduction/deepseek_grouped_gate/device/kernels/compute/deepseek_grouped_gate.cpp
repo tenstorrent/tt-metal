@@ -24,103 +24,102 @@
 namespace NAMESPACE {
 
 namespace blocks {
-void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t width_tiles) {
+void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
     // Perform sigmoid on scores
     // Reconfigure pack/unpack for bfloat16 after topk operations used UInt16
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(scores_cb_index, 1);
+        cb_wait_front(cb_in_scores, 1);
         tile_regs_acquire();
-        reconfig_data_format_srca(scores_cb_index);
+        reconfig_data_format_srca(cb_in_scores);
         // copy tile from scores cb to destination register 0
-        copy_tile_to_dst_init_short(scores_cb_index);
-        copy_tile(scores_cb_index, 0, 0);
+        copy_tile_to_dst_init_short(cb_in_scores);
+        copy_tile(cb_in_scores, 0, 0);
         // perform sigmoid on tile
         sigmoid_tile_init();
         sigmoid_tile(0);
         tile_regs_commit();
-        cb_pop_front(scores_cb_index, 1);
+        cb_pop_front(cb_in_scores, 1);
 
-        cb_reserve_back(sigmoid_input_cb_index, 1);
+        cb_reserve_back(cb_sigmoid_scores, 1);
         tile_regs_wait();
-        pack_reconfig_data_format(sigmoid_input_cb_index);
-        pack_tile(0, sigmoid_input_cb_index);
+        pack_reconfig_data_format(cb_sigmoid_scores);
+        pack_tile(0, cb_sigmoid_scores);
         tile_regs_release();
-        cb_push_back(sigmoid_input_cb_index, 1);
+        cb_push_back(cb_sigmoid_scores, 1);
     }
 }
 
-void add_bias(
-    uint32_t sigmoid_input_cb_index, uint32_t bias_cb_index, uint32_t add_bias_cb_index, uint32_t width_tiles) {
-    // Perform add bias on sigmoid input – should I do full or partial init here?
-    add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
-    cb_wait_front(sigmoid_input_cb_index, width_tiles);
+void add_bias(uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores, uint32_t width_tiles) {
+    // Perform add bias on sigmoid scores
+    add_tiles_init(cb_sigmoid_scores, cb_in_bias, false);
+    cb_wait_front(cb_sigmoid_scores, width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(bias_cb_index, 1);
+        cb_wait_front(cb_in_bias, 1);
         tile_regs_acquire();
-        add_tiles(sigmoid_input_cb_index, bias_cb_index, width_tile, 0, 0);
+        add_tiles(cb_sigmoid_scores, cb_in_bias, width_tile, 0, 0);
         tile_regs_commit();
-        cb_pop_front(bias_cb_index, 1);
+        cb_pop_front(cb_in_bias, 1);
 
-        cb_reserve_back(add_bias_cb_index, 1);
+        cb_reserve_back(cb_biased_scores, 1);
         tile_regs_wait();
-        pack_tile(0, add_bias_cb_index);
+        pack_tile(0, cb_biased_scores);
         tile_regs_release();
-        cb_push_back(add_bias_cb_index, 1);
+        cb_push_back(cb_biased_scores, 1);
     }
 }
 
 void process_and_sort_tiles(
-    uint32_t input_cb_index,
-    uint32_t index_cb_index,
-    uint32_t input_transposed_cb_index,
-    uint32_t index_transposed_cb_index,
+    uint32_t cb_biased_scores,
+    uint32_t cb_expert_index_template,
+    uint32_t cb_sorted_group_scores,
+    uint32_t cb_sorted_expert_indices_temp,
     uint32_t Wt,
     bool switch_dir,
     bool ascending,
     int end_phase) {
     topk_tile_init();
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
-    cb_wait_front(index_cb_index, Wt);
-    cb_wait_front(input_cb_index, Wt);
+    cb_wait_front(cb_expert_index_template, Wt);
+    cb_wait_front(cb_biased_scores, Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         acquire_dst();
         // transpose and unpack into dest regs
-        reconfig_data_format_srca(input_cb_index);
-        transpose_wh_init_short(input_cb_index);
-        transpose_wh_tile(input_cb_index, wt, 0);
-        transpose_wh_tile(input_cb_index, wt + 1, 1);
+        reconfig_data_format_srca(cb_biased_scores);
+        transpose_wh_init_short(cb_biased_scores);
+        transpose_wh_tile(cb_biased_scores, wt, 0);
+        transpose_wh_tile(cb_biased_scores, wt + 1, 1);
 
         // transpose and unpack into dest regs
-        reconfig_data_format_srca(index_cb_index);
-        transpose_wh_init_short(index_cb_index);
-        transpose_wh_tile(index_cb_index, wt, 2);
-        transpose_wh_tile(index_cb_index, wt + 1, 3);
+        reconfig_data_format_srca(cb_expert_index_template);
+        transpose_wh_init_short(cb_expert_index_template);
+        transpose_wh_tile(cb_expert_index_template, wt, 2);
+        transpose_wh_tile(cb_expert_index_template, wt + 1, 3);
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
 
-        // pack value tiles into cb_intermed0
-        pack_reconfig_data_format(input_transposed_cb_index);
-        cb_reserve_back(input_transposed_cb_index, 1);
-        pack_tile(0, input_transposed_cb_index);
-        cb_push_back(input_transposed_cb_index, 1);
+        // pack sorted score tiles
+        pack_reconfig_data_format(cb_sorted_group_scores);
+        cb_reserve_back(cb_sorted_group_scores, 1);
+        pack_tile(0, cb_sorted_group_scores);
+        cb_push_back(cb_sorted_group_scores, 1);
 
-        cb_reserve_back(input_transposed_cb_index, 1);
-        pack_tile(1, input_transposed_cb_index);
-        cb_push_back(input_transposed_cb_index, 1);
+        cb_reserve_back(cb_sorted_group_scores, 1);
+        pack_tile(1, cb_sorted_group_scores);
+        cb_push_back(cb_sorted_group_scores, 1);
 
-        // pack index tiles into cb_intermed1
-        pack_reconfig_data_format(index_transposed_cb_index);
-        cb_reserve_back(index_transposed_cb_index, 1);
-        pack_tile(2, index_transposed_cb_index);
-        cb_push_back(index_transposed_cb_index, 1);
+        // pack sorted index tiles
+        pack_reconfig_data_format(cb_sorted_expert_indices_temp);
+        cb_reserve_back(cb_sorted_expert_indices_temp, 1);
+        pack_tile(2, cb_sorted_expert_indices_temp);
+        cb_push_back(cb_sorted_expert_indices_temp, 1);
 
-        cb_reserve_back(index_transposed_cb_index, 1);
-        pack_tile(3, index_transposed_cb_index);
-        cb_push_back(index_transposed_cb_index, 1);
+        cb_reserve_back(cb_sorted_expert_indices_temp, 1);
+        pack_tile(3, cb_sorted_expert_indices_temp);
+        cb_push_back(cb_sorted_expert_indices_temp, 1);
 
-        cb_wait_front(index_transposed_cb_index, 2);
-        cb_pop_front(index_transposed_cb_index, 2);
+        cb_wait_front(cb_sorted_expert_indices_temp, 2);
+        cb_pop_front(cb_sorted_expert_indices_temp, 2);
 
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
@@ -128,65 +127,64 @@ void process_and_sort_tiles(
 }
 
 void sum_top_experts_per_group(
-    const uint32_t summed_experts_cb_index, const uint32_t group_scores_cb_index, uint32_t summed_experts_per_group) {
+    const uint32_t cb_top_experts_per_group, const uint32_t cb_group_summed_scores, uint32_t summed_experts_per_group) {
     // sum the top experts_per_group rows for each group
-    binary_op_init_common(summed_experts_cb_index, summed_experts_cb_index, group_scores_cb_index);  // with full
-    // init, good
-    add_tiles_init(summed_experts_cb_index, summed_experts_cb_index, true);
-    cb_wait_front(summed_experts_cb_index, summed_experts_per_group);
+    binary_op_init_common(cb_top_experts_per_group, cb_top_experts_per_group, cb_group_summed_scores);
+    add_tiles_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
+    cb_wait_front(cb_top_experts_per_group, summed_experts_per_group);
 
-    cb_reserve_back(group_scores_cb_index, 1);
+    cb_reserve_back(cb_group_summed_scores, 1);
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        add_tiles(summed_experts_cb_index, summed_experts_cb_index, i, i + 1, 0);
+        add_tiles(cb_top_experts_per_group, cb_top_experts_per_group, i, i + 1, 0);
     }
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile(0, group_scores_cb_index);
+    pack_tile(0, cb_group_summed_scores);
     tile_regs_release();
 
-    cb_push_back(group_scores_cb_index, 1);
-    cb_pop_front(summed_experts_cb_index, summed_experts_per_group);
+    cb_push_back(cb_group_summed_scores, 1);
+    cb_pop_front(cb_top_experts_per_group, summed_experts_per_group);
 }
 
 void topk_group_scores(
-    const uint32_t group_scores_cb_index,
-    const uint32_t group_indices_cb_index,
-    const uint32_t sorted_group_indices_cb_index,
+    const uint32_t cb_group_summed_scores,
+    const uint32_t cb_group_index_template,
+    const uint32_t cb_sorted_group_order,
     bool switch_dir,
     bool ascending,
     int log_topk_groups) {
     topk_tile_init();
-    cb_reserve_back(sorted_group_indices_cb_index, 1);
+    cb_reserve_back(cb_sorted_group_order, 1);
 
     // Sort single input and index tile that have already ben transposed.
     acquire_dst();
     // local sort into k groups
-    cb_wait_front(group_scores_cb_index, 1);
-    cb_wait_front(group_indices_cb_index, 1);
+    cb_wait_front(cb_group_summed_scores, 1);
+    cb_wait_front(cb_group_index_template, 1);
 
     // copy scores tile to dest reg 0
-    copy_tile_to_dst_init_short(group_scores_cb_index);
-    copy_tile(group_scores_cb_index, 0, 0);
+    copy_tile_to_dst_init_short(cb_group_summed_scores);
+    copy_tile(cb_group_summed_scores, 0, 0);
 
     // copy indices tile to dest reg 2
     // CVELE: Going to be correctly packed out if we use the reconfig call
-    copy_tile_to_dst_init_short_with_dt(group_scores_cb_index, group_indices_cb_index);
+    copy_tile_to_dst_init_short_with_dt(cb_group_summed_scores, cb_group_index_template);
     // CVELE: If we use this call, dprint will not use the correct data format
-    // copy_tile_to_dst_init_short(group_indices_cb_index);
-    copy_tile(group_indices_cb_index, 0, 2);
+    // copy_tile_to_dst_init_short(cb_group_index_template);
+    copy_tile(cb_group_index_template, 0, 2);
 
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
 
-    // pack index tile into sorted_group_indices_cb_index
-    pack_reconfig_data_format(sorted_group_indices_cb_index);
-    pack_tile(2, sorted_group_indices_cb_index);
-    cb_pop_front(group_scores_cb_index, 1);
+    // pack index tile into cb_sorted_group_order
+    pack_reconfig_data_format(cb_sorted_group_order);
+    pack_tile(2, cb_sorted_group_order);
+    cb_pop_front(cb_group_summed_scores, 1);
     // don't pop group indices as it gets re-used for the next tile heights
     release_dst();
 
-    cb_push_back(sorted_group_indices_cb_index, 1);
+    cb_push_back(cb_sorted_group_order, 1);
 }
 
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
@@ -276,93 +274,91 @@ void topk(
 }
 
 void normalize_scores(
-    const uint32_t unnormalized_scores_cb_index,
-    const uint32_t reduce_scalar_cb_index,
-    const uint32_t intermediate_reduce_cb_index,
-    const uint32_t transpose_cb_index,
-    const uint32_t epsilon_cb_index,
-    const uint32_t normalized_scores_cb_index) {
-    // compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
-    reconfig_data_format(unnormalized_scores_cb_index, reduce_scalar_cb_index);
-    pack_reconfig_data_format(normalized_scores_cb_index);
+    const uint32_t cb_gathered_sigmoid,
+    const uint32_t cb_reduce_ones_scalar,
+    const uint32_t cb_reduce_intermediate,
+    const uint32_t cb_reciprocal_sums,
+    const uint32_t cb_epsilon_scalar,
+    const uint32_t cb_normalized_scores) {
+    reconfig_data_format(cb_gathered_sigmoid, cb_reduce_ones_scalar);
+    pack_reconfig_data_format(cb_normalized_scores);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
+        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate);
 
-    cb_wait_front(unnormalized_scores_cb_index, 1);
-    cb_wait_front(reduce_scalar_cb_index, 1);
+    cb_wait_front(cb_gathered_sigmoid, 1);
+    cb_wait_front(cb_reduce_ones_scalar, 1);
 
     // 1. Sum row (experts) to get row vector of sums [1, 32]
     tile_regs_acquire();
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(unnormalized_scores_cb_index, reduce_scalar_cb_index, 0, 0, 0);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_gathered_sigmoid, cb_reduce_ones_scalar, 0, 0, 0);
     tile_regs_commit();
     reduce_uninit();
 
     // 2. Pack sums to intermediate to add epsilon
     tile_regs_wait();
-    cb_reserve_back(intermediate_reduce_cb_index, 1);
-    pack_tile(0, intermediate_reduce_cb_index);
+    cb_reserve_back(cb_reduce_intermediate, 1);
+    pack_tile(0, cb_reduce_intermediate);
     tile_regs_release();
-    cb_push_back(intermediate_reduce_cb_index, 1);
+    cb_push_back(cb_reduce_intermediate, 1);
     // 3. Add epsilon
     tile_regs_acquire();
-    cb_wait_front(epsilon_cb_index, 1);
-    cb_wait_front(intermediate_reduce_cb_index, 1);
+    cb_wait_front(cb_epsilon_scalar, 1);
+    cb_wait_front(cb_reduce_intermediate, 1);
 
-    reconfig_data_format(intermediate_reduce_cb_index, epsilon_cb_index);
-    pack_reconfig_data_format(transpose_cb_index);
+    reconfig_data_format(cb_reduce_intermediate, cb_epsilon_scalar);
+    pack_reconfig_data_format(cb_reciprocal_sums);
 
-    add_bcast_scalar_init_short(intermediate_reduce_cb_index, epsilon_cb_index);
-    add_tiles_bcast<BroadcastType::SCALAR>(intermediate_reduce_cb_index, epsilon_cb_index, 0, 0, 0);
+    add_bcast_scalar_init_short(cb_reduce_intermediate, cb_epsilon_scalar);
+    add_tiles_bcast<BroadcastType::SCALAR>(cb_reduce_intermediate, cb_epsilon_scalar, 0, 0, 0);
 
     // 4. Recip
     recip_tile_init();
     recip_tile(0);
     tile_regs_commit();
 
-    cb_pop_front(intermediate_reduce_cb_index, 1);
+    cb_pop_front(cb_reduce_intermediate, 1);
 
     // 5. Pack reciprocals
     tile_regs_wait();
-    cb_reserve_back(transpose_cb_index, 1);
-    pack_tile(0, transpose_cb_index);
-    cb_push_back(transpose_cb_index, 1);
+    cb_reserve_back(cb_reciprocal_sums, 1);
+    pack_tile(0, cb_reciprocal_sums);
+    cb_push_back(cb_reciprocal_sums, 1);
     tile_regs_release();
 
     // 6. Broadcast multiply
     tile_regs_acquire();
-    cb_wait_front(transpose_cb_index, 1);
-    mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
-    mul_tiles_bcast<BroadcastType::COL>(
-        unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
+    cb_wait_front(cb_reciprocal_sums, 1);
+    mul_bcast_cols_init_short(cb_gathered_sigmoid, cb_reciprocal_sums);
+    mul_tiles_bcast<BroadcastType::COL>(cb_gathered_sigmoid, cb_reciprocal_sums, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
-    cb_pop_front(transpose_cb_index, 1);
-    cb_pop_front(unnormalized_scores_cb_index, 1);
+    cb_pop_front(cb_reciprocal_sums, 1);
+    cb_pop_front(cb_gathered_sigmoid, 1);
 
     tile_regs_wait();
-    cb_reserve_back(normalized_scores_cb_index, 1);
-    pack_reconfig_data_format(normalized_scores_cb_index);
-    pack_tile(0, normalized_scores_cb_index);
-    cb_push_back(normalized_scores_cb_index, 1);
+    cb_reserve_back(cb_normalized_scores, 1);
+    pack_reconfig_data_format(cb_normalized_scores);
+    pack_tile(0, cb_normalized_scores);
+    cb_push_back(cb_normalized_scores, 1);
     tile_regs_release();
 }
 
-void scale(const uint32_t normalized_scores_cb_index, const uint32_t scales_cb_index, const uint32_t weights_cb_index) {
-    cb_wait_front(normalized_scores_cb_index, 1);
-    cb_wait_front(scales_cb_index, 1);
-    mul_tiles_bcast_scalar_init_short(normalized_scores_cb_index, scales_cb_index);
+void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_scalar, const uint32_t cb_out_weights) {
+    cb_wait_front(cb_normalized_scores, 1);
+    cb_wait_front(cb_route_scale_scalar, 1);
+    mul_tiles_bcast_scalar_init_short(cb_normalized_scores, cb_route_scale_scalar);
 
     tile_regs_acquire();
 
-    mul_tiles_bcast<BroadcastType::SCALAR>(normalized_scores_cb_index, scales_cb_index, 0, 0, 0);
+    mul_tiles_bcast<BroadcastType::SCALAR>(cb_normalized_scores, cb_route_scale_scalar, 0, 0, 0);
     tile_regs_commit();
 
-    cb_reserve_back(weights_cb_index, 1);
+    cb_reserve_back(cb_out_weights, 1);
     tile_regs_wait();
-    pack_tile(0, weights_cb_index);
-    cb_push_back(weights_cb_index, 1);
+    pack_tile(0, cb_out_weights);
+    cb_push_back(cb_out_weights, 1);
     tile_regs_release();
 
-    cb_pop_front(normalized_scores_cb_index, 1);
+    cb_pop_front(cb_normalized_scores, 1);
 }
 
 }  // namespace blocks

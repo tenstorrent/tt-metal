@@ -309,12 +309,12 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     cb_push_back(cb_winning_group_indices, topk_groups);
 }
 
-void write_single_scalar(const uint32_t scales_cb_index, const uint32_t packed_route_scale) {
-    cb_reserve_back(scales_cb_index, 1);
-    uint32_t write_addr = get_write_ptr(scales_cb_index);
+void write_single_scalar(const uint32_t cb_scalar, const uint32_t packed_scalar) {
+    cb_reserve_back(cb_scalar, 1);
+    uint32_t write_addr = get_write_ptr(cb_scalar);
     tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
-    write_ptr[0] = packed_route_scale >> 16;
-    cb_push_back(scales_cb_index, 1);
+    write_ptr[0] = packed_scalar >> 16;
+    cb_push_back(cb_scalar, 1);
 }
 
 template <
