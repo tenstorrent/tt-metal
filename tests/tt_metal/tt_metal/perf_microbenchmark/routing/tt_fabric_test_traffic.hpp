@@ -10,8 +10,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct SenderMetadataFields {
     SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
@@ -299,6 +298,11 @@ struct TestTrafficSenderConfig {
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
 
+struct TestTrafficSyncConfig {
+    uint32_t sync_val;
+    TestTrafficSenderConfig sender_config;
+};
+
 struct TestTrafficReceiverConfig {
     TrafficParameters parameters;
     uint32_t sender_id;
@@ -565,5 +569,4 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     return args;
 }
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

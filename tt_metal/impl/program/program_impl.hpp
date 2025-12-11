@@ -36,8 +36,7 @@
 #include <utility>
 #include <tt_stl/span.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class CircularBufferConfig;
 class IDevice;
@@ -280,6 +279,9 @@ public:
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
+    // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
+    void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
+
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
@@ -407,5 +409,4 @@ private:
 };
 
 }  // namespace detail
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
