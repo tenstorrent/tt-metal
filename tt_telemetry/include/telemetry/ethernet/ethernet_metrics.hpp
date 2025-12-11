@@ -162,7 +162,7 @@ private:
 };
 
 // Forward declaration for fabric telemetry reader
-class FabricTelemetryReader;
+class CachingFabricTelemetryReader;
 
 class FabricMeshIdMetric : public UIntMetric {
 public:
@@ -170,7 +170,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -183,7 +183,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -193,7 +193,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -206,7 +206,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -216,7 +216,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -229,7 +229,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -239,7 +239,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -252,7 +252,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -263,7 +263,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -276,7 +276,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -286,7 +286,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -299,7 +299,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -309,7 +309,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -322,7 +322,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -332,7 +332,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -345,7 +345,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -355,7 +355,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -368,7 +368,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -378,7 +378,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
         tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
@@ -393,7 +393,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
     tt::umd::FirmwareInfoProvider* firmware_info_provider_;
     tt::ARCH arch_;
@@ -409,7 +409,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
         tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
@@ -424,7 +424,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
     tt::umd::FirmwareInfoProvider* firmware_info_provider_;
     tt::ARCH arch_;
@@ -440,7 +440,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
         tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
@@ -455,7 +455,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
     tt::umd::FirmwareInfoProvider* firmware_info_provider_;
     tt::ARCH arch_;
@@ -471,7 +471,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr,
         tt::umd::FirmwareInfoProvider* firmware_info_provider = nullptr,
         tt::ARCH arch = tt::ARCH::Invalid);
@@ -486,7 +486,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
     tt::umd::FirmwareInfoProvider* firmware_info_provider_;
     tt::ARCH arch_;
@@ -503,7 +503,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         size_t erisc_core,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -517,7 +517,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
     size_t erisc_core_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -528,7 +528,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         size_t erisc_core,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -542,7 +542,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
     size_t erisc_core_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
@@ -553,7 +553,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
         size_t erisc_core,
-        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader,
         const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -567,7 +567,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
     size_t erisc_core_;
-    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::shared_ptr<CachingFabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
