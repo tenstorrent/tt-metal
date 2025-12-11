@@ -10,11 +10,7 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    device/kernels/*
-    tanh_accurate/device/kernels/*
-)
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_unary
     PUBLIC
@@ -32,10 +28,6 @@ target_sources(
         device/unary_device_operation.cpp
         device/unary_program_factory.cpp
         device/unary_sharded_program_factory.cpp
-        tanh_accurate/device/tanh_accurate_device_operation.cpp
-        tanh_accurate/device/tanh_accurate_pgm_factory.cpp
-        tanh_accurate/device/tanh_accurate_sharded_pgm_factory.cpp
-        tanh_accurate/tanh_accurate.cpp
         unary.cpp
 )
 

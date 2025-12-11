@@ -42,6 +42,18 @@ if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() 
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture for permute operation.
+    Permute with sharded configs can cause dispatch core issues, so we use explicit DispatchCoreConfig.
+    """
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
 def run(
     input_shape,
     input_a_dtype,

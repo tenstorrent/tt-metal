@@ -7,8 +7,8 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace copy {
+
+namespace operations::copy {
 
 struct Typecast {
     static Tensor invoke(
@@ -26,8 +26,7 @@ struct Typecast {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
-}  // namespace copy
-}  // namespace operations
+}  // namespace operations::copy
 
 constexpr auto typecast = ttnn::register_operation<"ttnn::typecast", ttnn::operations::copy::Typecast>();
 

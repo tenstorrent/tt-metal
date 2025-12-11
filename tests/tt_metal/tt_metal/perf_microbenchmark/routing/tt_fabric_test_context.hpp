@@ -47,6 +47,7 @@ using PerformanceTestMode = tt::tt_fabric::fabric_tests::PerformanceTestMode;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
+using TestTrafficSyncConfig = tt::tt_fabric::fabric_tests::TestTrafficSyncConfig;
 using SenderCreditInfo = tt::tt_fabric::fabric_tests::SenderCreditInfo;
 using ReceiverCreditInfo = tt::tt_fabric::fabric_tests::ReceiverCreditInfo;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
@@ -184,6 +185,8 @@ public:
         reset_local_variables();
     }
 
+    void add_sync_traffic_to_devices(const TestConfig& config);
+
     void process_traffic_config(TestConfig& config) {
         // Latency test mode: manually populate senders_ and receivers_ maps
         // with latency-specific kernels and configurations
@@ -217,78 +220,13 @@ public:
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
             // patterns.
             this->set_global_sync(config.global_sync);
-            this->set_global_sync_val(config.global_sync_val);
             this->set_performance_test_mode(config.performance_test_mode);
 
-            log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
-            log_debug(tt::LogTest, "Performance test mode: {}", enchantum::to_string(performance_test_mode_));
+            // Convert sync configs to traffic configs recognized by the test devuces
+            this->add_sync_traffic_to_devices(config);
 
-            for (const auto& sync_sender : config.global_sync_configs) {
-                // currently initializing our sync configs to be on senders local to the current hos
-                if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
-                    CoreCoord sync_core = sync_sender.core.value();
-                    const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
-
-                    // Track global sync core for this device
-                    device_global_sync_cores_[sync_sender.device] = sync_core;
-
-                    // Process each already-split sync pattern for this device
-                    for (const auto& sync_pattern : sync_sender.patterns) {
-                        // Convert sync pattern to TestTrafficSenderConfig format
-                        const auto& dest = sync_pattern.destination.value();
-
-                        // Patterns are now already split into single-direction hops
-                        auto single_direction_hops = dest.hops.value();
-
-                        TrafficParameters sync_traffic_parameters = {
-                            .chip_send_type = sync_pattern.ftype.value(),
-                            .noc_send_type = sync_pattern.ntype.value(),
-                            .payload_size_bytes = sync_pattern.size.value(),
-                            .num_packets = sync_pattern.num_packets.value(),
-                            .atomic_inc_val = sync_pattern.atomic_inc_val,
-                            .mcast_start_hops = sync_pattern.mcast_start_hops,
-                            .seed = config.seed,
-                            .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
-                            .mesh_shape = this->fixture_->get_mesh_shape(),
-                            .topology = this->fixture_->get_topology()};
-
-                        // For sync patterns, we use a dummy destination core and fixed sync address
-                        // The actual sync will be handled by atomic operations
-                        CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
-                        uint32_t sync_address =
-                            this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
-                        uint32_t dst_noc_encoding =
-                            this->fixture_->get_worker_noc_encoding(sync_core);  // populate the master coord
-
-                        // for 2d mcast case
-                        auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                            sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
-
-                        // for 2d, we need to spcify the mcast start node id
-                        std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
-                        if (fixture_->is_2D_routing_enabled() &&
-                            sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
-                            mcast_start_node_id =
-                                fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
-                        }
-
-                        TestTrafficSenderConfig sync_config = {
-                            .parameters = sync_traffic_parameters,
-                            .src_node_id = sync_sender.device,
-                            .dst_node_ids = dst_node_ids,   // Empty for multicast sync
-                            .hops = single_direction_hops,  // Use already single-direction hops
-                            .mcast_start_node_id = mcast_start_node_id,
-                            .dst_logical_core = dummy_dst_core,
-                            .target_address = sync_address,
-                            .atomic_inc_address = sync_address,
-                            .dst_noc_encoding = dst_noc_encoding,
-                            .link_id = sync_sender.link_id};  // Derive from SenderConfig (always 0 for sync)
-
-                        // Add sync config to the master sender on this device
-                        this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
-                    }
-                }
-            }
+            log_debug(tt::LogTest, "Enabled sync and created sync configs");
+            log_debug(tt::LogTest, "Set performance test mode to: {}", performance_test_mode_);
 
             // Validate that all sync cores have the same coordinate
             if (!device_global_sync_cores_.empty()) {
@@ -368,7 +306,6 @@ public:
         for (auto& [coord, test_device] : test_devices_) {
             test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
             test_device.set_global_sync(global_sync_);
-            test_device.set_global_sync_val(global_sync_val_);
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
 
             auto device_id = test_device.get_node_id();
@@ -577,8 +514,6 @@ public:
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
-    void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
-
     bool has_test_failures() const { return has_test_failures_; }
 
     std::vector<std::string> get_all_failed_tests() const;
@@ -620,7 +555,6 @@ public:
     void setup_ci_artifacts() {
         std::filesystem::path tt_metal_home =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
         std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
         // Create CI artifacts directory if it doesn't exist
         if (!std::filesystem::exists(ci_artifacts_path)) {
@@ -677,7 +611,6 @@ private:
     void reset_local_variables() {
         performance_test_mode_ = PerformanceTestMode::NONE;
         global_sync_ = false;
-        global_sync_val_ = 0;
         outgoing_traffic_.clear();
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
@@ -785,8 +718,12 @@ private:
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
             }
         }
+        // If the topology is NeighborExchange, make sure that all traffic patterns are single-hop.
+        if (fixture_->get_topology() == tt::tt_fabric::Topology::NeighborExchange) {
+            fixture_->validate_single_hop(hops.value());
+        }
 
-        // for 2d, we need to spcify the mcast start node id
+        // for 2d, we need to specify the mcast start node id
         // TODO: in future, we should be able to specify the mcast start node id in the traffic config
         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
         if (fixture_->is_2D_routing_enabled() &&
@@ -1043,7 +980,9 @@ private:
                 outgoing_traffic_[current_node][next_direction]++;
 
                 // Move to next node in this direction
-                current_node = fixture_->get_neighbor_node_id(current_node, next_direction);
+                const std::optional<FabricNodeId> next_node =
+                    fixture_->get_neighbor_node_id(current_node, next_direction);
+                current_node = next_node.value();
             }
 
             // Mark this direction as completed
@@ -1830,7 +1769,6 @@ private:
     PerformanceTestMode performance_test_mode_ = PerformanceTestMode::NONE;  // Performance test mode for current test
     bool telemetry_enabled_ = false;                                         // Telemetry enabled for current test
     bool global_sync_ = false;        // Line sync for current test
-    uint32_t global_sync_val_ = 0;
 
     // Performance profiling data
     // TODO: add link index into the result

@@ -35,8 +35,7 @@ const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabr
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct ConnectionKey {
     RoutingDirection direction;
@@ -243,12 +242,12 @@ public:
 struct TestSync : TestWorker {
 public:
     TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
-    void add_config(TestTrafficSenderConfig config);
+    void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
     // stores traffic config and the corresponding fabric connection key
     // Managed by TestDevice::sync_connection_manager_
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSyncConfig, ConnectionKey>> configs_;
 };
 
 struct TestMux : TestWorker {
@@ -280,7 +279,7 @@ public:
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id() const;
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
-    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config);
+    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
     void create_kernels();
@@ -307,7 +306,6 @@ public:
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
-    void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
     void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
 
@@ -415,7 +413,6 @@ private:
 
     bool benchmark_mode_ = false;
     bool global_sync_ = false;
-    uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
     bool progress_monitoring_enabled_ = false;
 
@@ -425,5 +422,4 @@ private:
     bool use_unified_connection_manager_ = false;
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

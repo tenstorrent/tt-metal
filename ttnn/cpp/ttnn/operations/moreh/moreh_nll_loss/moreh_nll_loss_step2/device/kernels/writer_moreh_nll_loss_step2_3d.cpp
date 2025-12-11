@@ -6,6 +6,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto output_addr = get_arg_val<uint32_t>(i++);
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);

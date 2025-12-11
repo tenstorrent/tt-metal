@@ -72,12 +72,22 @@ target_link_libraries(
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
+# We are adding yaml-cpp include like this to avoid including
+# scaleout_tools headers because that would cause protobuf issues.
+target_include_directories(
+    run_cluster_validation
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
 target_link_libraries(
     run_cluster_validation
     PRIVATE
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
+        cxxopts::cxxopts
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
@@ -143,6 +153,68 @@ target_link_libraries(
     generate_cluster_descriptor
     PRIVATE
         scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+# Generate MGD library
+add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
+
+add_dependencies(generate_mgd_lib scaleout_generated_protos)
+
+target_include_directories(
+    generate_mgd_lib
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/generate_mgd
+)
+target_include_directories(
+    generate_mgd_lib
+    SYSTEM
+    PUBLIC
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+)
+
+target_link_libraries(
+    generate_mgd_lib
+    PUBLIC
+        scaleout_tools
+        protobuf::libprotobuf
+)
+
+# Generate MGD CLI tool (standalone, links against fabric for protobuf implementation)
+add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
+
+add_dependencies(
+    generate_mgd
+    scaleout_generated_protos
+    fabric
+)
+
+set_target_properties(
+    generate_mgd
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+target_include_directories(
+    generate_mgd
+    SYSTEM
+    PRIVATE
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor
+)
+
+# Link against fabric's protobuf object files only
+target_sources(generate_mgd PRIVATE $<TARGET_OBJECTS:fabric>)
+
+target_link_libraries(
+    generate_mgd
+    PRIVATE
+        generate_mgd_lib
+        scaleout_tools
+        tt_metal
         protobuf::libprotobuf
         cxxopts::cxxopts
 )

@@ -12,13 +12,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/gather.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace cnn {
-namespace convert_to_hwc {
-namespace detail {
-namespace test {
+namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test {
 
 class GatherTransferTest : public ::testing::Test {
 protected:
@@ -126,6 +120,76 @@ protected:
 
         return shards;
     }
+
+    // Helper to compute expected output value for a given position
+    // Output layout: [C, B*HW/num_output_cores] per shard
+    // For output shard idx, position [c, pos] corresponds to input [b, c, hw]
+    float compute_expected_output_value(
+        uint32_t output_shard_idx,
+        uint32_t c,
+        uint32_t pos,
+        uint32_t B,
+        uint32_t C,
+        uint32_t HW,
+        uint32_t num_input_cores,
+        uint32_t num_output_cores) {
+        uint32_t output_shard_width = B * HW / num_output_cores;
+        uint32_t input_shard_width = HW / num_input_cores;
+
+        // Determine which batch and hw this position represents
+        // For output shard idx, we get elements output_shard_idx * output_shard_width to (idx+1) * output_shard_width -
+        // 1
+        uint32_t global_pos = (output_shard_idx * output_shard_width) + pos;
+        uint32_t b = global_pos / HW;
+        uint32_t hw = global_pos % HW;
+
+        // Find which input core has this hw
+        uint32_t input_core_idx = hw / input_shard_width;
+        uint32_t hw_in_shard = hw % input_shard_width;
+
+        // Input shard layout: [B*C, HW/num_input_cores]
+        // Row = b*C + c
+        uint32_t input_row = (b * C) + c;
+        uint32_t input_col = hw_in_shard;
+
+        // Calculate the value: each input core starts with a base value
+        // Core 0: starts at 0
+        // Core 1: starts at (B*C) * input_shard_width
+        // Core k: starts at k * (B*C) * input_shard_width
+        uint32_t base_value = input_core_idx * (B * C) * input_shard_width;
+        uint32_t value = base_value + (input_row * input_shard_width) + input_col;
+
+        return static_cast<float>(value);
+    }
+
+    // Verify all elements in output shards match expected values
+    void verify_all_output_elements(
+        const std::vector<std::vector<float>>& output_shards,
+        uint32_t B,
+        uint32_t C,
+        uint32_t HW,
+        uint32_t num_input_cores,
+        uint32_t num_output_cores) {
+        uint32_t output_shard_width = B * HW / num_output_cores;
+
+        for (uint32_t shard_idx = 0; shard_idx < output_shards.size(); shard_idx++) {
+            const auto& shard = output_shards[shard_idx];
+            EXPECT_EQ(shard.size(), C * output_shard_width) << "Shard " << shard_idx << " has wrong size";
+
+            for (uint32_t c = 0; c < C; c++) {
+                for (uint32_t pos = 0; pos < output_shard_width; pos++) {
+                    uint32_t idx = (c * output_shard_width) + pos;
+                    float expected =
+                        compute_expected_output_value(shard_idx, c, pos, B, C, HW, num_input_cores, num_output_cores);
+                    float actual = shard[idx];
+
+                    EXPECT_FLOAT_EQ(actual, expected)
+                        << "Mismatch at shard " << shard_idx << ", c=" << c << ", pos=" << pos << " (idx=" << idx
+                        << "): expected " << expected << ", got " << actual;
+                }
+            }
+        }
+    }
 };
 
 // CPU execution functions moved from production code for testing purposes
@@ -202,22 +266,24 @@ std::vector<std::vector<float>> gather_with_blocked_transfers(
             // Get source data
             const auto& src_flat = input_shards_flat[transfer.src_shard_idx];
 
+            // dst_offset is now relative to the block start (after splitting in gather.cpp)
+            // We need to calculate the row from the source offset
+            uint32_t input_shard_width = HW / input_cores.size();
+
             // For each element in the transfer
             for (uint32_t i = 0; i < transfer.length; i++) {
                 uint32_t src_idx = transfer.src_offset + i;
-                uint32_t dst_idx = transfer.dst_offset + i;
 
-                // Calculate 2D position in output shard
-                uint32_t dst_row = dst_idx / output_shard_width;
-                uint32_t dst_col = dst_idx % output_shard_width;
+                // Calculate which row in the input shard this element belongs to
+                uint32_t src_row = src_idx / input_shard_width;
 
-                // Skip if this element is outside the current column block
-                if (dst_col < col_start || dst_col >= col_end) {
-                    continue;
-                }
+                // Input shard layout: [B*C, HW/num_cores], so row = batch*C + channel
+                // Output shard layout: [C, B*HW/num_cores], so row = channel
+                // Extract channel from src_row: channel = src_row % C
+                uint32_t dst_row = src_row % C;
 
-                // Calculate position within the column block
-                uint32_t block_col = dst_col - col_start;
+                // dst_offset is relative to block start, so use it directly
+                uint32_t block_col = transfer.dst_offset + i;
 
                 // Write to block buffer
                 block_buffer[(dst_row * actual_block_width) + block_col] = src_flat[src_idx];
@@ -299,22 +365,28 @@ void gather_with_blocked_transfers_generic(
             const uint8_t* src_shard_base =
                 input_bytes + (transfer.src_shard_idx * B * C * input_shard_width * element_size);
 
-            const uint8_t* src_ptr = src_shard_base + (transfer.src_offset * element_size);
-
-            // Process the transfer - copy elements that belong to this block
+            // dst_offset is now relative to the block start (after splitting in gather.cpp)
+            // Calculate the row from the source offset
             for (uint32_t i = 0; i < transfer.length; i++) {
-                uint32_t dst_idx = transfer.dst_offset + i;
-                uint32_t dst_row = dst_idx / output_shard_width;
-                uint32_t dst_col = dst_idx % output_shard_width;
+                uint32_t src_idx = transfer.src_offset + i;
 
-                // Check if this element belongs in the current block
-                if (dst_col >= col_start && dst_col < col_end) {
-                    uint32_t block_col = dst_col - col_start;
-                    uint32_t block_idx = (dst_row * actual_block_width) + block_col;
+                // Calculate which row in the input shard this element belongs to
+                uint32_t src_row = src_idx / input_shard_width;
 
-                    // Copy element_size bytes
-                    std::memcpy(&block_buffer[block_idx * element_size], &src_ptr[i * element_size], element_size);
-                }
+                // Input shard layout: [B*C, HW/num_cores], so row = batch*C + channel
+                // Output shard layout: [C, B*HW/num_cores], so row = channel
+                // Extract channel from src_row: channel = src_row % C
+                uint32_t dst_row = src_row % C;
+
+                // dst_offset is relative to block start, so use it directly
+                uint32_t block_col = transfer.dst_offset + i;
+                uint32_t block_idx = (dst_row * actual_block_width) + block_col;
+
+                // Calculate source pointer for this element
+                const uint8_t* src_ptr = src_shard_base + (src_idx * element_size);
+
+                // Copy element_size bytes
+                std::memcpy(&block_buffer[block_idx * element_size], src_ptr, element_size);
             }
         }
 
@@ -1027,10 +1099,145 @@ TEST_F(GatherTransferTest, BlockBoundaryCorrectness) {
     }
 }
 
-}  // namespace test
-}  // namespace detail
-}  // namespace convert_to_hwc
-}  // namespace cnn
-}  // namespace experimental
-}  // namespace operations
-}  // namespace ttnn
+TEST_F(GatherTransferTest, SmallBlockSizes) {
+    // Test with small block sizes (32, 64) to verify L1 reduction works correctly
+    uint32_t B = 2, C = 4, HW = 128;
+    auto input_cores = make_cores(4);
+    auto output_cores = make_cores(4);
+
+    auto input_shards = create_test_input(B, C, HW, input_cores.size());
+    uint32_t output_shard_width = B * HW / output_cores.size();  // 64 elements per core
+
+    // Test with block_size = 32
+    {
+        uint32_t block_size = 32;
+        auto output_shards =
+            gather_with_blocked_transfers(B, C, HW, input_cores, output_cores, input_shards, block_size);
+
+        // Verify output shape
+        EXPECT_EQ(output_shards.size(), output_cores.size());
+        for (const auto& shard : output_shards) {
+            EXPECT_EQ(shard.size(), C * output_shard_width);
+        }
+
+        // Verify all elements explicitly
+        verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
+    }
+
+    // Test with block_size = 64 (full shard width)
+    {
+        uint32_t block_size = 64;
+        auto output_shards =
+            gather_with_blocked_transfers(B, C, HW, input_cores, output_cores, input_shards, block_size);
+
+        // Verify output shape
+        EXPECT_EQ(output_shards.size(), output_cores.size());
+        for (const auto& shard : output_shards) {
+            EXPECT_EQ(shard.size(), C * output_shard_width);
+        }
+
+        // Verify all elements explicitly
+        verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
+    }
+}
+
+TEST_F(GatherTransferTest, LargeBlockSizes) {
+    // Test with larger configurations and block sizes to verify scalability
+    uint32_t B = 4, C = 8, HW = 256;
+    auto input_cores = make_cores(8);
+    auto output_cores = make_cores(8);
+
+    auto input_shards = create_test_input(B, C, HW, input_cores.size());
+
+    // Test with block_size = 32 (smaller than shard width)
+    {
+        uint32_t block_size = 32;
+        auto output_shards =
+            gather_with_blocked_transfers(B, C, HW, input_cores, output_cores, input_shards, block_size);
+
+        // Verify all elements explicitly
+        verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
+    }
+
+    // Test with block_size = 64
+    {
+        uint32_t block_size = 64;
+        auto output_shards =
+            gather_with_blocked_transfers(B, C, HW, input_cores, output_cores, input_shards, block_size);
+
+        // Verify all elements explicitly
+        verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
+    }
+}
+
+TEST_F(GatherTransferTest, BlockSizeVariations) {
+    // Test various block sizes to ensure the blocking logic works correctly
+    uint32_t B = 2, C = 3, HW = 64;
+    auto input_cores = make_cores(4);
+    auto output_cores = make_cores(4);
+
+    auto input_shards = create_test_input(B, C, HW, input_cores.size());
+    uint32_t output_shard_width = B * HW / output_cores.size();  // 32 elements per core
+
+    // Test different block sizes that divide the output shard width
+    std::vector<uint32_t> block_sizes = {8, 16, 32};
+
+    for (uint32_t block_size : block_sizes) {
+        // Skip if block_size doesn't divide output_shard_width
+        if (output_shard_width % block_size != 0) {
+            continue;
+        }
+
+        auto output_shards =
+            gather_with_blocked_transfers(B, C, HW, input_cores, output_cores, input_shards, block_size);
+
+        // Verify output shape
+        EXPECT_EQ(output_shards.size(), output_cores.size()) << "Failed for block_size=" << block_size;
+        for (const auto& shard : output_shards) {
+            EXPECT_EQ(shard.size(), C * output_shard_width) << "Failed for block_size=" << block_size;
+        }
+
+        // Verify all elements explicitly
+        verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
+    }
+}
+
+TEST_F(GatherTransferTest, CrossBlockTransferSplitting) {
+    // Test that transfers crossing block boundaries are correctly split
+    uint32_t B = 1, C = 2, HW = 16;
+    uint32_t block_size = 4;
+    auto input_cores = make_cores(2);
+    auto output_cores = make_cores(2);
+
+    // Create input with known pattern
+    auto input_shards = create_test_input(B, C, HW, input_cores.size());
+
+    // Precompute transfers and verify blocking
+    auto transfers = precompute_gather_transfers(B, C, HW, input_cores, output_cores);
+    uint32_t output_shard_width = B * HW / output_cores.size();  // 8 elements per core
+
+    auto blocked_result = group_transfers_by_output_column_blocks(
+        transfers, B, C, HW, input_cores, output_cores.size(), sizeof(float), block_size, output_shard_width);
+    const auto& blocked_groups = blocked_result.blocked_transfers;
+
+    // Verify that transfers are properly distributed across blocks
+    // With output_shard_width=8 and block_size=4, we should have 2 blocks per shard
+    uint32_t expected_blocks_per_shard = (output_shard_width + block_size - 1) / block_size;
+    std::map<uint32_t, uint32_t> blocks_per_shard;
+    for (const auto& group : blocked_groups) {
+        blocks_per_shard[group.dst_shard_idx]++;
+    }
+
+    for (uint32_t shard = 0; shard < output_cores.size(); shard++) {
+        EXPECT_GE(blocks_per_shard[shard], expected_blocks_per_shard)
+            << "Shard " << shard << " should have at least " << expected_blocks_per_shard << " blocks";
+    }
+
+    // Run the actual gather to verify correctness
+    auto output_shards = gather_with_blocked_transfers(B, C, HW, input_cores, output_cores, input_shards, block_size);
+
+    // Verify all elements explicitly to ensure cross-block splitting works correctly
+    verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
+}
+
+}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test

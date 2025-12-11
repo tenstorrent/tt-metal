@@ -51,9 +51,11 @@ void kernel_main() {
     constexpr auto false_cb = get_compile_time_arg_val(2);
 
     // Compile-time args layout mirrors no-bcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<3>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
+    constexpr auto src0_args = TensorAccessorArgs<3, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
+    constexpr auto src2_args =
+        TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
 #if SRC_SHARDED_A
     cb_reserve_back(predicate_cb, src_num_tiles);

@@ -10,9 +10,7 @@
 
 namespace ttnn {
 
-namespace operations {
-
-namespace ternary {
+namespace operations::ternary {
 
 template <TernaryCompositeOpType ternary_comp_op_type>
 struct ExecuteTernaryCompositeOps {
@@ -65,8 +63,7 @@ struct ExecuteTernaryCompositeMac {
     }
 };
 
-}  // namespace ternary
-}  // namespace operations
+}  // namespace operations::ternary
 
 constexpr auto addcdiv = ttnn::register_operation<
     "ttnn::addcdiv",

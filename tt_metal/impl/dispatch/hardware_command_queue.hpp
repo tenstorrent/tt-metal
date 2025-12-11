@@ -34,14 +34,12 @@
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "ringbuffer_cache.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Program;
 class SystemMemoryManager;
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

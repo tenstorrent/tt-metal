@@ -385,8 +385,8 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
       core.warning(`Failed gtest log parsing for run ${runId}: ${e.message}`);
     }
 
-    // If other logs (non-gtest) are available for this run, extract job names from file names
-    // Don't parse the logs, just use the file names to determine job names
+    // If other logs (non-gtest) are available for this run, use job names from GitHub API
+    // Don't parse the logs, just use the stored job names from the API
     try {
       const otherLogsDir = getOtherLogsDirForRunId(runId);
       if (otherLogsDir && fs.existsSync(otherLogsDir)) {
@@ -401,25 +401,47 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             // Continue to annotations
           }
           if (logsListData) {
-            const files = Array.isArray(logsListData.files) ? logsListData.files : [];
-            core.info(`[OTHER LOGS] Files detected: ${files.length}`);
-
-            // Extract job names from file paths (e.g., "extract/1_job-name/step.txt" -> "job-name")
-            const jobNamesSet = new Set();
-            for (const filePath of files) {
-              try {
-                // Parse the path to extract job name
-                // Expected format: extract/<step>_<job-name>/<file>.txt
-                const parts = filePath.split(path.sep);
-                if (parts.length >= 2) {
-                  const folderName = parts[1]; // e.g., "1_job-name"
-                  // Remove leading step number and underscore
-                  const jobName = folderName.replace(/^\d+_/, '').trim();
-                  if (jobName) {
-                    jobNamesSet.add(jobName);
+            // Use job names from GitHub API if available (preferred method)
+            let jobNamesSet = new Set();
+            if (Array.isArray(logsListData.job_names) && logsListData.job_names.length > 0) {
+              // Use actual job names from GitHub API
+              for (const jobName of logsListData.job_names) {
+                if (jobName && typeof jobName === 'string') {
+                  // Remove .txt suffix if present (shouldn't happen with API names, but be safe)
+                  let cleanedName = jobName.trim().replace(/\.txt$/i, '').trim();
+                  // Replace " _ " (space-underscore-space) with " / " to match GitHub Actions job name format
+                  cleanedName = cleanedName.replace(/\s+_\s+/g, ' / ');
+                  if (cleanedName) {
+                    jobNamesSet.add(cleanedName);
                   }
                 }
-              } catch (_) { /* ignore */ }
+              }
+              core.info(`[OTHER LOGS] Using ${jobNamesSet.size} job name(s) from GitHub API for run ${runId}`);
+            } else {
+              // Fallback: extract job names from file paths (legacy method, less reliable)
+              const files = Array.isArray(logsListData.files) ? logsListData.files : [];
+              core.info(`[OTHER LOGS] No API job names found, falling back to file path extraction: ${files.length} files`);
+              for (const filePath of files) {
+                try {
+                  // Parse the path to extract job name
+                  // Expected format: extract/<step>_<job-name>/<file>.txt
+                  // Note: GitHub Actions folder names sometimes include .txt suffix, sometimes not
+                  const parts = filePath.split(path.sep);
+                  if (parts.length >= 2) {
+                    const folderName = parts[1]; // e.g., "1_job-name" or "1_job-name.txt"
+                    // Remove leading step number and underscore, then remove .txt suffix if present
+                    let jobName = folderName.replace(/^\d+_/, '');
+                    // Remove .txt extension if present (GitHub Actions sometimes includes it in folder names)
+                    jobName = jobName.replace(/\.txt$/i, '');
+                    // Replace " _ " (space-underscore-space) with " / " to match GitHub Actions job name format
+                    jobName = jobName.replace(/\s+_\s+/g, ' / ').trim();
+                    if (jobName) {
+                      jobNamesSet.add(jobName);
+                    }
+                  }
+                } catch (_) { /* ignore */ }
+              }
+              core.info(`[OTHER LOGS] Extracted ${jobNamesSet.size} job name(s) from file paths for run ${runId}`);
             }
 
             // Create snippets with job names, but blank test and informative error message
@@ -441,7 +463,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               snippets = filterGenericExitSnippets(snippets);
               return snippets;
             } else {
-              core.info(`[OTHER LOGS] No job names extracted from logs for run ${runId}`);
+              core.info(`[OTHER LOGS] No job names found for run ${runId}`);
             }
           }
         }

@@ -4,8 +4,7 @@
 
 #include "tt_fabric_test_device_setup.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 // ====================================
 // FabricConnectionManager Implementation
@@ -390,6 +389,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
 
     if (config.hops.has_value() && !is_torus_2d_unicast) {
         // Use hops to determine direction (for static routing with explicit hops)
+        // However, NeighborExchange topology does not support multi-hop.
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
     } else {
         // Derive direction from src->dst node IDs
@@ -504,11 +504,14 @@ TestSync::TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::opt
     // TODO: init mem map?
 }
 
-void TestSync::add_config(TestTrafficSenderConfig sync_config) {
-    // Sync configs should always have hops specified (multicast pattern)
-    TT_FATAL(sync_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
+void TestSync::add_config(TestTrafficSyncConfig sync_config) {
+    const auto& sender_config = sync_config.sender_config;
 
-    const auto outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sync_config.hops.value());
+    // Determine outgoing direction for sync message
+    RoutingDirection outgoing_direction;
+    // Multicast sync configs should always have hops specified (multicast pattern)
+    TT_FATAL(sender_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
+    outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value());
 
     // Use common helper to register sync fabric connection
     auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
@@ -516,7 +519,7 @@ void TestSync::add_config(TestTrafficSenderConfig sync_config) {
         TestWorkerType::SYNC,
         this->test_device_ptr_->get_sync_connection_manager(),
         outgoing_direction,
-        sync_config.link_id);
+        sender_config.link_id);
 
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
@@ -651,7 +654,7 @@ void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSe
     this->senders_.at(logical_core).add_config(std::move(config));
 }
 
-void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config) {
+void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
     if (this->sync_workers_.find(logical_core) == this->sync_workers_.end()) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
     }
@@ -749,6 +752,10 @@ void TestDevice::create_sync_kernel() {
     bool has_mux_connections = sync_connection_manager.is_mux_client(sync_core);
     uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
 
+    // If the test is using the NeighborExchange topology, synchronization must use unicast packets
+    const auto topology = tt::tt_fabric::get_fabric_topology();
+    bool use_unicast_sync_packets = (topology == tt::tt_fabric::Topology::NeighborExchange);
+
     // Compile-time args
     std::vector<uint32_t> ct_args = {
         is_2D_routing_enabled,
@@ -756,7 +763,8 @@ void TestDevice::create_sync_kernel() {
         static_cast<uint32_t>(senders_.size() + 1),          /* num local sync cores (all senders + sync core) */
         sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
         has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
-        num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
+        num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+        use_unicast_sync_packets                             /* USE_UNICAST_SYNC_PACKETS */
     };
 
     // Runtime args: memory map args, then sync fabric connection args
@@ -769,8 +777,12 @@ void TestDevice::create_sync_kernel() {
     // Local args (all the rest go to local args buffer)
     std::vector<uint32_t> local_args;
 
-    // Expected sync value for global sync
-    local_args.push_back(this->global_sync_val_);
+    // Push in sync val first before pushing in rest of sync args
+    // All sync configs for a device have been assigned the same sync val in
+    // tt_fabric_test_context.hpp:process_traffic_config So we can just use the first sync config to get the sync val
+    TT_FATAL(!sync_worker.configs_.empty(), "No sync configs found for core {}", sync_core.str());
+    const auto& sync_val = sync_worker.configs_.front().first.sync_val;
+    local_args.push_back(sync_val);
 
     // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
     // This mapping tells each LineSyncConfig which fabric connection index to use
@@ -784,7 +796,8 @@ void TestDevice::create_sync_kernel() {
 
     // Add sync routing args for each sync config
     for (const auto& [sync_config, _] : sync_worker.configs_) {
-        auto sync_traffic_args = sync_config.get_args(true /* is_sync_config */);
+        const auto& sender_config = sync_config.sender_config;
+        auto sync_traffic_args = sender_config.get_args(true /* is_sync_config */);
         local_args.insert(local_args.end(), sync_traffic_args.begin(), sync_traffic_args.end());
     }
 
@@ -1465,5 +1478,4 @@ uint64_t TestSender::get_total_packets() const {
     return total;
 }
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

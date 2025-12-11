@@ -34,9 +34,7 @@ inline void concat_db_print(bool condition, const std::string& msg) {
     }
 }
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>;
 
@@ -96,7 +94,8 @@ MassagedConcat build_untilize_rm_retilize_concat(
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
             bool res = std::any_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
                 return tensor.layout() == ttnn::TILE_LAYOUT and
-                       tensor.logical_shape()[dim] != tensor.padded_shape()[dim];
+                       (tensor.logical_shape()[dim] != tensor.padded_shape()[dim] or
+                        tensor.logical_shape().rank() == 1);
             });
             concat_db_print(res, "untilize_rm_retilize required");
             return res;
@@ -212,6 +211,45 @@ MassagedConcat build_non_aligned_last_dim_concat(
     return transpose_concat;
 }
 
+MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig& output_memory_config) {
+    return MassagedConcat(MassagedConcatParams{
+        .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
+            if (dim != 0) {
+                return false;
+            }
+            bool res = std::any_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
+                return tensor.layout() == ttnn::ROW_MAJOR_LAYOUT and tensor.logical_shape().rank() == 1 and
+                       tensor.logical_shape()[0] * tensor.element_size() % tensor.buffer()->alignment() != 0;
+            });
+            concat_db_print(res, "unsqueeze_squeeze_1D_concat required");
+            return res;
+        },
+        .pre_transform = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> OwnedConcatArgs {
+            std::vector<ttnn::Tensor> itensors;
+            itensors.reserve(tensors.size());
+            std::transform(
+                tensors.begin(),
+                tensors.end(),
+                std::back_inserter(itensors),
+                [](const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
+                    TT_FATAL(
+                        input_tensor.logical_shape().rank() == 1, "Expected 1D tensor for unsqueeze_squeeze_1D_concat");
+                    return ttnn::unsqueeze(input_tensor, 0);
+                });
+            return std::make_tuple(itensors, dim + 1, groups);
+        },
+        .post_transform = [](const ttnn::Tensor& output) -> ttnn::Tensor {
+            auto shape = output.logical_shape();
+            TT_FATAL(shape.rank() == 2 && shape[0] == 1, "Expected 2D tensor with first dim=1, got shape {}", shape);
+            return ttnn::squeeze(output, 0);
+        },
+        .operation = [output_memory_config](
+                         const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
+            const std::vector<ttnn::Tensor>& itensors(tensors);
+            return concat_impl(itensors, dim, groups, output_memory_config);
+        }});
+}
+
 // Wrapper for TTDNN
 ttnn::Tensor ConcatOperation::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
@@ -236,18 +274,10 @@ ttnn::Tensor ConcatOperation::invoke(
     //});
     // TT_FATAL(all_tensors_are_tile_layout_without_padding, "Not Implemented");
 
-    // TODO: Issue #22541: fix crash with 1D tiled tensors with padding
-    const bool tensors_are_1d_tiled_with_padding =
-        std::all_of(input_tensors.begin(), input_tensors.end(), [](const ttnn::Tensor& input_tensor) {
-            return input_tensor.layout() == ttnn::TILE_LAYOUT and input_tensor.logical_shape().rank() == 1 and
-                   input_tensor.logical_shape()[0] % ttnn::TILE_SIZE != 0;
-        });
-    TT_FATAL(!tensors_are_1d_tiled_with_padding, "1D tiled tensors with padding is not implemented. See Issue #22541.");
-
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.logical_shape().rank();
 
-    dim = first_tensor.padded_shape().get_normalized_index(dim);
+    dim = first_tensor.logical_shape().get_normalized_index(dim);
 
     TT_FATAL(
         dim >= 0 and dim < rank,
@@ -291,13 +321,13 @@ ttnn::Tensor ConcatOperation::invoke(
 
     auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(mem_config, logical_output_shape);
     auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, mem_config);
-    auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
+    auto unsqueeze_squeeze_1D_concat = build_unsqueeze_squeeze_1D_rm_unaligned_concat(mem_config);
+    auto massaged_concat =
+        untilize_rm_retilize_concat.sequence(unsqueeze_squeeze_1D_concat.sequence(non_aligned_last_dim_concat));
 
     const std::vector<ttnn::Tensor>& itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);
     return res;
 }
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

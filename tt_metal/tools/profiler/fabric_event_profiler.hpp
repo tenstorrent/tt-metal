@@ -211,7 +211,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 routing_fields_type,
                 unicast_write_cmd.noc_address,
                 unicast_write_cmd.chunk_size,
-                NOC_SCATTER_WRITE_MAX_CHUNKS);
+                unicast_write_cmd.chunk_count);
             break;
         }
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {

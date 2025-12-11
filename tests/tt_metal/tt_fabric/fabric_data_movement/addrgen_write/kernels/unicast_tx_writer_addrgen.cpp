@@ -121,7 +121,8 @@ void kernel_main() {
             auto noc_addr0 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 0, 0);
             auto noc_addr1 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 1, 0);
             header->to_noc_unicast_scatter_write(
-                tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_addr0, noc_addr1}, static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)},
+                tt::tt_fabric::NocUnicastScatterCommandHeader(
+                    {noc_addr0, noc_addr1}, {static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)}),
                 SRC_ALIGNED_PAGE_SIZE * 2);
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
             auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);

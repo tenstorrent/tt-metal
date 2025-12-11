@@ -64,6 +64,8 @@ void bind_batch_norm_operation(py::module& module) {
 
             These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
 
+            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+
         Memory Support:
             - Interleaved: DRAM and L1
 

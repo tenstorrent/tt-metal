@@ -8,6 +8,7 @@
 #include "debug/assert.h"
 #include "dataflow_api.h"
 #include "noc_parameters.h"
+#include "udm_registered_response_pool.hpp"
 
 namespace tt::tt_fabric::udm {
 
@@ -44,13 +45,8 @@ public:
         }
     }
 
-    // Check if num_slots are available
-    FORCE_INLINE bool cb_has_enough_slots(uint32_t num_slots) const {
-        return (NumSlots - num_used_slots_) >= num_slots;
-    }
-
-    // Helper: calculate slots needed for a given size
-    FORCE_INLINE uint32_t slots_needed(uint32_t size_bytes) const { return (size_bytes + SlotSize - 1) / SlotSize; }
+    // Get number of available slots
+    FORCE_INLINE uint32_t get_num_available_slots() const { return NumSlots - num_used_slots_; }
 
     // Get slot size
     FORCE_INLINE constexpr uint32_t get_slot_size() const { return SlotSize; }
@@ -64,20 +60,39 @@ public:
     // Get next slot index (with wrap)
     FORCE_INLINE uint32_t get_next_slot_idx(uint32_t idx) const { return advance_slot_idx(idx); }
 
-    // Allocate slots and fill with data from noc_addr using noc_async_read
-    FORCE_INLINE void cb_allocate_and_fill_slots(uint64_t noc_addr, uint32_t size_bytes) {
-        uint32_t bytes_remaining = size_bytes;
-        uint64_t src_addr = noc_addr;
+    // Allocate slots for a read response - bytes based
+    // Performs partial allocation: allocates min(bytes_needed, available_space).
+    // Reads from response->read_noc_address (auto-advanced), updates bytes_remaining and bytes_to_allocate.
+    // Callers should check response->bytes_to_allocate to determine if more allocation is needed.
+    FORCE_INLINE void cb_allocate_and_fill_slots(volatile RegisteredResponse* response) {
+        uint32_t bytes_to_allocate = response->bytes_to_allocate;
+        uint32_t available_slots = get_num_available_slots();
+        bool can_allocate = (bytes_to_allocate != 0) && (available_slots != 0);
+        if (can_allocate) {
+            // Partial allocation: allocate as much as available space allows
+            uint32_t bytes_to_read = std::min(bytes_to_allocate, available_slots * SlotSize);
+            uint32_t bytes_allocated = bytes_to_read;
 
-        // Read slot by slot
-        while (bytes_remaining > 0) {
-            uint32_t read_size = (bytes_remaining > SlotSize) ? SlotSize : bytes_remaining;
-            noc_async_read(src_addr, slot_addrs_[wr_slot_idx_], read_size);
+            // Read from current address (already points to next unread location)
+            uint64_t src_addr = response->read_noc_address;
 
-            src_addr += read_size;
-            bytes_remaining -= read_size;
+            // Read full slots
+            while (bytes_to_read > SlotSize) {
+                noc_async_read(src_addr, slot_addrs_[wr_slot_idx_], SlotSize);
+                src_addr += SlotSize;
+                bytes_to_read -= SlotSize;
+                wr_slot_idx_ = advance_slot_idx(wr_slot_idx_);
+                num_used_slots_++;
+            }
+            // Read final slot (may be partial)
+            noc_async_read(src_addr, slot_addrs_[wr_slot_idx_], bytes_to_read);
             wr_slot_idx_ = advance_slot_idx(wr_slot_idx_);
             num_used_slots_++;
+
+            noc_async_read_barrier();
+
+            // Update response: advance read address, update byte counters
+            response->complete_allocation(bytes_allocated);
         }
     }
 
@@ -85,12 +100,6 @@ public:
     FORCE_INLINE void cb_deallocate_slots(uint32_t num_slots) {
         rd_slot_idx_ = advance_slot_idx_n(rd_slot_idx_, num_slots);
         num_used_slots_ -= num_slots;
-    }
-
-    FORCE_INLINE void reset() {
-        wr_slot_idx_ = 0;
-        rd_slot_idx_ = 0;
-        num_used_slots_ = 0;
     }
 };
 

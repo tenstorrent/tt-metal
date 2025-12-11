@@ -187,9 +187,17 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     if (buffer_it == device_buffers_.end()) {
         return std::nullopt;
     }
+    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+    TT_ASSERT(!pcie_cores.empty());
+    auto pcie_xy = pcie_cores.front();
+    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
 
     if (use_64bit_address_space_) {
-        return PinnedMemory::NocAddr{buffer_it->second->get_device_io_addr(host_offset_), mmio_device_id};
+        return PinnedMemory::NocAddr{
+            .pcie_xy_enc = pcie_xy_enc,
+            .addr = buffer_it->second->get_device_io_addr(host_offset_),
+            .device_id = mmio_device_id};
     }
 
     auto noc_addr_opt = buffer_it->second->get_noc_addr();
@@ -198,7 +206,10 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     }
 
     // Return NOC address and the MMIO device ID where it's usable from
-    return PinnedMemory::NocAddr{noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id};
+    return PinnedMemory::NocAddr{
+        .pcie_xy_enc = pcie_xy_enc,
+        .addr = noc_addr_opt.value() + static_cast<uint64_t>(host_offset_),
+        .device_id = mmio_device_id};
 }
 
 std::vector<ChipId> PinnedMemoryImpl::get_device_ids() const {
@@ -333,7 +344,7 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
 
-experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
+experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& /* mesh_device */) {
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
     bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
     if (!iommu_enabled) {
@@ -344,8 +355,10 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     experimental::MemoryPinningParameters params{};
     params.max_pins = hal.get_max_pinned_memory_count();
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
-    // Disable NOC mapping until tested, except on Blackhole where it's supported.
-    params.can_map_to_noc = (mesh_device.arch() == tt::ARCH::BLACKHOLE);
+    // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
+    // bit addresses.
+    params.can_map_to_noc = MetalContext::instance().hal().get_supports_64_bit_pcie_addressing() ||
+                            MetalContext::instance().get_cluster().is_noc_mapping_enabled();
     return params;
 }
 

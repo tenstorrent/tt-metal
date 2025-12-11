@@ -22,6 +22,7 @@ def run_with_trace(
     output_mem_config,
     num_iter=20,
     subdevice_id=None,
+    cluster_axis=None,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -31,6 +32,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
+        cluster_axis=cluster_axis,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -44,6 +46,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
+            cluster_axis=cluster_axis,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -173,9 +176,7 @@ def run_all_broadcast_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                ),
+                ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(8, 4)),
             ),
         )
 
@@ -191,6 +192,7 @@ def run_all_broadcast_impl(
             output_mem_config,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
+            cluster_axis=cluster_axis,
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
@@ -201,6 +203,7 @@ def run_all_broadcast_impl(
                 memory_config=output_mem_config,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
             )
             tt_out_tensor_list.append(tt_out_tensors)
 
@@ -238,9 +241,9 @@ def run_all_broadcast_impl(
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
-    "num_devices, num_links, output_shape, layout, input_dtype",
+    "num_devices, num_links, output_shape, layout, input_dtype, cluster_axis",
     [
-        (2, 1, [1, 1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 1, [1, 1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -262,6 +265,7 @@ def test_all_broadcast(
     mem_config,
     num_iters,
     function_level_defaults,
+    cluster_axis,
 ):
     topology = ttnn.Topology.Linear
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
@@ -279,4 +283,5 @@ def test_all_broadcast(
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
+        cluster_axis=cluster_axis,
     )

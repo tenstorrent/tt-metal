@@ -29,8 +29,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal {
-namespace experimental {
+namespace tt::tt_metal::experimental {
 
 GlobalCircularBuffer::GlobalCircularBuffer(
     IDevice* device,
@@ -159,10 +158,7 @@ std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
     tt::stl::reflection::operator<<(os, value);
     return os;
 }
-
-}  // namespace experimental
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental
 
 namespace std {
 
