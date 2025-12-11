@@ -99,6 +99,9 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
+    if (this == &other) {
+        return *this;
+    }
     this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = other.tensor_attributes;
