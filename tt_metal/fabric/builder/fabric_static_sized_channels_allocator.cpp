@@ -301,7 +301,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {16, 16, 0, 0},  // Option 1
             {8, 16, 0, 0},   // Option 2
             {8, 8, 0, 0},    // Option 3
-            {4, 8, 0, 0}     // Option 4
+            {4, 8, 0, 0},    // Option 4
+            {4, 8, 4, 4},    // Option 4
+            {4, 8, 2, 2},    // Option 4
+            {4, 4, 2, 2},    // Option 4
+            {2, 2, 2, 2}     // Option 4
         },
         // BLACKHOLE
         {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}}};
