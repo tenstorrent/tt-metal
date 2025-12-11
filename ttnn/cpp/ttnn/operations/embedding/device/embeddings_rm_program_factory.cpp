@@ -197,7 +197,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         {
             reader_runtime_args[2] = input_offset / num_blocks_per_batch;
             reader_runtime_args[3] =
-                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
+                ttsl::math::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
             reader_runtime_args[4] = local_num_blocks;
             reader_runtime_args[5] = input_offset % num_blocks_per_batch % block_height;
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);

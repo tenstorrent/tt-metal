@@ -37,7 +37,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> calculate_chunk_params(uint32_t pages_p
 
     while (true) {
         const uint32_t chunk_tiles = chunk_granularity * pages_per_packet;
-        const uint32_t num_chunks = tt::div_up(pages_per_shard, chunk_tiles);
+        const uint32_t num_chunks = ttsl::math::div_up(pages_per_shard, chunk_tiles);
 
         if (num_chunks < MAX_CHUNKS_PER_SHARD) {
             return {chunk_granularity, chunk_tiles, num_chunks};
@@ -410,7 +410,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
                 in_row_tiles, in_col_tiles, operation_attributes.ring_size, ring_index, operation_attributes.in_dim);
 
     // Check that with this static partitioning, the final packet does not overflow the intermediate buffer
-    const uint32_t packets_per_row = tt::div_up(input_shard_col_tiles, contig_pages_advanced);
+    const uint32_t packets_per_row = ttsl::math::div_up(input_shard_col_tiles, contig_pages_advanced);
     const uint32_t packets_per_device_shard = packets_per_row * input_shard_row_tiles;
     const uint32_t final_packet_id = packets_per_device_shard - 1;
     const uint32_t final_packet_global_id =

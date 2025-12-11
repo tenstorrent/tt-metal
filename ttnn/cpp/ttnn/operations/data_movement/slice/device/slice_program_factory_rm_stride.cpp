@@ -58,7 +58,7 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
     auto dst_buffer_alignment = output.buffer()->alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
-    uint32_t cb_page_size_aligned = tt::round_up(cb_page_size, alignment);
+    uint32_t cb_page_size_aligned = ttsl::math::round_up(cb_page_size, alignment);
     uint32_t cb_total_size = 2 * cb_page_size_aligned;
 
     constexpr uint32_t in_cb = 0;

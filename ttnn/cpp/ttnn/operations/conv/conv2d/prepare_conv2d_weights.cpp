@@ -12,7 +12,7 @@
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_buffer.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -260,8 +260,8 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
     uint32_t weight_matrix_cols = Co;
 
     // Pad to tile boundaries
-    uint32_t weight_matrix_rows_padded = tt::round_up(weight_matrix_rows, constants::TILE_HEIGHT);
-    uint32_t weight_matrix_cols_padded = tt::round_up(weight_matrix_cols, constants::TILE_WIDTH);
+    uint32_t weight_matrix_rows_padded = ttsl::math::round_up(weight_matrix_rows, constants::TILE_HEIGHT);
+    uint32_t weight_matrix_cols_padded = ttsl::math::round_up(weight_matrix_cols, constants::TILE_WIDTH);
 
     const ttnn::Shape output_shape{1, 1, weight_matrix_rows_padded, weight_matrix_cols_padded};
 
@@ -408,7 +408,7 @@ Tensor to_weight_tile_layout_block_sharded(
     uint32_t weight_matrix_cols = w_shape[0];
     TT_ASSERT(weight_matrix_cols % out_num_channel_shards == 0);
     uint32_t conv_output_shard_width = weight_matrix_cols / out_num_channel_shards;
-    uint32_t conv_output_shard_width_padded = tt::round_up(conv_output_shard_width, constants::TILE_WIDTH);
+    uint32_t conv_output_shard_width_padded = ttsl::math::round_up(conv_output_shard_width, constants::TILE_WIDTH);
     if (conv_output_shard_width < conv_output_shard_width_padded) {
         // width padding for conv output shard padding
         weight_matrix_cols = conv_output_shard_width_padded * out_num_channel_shards;
@@ -423,11 +423,11 @@ Tensor to_weight_tile_layout_block_sharded(
     if (full_inner_dim) {
         // Use full inner dimension - round up the entire block height
         weight_block_height_padded =
-            tt::round_up(conv_input_shard_width * w_shape[3] * w_shape[2], constants::TILE_HEIGHT);
+            ttsl::math::round_up(conv_input_shard_width * w_shape[3] * w_shape[2], constants::TILE_HEIGHT);
     } else {
         // Original logic - slice by kernel height, round up kernel width portion
         weight_block_height_padded =
-            tt::round_up(conv_input_shard_width * w_shape[3], constants::TILE_HEIGHT) * w_shape[2];
+            ttsl::math::round_up(conv_input_shard_width * w_shape[3], constants::TILE_HEIGHT) * w_shape[2];
     }
 
     if (weight_block_height < weight_block_height_padded) {
@@ -456,8 +456,8 @@ Tensor to_weight_tile_layout_block_sharded(
         const uint32_t kernel_h = w_shape[2];
         const uint32_t kernel_w = w_shape[3];
 
-        uint32_t height_stride_per_kernel_row =
-            tt::round_up(conv_input_shard_width * (full_inner_dim ? kernel_h : 1) * kernel_w, constants::TILE_HEIGHT);
+        uint32_t height_stride_per_kernel_row = ttsl::math::round_up(
+            conv_input_shard_width * (full_inner_dim ? kernel_h : 1) * kernel_w, constants::TILE_HEIGHT);
 
         WeightLayoutThreader::parallel_for_channels(
             out_num_channel_shards,
@@ -1050,7 +1050,7 @@ static Conv2dBlockConfig get_opt_block_config(
             {1,
              1,
              batch_size * output_height * output_width,
-             tt::round_up(
+             ttsl::math::round_up(
                  out_channels,
                  get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH)}),
         output_parallel_config,
@@ -1065,8 +1065,8 @@ static Conv2dBlockConfig get_opt_block_config(
             get_num_cores_channels_from_parallel_config(parallel_config),
             get_num_cores_channels_from_parallel_config(output_parallel_config));
 
-    uint32_t in_channels_padded =
-        tt::round_up(in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
+    uint32_t in_channels_padded = ttsl::math::round_up(
+        in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
 
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
@@ -1088,7 +1088,7 @@ static Conv2dBlockConfig get_opt_block_config(
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {
     uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(output_parallel_config);
-    return tt::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
+    return ttsl::math::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
 }
 
 static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
@@ -1217,7 +1217,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             output_sliced_dim);
 
         const uint32_t min_output_slice_size =
-            tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
+            ttsl::math::div_up(
+                ttsl::math::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
             slice_rounding_value;
 
         if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
@@ -1405,8 +1406,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
         original_weights_out_channels,
         out_channels);
 
-    uint32_t in_channels_padded = tt::round_up(in_channels, params.input_channels_alignment);
-    uint32_t out_channels_padded = tt::round_up(out_channels, constants::TILE_WIDTH);
+    uint32_t in_channels_padded = ttsl::math::round_up(in_channels, params.input_channels_alignment);
+    uint32_t out_channels_padded = ttsl::math::round_up(out_channels, constants::TILE_WIDTH);
 
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
@@ -1419,7 +1420,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
         auto output_parallel_config = params.output_parallel_config.value();
         uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(input_parallel_config);
         uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(output_parallel_config);
-        in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
+        in_channels_padded =
+            ttsl::math::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
         out_channels_padded = calculate_out_channels_padded(out_channels, output_parallel_config);
         out_channel_padding = out_channels_padded - out_channels;
         ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
@@ -1479,14 +1481,14 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
     if (!is_bias_tensor_is_on_device) {
         TT_FATAL(bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
-        uint32_t out_channels_padded = tt::round_up(out_channels, constants::TILE_WIDTH);
+        uint32_t out_channels_padded = ttsl::math::round_up(out_channels, constants::TILE_WIDTH);
         if (params.output_parallel_config.has_value()) {
             out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config.value());
         }
         // Inline the operations from conv_bias_layout_convert
         validate_host_conv_bias(bias_tensor_);
         ttnn::Shape bias_channels_padded_shape(
-            {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
+            {1, 1, 32, ttsl::math::round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
         bias_tensor_ =
             ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
         bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);

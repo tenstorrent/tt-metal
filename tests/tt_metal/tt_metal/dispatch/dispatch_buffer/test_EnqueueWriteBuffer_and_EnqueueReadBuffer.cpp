@@ -41,7 +41,7 @@
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
@@ -167,7 +167,7 @@ vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_config
                         CoreRange cores(start, end);
                         const uint32_t num_pages = buffer_size / page_size;
                         const uint32_t num_shards = cores.size();
-                        const uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
+                        const uint32_t num_pages_per_shard = ttsl::math::div_up(num_pages, num_shards);
                         uint32_t page_shape_height_div_factor = 1;
                         while (page_shape_height_div_factor <= num_pages_per_shard) {
                             uint32_t page_shape_width_div_factor = 1;
@@ -1021,7 +1021,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpace
         uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
 
         uint32_t first_buffer_size =
-            tt::round_up(static_cast<uint32_t>(command_completion_region_size * 0.95), large_page_size);
+            ttsl::math::round_up(static_cast<uint32_t>(command_completion_region_size * 0.95), large_page_size);
 
         uint32_t space_after_first_buffer = command_completion_region_size - first_buffer_size;
         // leave only small_page_size * 2 B of space in the completion queue

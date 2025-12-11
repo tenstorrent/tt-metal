@@ -43,7 +43,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
 
-    uint32_t Ktiles = tt::div_up(args.k, tt::constants::TILE_WIDTH);
+    uint32_t Ktiles = ttsl::math::div_up(args.k, tt::constants::TILE_WIDTH);
 
     // for streaming in input
     uint32_t num_cb_unit = 2;

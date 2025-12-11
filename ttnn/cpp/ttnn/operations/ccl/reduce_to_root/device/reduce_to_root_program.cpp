@@ -223,7 +223,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     auto stats_tile = tiny_tile;
 
     // Create buffers
-    const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
+    const uint32_t aligned_input_page_size_bytes = ttsl::math::round_up(input_page_size_bytes, l1_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_l.dtype());
 
     constexpr auto compute_cb_l = tt::CBIndex::c_0;

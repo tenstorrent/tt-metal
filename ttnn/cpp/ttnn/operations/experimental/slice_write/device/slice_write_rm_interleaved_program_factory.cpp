@@ -12,7 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_device_operation_types.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -103,7 +103,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t input_row_size_bytes_offset = ttsl::math::round_up(input_row_size_bytes, src_buffer_alignment);
 
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address(),
@@ -239,14 +239,14 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;  // cb for reading in input
     const uint32_t dst0_cb_index = tt::CBIndex::c_1;  // cb for reading in output pages for last dim striding
-    uint32_t cb_page_size = tt::round_up(input_row_size_bytes, alignment);
+    uint32_t cb_page_size = ttsl::math::round_up(input_row_size_bytes, alignment);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
     uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
         // Round up num_input_pages so that it takes the max of both core groups.
-        auto num_input_pages_pad32 = tt::round_up(num_input_pages, 32);
+        auto num_input_pages_pad32 = ttsl::math::round_up(num_input_pages, 32);
         num_sticks_per_core_read =
             tt::tt_metal::merge_num_sticks_to_read(num_input_pages_pad32, cb_page_size, max_read_size);
         num_read_per_barrier = num_input_pages_pad32 / num_sticks_per_core_read;
@@ -260,7 +260,7 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     if (stride[-1] != 1) {
         writer_defines["LAST_DIM_STRIDED"] = "1";
         uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
-        cb_page_size = tt::round_up(output_row_size_bytes, alignment);
+        cb_page_size = ttsl::math::round_up(output_row_size_bytes, alignment);
         tt::tt_metal::CircularBufferConfig cb_dst0_config =
             tt::tt_metal::CircularBufferConfig(
                 num_read_per_barrier * 2 * cb_page_size,

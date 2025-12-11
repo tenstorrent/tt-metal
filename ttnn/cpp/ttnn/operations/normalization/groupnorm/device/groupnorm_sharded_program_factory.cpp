@@ -94,7 +94,8 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
+    uint32_t per_core_N_bytes_padded =
+        ttsl::math::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;

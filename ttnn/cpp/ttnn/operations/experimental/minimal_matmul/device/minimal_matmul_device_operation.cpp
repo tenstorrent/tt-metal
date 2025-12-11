@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "minimal_matmul_program_factory.hpp"

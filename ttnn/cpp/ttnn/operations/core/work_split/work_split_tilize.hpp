@@ -84,8 +84,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     nblocks_per_core = adjusted_nblocks_per_core;
 
     // Helper lambda for ceiling division.
-    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
+    const uint32_t total_blocks_width = ttsl::math::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = ttsl::math::div_up(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     // Sets to hold different core ranges.
@@ -153,8 +153,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     nblocks_per_core = adjusted_nblocks_per_core;
 
     // Helper lambda for ceiling division.
-    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
+    const uint32_t total_blocks_width = ttsl::math::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = ttsl::math::div_up(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     // Sets to hold different core ranges.

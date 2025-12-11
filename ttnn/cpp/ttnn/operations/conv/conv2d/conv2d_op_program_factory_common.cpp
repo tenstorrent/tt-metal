@@ -32,7 +32,7 @@ uint32_t calculate_act_cb_size_with_reuse(
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t input_tile_size,
     DataType input_datatype) {
-    const uint32_t image_width_tiles = tt::div_up(output_image_width, tt::constants::TILE_HEIGHT);
+    const uint32_t image_width_tiles = ttsl::math::div_up(output_image_width, tt::constants::TILE_HEIGHT);
     const uint32_t reuse_loops = std::ceil(static_cast<float>(act_block_h_tiles) / image_width_tiles);
     const uint32_t image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
     const uint32_t image_width_tile_leftover =
@@ -41,7 +41,7 @@ uint32_t calculate_act_cb_size_with_reuse(
     const uint32_t dtype_size_bytes = datum_size(data_format);
     const uint32_t reuse_length = reuse_loops * padded_in_channels * kernel_size[1] *
                                   (1 + image_width_tile_leftover * kernel_size[0]) * dtype_size_bytes;
-    const uint32_t reuse_tiles = tt::div_up(reuse_length, input_tile_size);
+    const uint32_t reuse_tiles = ttsl::math::div_up(reuse_length, input_tile_size);
 
     return (image_width_tiles * act_block_w_tiles) + reuse_tiles;
 }

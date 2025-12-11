@@ -65,7 +65,7 @@ ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
     const bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
     const auto input_cores = input_tensors[0].shard_spec().value().grid;
-    const uint32_t num_output_rows_per_core = tt::div_up(num_output_rows, input_cores.num_cores());
+    const uint32_t num_output_rows_per_core = ttsl::math::div_up(num_output_rows, input_cores.num_cores());
 
     uint32_t core_id = 0;
     for (const CoreCoord& core : cores) {
@@ -114,7 +114,7 @@ void ConcatS2IProgramFactory::override_runtime_arguments(
     auto cores = corerange_to_cores(shared_vars.all_cores, std::nullopt, row_wise);
     auto input_cores = tensor_args.input_tensors[0].shard_spec().value().grid;
     const uint32_t num_output_rows = tensor_return_value.padded_shape()[-1];
-    const uint32_t num_output_rows_per_core = tt::div_up(num_output_rows, input_cores.num_cores());
+    const uint32_t num_output_rows_per_core = ttsl::math::div_up(num_output_rows, input_cores.num_cores());
 
     for (const CoreCoord& core : cores) {
         uint32_t curr_num_input_tensors;

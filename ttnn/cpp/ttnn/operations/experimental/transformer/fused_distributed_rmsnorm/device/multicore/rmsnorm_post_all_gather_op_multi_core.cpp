@@ -199,7 +199,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const uint32_t reduce_result_cb_num_tiles = 1;
     const uint32_t output_cb_num_tiles = dst_reg_count * double_buffer_constant;
     // kernels use weight_cb in granularity of dst_reg_count, so we need to size appropriately
-    const uint32_t weight_cb_num_tiles = tt::round_up(num_tile_cols, dst_reg_count);
+    const uint32_t weight_cb_num_tiles = ttsl::math::round_up(num_tile_cols, dst_reg_count);
     const uint32_t intermediate_cb_num_tiles = dst_reg_count;
     const uint32_t transformation_mat_cb_num_tiles = 1;
     const uint32_t rope_cos_sin_cb_num_tiles = head_dim_tiles;
@@ -361,7 +361,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         .compile_args = compute_args};
     auto compute_kernels_id = CreateKernel(program, compute_kernel_file, core_grid, compute_config);
 
-    const uint32_t num_tile_rows_per_core = tt::div_up(num_tile_rows, num_cores);
+    const uint32_t num_tile_rows_per_core = ttsl::math::div_up(num_tile_rows, num_cores);
 
     const auto cores = corerange_to_cores(core_grid, num_cores, true);
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {

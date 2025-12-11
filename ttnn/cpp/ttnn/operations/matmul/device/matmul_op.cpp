@@ -394,13 +394,13 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t k_tiles_per_core;
     uint32_t n_tiles_per_core;
     if (is_tall) {
-        batch_and_m_tiles_per_core = div_up(batch_and_m_tiles, num_cores);
-        k_tiles_per_core = div_up(k_tiles, num_cores);
+        batch_and_m_tiles_per_core = ttsl::math::div_up(batch_and_m_tiles, num_cores);
+        k_tiles_per_core = ttsl::math::div_up(k_tiles, num_cores);
         n_tiles_per_core = n_tiles;
     } else {
         batch_and_m_tiles_per_core = batch_and_m_tiles;
-        k_tiles_per_core = div_up(k_tiles, num_cores);
-        n_tiles_per_core = div_up(n_tiles, num_cores);
+        k_tiles_per_core = ttsl::math::div_up(k_tiles, num_cores);
+        n_tiles_per_core = ttsl::math::div_up(n_tiles, num_cores);
     }
     while (k_tiles % k_tiles_per_core != 0) {
         k_tiles_per_core -= 1;
@@ -458,9 +458,9 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
     if (mcast_in0) {
         per_core_M = M / in0_tile_shape[0];
-        per_core_N = div_up(div_up(N, grid_size.x * grid_size.y), in1_tile_shape[1]);
+        per_core_N = ttsl::math::div_up(ttsl::math::div_up(N, grid_size.x * grid_size.y), in1_tile_shape[1]);
     } else {
-        per_core_M = div_up(div_up(M, grid_size.x * grid_size.y), in0_tile_shape[0]);
+        per_core_M = ttsl::math::div_up(ttsl::math::div_up(M, grid_size.x * grid_size.y), in0_tile_shape[0]);
         per_core_N = N / in1_tile_shape[1];
     }
     uint32_t in0_block_w = K / in0_tile_shape[1] % 2 == 0 ? 2 : 1;
@@ -615,8 +615,10 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
                                                : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
-                per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
-                per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
+                per_core_M =
+                    !transpose_mcast ? ttsl::math::div_up(Mt, num_cores_y) : ttsl::math::div_up(Mt, num_cores_x);
+                per_core_N =
+                    !transpose_mcast ? ttsl::math::div_up(Nt, num_cores_x) : ttsl::math::div_up(Nt, num_cores_y);
 
                 auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
                     input_tensor_a,
@@ -705,8 +707,8 @@ MatmulProgramConfig create_matmul_program_config(
     if (input_b_is_batched) {
         TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
         if (!a_is_sharded && !input_tensor_b.is_sharded()) {
-            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
-            n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
+            m_tiles_per_core = ttsl::math::div_up(m_size, ttnn::TILE_SIZE);
+            n_tiles_per_core = ttsl::math::div_up(n_size, ttnn::TILE_SIZE);
             k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without
                                    // running out of memory?
             if (!can_cbs_fit_in_l1(
@@ -743,7 +745,7 @@ MatmulProgramConfig create_matmul_program_config(
                 "MatmulMultiCoreReuseProgramConfig: Input B cannot be width sharded, got layout: {}",
                 input_tensor_b_memory_config.memory_layout());
             auto shard_shape = input_tensor_b_memory_config.shard_spec().value().shape;
-            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
+            m_tiles_per_core = ttsl::math::div_up(m_size, ttnn::TILE_SIZE);
             n_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
             k_tiles_per_core = 1;
         }
@@ -907,7 +909,7 @@ MatmulProgramConfig get_matmul_program_config(
             if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 mcast_in0 = true;
                 per_core_M = M;
-                per_core_N = div_up(N, input_tensor_a.shard_spec().value().grid.num_cores());
+                per_core_N = ttsl::math::div_up(N, input_tensor_a.shard_spec().value().grid.num_cores());
                 in0_block_w = std::gcd(shard_shape[1] / in0_tile_shape[1], K);
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 mcast_in0 = false;
@@ -981,20 +983,22 @@ MatmulProgramConfig get_matmul_program_config(
             bool cores_along_x_match_grid_size = virtual_x == (K / (shard_shape[1] / in0_tile_shape[1]));
             bool cores_along_y_match_grid_size = virtual_y == (M / (shard_shape[0] / in0_tile_shape[0]));
             TT_FATAL(
-                cores_along_y_match_grid_size || virtual_y == div_up(M, (shard_shape[0] / in0_tile_shape[0])),
+                cores_along_y_match_grid_size ||
+                    virtual_y == ttsl::math::div_up(M, (shard_shape[0] / in0_tile_shape[0])),
                 "Num cores along y ({}) must match provided grid size ({}) or divided up size ({})",
                 virtual_y,
                 M / (shard_shape[0] / in0_tile_shape[0]),
-                div_up(M, (shard_shape[0] / in0_tile_shape[0])));
+                ttsl::math::div_up(M, (shard_shape[0] / in0_tile_shape[0])));
             TT_FATAL(
-                cores_along_x_match_grid_size || virtual_x == div_up(K, (shard_shape[1] / in0_tile_shape[1])),
+                cores_along_x_match_grid_size ||
+                    virtual_x == ttsl::math::div_up(K, (shard_shape[1] / in0_tile_shape[1])),
                 "Num cores along x ({}) must match provided grid size ({}) or divided up size ({})",
                 virtual_x,
                 K / (shard_shape[1] / in0_tile_shape[1]),
-                div_up(K, (shard_shape[1] / in0_tile_shape[1])));
+                ttsl::math::div_up(K, (shard_shape[1] / in0_tile_shape[1])));
 
-            uint32_t per_core_M = div_up(M, virtual_y);
-            uint32_t per_core_N = div_up(N, virtual_x);
+            uint32_t per_core_M = ttsl::math::div_up(M, virtual_y);
+            uint32_t per_core_N = ttsl::math::div_up(N, virtual_x);
             uint32_t in0_block_w = cores_along_x_match_grid_size ? std::gcd(shard_shape[1] / in0_tile_shape[1], K) : 1;
 
             auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
@@ -2010,7 +2014,7 @@ void Matmul::validate(
                         uint32_t per_core_M = program_config.per_core_M;
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
                         TT_FATAL(
-                            div_up(M, per_core_M) <= input_tensor_a.shard_spec().value().grid.num_cores(),
+                            ttsl::math::div_up(M, per_core_M) <= input_tensor_a.shard_spec().value().grid.num_cores(),
                             "Error: M must be divisible by per_core_M.");
                         TT_FATAL(
                             per_core_M == (shard_shape[0] / in0_tile_shape[0]),

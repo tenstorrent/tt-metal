@@ -141,8 +141,8 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
 
-    padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
-    padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
+    padded_shape[-2] = ttsl::math::round_up(padded_shape[-2], input_tile_height);
+    padded_shape[-1] = ttsl::math::round_up(padded_shape[-1], input_tile_width);
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {

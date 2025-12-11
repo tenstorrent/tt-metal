@@ -94,9 +94,9 @@ PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgr
     }
 
     auto l1_alignment_bytes = hal::get_l1_alignment();
-    uint32_t padded_stick_step = tt::round_up(
+    uint32_t padded_stick_step = ttsl::math::round_up(
         padded_stick_bytes, l1_alignment_bytes);  // round padded_stick bytes to a multiple of l1_alignment_bytes
-    uint32_t unpadded_stick_step = tt::round_up(
+    uint32_t unpadded_stick_step = ttsl::math::round_up(
         unpadded_stick_bytes,
         l1_alignment_bytes);  // round unpadded_stick bytes to a multiple of l1_alignment_bytes
 

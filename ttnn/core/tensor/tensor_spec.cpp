@@ -35,7 +35,7 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
             "Shard width {} must match physical width {} for height sharded",
             physical_shard_width,
             physical_width);
-        uint32_t num_shards = div_up(physical_height, physical_shard_height);
+        uint32_t num_shards = ttsl::math::div_up(physical_height, physical_shard_height);
         TT_FATAL(
             num_shards <= num_cores,
             "Number of shards along height {} must not exceed number of cores {}",
@@ -47,7 +47,7 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
             "Shard height {} must match physical height {} for width sharded",
             physical_shard_height,
             physical_height);
-        uint32_t num_shards = div_up(physical_width, physical_shard_width);
+        uint32_t num_shards = ttsl::math::div_up(physical_width, physical_shard_width);
         TT_FATAL(
             num_shards <= num_cores,
             "Number of shards along width {} must not exceed number of cores {}",
@@ -56,8 +56,8 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
     } else if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(
             shard_spec.grid.ranges().size() == 1, "Shard grid must be one full rectangular grid for block sharded!");
-        uint32_t num_shards_along_height = div_up(physical_height, physical_shard_height);
-        uint32_t num_shards_along_width = div_up(physical_width, physical_shard_width);
+        uint32_t num_shards_along_height = ttsl::math::div_up(physical_height, physical_shard_height);
+        uint32_t num_shards_along_width = ttsl::math::div_up(physical_width, physical_shard_width);
 
         // Additionally check that number of cores along height and width matches shard grid
         const CoreCoord shard_grid = shard_spec.grid.bounding_box().grid_size();
@@ -165,24 +165,24 @@ TensorSpec TensorSpec::sharded_across_dims_except(
 
 TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
-    auto shard_height = div_up(physical_shape().height(), num_cores);
+    auto shard_height = ttsl::math::div_up(physical_shape().height(), num_cores);
     NdShardSpec shard_spec(Shape({shard_height, physical_shape().width()}), std::move(grid), orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::REQUIRED);
 }
 
 TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
-    auto shard_width = div_up(physical_shape().width(), num_cores);
+    auto shard_width = ttsl::math::div_up(physical_shape().width(), num_cores);
     NdShardSpec shard_spec(Shape({physical_shape().height(), shard_width}), std::move(grid), orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::REQUIRED);
 }
 
 TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientation) const {
     auto grid_size = grid.grid_size();
-    auto shard_height =
-        div_up(physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
-    auto shard_width =
-        div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
+    auto shard_height = ttsl::math::div_up(
+        physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
+    auto shard_width = ttsl::math::div_up(
+        physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
     NdShardSpec shard_spec(Shape({shard_height, shard_width}), grid, orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::RECOMMENDED);
 }
@@ -194,7 +194,7 @@ TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment sh
                              : page_config().get_recommended_shard_shape_alignment(data_type());
         auto& shard_shape = nd_shard_spec.shard_shape;
         for (int dim = 1; dim <= alignment.size(); dim++) {
-            shard_shape[-dim] = round_up(shard_shape[-dim], alignment[-dim]);
+            shard_shape[-dim] = ttsl::math::round_up(shard_shape[-dim], alignment[-dim]);
         }
     }
     TensorLayout new_layout(
@@ -294,8 +294,8 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     ShardSpec shard_spec(nd_shard_spec.grid, shard_shape, nd_shard_spec.orientation);
 
     // Check that the number of shards fits onto the cores
-    size_t num_shards_along_height = div_up(physical_shape().height(), shard_spec.shape[0]);
-    size_t num_shards_along_width = div_up(physical_shape().width(), shard_spec.shape[1]);
+    size_t num_shards_along_height = ttsl::math::div_up(physical_shape().height(), shard_spec.shape[0]);
+    size_t num_shards_along_width = ttsl::math::div_up(physical_shape().width(), shard_spec.shape[1]);
     if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
         std::swap(num_shards_along_height, num_shards_along_width);
     }

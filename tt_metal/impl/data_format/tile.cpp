@@ -9,7 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
@@ -67,7 +67,7 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape
 
 uint32_t Tile::get_tile_size(const DataFormat& format) const {
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
+    uint32_t aligned_exp_size = ttsl::math::round_up(face_shape[0] * num_faces, l1_alignment);
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b: return (tile_hw / 4) + aligned_exp_size;

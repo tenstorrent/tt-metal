@@ -6,20 +6,12 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-
-size_t round_up(size_t value, size_t multiple) {
-    if (multiple == 0) {
-        return value;
-    }
-
-    return ((value + multiple - 1) / multiple) * multiple;
-};
 
 Alignment legacyShapeToAlignment(
     const tt::tt_metal::Shape& logical_shape,
@@ -162,7 +154,7 @@ void TensorLayout::initialize_alignment() {
     }
     for (size_t i = 0; i < default_alignment.size(); i++) {
         size_t result_idx = i + result.size() - default_alignment.size();
-        result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
+        result[result_idx] = ttsl::math::round_up(result[result_idx], default_alignment[i]);
     }
     alignment_ = Alignment(std::move(result));
 }
@@ -253,18 +245,18 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
     if (!memory_config_.is_sharded()) {
         const size_t num_pages =
             physical_shape.height() * physical_shape.width() / page_shape.height() / page_shape.width();
-        num_pages_per_bank = div_up(num_pages, num_banks);
+        num_pages_per_bank = ttsl::math::div_up(num_pages, num_banks);
     } else if (const auto& shard_spec = memory_config_.shard_spec()) {
         Shape2D shard_shape = Shape2D(shard_spec->shape);
-        num_pages_per_bank =
-            div_up(shard_shape.height(), page_shape.height()) * div_up(shard_shape.width(), page_shape.width());
+        num_pages_per_bank = ttsl::math::div_up(shard_shape.height(), page_shape.height()) *
+                             ttsl::math::div_up(shard_shape.width(), page_shape.width());
     } else {
         auto sharding_args = compute_buffer_sharding_args(shape);
         const auto& dist_spec = sharding_args.buffer_distribution_spec().value();
         num_pages_per_bank = dist_spec.max_num_dev_pages_per_core();
     }
 
-    const size_t aligned_page_size = round_up(compute_page_size_bytes(page_shape), page_alignment);
+    const size_t aligned_page_size = ttsl::math::round_up(compute_page_size_bytes(page_shape), page_alignment);
     return num_pages_per_bank * aligned_page_size;
 }
 
@@ -329,7 +321,7 @@ Shape2D TensorLayout::compute_physical_shape(const tt::tt_metal::Shape& shape) c
 
         // Align the current dimension if alignment is available
         if (i >= -alignment_rank) {
-            dim = CMAKE_UNIQUE_NAMESPACE::round_up(dim, alignment_[i]);
+            dim = ttsl::math::round_up(dim, alignment_[i]);
         }
     }
 
@@ -354,7 +346,7 @@ Strides TensorLayout::compute_strides(const tt::tt_metal::Shape& logical_shape) 
         strides[i] = strides[i + 1] * logical_shape[i + 1];
         const int alignment_index = i - (rank - alignment_rank) + 1;
         if (alignment_index >= 0) {
-            strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
+            strides[i] = ttsl::math::round_up(strides[i], alignment_[alignment_index]);
         }
     }
     return strides;
@@ -373,13 +365,13 @@ tt::tt_metal::Shape TensorLayout::compute_padded_shape(const tt::tt_metal::Shape
         uint32_t& padded_shape_value = padded_shape[padded_shape_index];
         // The last 2 dimensions of a shape are special
         if (rank_index >= static_cast<int>(shape.rank()) - 2) {
-            padded_shape_value = CMAKE_UNIQUE_NAMESPACE::round_up(shape_value, alignment_value);
+            padded_shape_value = ttsl::math::round_up(shape_value, alignment_value);
         } else {
             if (accum_alignment % alignment_value == 0) {
                 // Alignment for this dimension is redundant, ignoring
                 padded_shape_value = shape_value;
             } else if (alignment_value % accum_alignment == 0) {
-                padded_shape_value = CMAKE_UNIQUE_NAMESPACE::round_up(shape_value, alignment_value / accum_alignment);
+                padded_shape_value = ttsl::math::round_up(shape_value, alignment_value / accum_alignment);
             } else {
                 TT_THROW(
                     "Padded shape can't be deducted from TensorLayout parameters {} and Shape {}", alignment_, shape);

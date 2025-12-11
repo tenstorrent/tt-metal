@@ -32,9 +32,9 @@ void run_sliced_op(
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
     const uint32_t min_output_slice_size =
-        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+        ttsl::math::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
     const uint32_t output_slice_rem =
-        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
+        ttsl::math::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;

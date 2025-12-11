@@ -52,9 +52,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_offset = num_units_per_row;
         num_units_height = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
-            num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            num_units_per_shard_height - (ttsl::math::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
-            num_units_per_shard_width - (round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
+            num_units_per_shard_width - (ttsl::math::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
     } else {
         input_unit_size = shard_spec.shape[1] * input.element_size();
         output_unit_size = shard_spec.shape[1] * output.element_size();
@@ -65,19 +65,19 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_offset = 1;
         num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
-            num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            num_units_per_shard_height - (ttsl::math::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
-            output_unit_size - (round_up(num_units_per_row, output_unit_size) - num_units_per_row);
+            output_unit_size - (ttsl::math::round_up(num_units_per_row, output_unit_size) - num_units_per_row);
     }
 
     // re-calculate end_core in the case shard grid is larger than used grid
     if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-        num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
+        num_cores_unpadded = ttsl::math::round_up(num_units_height, num_units_per_shard_height);
     } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
         if (output.layout() == Layout::TILE) {
-            num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
+            num_cores_unpadded = ttsl::math::round_up(num_units_per_row, num_units_per_shard_width);
         } else {
-            num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
+            num_cores_unpadded = ttsl::math::round_up(num_units_per_row, output_unit_size);
         }
     }
     end_core = cores[num_cores_unpadded - 1];

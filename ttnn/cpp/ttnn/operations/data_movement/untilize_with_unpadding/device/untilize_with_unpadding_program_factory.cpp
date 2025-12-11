@@ -908,20 +908,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     num_rows_block = out_shard_spec.shape[0];
     block_row_size = out_shard_spec.shape[1] * output.element_size();         // in0_block_w * TILE_WIDTH * dtype_nbytes
     output_row_size = output.padded_shape()[-1] * output.element_size();      // output row size bytes
-    last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) -
-                                                     output.padded_shape()[-1]) *
-                                                        output.element_size();
+    last_block_row_size_unpadded =
+        block_row_size -
+        (ttsl::math::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - output.padded_shape()[-1]) *
+            output.element_size();
     uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
     num_output_rows_unpadded =
-        num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
+        num_rows_block - (ttsl::math::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
     if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        last_idx = tt::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1;
+        last_idx = ttsl::math::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1;
     } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-        last_idx = tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
+        last_idx = ttsl::math::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
     } else {
         end_core = {
-            tt::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1,
-            tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1};
+            ttsl::math::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1,
+            ttsl::math::div_up(num_output_rows, out_shard_spec.shape[0]) - 1};
     }
     if (!row_major) {
         std::swap(end_core.x, end_core.y);

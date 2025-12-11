@@ -160,7 +160,8 @@ Result conv_transpose2d_L1(
 
     // Call Conv2d u_op with Stride = 1, Padding = 0.
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({1, 1, batch_size * dims.output_height * dims.output_width, tt::round_up(out_channels, 32)}),
+        ttnn::Shape(
+            {1, 1, batch_size * dims.output_height * dims.output_width, ttsl::math::round_up(out_channels, 32)}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
 
@@ -176,7 +177,7 @@ Result conv_transpose2d_L1(
         false,
         mm_conv,
         input_tensor_post_tm.memory_config());
-    uint32_t in_channels_padded = tt::round_up(
+    uint32_t in_channels_padded = ttsl::math::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
@@ -724,8 +725,8 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
     int actual_pad_left = base_pad_width - padding_n4[2];
     int actual_pad_right = base_pad_width - padding_n4[3];
 
-    int input_slice_height_start = tt::div_up((output_slice_height_start - actual_pad_top), (int)stride[0]);
-    int input_slice_width_start = tt::div_up((output_slice_width_start - actual_pad_left), (int)stride[1]);
+    int input_slice_height_start = ttsl::math::div_up((output_slice_height_start - actual_pad_top), (int)stride[0]);
+    int input_slice_width_start = ttsl::math::div_up((output_slice_width_start - actual_pad_left), (int)stride[1]);
     int unpadded_output_height_start = std::max<int>(0, output_slice_height_start - actual_pad_top);
     int unpadded_output_width_start = std::max<int>(0, output_slice_width_start - actual_pad_left);
     int pad_top_offset = unpadded_output_height_start % (int)stride[0] == 0

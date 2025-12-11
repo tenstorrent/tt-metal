@@ -102,7 +102,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
     auto output_page_size = output_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(output_page_size, max_alignment);
     auto total_num_pages = output_tensor.buffer()->num_pages();
-    auto fabric_max_payload_size = tt::round_down(
+    auto fabric_max_payload_size = ttsl::math::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),

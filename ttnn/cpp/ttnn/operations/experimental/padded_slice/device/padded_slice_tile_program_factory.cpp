@@ -9,7 +9,7 @@
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/math.hpp"
+#include "tt_stl/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
@@ -59,14 +59,14 @@ get_padded_slice_runtime_args_tile_sharded_output(
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
-    const uint32_t input_num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
+    const uint32_t input_num_tiles_per_channel = ttsl::math::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
 
-    uint32_t num_tiles_per_channel = tt::div_up(input_num_tiles_per_channel, num_cores_channels);
+    uint32_t num_tiles_per_channel = ttsl::math::div_up(input_num_tiles_per_channel, num_cores_channels);
     TT_FATAL(
-        num_tiles_per_channel == tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH),
+        num_tiles_per_channel == ttsl::math::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH),
         "Number of tiles per channel {} should be equal to number of output shard width in tiles {}",
         num_tiles_per_channel,
-        tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH));
+        ttsl::math::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH));
 
     [[maybe_unused]] uint32_t output_row_size_bytes = output_shard_shape[1] * output_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -84,18 +84,20 @@ get_padded_slice_runtime_args_tile_sharded_output(
     std::vector<uint32_t> accumulated_total_sticks_per_dim(num_dims);
 
     num_output_tiles_per_dim[0] = num_tiles_per_channel;
-    num_output_tiles_per_dim[1] = (tt::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
-                                   tt::round_down(output_tensor_start[-2], TILE_HEIGHT)) /
-                                  TILE_HEIGHT;
+    num_output_tiles_per_dim[1] =
+        (ttsl::math::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
+         ttsl::math::round_down(output_tensor_start[-2], TILE_HEIGHT)) /
+        TILE_HEIGHT;
 
     log_debug(tt::LogOp, "Output Start : {}, Output Shape : {}", output_tensor_start, actual_output_shape);
 
-    accumulated_total_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH);
-    accumulated_total_tiles_per_dim[1] = tt::div_up(input_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
+    accumulated_total_tiles_per_dim[0] = ttsl::math::div_up(actual_output_shape[-1], TILE_WIDTH);
+    accumulated_total_tiles_per_dim[1] =
+        ttsl::math::div_up(input_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
-    num_input_tiles_per_dim[0] = tt::div_up(input_padded_shape[-1], TILE_WIDTH) - num_output_tiles_per_dim[0];
-    num_input_tiles_per_dim[1] =
-        (tt::div_up(input_shape[-2], TILE_HEIGHT) - num_output_tiles_per_dim[1]) * accumulated_total_tiles_per_dim[0];
+    num_input_tiles_per_dim[0] = ttsl::math::div_up(input_padded_shape[-1], TILE_WIDTH) - num_output_tiles_per_dim[0];
+    num_input_tiles_per_dim[1] = (ttsl::math::div_up(input_shape[-2], TILE_HEIGHT) - num_output_tiles_per_dim[1]) *
+                                 accumulated_total_tiles_per_dim[0];
 
     num_output_sticks_per_dim[0] = 1;
     num_input_sticks_per_dim[0] = 0;
@@ -187,7 +189,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
         const uint32_t width_offset_start_tile = width_offset_elems / TILE_WIDTH;
         const uint32_t width_offset_end_tile = std::min(
-            tt::div_up(std::min(width_offset_elems + output_row_size_elems, input_channels_num_elems), TILE_WIDTH),
+            ttsl::math::div_up(
+                std::min(width_offset_elems + output_row_size_elems, input_channels_num_elems), TILE_WIDTH),
             input_num_tiles_per_channel);
         const uint32_t this_core_num_tiles_per_channel = width_offset_end_tile - width_offset_start_tile;
         const uint32_t misalignment_bytes = width_offset_elems % TILE_WIDTH * output_tensor.element_size();
@@ -203,7 +206,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
         reader_kernel_args[5] = this_core_num_tiles_per_channel;
         reader_kernel_args[6] = max_num_tiles_per_row;
-        reader_kernel_args[10] = tt::div_up(input_padded_shape[-1], TILE_WIDTH) - max_num_tiles_per_row;
+        reader_kernel_args[10] = ttsl::math::div_up(input_padded_shape[-1], TILE_WIDTH) - max_num_tiles_per_row;
 
         std::vector<uint32_t> start_index_per_dim(num_dims);
         std::vector<uint32_t> end_index_per_dim(num_dims);
@@ -262,16 +265,17 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
         uint32_t num_tiles_this_core = num_full_rows * num_tiles_per_full_row;
 
-        num_tiles_this_core += ((tt::round_up(end_index_in_input_per_dim[num_dims - 2], TILE_HEIGHT) -
-                                 tt::round_down(output_tensor_start[num_dims - 2], TILE_HEIGHT)) /
+        num_tiles_this_core += ((ttsl::math::round_up(end_index_in_input_per_dim[num_dims - 2], TILE_HEIGHT) -
+                                 ttsl::math::round_down(output_tensor_start[num_dims - 2], TILE_HEIGHT)) /
                                 TILE_HEIGHT) *
                                max_num_tiles_per_row;
 
         if (start_index_per_dim[2] != 0) {
-            num_tiles_this_core += ((tt::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
-                                     tt::round_down(start_index_in_input_per_dim[num_dims - 2], TILE_HEIGHT)) /
-                                    TILE_HEIGHT) *
-                                   max_num_tiles_per_row;
+            num_tiles_this_core +=
+                ((ttsl::math::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
+                  ttsl::math::round_down(start_index_in_input_per_dim[num_dims - 2], TILE_HEIGHT)) /
+                 TILE_HEIGHT) *
+                max_num_tiles_per_row;
         }
         num_full_rows = std::max(num_full_rows, 0);
         log_trace(
@@ -300,8 +304,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
         auto reversed_tile_start_index = reversed_start_index;
         reversed_tile_start_index[0] /= TILE_WIDTH;
         reversed_tile_start_index[1] =
-            tt::round_down(reversed_tile_start_index[1] + output_tensor_start[2], TILE_HEIGHT) -
-            tt::round_down(output_tensor_start[-2], TILE_HEIGHT);
+            ttsl::math::round_down(reversed_tile_start_index[1] + output_tensor_start[2], TILE_HEIGHT) -
+            ttsl::math::round_down(output_tensor_start[-2], TILE_HEIGHT);
         reversed_tile_start_index[1] /= TILE_HEIGHT;
         std::vector<uint32_t> reversed_output_start_in_input(num_dims);
         std::vector<uint32_t> reversed_output_end(num_dims);
@@ -397,14 +401,15 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
     for (uint32_t channel_index = 0; channel_index < num_cores_channels; channel_index++) {
         const uint32_t width_offset_elems = channel_index * output_row_size_elems;
         const uint32_t width_offset_start_tile = width_offset_elems / TILE_WIDTH;
-        const uint32_t width_offset_end_tile = tt::div_up(width_offset_elems + output_row_size_elems, TILE_WIDTH);
+        const uint32_t width_offset_end_tile =
+            ttsl::math::div_up(width_offset_elems + output_row_size_elems, TILE_WIDTH);
         const uint32_t this_core_num_tiles_per_channel = width_offset_end_tile - width_offset_start_tile;
         max_num_tiles_per_row = std::max(max_num_tiles_per_row, this_core_num_tiles_per_channel);
     }
-    num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
+    num_tiles_per_channel = ttsl::math::div_up(num_tiles_per_channel, num_cores_channels);
 
     [[maybe_unused]] uint32_t num_tiles_height_per_core =
-        tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
+        ttsl::math::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();

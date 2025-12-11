@@ -9,7 +9,7 @@
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
-#include <math.hpp>
+#include <tt_stl/math.hpp>
 #include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -115,7 +115,8 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
     } else if (layout == TensorMemoryLayout::WIDTH_SHARDED or layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t i_offset = 0;
         uint32_t j_offset = 0;
-        uint32_t num_shard_columns = shard_in_pages[1] == 0 ? 0 : div_up(tensor2d_size[1], shard_in_pages[1]);
+        uint32_t num_shard_columns =
+            shard_in_pages[1] == 0 ? 0 : ttsl::math::div_up(tensor2d_size[1], shard_in_pages[1]);
         uint32_t shard_in_row = 0;
 
         for (uint32_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
@@ -519,7 +520,9 @@ DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const
     DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     DeviceAddr pages_offset_within_bank = page_index / num_banks;
-    auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
+    auto offset =
+        (ttsl::math::round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) *
+         pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 

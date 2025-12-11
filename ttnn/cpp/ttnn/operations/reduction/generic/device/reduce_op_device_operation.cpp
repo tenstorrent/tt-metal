@@ -99,7 +99,8 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
         if ((operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
              operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) &&
             nd_shard_spec.shard_shape.rank() > 1) {
-            nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], input_tensor.logical_shape()[-2]);
+            nd_shard_spec.shard_shape[-2] =
+                ttsl::math::div_up(nd_shard_spec.shard_shape[-2], input_tensor.logical_shape()[-2]);
         }
         return tensor_spec.sharded(std::move(nd_shard_spec), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }

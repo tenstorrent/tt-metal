@@ -4,7 +4,7 @@
 
 #include "pool_op.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <utility>
 
 /**
@@ -116,17 +116,19 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     auto mem_config = out_mem_config;
     auto layout = mem_config.memory_layout();
 
-    uint32_t out_nhw_padded = tt::round_up(out_nhw, tile_rows * num_cores_nhw);
-    uint32_t out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH / 2);
+    uint32_t out_nhw_padded = ttsl::math::round_up(out_nhw, tile_rows * num_cores_nhw);
+    uint32_t out_c_padded = ttsl::math::round_up(out_c, tt::constants::TILE_WIDTH / 2);
     if (mem_config.is_sharded()) {
         if (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            out_c_padded = tt::round_up(out_c, sliding_window_config.num_cores_c * tt::constants::TILE_WIDTH / 2);
+            out_c_padded =
+                ttsl::math::round_up(out_c, sliding_window_config.num_cores_c * tt::constants::TILE_WIDTH / 2);
         }
     }
 
     if (is_out_tiled) {
-        out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH * sliding_window_config.num_cores_c);
-        out_nhw_padded = tt::round_up(out_nhw_padded, tt::constants::TILE_HEIGHT * sliding_window_config.num_cores_nhw);
+        out_c_padded = ttsl::math::round_up(out_c, tt::constants::TILE_WIDTH * sliding_window_config.num_cores_c);
+        out_nhw_padded =
+            ttsl::math::round_up(out_nhw_padded, tt::constants::TILE_HEIGHT * sliding_window_config.num_cores_nhw);
     }
 
     ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});

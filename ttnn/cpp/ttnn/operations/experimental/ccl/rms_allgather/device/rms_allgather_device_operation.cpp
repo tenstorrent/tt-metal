@@ -155,7 +155,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Shard grid bounding box must fit within compute grid size");
 
     TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
-    TT_FATAL(tt::div_up(Kt, shard_spec.num_cores()) == args.block_wt, "block_w must equal to K / num_cores.");
+    TT_FATAL(ttsl::math::div_up(Kt, shard_spec.num_cores()) == args.block_wt, "block_w must equal to K / num_cores.");
     TT_FATAL(
         a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
         "Input tensor memory layout must not be HEIGHT_SHARDED but got {}",

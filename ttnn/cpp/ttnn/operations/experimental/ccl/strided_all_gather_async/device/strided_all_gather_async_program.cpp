@@ -399,7 +399,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     /* All gather fusion */
     std::vector<std::vector<uint32_t>> device_chunk_widths(ring_size);
     std::vector<uint32_t> device_k_block_counts(ring_size, 0);
-    uint32_t padded_K_tiles = tt::round_up(output_tensor_Wt, mm_block_wt_val);
+    uint32_t padded_K_tiles = ttsl::math::round_up(output_tensor_Wt, mm_block_wt_val);
     uint32_t K_blocks = padded_K_tiles / mm_block_wt_val;
 
     uint32_t curr_device = 0;

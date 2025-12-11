@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include <cassert>
-#include <cstdint>
+#include <tt_stl/assert.hpp>
 #include <type_traits>
 
-namespace tt {
+namespace ttsl::math {
 
 /**
  * @brief Computes the ceiling of a / b.
@@ -24,7 +23,7 @@ namespace tt {
 template <typename A, typename B>
 constexpr auto div_up(A a, B b) noexcept -> std::common_type_t<A, B> {
     using T = std::common_type_t<A, B>;
-    assert(b != 0 && "Divide by zero error in div_up");
+    TT_ASSERT(b != 0, "Divide by zero error in div_up");
     return static_cast<T>((static_cast<T>(a) + static_cast<T>(b) - 1) / static_cast<T>(b));
 }
 
@@ -61,4 +60,4 @@ constexpr auto round_down(A a, B b) {
     return static_cast<T>(b) * (static_cast<T>(a) / static_cast<T>(b));
 }
 
-}  // namespace tt
+}  // namespace ttsl::math

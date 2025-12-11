@@ -119,7 +119,7 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
     const uint32_t intermediate_cb_num_tiles = 1;
     const uint32_t output_cb_num_tiles = output_tiles_per_row * double_buffer_constant;
 
-    const uint32_t num_tile_rows_per_core = tt::div_up(num_tile_rows, num_cores);
+    const uint32_t num_tile_rows_per_core = ttsl::math::div_up(num_tile_rows, num_cores);
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(tt::LogOp, "grid_size: {}", grid_size);

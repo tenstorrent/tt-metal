@@ -26,7 +26,7 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
     const int output_shard_height = B * input_shard_width;
     const int alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensor);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
-    const int output_shard_width = tt::round_up(C, alignment_elements);
+    const int output_shard_width = ttsl::math::round_up(C, alignment_elements);
 
     const std::array<uint32_t, 2> output_shard_shape = {output_shard_height, output_shard_width};
 

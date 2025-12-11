@@ -240,12 +240,12 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t num_rows_per_all_to_all_worker = tt::div_up(block_ht, num_blocks);
+    uint32_t num_rows_per_all_to_all_worker = ttsl::math::div_up(block_ht, num_blocks);
     if (use_two_stage_reduce) {
         if (row_wise) {
-            num_rows_per_all_to_all_worker = tt::div_up(block_ht, grid_size.x);
+            num_rows_per_all_to_all_worker = ttsl::math::div_up(block_ht, grid_size.x);
         } else {
-            num_rows_per_all_to_all_worker = tt::div_up(block_ht, grid_size.y);
+            num_rows_per_all_to_all_worker = ttsl::math::div_up(block_ht, grid_size.y);
         }
     }
     uint32_t num_rows_per_all_to_all_worker_last =
@@ -277,7 +277,7 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
+    uint32_t ex_external_CB_size = ttsl::math::div_up(Kt, block_wt) * single_tile_size;
     if (is_pre_all_gather || is_post_all_gather) {
         ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
     }
@@ -310,7 +310,7 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores_all_to_all = tt::div_up(block_ht, num_rows_per_all_to_all_worker);
+    uint32_t num_cores_all_to_all = ttsl::math::div_up(block_ht, num_rows_per_all_to_all_worker);
     uint32_t num_cores_all_to_all_first_stage = num_cores_all_to_all;
     uint32_t num_cores_all_to_all_second_stage = 0;
     uint32_t num_blocks_first_stage = num_blocks;

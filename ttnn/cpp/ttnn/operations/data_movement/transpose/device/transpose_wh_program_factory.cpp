@@ -76,7 +76,7 @@ void set_runtime_args_wh_tiled(
                 core,
                 {input_tensor.buffer()->address(),
                  num_tiles_per_core,
-                 tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
+                 ttsl::math::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
                  h,
                  w,
                  Ht,
@@ -97,7 +97,7 @@ void set_runtime_args_wh_tiled(
 
             reader_args[0] = input_tensor.buffer()->address();
             reader_args[1] = num_tiles_per_core;
-            reader_args[2] = tt::round_down(num_tiles_read, HtWt) + h * Wt + w;
+            reader_args[2] = ttsl::math::round_down(num_tiles_read, HtWt) + h * Wt + w;
             reader_args[3] = h;
             reader_args[4] = w;
             reader_args[5] = Ht;

@@ -776,25 +776,25 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
+    uint32_t in0_t = attributes.numeric_stable ? ttsl::math::div_up(Wt, block_size) * block_size : block_size * 2;
     uint32_t out0_t = block_size * 2;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
     uint32_t in3_t = 1;  // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
-    uint32_t in4_t =
-        tt::div_up(Wt, block_size) * block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+    uint32_t in4_t = ttsl::math::div_up(Wt, block_size) *
+                     block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t in5_t = 1;
     // numeric_stable cb max
     uint32_t im2_t = 1;
-    uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
+    uint32_t im4_t = ttsl::math::div_up(Wt, block_size) * block_size;
 
     // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
-    uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
+    uint32_t im0_t = block_size * ttsl::math::div_up(Wt, block_size);
     TT_FATAL(im0_t == Wt, "im0_t: {} == Wt: {}, (Non user error)", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
-    uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
+    uint32_t im3_t = block_size * (ttsl::math::div_up(Wt, block_size) + 1);
 
     uint32_t cb_length = in0_t;
     bool use_large_kernel = false;
@@ -1108,23 +1108,23 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
                                                                            : tt::tt_metal::find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
+    uint32_t in0_t = attributes.numeric_stable ? ttsl::math::div_up(Wt, block_size) * block_size : block_size * 2;
     uint32_t out0_t = block_size * 2;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
     uint32_t in3_t = 1;  // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
-    uint32_t in4_t =
-        tt::div_up(Wt, block_size) * block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+    uint32_t in4_t = ttsl::math::div_up(Wt, block_size) *
+                     block_size;  // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t im2_t = 1;
-    uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
+    uint32_t im4_t = ttsl::math::div_up(Wt, block_size) * block_size;
 
     // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
-    uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
+    uint32_t im0_t = block_size * ttsl::math::div_up(Wt, block_size);
     TT_FATAL(im0_t == Wt, "Intermediate buffer size (im0_t={}) must match width (Wt={})", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
-    uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
+    uint32_t im3_t = block_size * (ttsl::math::div_up(Wt, block_size) + 1);
     TT_FATAL(im3_t == Wt + block_size, "im3_t {} == Wt {}+ block_size {}", im3_t, Wt, block_size);
 
     TT_FATAL(Wt % block_size == 0, "Wt {} must be divisible by block size {}", Wt, block_size);

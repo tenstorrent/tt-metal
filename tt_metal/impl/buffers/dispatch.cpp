@@ -20,7 +20,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
@@ -398,7 +398,7 @@ PartialPageSpec calculate_partial_page_spec(const Buffer& buffer) {
     PartialPageSpec partial_page_spec;
     partial_page_spec.partial_page_size = calculate_partial_page_size(buffer);
     partial_page_spec.num_partial_pages_per_full_page =
-        tt::div_up(buffer.aligned_page_size(), partial_page_spec.partial_page_size);
+        ttsl::math::div_up(buffer.aligned_page_size(), partial_page_spec.partial_page_size);
     return partial_page_spec;
 }
 
@@ -1001,7 +1001,7 @@ void copy_completion_queue_data_into_user_space(
         // completion queue write ptr on device could have wrapped but our read ptr is lagging behind
         uint32_t bytes_xfered =
             static_cast<uint32_t>(std::min(remaining_bytes_to_read, (DeviceAddr)bytes_avail_in_completion_queue));
-        uint32_t num_pages_xfered = div_up(bytes_xfered, DispatchSettings::TRANSFER_PAGE_SIZE);
+        uint32_t num_pages_xfered = ttsl::math::div_up(bytes_xfered, DispatchSettings::TRANSFER_PAGE_SIZE);
 
         remaining_bytes_to_read -= bytes_xfered;
 

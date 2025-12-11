@@ -954,7 +954,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         cliff_compute_core_range = CoreRangeSet();
 
         // Note: Accounting for uneven input shards
-        num_input_blocks_across_width = tt::div_up(tensor_width, input_shard_width);
+        num_input_blocks_across_width = ttsl::math::div_up(tensor_width, input_shard_width);
         num_tiles_per_input_block = input_shard_width / tile_width;
         num_input_blocks_per_full_core = input_shard_height / tile_height;
         num_input_blocks_per_cliff_core = 0;
@@ -1134,7 +1134,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             if (is_last_input_shard_in_row) {
                 uint32_t input_shard_width = a.shard_spec().value().shape[1];
                 num_unpadded_cols_per_input_block =
-                    num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
+                    num_cols_per_input_block - (ttsl::math::round_up(tensor_width, input_shard_width) - tensor_width);
             }
         }
 
@@ -1143,12 +1143,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (input_is_sharded) {
             uint32_t input_shard_height = a.shard_spec().value().shape[0];
             uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
-            uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
+            uint32_t num_shards_height_wise = ttsl::math::div_up(tensor_height, input_shard_height);
             bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
             if (is_last_input_shard_in_col) {
                 num_input_blocks_to_process =
                     num_input_blocks_per_full_core -
-                    (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
+                    (ttsl::math::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
             }
         }
 

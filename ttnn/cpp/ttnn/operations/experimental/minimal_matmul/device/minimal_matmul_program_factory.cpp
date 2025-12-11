@@ -4,7 +4,7 @@
 
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -312,17 +312,17 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
      * Within a core, tiles are blocked by M_block_tiles and N_block_tiles.
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
-    uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
-    uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+    uint32_t padded_M_tiles = ttsl::math::round_up(M_tiles, in0_parallel_axis_cores);
+    uint32_t padded_N_tiles = ttsl::math::round_up(N_tiles, in1_parallel_axis_cores);
+    uint32_t padded_K_tiles = ttsl::math::round_up(K_tiles, K_block_tiles);
 
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
-    uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
-    uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
+    uint32_t M_blocks_per_core = ttsl::math::div_up(M_tiles_per_core, M_block_tiles);
+    uint32_t N_blocks_per_core = ttsl::math::div_up(N_tiles_per_core, N_block_tiles);
 
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
@@ -607,7 +607,7 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
      * For first pass, it's easy enough to use core_grid.x
      */
     uint32_t k_blocks_per_core =
-        tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
+        ttsl::math::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 

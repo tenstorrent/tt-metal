@@ -68,7 +68,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
+    uint32_t unpadded_row_size_bytes_offset = ttsl::math::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -172,7 +172,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     }
     const ttnn::Shape& output_shape = output.padded_shape();
     const uint32_t unpadded_row_size_bytes = output_shape[-1] * input.element_size();
-    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    const uint32_t cb_page_size = ttsl::math::round_up(unpadded_row_size_bytes, alignment);
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1
                                          : num_sticks_per_core_group_2;

@@ -9,7 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 
 namespace tt::tt_metal {
 
@@ -36,7 +36,7 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
         ((kernel_profiler::PROFILER_L1_BUFFER_SIZE) / dram_bank_size_per_risc_bytes_single_program)) {
         const uint32_t old_profiler_program_support_count = profiler_program_support_count.value();
         profiler_program_support_count =
-            div_up(kernel_profiler::PROFILER_L1_BUFFER_SIZE, dram_bank_size_per_risc_bytes_single_program);
+            ttsl::math::div_up(kernel_profiler::PROFILER_L1_BUFFER_SIZE, dram_bank_size_per_risc_bytes_single_program);
         log_warning(
             tt::LogMetal,
             "Profiler program support count must be >= {}. Increasing program support count from {} to {}.",

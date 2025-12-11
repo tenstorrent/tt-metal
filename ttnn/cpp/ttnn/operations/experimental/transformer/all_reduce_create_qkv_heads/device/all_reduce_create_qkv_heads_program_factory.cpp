@@ -19,7 +19,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <algorithm>
@@ -311,7 +311,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (operation_attributes.topology == Topology::Ring) {
         // TODO: Commonize
-        num_targets_forward = tt::div_up(operation_attributes.ring_size - 1, 2);
+        num_targets_forward = ttsl::math::div_up(operation_attributes.ring_size - 1, 2);
         num_targets_backward = operation_attributes.ring_size - 1 - num_targets_forward;
         if (device_index % 2 == 0) {
             std::swap(num_targets_forward, num_targets_backward);
@@ -384,7 +384,8 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     // TODO: Currently does not support output shards being split across multiple links
     std::vector<CoreRangeSet> output_corerangeset_per_link;
     std::vector<uint32_t> num_output_cores_in_link(operation_attributes.num_links, 0);
-    uint32_t output_cores_per_link = tt::div_up(output_tensor_cores.num_cores(), operation_attributes.num_links);
+    uint32_t output_cores_per_link =
+        ttsl::math::div_up(output_tensor_cores.num_cores(), operation_attributes.num_links);
     uint32_t num_assigned_cores = 0;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
         uint32_t num_cores_this_link = std::min(output_cores_per_link, num_output_cores - num_assigned_cores);
@@ -439,7 +440,8 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         input_tensor_tile_offset_per_link[link] = input_tensor_tile_offset;
 
         uint32_t end_core_idx = std::min(
-            start_core_idx + tt::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
+            start_core_idx +
+                ttsl::math::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
             num_input_cores);
 
         // Num pages allocated based on number of input cores selected for this link

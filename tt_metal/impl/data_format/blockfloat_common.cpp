@@ -12,7 +12,7 @@
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
@@ -425,7 +425,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         // align the exponent section to 16B
         if (exponent_padding) {
             std::vector<uint8_t> pads(
-                tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
+                ttsl::math::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
             exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
             std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
             packed_result.insert(packed_result.end(), packed.begin(), packed.end());
