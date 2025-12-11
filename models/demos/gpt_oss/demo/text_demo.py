@@ -243,7 +243,8 @@ def test_gpt_oss_demo(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    enable_trace = True
+    enable_decode_trace = True
+    enable_prefill_trace = False
 
     logger.info(f"Running GPT-OSS demo with tt_transformers generation pipeline")
 
@@ -351,6 +352,7 @@ def test_gpt_oss_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=enable_prefill_trace,
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
@@ -362,6 +364,7 @@ def test_gpt_oss_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=enable_prefill_trace,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
@@ -394,7 +397,7 @@ def test_gpt_oss_demo(
             logits = generator.decode_forward_text(
                 out_tok,
                 current_pos,
-                enable_trace=enable_trace,
+                enable_trace=enable_decode_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
             )
