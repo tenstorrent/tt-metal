@@ -285,3 +285,4 @@ jobs:
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
           slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          send-slack-message: true
