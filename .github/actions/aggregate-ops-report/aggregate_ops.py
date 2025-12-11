@@ -14,7 +14,7 @@ from pathlib import Path
 def extract_model_name(csv_path: Path) -> str:
     """Extract model name from CSV filename or parent directory."""
     filename = csv_path.stem
-    match = re.match(r'ops_perf_results_(.+)$', filename)
+    match = re.match(r"ops_perf_results_(.+)$", filename)
     return match.group(1) if match else csv_path.parent.name
 
 
@@ -22,7 +22,7 @@ def parse_csv_operations(csv_path: Path) -> set:
     """Parse a Tracy CSV and return set of unique operation names."""
     ops = set()
     try:
-        with open(csv_path, 'r') as f:
+        with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 op_name = row.get("OP CODE", row.get("op_code", ""))
@@ -36,7 +36,7 @@ def parse_csv_operations(csv_path: Path) -> set:
 def generate_text_report(op_models: dict, output_path: Path) -> Path:
     """Generate a text report of operations by model."""
     report_path = output_path / "aggregated_operations.txt"
-    with open(report_path, 'w') as f:
+    with open(report_path, "w") as f:
         f.write("Device Operations Report\n")
         f.write("=" * 60 + "\n")
         for op_name, models in sorted(op_models.items()):
@@ -49,7 +49,7 @@ def generate_text_report(op_models: dict, output_path: Path) -> Path:
 def generate_json_report(op_models: dict, output_path: Path) -> Path:
     """Generate a JSON report of operations by model."""
     report_path = output_path / "aggregated_operations.json"
-    with open(report_path, 'w') as f:
+    with open(report_path, "w") as f:
         json.dump({
             "by_operation": {op: sorted(list(models)) for op, models in sorted(op_models.items())}
         }, f, indent=2)
@@ -109,7 +109,7 @@ def main():
     set_github_output("text-report", str(text_report))
     set_github_output("operations-count", str(len(op_models)))
 
-    with open(text_report, 'r') as f:
+    with open(text_report, "r") as f:
         print(f.read())
 
 
