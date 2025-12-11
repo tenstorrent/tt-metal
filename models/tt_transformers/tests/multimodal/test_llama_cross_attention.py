@@ -132,7 +132,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     """
     Test forward, prefill and decode!
     """
-    n_iter = 1  # 10
+    n_iter = 10
     for i in range(n_iter):
         mode = "prefill" if i == 0 else "decode"
         seq_len = text_seq_len if mode == "prefill" else 1
