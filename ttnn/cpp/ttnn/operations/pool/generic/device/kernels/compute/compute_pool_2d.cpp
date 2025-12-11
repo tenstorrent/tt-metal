@@ -251,6 +251,7 @@ void MAIN {
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
+                        cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
@@ -268,6 +269,8 @@ void MAIN {
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                         cb_push_back(out_cb_id, in_ntiles_c);
+                        cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
                         if constexpr (is_output_block_format) {
                             pack_reconfig_data_format(pre_tilize_cb_id);

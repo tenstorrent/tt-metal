@@ -219,6 +219,8 @@ public:
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
+    tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
