@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #include <enchantum/enchantum.hpp>
 
 #include <stdint.h>
@@ -1188,7 +1187,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[5],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[6],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[7],
-    }; // 16 elements
+    };
 
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);
 
