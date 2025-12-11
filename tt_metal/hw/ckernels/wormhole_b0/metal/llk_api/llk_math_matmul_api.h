@@ -26,14 +26,10 @@ inline void llk_math_matmul_init(
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
     // Determine if we have partial faces (tiny tiles)
-    // The matmul operation is D = B*A where in0->srcB and in1->srcA
-    // A partial face occurs when tile has non-standard face dimensions (row or col dim != 16)
-    // For matmul address mode configuration, we specifically need to check if in0 (srcB) has partial faces
-    // Example: 8x32 tile has 8<=16 rows and 32>16 cols, requiring special address mode handling
-    const bool is_in0_16x32 = (in0_tile_r_dim <= 16) && (in0_tile_c_dim > 16);
-    const bool is_in0_32x16 = (in0_tile_r_dim > 16) && (in0_tile_c_dim <= 16);
-    // A tile is partial face if it's not the standard 32x32 AND has mismatched dimensions (one dim <=16, other >16)
-    const bool partial_face = (is_in0_16x32 || is_in0_32x16);
+    // A partial face has a dimension < 16 (FACE_R_DIM or FACE_C_DIM)
+    // Examples: 8x32 has 8<16 rows (partial), 16x32 has full 16x16 faces (not partial)
+    //           32x16 has full 16x16 faces (not partial)
+    const bool partial_face = (in0_tile_r_dim < 16) || (in0_tile_c_dim < 16);
 
     _llk_math_matmul_init_<NUM_FIDELITY_PHASES, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
