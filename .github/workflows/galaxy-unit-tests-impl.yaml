@@ -90,12 +90,12 @@ jobs:
         id: generate
         run: |
           # Owners for the following tests:
-          Galaxy unit tests: None, see issue #29677
-          Fabric tests: Allan Liu
-          Llama3-70b unit tests: Djordje Ivanovic
-          DRAM Prefetcher unit tests: Johanna Rock, Yu Gao
-          Distributed ops tests: Johanna Rock
-          GPT-OSS unit tests: Stuti Raizada
+          # Galaxy unit tests: None, see issue #29677
+          # Fabric tests: Allan Liu
+          # Llama3-70b unit tests: Djordje Ivanovic
+          # DRAM Prefetcher unit tests: Johanna Rock, Yu Gao
+          # Distributed ops tests: Johanna Rock
+          # GPT-OSS unit tests: Stuti Raizada
 
           all_tests='[
             { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 30, "owner_id": "XXXXX" },
