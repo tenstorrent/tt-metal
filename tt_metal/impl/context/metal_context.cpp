@@ -472,6 +472,12 @@ MetalContext::MetalContext() {
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
+    // print the distributed context type if its mpi or single host
+#if defined(OPEN_MPI)
+    log_info(tt::LogMetal, "Distributed context type: MPI");
+#else
+    log_info(tt::LogMetal, "Distributed context type: SingleHost");
+#endif
     return *distributed_context_;
 }
 
