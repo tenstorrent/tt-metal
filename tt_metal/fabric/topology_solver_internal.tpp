@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <unordered_set>
+#include <set>
 
 namespace tt::tt_fabric::detail {
 
@@ -104,6 +105,82 @@ GraphIndexData<TargetNode, GlobalNode> build_graph_index_data(
     }
 
     return data;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool ConstraintIndexData<TargetNode, GlobalNode>::is_valid_mapping(size_t target_idx, size_t global_idx) const {
+    // If no restrictions for this target, all mappings are valid
+    if (target_idx >= restricted_global_indices.size() || restricted_global_indices[target_idx].empty()) {
+        return true;
+    }
+    // Check if global_idx is in the restricted list
+    const auto& candidates = restricted_global_indices[target_idx];
+    return std::find(candidates.begin(), candidates.end(), global_idx) != candidates.end();
+}
+
+template <typename TargetNode, typename GlobalNode>
+const std::vector<size_t>& ConstraintIndexData<TargetNode, GlobalNode>::get_candidates(size_t target_idx) const {
+    // Return restricted candidates if available
+    if (target_idx < restricted_global_indices.size() && !restricted_global_indices[target_idx].empty()) {
+        return restricted_global_indices[target_idx];
+    }
+    // Return empty vector to indicate all nodes are valid candidates
+    static const std::vector<size_t> empty_vec;
+    return empty_vec;
+}
+
+template <typename TargetNode, typename GlobalNode>
+ConstraintIndexData<TargetNode, GlobalNode> build_constraint_index_data(
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+    ConstraintIndexData<TargetNode, GlobalNode> constraint_data;
+
+    // Initialize vectors for all target nodes
+    constraint_data.restricted_global_indices.resize(graph_data.n_target);
+    constraint_data.preferred_global_indices.resize(graph_data.n_target);
+
+    // Get valid and preferred mappings from constraints
+    const auto& valid_mappings = constraints.get_valid_mappings();
+    const auto& preferred_mappings = constraints.get_preferred_mappings();
+
+    // Convert node-based mappings to index-based mappings
+    for (size_t i = 0; i < graph_data.n_target; ++i) {
+        const TargetNode& target_node = graph_data.target_nodes[i];
+
+        // Process required constraints (restricted mappings)
+        auto valid_it = valid_mappings.find(target_node);
+        if (valid_it != valid_mappings.end() && !valid_it->second.empty()) {
+            // Convert GlobalNode set to index vector
+            std::vector<size_t> restricted_indices;
+            restricted_indices.reserve(valid_it->second.size());
+            for (const auto& global_node : valid_it->second) {
+                auto idx_it = graph_data.global_to_idx.find(global_node);
+                if (idx_it != graph_data.global_to_idx.end()) {
+                    restricted_indices.push_back(idx_it->second);
+                }
+            }
+            std::sort(restricted_indices.begin(), restricted_indices.end());
+            constraint_data.restricted_global_indices[i] = std::move(restricted_indices);
+        }
+
+        // Process preferred constraints
+        auto preferred_it = preferred_mappings.find(target_node);
+        if (preferred_it != preferred_mappings.end() && !preferred_it->second.empty()) {
+            // Convert GlobalNode set to index vector
+            std::vector<size_t> preferred_indices;
+            preferred_indices.reserve(preferred_it->second.size());
+            for (const auto& global_node : preferred_it->second) {
+                auto idx_it = graph_data.global_to_idx.find(global_node);
+                if (idx_it != graph_data.global_to_idx.end()) {
+                    preferred_indices.push_back(idx_it->second);
+                }
+            }
+            std::sort(preferred_indices.begin(), preferred_indices.end());
+            constraint_data.preferred_global_indices[i] = std::move(preferred_indices);
+        }
+    }
+
+    return constraint_data;
 }
 
 }  // namespace tt::tt_fabric::detail
