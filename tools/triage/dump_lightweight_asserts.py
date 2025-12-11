@@ -74,10 +74,23 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                 return "?ASSERT() not found?"
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
                 start_index -= 1
-            end_index = code_line.find(")", start_index)
-            if end_index == -1:
+            # Find the matching closing parenthesis for ASSERT(
+            open_paren_index = code_line.find("(", start_index)
+            if open_paren_index == -1:
+                return "?ASSERT() not opened?"
+            paren_count = 1
+            i = open_paren_index + 1
+            while i < len(code_line):
+                if code_line[i] == "(":
+                    paren_count += 1
+                elif code_line[i] == ")":
+                    paren_count -= 1
+                    if paren_count == 0:
+                        break
+                i += 1
+            if paren_count != 0:
                 return "?ASSERT() not closed?"
-            return code_line[start_index : end_index + 1].strip()
+            return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
 
