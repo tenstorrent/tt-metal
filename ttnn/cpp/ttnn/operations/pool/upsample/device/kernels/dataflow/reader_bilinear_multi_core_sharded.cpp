@@ -75,7 +75,6 @@ void kernel_main() {
                                      // in_h (corresponding to the height of a single batch) +
                                      // 2 (corresponding to the 2 skipped padding rows)
 
-    noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), input_block_size_bytes);
     constexpr uint32_t img2_stick_bytes = in_w * stick_nbytes;
     constexpr uint32_t num_outer_loops = in_image_rows_per_core * scale_h;
 
@@ -279,22 +278,26 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(out_cb_id);
                 uint32_t l1_read_addr_temp = y1_base + x1_offset + block_offset;
                 // 1st stick
-                noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
+                uint64_t src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 // 2nd stick
                 l1_read_addr_temp = y1_base + x2_offset + block_offset;
-                noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
+                src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 // 3rd stick
                 l1_read_addr_temp = y2_base + x1_offset + block_offset;
-                noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
+                src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 // 4th stick
                 l1_read_addr_temp = y2_base + x2_offset + block_offset;
-                noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
+                src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
                 l1_write_addr += input_block_size_bytes;
 
                 fill_four_val(get_write_ptr(in_scalar_cb_id), p1_bf16, p2_bf16, p3_bf16, p4_bf16);
