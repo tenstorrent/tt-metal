@@ -17,6 +17,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
@@ -1306,30 +1308,59 @@ class ModelArgs:
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
+    def get_warmup_prefill_supported_seq_lens(self):
+        DEFAULT_VALUE = self.max_prefill_chunk_size
+        # This dictionary is used to override the default ceil warmup prefill value
+        model_specific_ceil_warmup_lengths = {
+            # e.g. "Llama-3.1-8B": 4096
+        }
+
+        max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+
+        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size
+        )
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/33991 - for P100 only, P150 has assert for ISL > 1K
+        if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P100":
+            for seq_len in to_warmup_seq_lens:
+                if seq_len > 1024:
+                    to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
+                    break
+        return to_warmup_seq_lens
+
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
-            "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024],
-            "T3K": [128, 256, 512, 1024],
-            "TG": [128, 256, 512, 1024],
+            "N150": [128],
+            "N300": [128, 1024],
+            "T3K": [128, 1024],
+            "TG": [128, 1024],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {
             "Llama-3.1-8B": {
-                "P100": [128, 256, 512, 1024],
-                "N150": [128, 256, 512, 1024],
-                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P100": [128, 1024],
+                "N150": [128, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.1-70B": {
-                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.3-70B": {
-                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
             },
         }
 
@@ -1339,12 +1370,12 @@ class ModelArgs:
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
 
         # No supported sequence lengths found, return empty list
         return []

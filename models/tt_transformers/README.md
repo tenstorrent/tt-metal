@@ -97,11 +97,8 @@ The current version is verified to work with the following models:
 
 ## Prerequisites
 
-1. Install [TT-Metalium and TTNN](../../INSTALLING.md).
-2. Install additional python dependencies:
-    ```
-    pip install -r models/tt_transformers/requirements.txt
-    ```
+Install [TT-Metalium and TTNN](../../INSTALLING.md).
+
 
 ## How to Run
 
