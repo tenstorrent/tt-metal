@@ -71,7 +71,8 @@ void kernel_main() {
                     src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_in));
                 }
 
-                const uint32_t dst_addr = get_write_ptr(cb_in_batch) + (dst_offset_bytes % block_size_bytes);
+                // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
+                const uint32_t dst_addr = get_write_ptr(cb_in_batch) + dst_offset_bytes;
                 noc_async_read(src_addr_base + src_offset_bytes, dst_addr, transfer_size_bytes);
             }
 

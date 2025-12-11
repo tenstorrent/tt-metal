@@ -199,7 +199,7 @@ def get_timeout(test_module_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "input_hash"]
+    info_field_names = ["sweep_name", "suite_name", "input_hash", "traced_source"]
     header_info = []
     for vector in test_vectors:
         header = dict()
