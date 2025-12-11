@@ -70,6 +70,7 @@ target_sources(
         physical_system_descriptor.cpp
         topology_mapper.cpp
         topology_mapper_utils.cpp
+        topology_solver.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
