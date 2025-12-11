@@ -32,6 +32,8 @@ class SDXLRunner:
         self.ttnn_device = None
         self.pipeline = None
         self.tt_sdxl = None
+        # Optional legacy path to prepare per-prompt tensors (pre-merge behavior)
+        self.legacy_prepare_per_prompt = os.getenv("SDXL_LEGACY_PREPARE_PER_PROMPT", "false").lower() == "true"
 
     def initialize_device(self):
         """Initialize mesh device with proper configuration"""
@@ -126,7 +128,12 @@ class SDXLRunner:
 
         tt_latents, tt_prompts, tt_texts = self.tt_sdxl.generate_input_tensors(prompt_embeds, text_embeds)
 
-        self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts, tt_texts])
+        if self.legacy_prepare_per_prompt:
+            # Pre-merge path: prepare tensors per-prompt (single prompt in warmup)
+            self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[0], tt_texts[0]])
+        else:
+            # Current path: prepare full batch at once
+            self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts, tt_texts])
 
         # NOTE: DO NOT set guidance_rescale before trace capture.
         # tt-media-server traces with default 0.0 - device tensor values can be
@@ -181,14 +188,22 @@ class SDXLRunner:
             prompt_embeds, text_embeds, start_latent_seed=seed
         )
 
-        # Process full batch at once
-        self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts, tt_texts])
-        img_tensors = self.tt_sdxl.generate_images()
-
+        # Process either per-prompt (legacy) or full batch (current)
         images = []
-        for img_tensor in img_tensors:
-            pil_img = tensor_to_pil(img_tensor, self.pipeline.image_processor)
-            images.append(pil_img)
+        if self.legacy_prepare_per_prompt:
+            for i in range(len(prompts)):
+                self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[i], tt_texts[i]])
+                img_tensors = self.tt_sdxl.generate_images()
+                for img_tensor in img_tensors:
+                    pil_img = tensor_to_pil(img_tensor, self.pipeline.image_processor)
+                    images.append(pil_img)
+        else:
+            self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts, tt_texts])
+            img_tensors = self.tt_sdxl.generate_images()
+
+            for img_tensor in img_tensors:
+                pil_img = tensor_to_pil(img_tensor, self.pipeline.image_processor)
+                images.append(pil_img)
         return images
 
     def close_device(self):
