@@ -70,9 +70,10 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     // Scores are streamed one tile at a time (double-buffered with 2 tiles)
     // Bias needs width_tiles capacity because add_bias doesn't consume bias until ALL sigmoid tiles are ready,
     // but reader pushes scores+bias together - if bias CB is too small, reader blocks causing deadlock
-    tt::tt_metal::create_cb(scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
     tt::tt_metal::create_cb(
-        bias_cb_index, program, all_cores, bias.buffer()->page_size(), width_tiles, bias_data_format);
+        scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
+    tt::tt_metal::create_cb(
+        bias_cb_index, program, all_cores, bias.buffer()->page_size(), 2 * width_tiles, bias_data_format);
     tt::tt_metal::create_cb(
         weights_cb_index,
         program,
