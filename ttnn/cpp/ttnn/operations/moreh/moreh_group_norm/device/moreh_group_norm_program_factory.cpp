@@ -69,8 +69,16 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
 
     const auto num_channels = c;
     const auto num_rows = n * num_groups;
+    TT_ASSERT(
+        num_channels % num_groups == 0,
+        "Group norm requires num_channels ({}) to be divisible by num_groups ({})",
+        num_channels,
+        num_groups);
     const auto num_inner_tiles = (num_channels / num_groups) * Ht * Wt;
 
+    // num_channels is guaranteed to be divisible by num_groups (group norm requirement),
+    // so integer division is exact and the cast to float preserves the correct value.
+    // NOLINTNEXTLINE(bugprone-integer-division)
     const auto f_c = static_cast<float>(num_channels / num_groups);
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
