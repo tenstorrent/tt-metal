@@ -398,13 +398,15 @@ void py_module_types(nb::module_& mod) {
         Default constructor for SemaphoreDescriptor.
     )pbdoc")
         .def(
-            nb::init<tt::CoreType, CoreRangeSet, uint32_t>(),
+            nb::init<uint32_t, tt::CoreType, CoreRangeSet, uint32_t>(),
+            nb::arg("id"),
             nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
             nb::arg("core_ranges"),
             nb::arg("initial_value"),
             R"pbdoc(
-                Initialize a SemaphoreDescriptor with core type, core ranges, and initial value.
+                Initialize a SemaphoreDescriptor with id, core type, core ranges, and initial value.
             )pbdoc")
+        .def_ro("id", &tt::tt_metal::SemaphoreDescriptor::id, "Semaphore ID")
         .def_rw("core_type", &tt::tt_metal::SemaphoreDescriptor::core_type, "Type of core for the semaphore")
         .def_rw("core_ranges", &tt::tt_metal::SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
         .def_rw("initial_value", &tt::tt_metal::SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
