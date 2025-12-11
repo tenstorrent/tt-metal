@@ -30,6 +30,8 @@ Data::Data()
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetMeshWorkloadsRuntimeIdsCallback(
+                [this](auto result) { this->rpc_get_mesh_workloads_runtime_ids(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
@@ -156,9 +158,10 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             binary_status.setStatus(convert_binary_status(status));
         }
     }
+}
 
-    // Add runtime IDs from global queue
-    std::lock_guard<std::mutex> runtime_lock(runtime_ids_mutex);
+void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
     auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
     for (size_t i = 0; i < runtime_ids.size(); ++i) {
         auto entry = all_runtime_ids[i];

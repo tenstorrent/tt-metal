@@ -69,7 +69,7 @@ struct MeshWorkloadData {
     parameters @4 :Text;  # Operation parameters
 }
 
-struct RuntimeIdEntry {
+struct MeshWorkloadRuntimeIdEntry {
     workloadId @0 :UInt64;
     runtimeId @1 :UInt64;
 }
@@ -143,7 +143,7 @@ interface Inspector {
     getMeshDevices @1 () -> (meshDevices :List(MeshDeviceData));
 
     # Get mesh workloads currently alive
-    getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData), runtimeIds :List(RuntimeIdEntry));
+    getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
     # Get list of local devices that are being used by this Metal runtime
     getDevicesInUse @3 () -> (metalDeviceIds :List(UInt64));
@@ -162,4 +162,7 @@ interface Inspector {
 
     # Get mapping from metal device ID to unique ID for all devices
     getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
+
+    # Get runtime IDs for mesh workloads
+    getMeshWorkloadsRuntimeIds @8 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
 }
