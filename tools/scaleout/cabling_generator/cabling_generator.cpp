@@ -358,24 +358,6 @@ tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor load_cluster_des
     }
 }
 
-// Helper to load cluster descriptor from multiple paths
-tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor load_cluster_descriptor_from_paths(
-    const std::vector<std::string>& paths) {
-    if (paths.empty()) {
-        throw std::runtime_error("No cluster descriptor paths provided");
-    }
-
-    if (paths.size() == 1) {
-        return load_cluster_descriptor_from_path(paths[0]);
-    }
-
-    std::cout << "Merging " << paths.size() << " cabling descriptor files:" << std::endl;
-    for (const auto& path : paths) {
-        std::cout << "  - " << path << std::endl;
-    }
-    return DescriptorMerger::merge_descriptors(paths);
-}
-
 }  // anonymous namespace
 
 // Constructor with full deployment descriptor
@@ -411,54 +393,6 @@ CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) {
     // Load cluster descriptor (supports directory)
     auto cluster_descriptor = load_cluster_descriptor_from_path(cluster_descriptor_path);
-
-    // Build cluster with all connections and port validation (without deployment descriptor)
-    root_instance_ = build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
-
-    // Populate deployment hosts from hostnames
-    populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
-}
-
-// Constructor with multiple explicit descriptor paths and deployment descriptor
-CablingGenerator::CablingGenerator(
-    const std::vector<std::string>& cluster_descriptor_paths, const std::string& deployment_descriptor_path) {
-    // Load and merge cluster descriptors
-    auto cluster_descriptor = load_cluster_descriptor_from_paths(cluster_descriptor_paths);
-    auto deployment_descriptor =
-        load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
-            deployment_descriptor_path);
-
-    // Build cluster with all connections and port validation
-    root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
-
-    // Populate deployment hosts
-    populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
-}
-
-// Constructor with multiple explicit descriptor paths and hostnames
-CablingGenerator::CablingGenerator(
-    const std::vector<std::string>& cluster_descriptor_paths, const std::vector<std::string>& hostnames) {
-    // Load and merge cluster descriptors
-    auto cluster_descriptor = load_cluster_descriptor_from_paths(cluster_descriptor_paths);
 
     // Build cluster with all connections and port validation (without deployment descriptor)
     root_instance_ = build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);

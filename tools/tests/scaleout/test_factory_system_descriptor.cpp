@@ -207,4 +207,23 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
 }
 
+// ============================================================================
+// Tests for multi-path and directory-based descriptor merging
+// ============================================================================
+
+// Helper to create a 4-host deployment descriptor for merge tests
+void create_4host_deployment_descriptor(tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment) {
+    deployment.set_rack_capacity(4);
+
+    for (int i = 0; i < 4; ++i) {
+        auto* host = deployment.add_hosts();
+        host->set_hall("0");
+        host->set_aisle("0");
+        host->set_rack(0);
+        host->set_shelf_u(i);
+        host->set_node_type("BH_GALAXY");
+        host->set_host("host" + std::to_string(i));
+    }
+}
+
 }  // namespace tt::scaleout_tools
