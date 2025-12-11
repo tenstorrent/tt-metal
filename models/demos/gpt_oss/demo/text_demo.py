@@ -124,7 +124,9 @@ def prepare_gpt_oss_generator_args(
             4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -135,6 +137,8 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -145,6 +149,8 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -221,6 +227,8 @@ def test_gpt_oss_demo(
     max_generated_tokens,
     page_params,
     sampling_params,
+    enable_decode_trace,
+    enable_prefill_trace,
     is_ci_env,
     state_dict,
 ):
@@ -242,9 +250,6 @@ def test_gpt_oss_demo(
     # Validate data parallel configuration (like tt-transformers)
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
-
-    enable_decode_trace = True
-    enable_prefill_trace = True
 
     logger.info(f"Running GPT-OSS demo with tt_transformers generation pipeline")
 
