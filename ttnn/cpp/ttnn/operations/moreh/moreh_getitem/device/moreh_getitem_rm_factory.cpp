@@ -34,7 +34,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto index_dims = operation_attributes.index_dims;
     auto memory_config = operation_attributes.memory_config;
     // auto core_range = operation_attributes.core_range;
-    auto device = input.device();
+    auto* device = input.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
@@ -156,7 +156,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     uint32_t start_id = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
         std::vector<uint32_t> reader_args = {
@@ -243,8 +243,8 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     auto index_dims = cached_program.shared_variables.index_dims;
     auto input_dim_offset = cached_program.shared_variables.input_dim_offset;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
     IndexInfo index_info[5] = {{false}};
 

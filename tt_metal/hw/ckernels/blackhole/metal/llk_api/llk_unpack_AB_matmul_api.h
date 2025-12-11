@@ -50,15 +50,10 @@ inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
 }
 
 inline void llk_unpack_AB_matmul_mop_config(
-    const bool transpose,
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim,
-    const std::uint32_t kt_dim,
-    const bool partial_face_a,
-    const bool partial_face_b) {
+    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool partial_face_a, const bool partial_face_b) {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
-    _llk_unpack_AB_matmul_mop_config_(transpose, ct_dim, rt_dim, kt_dim, partial_face_a, partial_face_b);
+    _llk_unpack_AB_matmul_mop_config_(ct_dim, rt_dim, partial_face_a, partial_face_b);
 }
 
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -112,12 +107,10 @@ inline void llk_unpack_AB_matmul(
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandB_id);  // In1/InB -> srcA
-    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandA_id);  // In0/InA -> srcB
 
     // TODO: Review RT, use partial_face_b
-    const bool partial_face_a = get_operand_partial_face(operandA_id);
-    const bool partial_face_b = get_operand_partial_face(operandB_id);
+    const bool partial_face_a = get_operand_partial_face(operandB_id);
+    const bool partial_face_b = get_operand_partial_face(operandA_id);
 
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
@@ -133,8 +126,6 @@ inline void llk_unpack_AB_matmul(
         tile_index_b,
         tile_size_a,
         tile_size_b,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
         partial_face_a,
         partial_face_b,
         ct_dim,

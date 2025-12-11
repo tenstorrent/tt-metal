@@ -8,14 +8,18 @@
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/math.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type) {
-    return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() -
-           (tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST) *
-            2);  // * 2 to account for issue
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
+    // CQ capacity would be reduced by the commands and alignment padding.
+    // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
+    const auto host_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
+                                (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
+                                tt::align(sizeof(CQDispatchCmdLarge), host_alignment);
+    return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() - padded_commands_size;
 }
 
 namespace device_dispatch {
@@ -36,7 +40,7 @@ void validate_core_read_write_bounds(
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
-        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
 
@@ -50,7 +54,7 @@ void validate_core_read_write_bounds(
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
-        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         address += soc_desc.get_address_offset(dram_channel);
     }
@@ -108,7 +112,7 @@ void write_to_core(
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
         const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type));
+            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type, sub_device_ids.size()));
 
         CoreWriteDispatchParams dispatch_params{
             {virtual_core,
@@ -174,7 +178,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
 
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
-    chip_id_t mmio_device_id,
+    ChipId mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager,
@@ -224,5 +228,4 @@ void read_core_data_from_completion_queue(
 }
 
 }  // namespace device_dispatch
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

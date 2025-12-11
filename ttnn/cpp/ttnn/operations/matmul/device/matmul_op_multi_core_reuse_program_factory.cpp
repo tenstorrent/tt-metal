@@ -11,7 +11,6 @@
 
 using namespace tt::constants;
 using namespace tt;
-using tt_metal::Buffer;
 
 tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::IDevice* device,
@@ -174,12 +173,13 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)out_buffer->address(),                                      // out_tensor_addr
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                          // out_tensor_stride_w
-                (std::uint32_t)N,                                                          // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+                (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                     // out_tensor_stride_w
+                (std::uint32_t)N,                     // out_tensor_stride_h
+                (std::uint32_t)out_subblock_w,        // out_tensor_next_subblock_stride_w
+                (std::uint32_t)out_subblock_h * N,    // out_tensor_next_subblock_stride_h
 
                 (std::uint32_t)out_subblock_w,                     // out_subblock_w
                 (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -208,10 +208,10 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                               const std::vector<ttnn::Tensor>& input_tensors,
                                               const std::vector<std::optional<const ttnn::Tensor>>&,
                                               const std::vector<ttnn::Tensor>& output_tensors) {
-        auto src_dram_buffer_a = input_tensors.at(0).buffer();
-        auto src_dram_buffer_b = input_tensors.at(1).buffer();
+        auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+        auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
         uint32_t num_blocks_read = 0;
         for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
@@ -238,11 +238,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     return {std::move(program), override_runtime_args_callback};
 }
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
@@ -321,8 +317,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
         out_buffer);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

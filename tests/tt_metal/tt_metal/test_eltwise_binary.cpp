@@ -38,11 +38,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -178,8 +176,7 @@ int main(int argc, char** argv) {
             SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
             SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
-            distributed::AddProgramToMeshWorkload(
-                mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+            mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application
             ////////////////////////////////////////////////////////////////////////////

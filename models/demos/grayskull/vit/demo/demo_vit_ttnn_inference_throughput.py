@@ -12,15 +12,9 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    is_wormhole_b0,
-    torch2tt_tensor,
-)
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
 
 
@@ -40,8 +34,6 @@ os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 @pytest.mark.models_performance_virtual_machine
 def test_vit(device):
     torch.manual_seed(0)
-
-    disable_persistent_kernel_cache()
 
     model_name = "google/vit-base-patch16-224"
     batch_size = 8
@@ -140,7 +132,6 @@ def test_vit(device):
 
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

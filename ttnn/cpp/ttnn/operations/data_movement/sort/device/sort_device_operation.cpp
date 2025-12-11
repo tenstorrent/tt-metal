@@ -17,7 +17,7 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const uint32_t Wt = input_tensor_shape[3] / tile_width;
 
     // Device number of cores
-    const auto device = tensor_args.input_tensor.device();
+    auto* const device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -47,7 +47,7 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
 
 void SortDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return validate_on_program_cache_miss(attributes, tensor_args);
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void SortDeviceOperation::validate_on_program_cache_miss(

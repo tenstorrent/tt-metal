@@ -52,7 +52,7 @@ SetRuntimeArgs(program, void_dataflow_kernel_noc0_id, core, {});
 SetRuntimeArgs(program, void_dataflow_kernel_noc1_id, core, {});
 std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication." << std::endl;
 
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 ```

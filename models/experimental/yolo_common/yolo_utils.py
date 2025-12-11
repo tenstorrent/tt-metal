@@ -75,6 +75,7 @@ def concat(dim=-1, use_sharded_concat=True, *tensors):
         return sharded_concat(processed_tensors)
     else:
         processed_tensors = [
-            ttnn.sharded_to_interleaved(tensor) if tensor.is_sharded() else tensor for tensor in tensors
+            ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.L1_MEMORY_CONFIG) if tensor.is_sharded() else tensor
+            for tensor in tensors
         ]
         return ttnn.concat(processed_tensors, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)

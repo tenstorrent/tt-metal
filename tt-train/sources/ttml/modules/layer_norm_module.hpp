@@ -6,13 +6,13 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 #include "ops/layernorm_op.hpp"
 
 namespace ttml::modules {
 
-class LayerNormLayer : public autograd::ModuleBase {
+class LayerNormLayer : public ModuleBase {
 private:
     bool m_use_composite_op = false;
     autograd::TensorPtr m_gamma;

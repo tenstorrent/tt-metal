@@ -5,18 +5,14 @@
 #pragma once
 
 #include <mesh_coord.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <stdint.h>
 #include <tuple>
 
-namespace tt {
-namespace tt_metal {
-namespace distributed {
+namespace tt::tt_metal::distributed {
 template <typename T>
 class MeshContainer;
-}  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::distributed {
 
@@ -24,12 +20,12 @@ namespace tt::tt_metal::distributed {
 // MeshCoordinate[0] is the mesh_id and MeshCoordinate[1] is the physical_device_id.
 class PhysicalMeshCoordinate {
 public:
-    using chip_id_t = uint32_t;
+    using ChipId = uint32_t;
     using MeshId = tt::tt_fabric::MeshId;
     PhysicalMeshCoordinate() = delete;
-    PhysicalMeshCoordinate(MeshId mesh_id, chip_id_t chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
+    PhysicalMeshCoordinate(MeshId mesh_id, ChipId chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
     MeshId mesh_id() const { return mesh_id_; }
-    chip_id_t chip_id() const { return chip_id_; }
+    ChipId chip_id() const { return chip_id_; }
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("mesh_id", "chip_id");
@@ -37,7 +33,7 @@ public:
 
 private:
     MeshId mesh_id_{0};
-    chip_id_t chip_id_{0};
+    ChipId chip_id_{0};
 };
 
 // Returns a map of all physical mesh coordinates in the system.

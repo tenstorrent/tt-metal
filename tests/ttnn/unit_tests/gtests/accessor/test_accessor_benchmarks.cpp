@@ -103,7 +103,7 @@ void benchmark_args_combinations_single_core(
 
     // Extract local single-device buffer concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+    auto* const input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
 
     auto profiler_dir = res_path + "/" + params.test_name;
     tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
@@ -144,8 +144,7 @@ void benchmark_args_combinations_single_core(
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::MeshWorkload();
-        AddProgramToMeshWorkload(
-            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
+        mesh_work_load.add_program((tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate, std::move(program));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish

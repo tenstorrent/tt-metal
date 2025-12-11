@@ -15,10 +15,8 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_split(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
-            split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Returns a tensor that is in num_splits ways on dim.
 
             Equivalent pytorch code:

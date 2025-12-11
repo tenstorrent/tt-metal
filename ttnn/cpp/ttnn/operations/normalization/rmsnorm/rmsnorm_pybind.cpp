@@ -79,24 +79,18 @@ void bind_normalization_rms_norm(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B (matching input)
                  - TILE
 
+        Memory Support:
+            - Interleaved: DRAM and L1
+
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.
             - If `residual_input_tensor` is provided, it must match the :attr:`input_tensor`'s padded shape.
             - If the `weight`/`bias` tensors are TILE layout: last padded dim must match :attr:`input_tensor`'s last padded dim.
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
-
-        Example:
-            .. code-block:: python
-
-              h, w = 32, 64
-              batch_size = 1
-
-              input_tensor = ttnn.rand([batch_size, h, w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-              weight = ttnn.rand([w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-              output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
-
-            )doc",
+            - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
+              :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
+        )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),

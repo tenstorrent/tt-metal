@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDo
 
 
 class TtDownBlock2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config):
+    def __init__(self, device, state_dict, module_path, model_config, has_downsample=False, debug_mode=False):
         super().__init__()
 
         num_layers = 2
@@ -17,18 +17,25 @@ class TtDownBlock2D(LightweightModule):
 
         for i in range(num_layers):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config, debug_mode=debug_mode
+                )
             )
 
-        self.downsamplers = TtDownsample2D(
-            device,
-            state_dict,
-            f"{module_path}.downsamplers.0",
-            (2, 2),
-            (1, 1),
-            (1, 1),
-            1,
-            model_config=model_config,
+        self.downsamplers = (
+            TtDownsample2D(
+                device,
+                state_dict,
+                f"{module_path}.downsamplers.0",
+                (2, 2),
+                (1, 1),
+                (1, 1),
+                1,
+                model_config=model_config,
+                debug_mode=debug_mode,
+            )
+            if has_downsample
+            else None
         )
 
     def forward(self, hidden_states, input_shape, temb):
@@ -40,7 +47,8 @@ class TtDownBlock2D(LightweightModule):
             residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             output_states = output_states + (residual,)
 
-        hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
-        residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        output_states = output_states + (residual,)
+        if self.downsamplers is not None:
+            hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
+            residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            output_states = output_states + (residual,)
         return hidden_states, [C, H, W], output_states

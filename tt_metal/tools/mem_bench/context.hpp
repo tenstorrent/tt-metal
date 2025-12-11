@@ -40,18 +40,18 @@ struct L1MemoryMap {
 };
 
 struct Context {
-    std::map<chip_id_t, IDevice*> devices;
+    std::map<ChipId, IDevice*> devices;
     L1MemoryMap device_address{};
     uint32_t total_size{0};
     uint32_t page_size{0};
     int threads{0};
     int number_reader_kernels{0};
     int number_writer_kernels{0};
-    bool enable_host_copy_with_kernels{0};
+    bool enable_host_copy_with_kernels{false};
     int iterations{0};
 
     Context(
-        const std::map<chip_id_t, IDevice*>& devices_,
+        const std::map<ChipId, IDevice*>& devices_,
         uint32_t total_size_,
         uint32_t page_size_,
         int threads_,

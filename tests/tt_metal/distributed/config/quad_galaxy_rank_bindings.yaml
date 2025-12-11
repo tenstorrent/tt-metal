@@ -1,0 +1,18 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+
+  - rank: 2
+    mesh_id: 0
+    mesh_host_rank: 2
+
+  - rank: 3
+    mesh_id: 0
+    mesh_host_rank: 3
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"

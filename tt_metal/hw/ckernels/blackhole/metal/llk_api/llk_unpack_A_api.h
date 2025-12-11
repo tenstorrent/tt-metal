@@ -64,7 +64,6 @@ inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -90,8 +89,7 @@ template <
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(
-    const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0) {
+inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
@@ -99,7 +97,7 @@ inline void llk_unpack_A(
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-        address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     WAYPOINT("UPAD");
 }
 
@@ -109,10 +107,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand,
-    const std::uint32_t start_tile_index,
-    const std::uint32_t ntiles,
-    const bool transpose_of_faces = 0) {
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
@@ -121,7 +116,7 @@ inline void llk_unpack_A_block(
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-            address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+            address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
         address += offset_address;
         WAYPOINT("UPAD");
     }

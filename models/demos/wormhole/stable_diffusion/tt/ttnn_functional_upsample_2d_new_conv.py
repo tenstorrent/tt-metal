@@ -102,6 +102,7 @@ class upsample2d:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         tt_out, [self.conv_weight_tensor, self.conv_bias_tensor] = ttnn.conv2d(

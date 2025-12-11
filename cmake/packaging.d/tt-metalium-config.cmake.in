@@ -8,6 +8,7 @@ find_dependency(nlohmann_json REQUIRED)
 find_dependency(umd REQUIRED)
 find_dependency(spdlog REQUIRED)
 find_dependency(tt-logger REQUIRED)
+find_dependency(Threads REQUIRED)
 
 # Set package as found
 set(TT-@PROJECT_NAME@_FOUND TRUE)

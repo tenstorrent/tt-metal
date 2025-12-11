@@ -62,6 +62,7 @@ void MAIN {
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -73,6 +74,7 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
@@ -125,13 +127,12 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
+
             cb_wait_front(cb_index_id, 1);
-            volatile uint32_t* index_addr_ptr;
-            cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-            uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
-            cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
-            cb_release_tile(cb_index_id);
+            cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
+            cb_pop_front(cb_index_id, 1);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
@@ -144,8 +145,13 @@ void MAIN {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Get the sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
+        cur_pos,
+        cur_batch,
+        core_num_in_reduce,
+        num_cores_per_head,
+        k_chunk_size_dynamic,
+        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
@@ -207,7 +213,6 @@ void MAIN {
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
-
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
          ******************************************************************************/
@@ -270,13 +275,22 @@ void MAIN {
 
                 // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
-                bool add_mask_fusion =
-                    is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk || use_attention_mask;
+                bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
+                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
+                bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
+                bool add_causal_mask_fusion = false;
+                bool add_sliding_window_mask_fusion = false;
 #endif
 
                 /* QK = Q_CHUNK @ K_CHUNK */
+                // Determine which mask buffer to use for fusion
+                uint32_t mask_cb_to_use = cb_mask_in;  // Default to causal mask buffer
+                if (add_sliding_window_mask_fusion) {
+                    mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
+                }
+
                 cb_matmul_blocks(
                     cb_q_in,
                     cb_k_in,
@@ -292,7 +306,7 @@ void MAIN {
                     qk_subblock_w_dynamic,
                     true,
                     add_mask_fusion,
-                    cb_mask_in,
+                    mask_cb_to_use,
                     cb_zero_in);
 
                 /* QK += MASK */
@@ -308,6 +322,12 @@ void MAIN {
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
+                    }
+
+                    // Apply sliding window mask to the first chunk (only on the core that processes it)
+                    if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
+                        reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
+                        add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
                 }
 
@@ -443,29 +463,31 @@ void MAIN {
                 // This indicates that there are computes done by other workers.
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
-
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    // OUT_ACC_2 <- WORKER_OUT
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
-
-                    // PREV_SUM_2 <- WORKER_SUM
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
 
-                    // CUR_MAX = max(PREV_MAX, WORKER_MAX)
-                    max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
+                    // Fused Softmax Correction
+                    // * Fused Correction is a fused operation that performs the following steps:
+                    // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
+                    // * 2. EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
+                    // * 3. PREV_SUM_2 *= EXP_MAX_DIFF_2
+                    // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
+                    // * 5. PREV_SUM *= EXP_MAX_DIFF
+                    // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
+                    // */
+                    correction_block<scale_fp32, vector_mode>(
+                        cb_m_in,        // cb worker max
+                        cb_prev_sum_2,  // cb worker sum
+                        cb_cur_max,
+                        cb_prev_max,
+                        cb_cur_sum,
+                        cb_prev_sum,
+                        cb_exp_max_diff,
+                        cb_exp_max_diff_2,
+                        Sq_chunk_t);
 
-                    // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
-                    // PREV_SUM_2 *= EXP_MAX_DIFF_2
-                    sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
-
-                    /// EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
-                    // PREV_SUM *= EXP_MAX_DIFF
-                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-
-                    /// CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
+                    // OUT_ACC_2 <- WORKER_OUT
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC_2 *= EXP_MAX_DIFF
                     // OUT_ACC *= EXP_MAX_DIFF_2

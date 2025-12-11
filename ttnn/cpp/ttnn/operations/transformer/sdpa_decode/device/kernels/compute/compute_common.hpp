@@ -67,27 +67,24 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     // If do_eltwise_max == true, prev_cb has `rows` produced.
     // Postcondition: out_cb has `rows` produced.
 
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
-    if (do_eltwise_max) {
-        copy_tile_to_dst_init_short(prev_cb);
-        max_tile_init();
-    }
-
+    max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t r = 0; r < rows; ++r) {
         acquire_dst();
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t c = 0; c < cols; ++c) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
         }
+        reduce_uninit();
         if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, r, prev_max_dst_idx);
             max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
         }
@@ -95,8 +92,58 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         release_dst();
     }
     cb_push_back(out_cb, rows);
-    reduce_uninit();
 }
+
+#ifdef TRISC_MATH
+/**
+ * recip_tile on only the columns 0:8 of a face
+ */
+template <bool legacy_compat = true>
+void calculate_recip_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    if constexpr (legacy_compat) {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+            // Note: negate check removed since in always >= 0.0
+            // v_if (in < 0.0)
+            // {
+            //     out = -out;
+            // }
+            // v_endif;
+            if constexpr (DST_ACCUM_MODE || APPROX) {
+                sfpi::dst_reg[0] = out;
+            } else {
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+            }
+            sfpi::dst_reg += 2;
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+
+            if constexpr (APPROX) {
+                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+            } else {
+                if constexpr (DST_ACCUM_MODE) {
+                    sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+                } else {
+                    sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+                    sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+                }
+            }
+
+            sfpi::dst_reg += 2;
+        }
+    }
+}
+
+template <bool legacy_compat = true>
+void recip_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+}
+#endif
 
 /**
  * in_cb = 1 / in_cb
@@ -111,7 +158,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        recip_tile(0, static_cast<int>(vector_mode));
+        MATH((recip_tile_first_column(0)));
         pack_tile(0, in_cb);
         release_dst();
     }
@@ -294,6 +341,44 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
+#ifdef TRISC_MATH
+/**
+ * exp_tile on only the columns 0:8 of a face
+ */
+template <bool SDPA_EXP_APPROX_MODE>
+void calculate_exponential_first_column(int scale_bf16) {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    if constexpr (SDPA_EXP_APPROX_MODE) {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = ckernel::sfpu::
+                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                    val, scale_bf16);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val = val * sfpi::s2vFloat16b(scale_bf16);
+            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    }
+}
+
+template <bool SDPA_EXP_APPROX_MODE>
+void exp_tile_first_column(uint32_t idst, int scale_bf16) {
+    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE>, idst, (int)VectorMode::C, scale_bf16);
+}
+#endif
+
 /**
  * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
  */
@@ -315,11 +400,131 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(vector_mode), scale_bf16);
+        MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
     }
+}
+
+#ifdef TRISC_MATH
+/**
+ * The custom SFPI LLK function computes the following operation:
+ * cur_max = max(prev_max, worker_max)
+ * cur_sum = exp((worker_max - cur_max) * scale) * worker_sum + exp((prev_max - cur_max) * scale) * prev_sum
+ * There are 4 results produced:
+ * 1. exp_max_diff = exp((worker_max - cur_max) * scale), produced in dst_reg[prev_max_base_idx]
+ * 2. exp_max_diff_2 = exp((prev_max - cur_max) * scale), produced in dst_reg[worker_max_base_idx]
+ * 3. cur_sum produced in dst_reg[prev_sum_base_idx]
+ * 4. cur_max produced in dst_reg[cur_max_base_idx]
+ * fused_max_sub_exp_add_tile
+ */
+template <bool SDPA_EXP_APPROX_MODE>
+void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    constexpr uint32_t prev_max_base_idx = 0;      // dst_reg_0 (Tile 0)
+    constexpr uint32_t worker_max_base_idx = 32;   // dst_reg_1 (Tile 1)
+    constexpr uint32_t cur_max_base_idx = 64;      // dst_reg_2 (Tile 2)
+    constexpr uint32_t prev_sum_base_idx = 96;     // dst_reg_3 (Tile 3)
+    constexpr uint32_t worker_sum_base_idx = 128;  // dst_reg_4 (Tile 4)
+
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        // Load inputs for this vector-slot into temporaries to avoid aliasing on dst_reg
+        sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
+        sfpi::vFloat worker_max_vec = sfpi::dst_reg[worker_max_base_idx];
+        sfpi::vFloat prev_sum_vec = sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::vFloat worker_sum_vec = sfpi::dst_reg[worker_sum_base_idx];
+        v_if(prev_max_vec < worker_max_vec) { sfpi::dst_reg[cur_max_base_idx] = worker_max_vec; }
+        v_else { sfpi::dst_reg[cur_max_base_idx] = prev_max_vec; }
+        v_endif;
+        sfpi::vFloat cur_max = sfpi::dst_reg[cur_max_base_idx];
+
+        // Compute differences
+        sfpi::vFloat diff_prev = prev_max_vec - cur_max;
+        sfpi::vFloat diff_worker = worker_max_vec - cur_max;
+
+        // Exponentials of differences
+        sfpi::vFloat exp_prev = ckernel::sfpu::
+            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                diff_prev, scale_bf16);
+        sfpi::vFloat exp_worker = ckernel::sfpu::
+            _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                diff_worker, scale_bf16);
+
+        // Store exponentials for optional debug/pack-out
+        sfpi::dst_reg[prev_max_base_idx] = exp_prev;
+        sfpi::dst_reg[worker_max_base_idx] = exp_worker;
+
+        // cur_sum = exp(worker_max - cur_max) * worker_sum + exp(prev_max - cur_max) * prev_sum
+        sfpi::dst_reg[worker_sum_base_idx] = exp_worker * worker_sum_vec;
+        sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
+        sfpi::vFloat corr_worker_sum = sfpi::dst_reg[worker_sum_base_idx];
+        sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
+        sfpi::vFloat corr_sum = corr_worker_sum + corr_prev_sum;
+        sfpi::dst_reg[prev_sum_base_idx] = corr_sum;
+        sfpi::dst_reg += 2;
+    }
+}
+
+template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
+void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
+    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
+}
+#endif
+
+template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::C>
+void correction_block(
+    uint32_t cb_worker_max,
+    uint32_t cb_worker_sum,
+    uint32_t cb_cur_max,
+    uint32_t cb_prev_max,
+    uint32_t cb_cur_sum,
+    uint32_t cb_prev_sum,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_exp_max_diff_2,
+    uint32_t num_head_tiles) {
+    cb_wait_front(cb_worker_max, num_head_tiles);
+    cb_wait_front(cb_worker_sum, num_head_tiles);
+    cb_wait_front(cb_prev_max, num_head_tiles);
+    cb_wait_front(cb_prev_sum, num_head_tiles);
+
+    cb_reserve_back(cb_cur_max, num_head_tiles);
+    cb_reserve_back(cb_cur_sum, num_head_tiles);
+    cb_reserve_back(cb_exp_max_diff, num_head_tiles);
+    cb_reserve_back(cb_exp_max_diff_2, num_head_tiles);
+
+    constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
+    constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
+    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
+    constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
+    constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
+
+    // convert scale from fp32 to bf16
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    for (uint32_t i = 0; i < num_head_tiles; i++) {
+        acquire_dst();
+        copy_tile_to_dst_init_short(cb_worker_max);
+        exp_tile_init<EXP_APPROX_MODE, false>();
+        max_tile_init();
+        copy_tile(cb_prev_max, i, dst_reg_0);
+        copy_tile(cb_worker_max, i, dst_reg_1);
+        copy_tile(cb_prev_sum, i, dst_reg_3);
+        copy_tile(cb_worker_sum, i, dst_reg_4);
+        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE, vector_mode>(0, scale_bf16)));
+        pack_tile(dst_reg_0, cb_exp_max_diff);
+        pack_tile(dst_reg_1, cb_exp_max_diff_2);
+        pack_tile(dst_reg_2, cb_cur_max);
+        pack_tile(dst_reg_3, cb_cur_sum);
+        cb_push_back(cb_cur_max, 1);
+        cb_push_back(cb_cur_sum, 1);
+        cb_push_back(cb_exp_max_diff, 1);
+        cb_push_back(cb_exp_max_diff_2, 1);
+        release_dst();
+    }
+    cb_pop_front(cb_prev_sum, num_head_tiles);
+    cb_pop_front(cb_worker_sum, num_head_tiles);
 }
 
 /**

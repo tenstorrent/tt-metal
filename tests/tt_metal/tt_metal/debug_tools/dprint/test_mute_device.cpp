@@ -23,11 +23,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking that disabling dprints on a device won't cause a hang.
@@ -44,7 +42,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
     auto device_range =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s

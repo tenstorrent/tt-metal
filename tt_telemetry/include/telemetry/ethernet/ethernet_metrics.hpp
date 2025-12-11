@@ -17,96 +17,148 @@
 
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <llrt/hal.hpp>
+#include <tt_metal/fabric/physical_system_descriptor.hpp>
 
 #include <telemetry/metric.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <topology/topology.hpp>
 
-class EthernetEndpointUpMetric: public BoolMetric {
+namespace tt::scaleout_tools::fsd::proto {
+class FactorySystemDescriptor;
+}
+
+class EthernetEndpointUpMetric : public BoolMetric {
 public:
     static constexpr std::chrono::seconds FORCE_REFRESH_LINK_STATUS_TIMEOUT{120};
 
-    EthernetEndpointUpMetric(const EthernetEndpoint& endpoint, const std::unique_ptr<tt::tt_metal::Hal>& hal);
+    EthernetEndpointUpMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
-    EthernetEndpoint endpoint_;
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
     std::chrono::steady_clock::time_point last_force_refresh_time_;
     uint32_t link_up_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetCRCErrorCountMetric: public UIntMetric {
+class EthernetCRCErrorCountMetric : public UIntMetric {
 public:
     EthernetCRCErrorCountMetric(
-        const EthernetEndpoint& endpoint,
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
-    EthernetEndpoint endpoint_;
-    std::optional<tt::umd::CoreCoord> ethernet_core_;
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
+    tt::umd::CoreCoord ethernet_core_;
     uint32_t crc_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetRetrainCountMetric: public UIntMetric {
+class EthernetRetrainCountMetric : public UIntMetric {
 public:
     EthernetRetrainCountMetric(
-        const EthernetEndpoint& endpoint,
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
-    EthernetEndpoint endpoint_;
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t retrain_count_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetCorrectedCodewordCountMetric: public UIntMetric {
+class EthernetCorrectedCodewordCountMetric : public UIntMetric {
 public:
     EthernetCorrectedCodewordCountMetric(
-        const EthernetEndpoint& endpoint,
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
-    EthernetEndpoint endpoint_;
-    std::optional<tt::umd::CoreCoord> ethernet_core_;
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
+    tt::umd::CoreCoord ethernet_core_;
     uint32_t corr_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetUncorrectedCodewordCountMetric: public UIntMetric {
+class EthernetUncorrectedCodewordCountMetric : public UIntMetric {
 public:
     EthernetUncorrectedCodewordCountMetric(
-        const EthernetEndpoint& endpoint,
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
 
 private:
-    EthernetEndpoint endpoint_;
-    std::optional<tt::umd::CoreCoord> ethernet_core_;
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
+    tt::umd::CoreCoord ethernet_core_;
     uint32_t uncorr_addr_;
+    std::optional<PhysicalLinkInfo> link_info_;
 };
 
 void create_ethernet_metrics(
@@ -114,4 +166,6 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal);

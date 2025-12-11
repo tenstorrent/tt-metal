@@ -14,15 +14,20 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int num_rows, int ITERATIONS = 8>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int num_rows,
+    int ITERATIONS = 8,
+    DataLayout layout = DataLayout::TILE>
 inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_tile_idx, uint tile_idx) {
-    _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, num_rows, ITERATIONS>(
+    _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout>(
         values_tile_idx, indices_tile_idx, tile_idx);
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, DataLayout layout = DataLayout::TILE>
 inline void init_max_pool_with_indices() {
-    _init_max_pool_with_indices_();
+    _init_max_pool_with_indices_<layout>();
 }
 
 }  // namespace sfpu

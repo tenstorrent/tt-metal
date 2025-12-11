@@ -4,6 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <cstdint>
@@ -23,7 +24,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -34,21 +34,19 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-namespace tt {
-namespace tt_metal {
-class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 using namespace tt::tt_metal;
 
-static constexpr uint32_t elements_in_tile = 32 * 32;
+namespace CMAKE_UNIQUE_NAMESPACE {
 
-static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
+namespace {
+
+constexpr uint32_t elements_in_tile = 32 * 32;
+
+std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     std::vector<uint32_t> u32_vec;
     if (data_format == tt::DataFormat::Float32) {
         u32_vec.resize(elements_in_tile);
@@ -114,112 +112,114 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     return u32_vec;
 }
 
-static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
-    std::string data = "";
+std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data;
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 0]),
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 8]),
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 16]),
-                *reinterpret_cast<float *>(&input_tile[col * 32 + 24]));
+                *reinterpret_cast<float*>(&input_tile[(col * 32) + 0]),
+                *reinterpret_cast<float*>(&input_tile[(col * 32) + 8]),
+                *reinterpret_cast<float*>(&input_tile[(col * 32) + 16]),
+                *reinterpret_cast<float*>(&input_tile[(col * 32) + 24]));
         }
     } else if (data_format == tt::DataFormat::Float16_b) {
         std::vector<bfloat16> fp16b_vec = unpack_uint32_vec_into_bfloat16_vec(input_tile);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                static_cast<float>(fp16b_vec[col * 32 + 0]),
-                static_cast<float>(fp16b_vec[col * 32 + 8]),
-                static_cast<float>(fp16b_vec[col * 32 + 16]),
-                static_cast<float>(fp16b_vec[col * 32 + 24]));
+                static_cast<float>(fp16b_vec[(col * 32) + 0]),
+                static_cast<float>(fp16b_vec[(col * 32) + 8]),
+                static_cast<float>(fp16b_vec[(col * 32) + 16]),
+                static_cast<float>(fp16b_vec[(col * 32) + 24]));
         }
     } else if (data_format == tt::DataFormat::Bfp8_b) {
         std::vector<float> float_vec = unpack_bfp8_tiles_into_float_vec(input_tile, true, false);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 0]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 8]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 16]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 24]));
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 0]),
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 8]),
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 16]),
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 24]));
         }
     } else if (data_format == tt::DataFormat::Bfp4_b) {
         std::vector<float> float_vec = unpack_bfp4_tiles_into_float_vec(input_tile, true, false);
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 0]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 8]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 16]),
-                *reinterpret_cast<float *>(&float_vec[col * 32 + 24]));
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 0]),
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 8]),
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 16]),
+                *reinterpret_cast<float*>(&float_vec[(col * 32) + 24]));
         }
     } else if (data_format == tt::DataFormat::Int8) {
         int8_t* int8_ptr = reinterpret_cast<int8_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
-                int8_ptr[col * 32 + 0],
-                int8_ptr[col * 32 + 8],
-                int8_ptr[col * 32 + 16],
-                int8_ptr[col * 32 + 24]);
+                int8_ptr[(col * 32) + 0],
+                int8_ptr[(col * 32) + 8],
+                int8_ptr[(col * 32) + 16],
+                int8_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt8) {
         uint8_t* uint8_ptr = reinterpret_cast<uint8_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
-                uint8_ptr[col * 32 + 0],
-                uint8_ptr[col * 32 + 8],
-                uint8_ptr[col * 32 + 16],
-                uint8_ptr[col * 32 + 24]);
+                uint8_ptr[(col * 32) + 0],
+                uint8_ptr[(col * 32) + 8],
+                uint8_ptr[(col * 32) + 16],
+                uint8_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt16) {
         uint16_t* uint16_ptr = reinterpret_cast<uint16_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
-                uint16_ptr[col * 32 + 0],
-                uint16_ptr[col * 32 + 8],
-                uint16_ptr[col * 32 + 16],
-                uint16_ptr[col * 32 + 24]);
+                uint16_ptr[(col * 32) + 0],
+                uint16_ptr[(col * 32) + 8],
+                uint16_ptr[(col * 32) + 16],
+                uint16_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::Int32) {
         int32_t* int32_ptr = reinterpret_cast<int32_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
-                int32_ptr[col * 32 + 0],
-                int32_ptr[col * 32 + 8],
-                int32_ptr[col * 32 + 16],
-                int32_ptr[col * 32 + 24]);
+                int32_ptr[(col * 32) + 0],
+                int32_ptr[(col * 32) + 8],
+                int32_ptr[(col * 32) + 16],
+                int32_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt32) {
         uint32_t* uint32_ptr = reinterpret_cast<uint32_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
-                uint32_ptr[col * 32 + 0],
-                uint32_ptr[col * 32 + 8],
-                uint32_ptr[col * 32 + 16],
-                uint32_ptr[col * 32 + 24]);
+                uint32_ptr[(col * 32) + 0],
+                uint32_ptr[(col * 32) + 8],
+                uint32_ptr[(col * 32) + 16],
+                uint32_ptr[(col * 32) + 24]);
         }
     }
     return data;
 }
 
-static std::string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+std::vector<std::string> GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
     std::string data = GenerateExpectedData(data_format, input_tile);
-    std::string expected = fmt::format("Print tile from Data0:{}", data);
-    expected += fmt::format("\nPrint tile from Unpack:{}", data);
-    expected += fmt::format("\nPrint tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...");
-    expected += fmt::format("\nPrint tile from Pack:{}", data);
-    expected += fmt::format("\nPrint tile from Data1:{}", data);
+    std::vector<std::string> expected;
+    expected.push_back(fmt::format("Print tile from Data0:{}", data));
+    expected.push_back(fmt::format("Print tile from Data1:{}", data));
+    expected.push_back(fmt::format("Print tile from Unpack:{}", data));
+    expected.push_back(fmt::format(
+        "Print tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print..."));
+    expected.push_back(fmt::format("Print tile from Pack:{}", data));
     return expected;
 }
 
-static void RunTest(
+void RunTest(
     DPrintMeshFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     tt::DataFormat data_format) {
@@ -229,7 +229,7 @@ static void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -291,89 +291,43 @@ static void RunTest(
     fixture->RunProgram(mesh_device, workload);
 
     // Check against expected prints
-    std::string expected = GenerateGoldenOutput(data_format, u32_vec);
-    // log_info(tt::LogTest, "Expected output:\n{}", expected);
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, expected));
+    auto expected = GenerateGoldenOutput(data_format, u32_vec);
+    DPrintSeparateFilesFixture::check_output(expected);
 }
 
-TEST_F(DPrintMeshFixture, TestPrintTilesFloat32) {
+struct TestParams {
+    tt::DataFormat data_format;
+};
+
+class PrintTilesFixture : public DPrintSeparateFilesFixture, public ::testing::WithParamInterface<TestParams> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    PrintTilesTests,
+    PrintTilesFixture,
+    ::testing::Values(
+        TestParams{tt::DataFormat::Float32},
+        TestParams{tt::DataFormat::Float16_b},
+        TestParams{tt::DataFormat::Bfp4_b},
+        TestParams{tt::DataFormat::Bfp8_b},
+        TestParams{tt::DataFormat::Int8},
+        TestParams{tt::DataFormat::Int32},
+        TestParams{tt::DataFormat::UInt8},
+        TestParams{tt::DataFormat::UInt16},
+        TestParams{tt::DataFormat::UInt32}),
+    [](const ::testing::TestParamInfo<PrintTilesFixture::ParamType>& info) {
+        return std::string(enchantum::to_string(info.param.data_format));
+    });
+
+TEST_P(PrintTilesFixture, TestPrintTiles) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::Float32);
+                RunTest(fixture, mesh_device, GetParam().data_format);
             },
             mesh_device);
     }
 }
-TEST_F(DPrintMeshFixture, TestPrintTilesFloat16_b) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::Float16_b);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesBfp4_b) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::Bfp4_b);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesBfp8_b) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::Bfp8_b);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesInt8) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::Int8);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesInt32) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::Int32);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesUInt8) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::UInt8);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesUInt16) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::UInt16);
-            },
-            mesh_device);
-    }
-}
-TEST_F(DPrintMeshFixture, TestPrintTilesUInt32) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, tt::DataFormat::UInt32);
-            },
-            mesh_device);
-    }
-}
+
+}  // namespace
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE

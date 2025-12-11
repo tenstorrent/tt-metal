@@ -55,13 +55,13 @@ ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_pat
 
 DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
     if (node.IsScalar()) {
-        chip_id_t chip_id = parse_scalar<chip_id_t>(node);
+        ChipId chip_id = parse_scalar<ChipId>(node);
         return chip_id;
     } else if (node.IsSequence() && node.size() == 2) {
         MeshId mesh_id = parse_mesh_id(node[0]);
         if (node[1].IsScalar()) {
             // Format: [mesh_id, chip_id]
-            chip_id_t chip_id = parse_scalar<chip_id_t>(node[1]);
+            ChipId chip_id = parse_scalar<ChipId>(node[1]);
             return std::make_pair(mesh_id, chip_id);
         } else if (node[1].IsSequence()) {
             // Format: [mesh_id, [row, col]]
@@ -124,14 +124,12 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
         config.destination = parse_destination_config(pattern_yaml["destination"]);
     }
     if (pattern_yaml["atomic_inc_val"]) {
-        config.atomic_inc_val = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_val"]);
-    }
-    if (pattern_yaml["atomic_inc_wrap"]) {
-        config.atomic_inc_wrap = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_wrap"]);
+        config.atomic_inc_val = parse_scalar<uint32_t>(pattern_yaml["atomic_inc_val"]);
     }
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
+
     return config;
 }
 
@@ -145,6 +143,9 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     if (sender_yaml["core"]) {
         config.core = parse_core_coord(sender_yaml["core"]);
     }
+    if (sender_yaml["link_id"]) {
+        config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
+    }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
     TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");
@@ -154,6 +155,27 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
         config.patterns.push_back(merge_patterns(defaults, specific_pattern));
     }
     return config;
+}
+
+static void validate_latency_test_config(const ParsedTestConfig& test_config) {
+    TT_FATAL(
+        !test_config.patterns.has_value() || test_config.patterns.value().empty(),
+        "Test '{}': latency_test_mode does not support high-level patterns",
+        test_config.name);
+    TT_FATAL(
+        test_config.senders.size() == 1,
+        "Test '{}': latency_test_mode requires exactly one sender, got {}",
+        test_config.name,
+        test_config.senders.size());
+    TT_FATAL(
+        test_config.senders[0].patterns.size() == 1,
+        "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+        test_config.name,
+        test_config.senders[0].patterns.size());
+    TT_FATAL(
+        test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
+        "Test '{}': latency_test_mode only supports unicast",
+        test_config.name);
 }
 
 ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
@@ -195,6 +217,16 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.patterns = high_level_patterns;
     }
 
+    if (test_yaml["skip"]) {
+        const auto& skip_yaml = test_yaml["skip"];
+        TT_FATAL(skip_yaml.IsSequence(), "Expected 'skip' to be a sequence of platform strings.");
+        std::vector<std::string> skips;
+        for (const auto& s : skip_yaml) {
+            skips.push_back(parse_scalar<std::string>(s));
+        }
+        test_config.skip = std::move(skips);
+    }
+
     if (test_yaml["senders"]) {
         const auto& senders_yaml = test_yaml["senders"];
         TT_FATAL(senders_yaml.IsSequence(), "Expected senders to be a sequence");
@@ -209,12 +241,36 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
+    // Parse performance test mode (replaces benchmark_mode and latency_test_mode)
     if (test_yaml["benchmark_mode"]) {
-        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        bool benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        if (benchmark_mode) {
+            test_config.performance_test_mode = PerformanceTestMode::BANDWIDTH;
+        }
+    }
+
+    if (test_yaml["latency_test_mode"]) {
+        bool latency_test_mode = parse_scalar<bool>(test_yaml["latency_test_mode"]);
+        if (latency_test_mode) {
+            TT_FATAL(
+                test_config.performance_test_mode == PerformanceTestMode::NONE,
+                "Test '{}': benchmark_mode and latency_test_mode are mutually exclusive",
+                test_config.name);
+            test_config.performance_test_mode = PerformanceTestMode::LATENCY;
+        }
+    }
+
+    // Validate latency test mode requirements
+    if (test_config.performance_test_mode == PerformanceTestMode::LATENCY) {
+        validate_latency_test_config(test_config);
     }
 
     if (test_yaml["sync"]) {
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
+    }
+
+    if (test_yaml["enable_flow_control"]) {
+        test_config.enable_flow_control = parse_scalar<bool>(test_yaml["enable_flow_control"]);
     }
 
     return test_config;
@@ -269,14 +325,6 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
     auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
     fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
 
-    if (fabric_setup_yaml["routing_type"]) {
-        auto routing_type_str = parse_scalar<std::string>(fabric_setup_yaml["routing_type"]);
-        fabric_setup.routing_type = detail::routing_type_mapper.from_string(routing_type_str, "RoutingType");
-    } else {
-        log_info(tt::LogTest, "No routing type specified, defaulting to LowLatency");
-        fabric_setup.routing_type = RoutingType::LowLatency;
-    }
-
     if (fabric_setup_yaml["fabric_tensix_config"]) {
         auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_tensix_config"]);
         fabric_setup.fabric_tensix_config =
@@ -329,7 +377,7 @@ PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node
 
     PhysicalMeshConfig physical_mesh_config;
     physical_mesh_config.mesh_descriptor_path = parse_scalar<std::string>(physical_mesh_yaml["mesh_descriptor_path"]);
-    physical_mesh_config.eth_coord_mapping = parse_2d_array<eth_coord_t>(physical_mesh_yaml["eth_coord_mapping"]);
+    physical_mesh_config.eth_coord_mapping = parse_2d_array<EthCoord>(physical_mesh_yaml["eth_coord_mapping"]);
 
     return physical_mesh_config;
 }
@@ -374,25 +422,11 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 return false;
             }
             return test_config.fabric_setup.topology == topo;
-        } else if (filter_type.value() == "routing_type" || filter_type.value() == "Routing_Type") {
-            auto r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;  // Default value
-            if (filter_value == "LowLatency") {
-                r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;
-            } else if (filter_value == "Dynamic") {
-                r_type = tt::tt_fabric::fabric_tests::RoutingType::Dynamic;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency, Dynamic",
-                    filter_value);
-                return false;
-            }
-            return test_config.fabric_setup.routing_type == r_type;
         } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
-                return test_config.benchmark_mode;
+                return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
             } else if (filter_value == "false") {
-                return !test_config.benchmark_mode;
+                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
             } else {
                 log_info(
                     tt::LogTest,
@@ -625,7 +659,7 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
         } else {
             log_info(
                 tt::LogTest,
-                "Unsupported filter type: '{}'. Supported types are: name, topology, routing_type, benchmark_mode, "
+                "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
                 "sync, num_links, ntype, ftype, num_packets, size, pattern",
                 filter_type.value());
             return false;
@@ -674,57 +708,6 @@ void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs)
     }
 }
 
-std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
-    log_info(LogTest, "No YAML config provided. Generating a default test configuration from command-line args.");
-
-    TestFabricSetup fabric_setup;
-    if (test_args::has_command_option(input_args_, "--topology")) {
-        std::string topology_str = test_args::get_command_option(input_args_, "--topology", "Linear");
-        fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
-    } else {
-        fabric_setup.topology = Topology::Linear;
-        log_info(LogTest, "No topology specified via --topology, defaulting to Linear.");
-    }
-
-    ParsedTestConfig default_test;
-
-    if (test_args::has_command_option(input_args_, "--pattern")) {
-        log_info(LogTest, "Generating a high-level pattern test from command line.");
-        std::string pattern_type = test_args::get_command_option(input_args_, "--pattern", "");
-        TT_FATAL(
-            detail::high_level_traffic_pattern_mapper.to_enum.find(pattern_type) !=
-                detail::high_level_traffic_pattern_mapper.to_enum.end(),
-            "Unsupported pattern type from command line: '{}'. Supported types are: {}",
-            pattern_type,
-            get_supported_high_level_patterns());
-
-        HighLevelPatternConfig hlp_config;
-        hlp_config.type = pattern_type;
-        hlp_config.iterations = test_args::get_command_option_uint32(input_args_, "--iterations", 1);
-
-        default_test.patterns = std::vector<HighLevelPatternConfig>{hlp_config};
-    } else {
-        log_info(LogTest, "Generating a simple unicast test from command line.");
-        std::string src_device_str = test_args::get_command_option(input_args_, "--src-device", "0");
-        std::string dst_device_str = test_args::get_command_option(input_args_, "--dst-device", "1");
-
-        chip_id_t src_device_id = std::stoul(src_device_str);
-        chip_id_t dst_device_id = std::stoul(dst_device_str);
-
-        ParsedTrafficPatternConfig pattern = {.destination = ParsedDestinationConfig{.device = dst_device_id}};
-        ParsedSenderConfig sender = {.device = src_device_id, .patterns = {pattern}};
-        default_test.senders = {sender};
-    }
-
-    default_test.name = "DefaultCommandLineTest";
-    default_test.fabric_setup = fabric_setup;
-    default_test.defaults = ParsedTrafficPatternConfig{};
-    default_test.defaults->ftype = ChipSendType::CHIP_UNICAST;
-    default_test.defaults->ntype = NocSendType::NOC_UNICAST_WRITE;
-
-    return {default_test};
-}
-
 std::optional<uint32_t> CmdlineParser::get_master_seed() {
     if (test_args::has_command_option(input_args_, "--master-seed")) {
         uint32_t master_seed = test_args::get_command_option_uint32(input_args_, "--master-seed", 0);
@@ -748,48 +731,17 @@ std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& def
 bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
 
 void CmdlineParser::print_help() {
-    log_info(LogTest, "Usage: test_tt_fabric [options]");
-    log_info(LogTest, "This test can be run in two modes:");
-    log_info(
-        LogTest,
-        "1. With a YAML configuration file (--test_config), which provides detailed control over traffic patterns.");
-    log_info(LogTest, "2. With command-line arguments for simpler, predefined test cases.");
+    log_info(LogTest, "Usage: test_tt_fabric --test_config <path> [options]");
+    log_info(LogTest, "[This test needs a yaml configuration file to run, see test_features.yaml for examples]");
     log_info(LogTest, "");
     log_info(LogTest, "General Options:");
     log_info(LogTest, "  --help                                       Print this help message.");
     log_info(
         LogTest,
-        "  --test_config <path>                         Path to the YAML test configuration file. See "
-        "test_features.yaml for examples.");
-    log_info(
-        LogTest,
         "  --master-seed <seed>                         Master seed for all random operations to ensure "
         "reproducibility.");
     log_info(LogTest, "");
-    log_info(LogTest, "Options for command-line mode (when --test_config is NOT used):");
-    log_info(LogTest, "  --topology <Linear|Ring|Mesh|Torus>          Specify the fabric topology. Default: Linear.");
-    log_info(
-        LogTest,
-        "  --pattern <type>                             Specify a high-level traffic pattern. If not provided, a "
-        "simple unicast test is run.");
-    log_info(
-        LogTest,
-        "                                               Supported types: {}",
-        get_supported_high_level_patterns());
-    log_info(
-        LogTest,
-        "  --src-device <id>                            Source device for simple unicast test. "
-        "Default: 0.");
-    log_info(
-        LogTest,
-        "  --dst-device <id>                            Destination device for simple unicast test. "
-        "Default: 1.");
-    log_info(
-        LogTest,
-        "  --iterations <N>                             Number of iterations for high-level patterns (e.g., for "
-        "different random pairings). Default: 1.");
-    log_info(LogTest, "");
-    log_info(LogTest, "Value Overrides (can be used with either mode):");
+    log_info(LogTest, "Value Overrides:");
     log_info(
         LogTest,
         "  --num-packets <N>                            Override the number of packets for all traffic "
@@ -808,6 +760,22 @@ void CmdlineParser::print_help() {
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
     log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
+    log_info(LogTest, "");
+    log_info(LogTest, "Progress Monitoring Options:");
+    log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
+    log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
+    log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
+}
+
+// Progress monitoring methods
+bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }
+
+uint32_t CmdlineParser::get_progress_interval() {
+    return test_args::get_command_option_uint32(input_args_, "--progress-interval", 2);
+}
+
+uint32_t CmdlineParser::get_hung_threshold() {
+    return test_args::get_command_option_uint32(input_args_, "--hung-threshold", 30);
 }
 
 // YamlConfigParser private helpers

@@ -11,27 +11,25 @@ from loguru import logger
 
 
 BH_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct",
     "distil-whisper/distil-large-v3",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    # "meta-llama/Llama-3.3-70B-Instruct",  # is loaded from different path (/mnt/MLPerf/...)
 ]
 
 TG_MODELS = [
+    "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
+    # "deepseek-ai/DeepSeek-R1-0528",  # weights loading is custom (not using transformers)
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.3-70B-Instruct",
-    "deepseek-ai/DeepSeek-R1-0528",
+    # "openai/gpt-oss-20b",   # weights loading is custom (not using transformers)
+    # "openai/gpt-oss-120b",  # weights loading is custom (not using transformers)
+    "stabilityai/stable-diffusion-3.5-large",
+    "tiiuae/falcon-7b-instruct",
 ]
 
 UPSTREAM_MODELS = [
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.3-70B-Instruct",
-]
-
-PYTHON_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct",
-    "meta-llama/Llama-3.2-1B-Instruct",
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
 ]
 
 SINGLE_CARD_MODELS = [
@@ -59,6 +57,7 @@ SINGLE_CARD_MODELS = [
 ]
 
 T3K_MODELS = [
+    "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
     "google/gemma-3-27b-it",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.1-70B-Instruct",
@@ -67,12 +66,21 @@ T3K_MODELS = [
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "meta-llama/Llama-3.2-90B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mixtral-8x7B-v0.1",
+    "stabilityai/stable-diffusion-3.5-large",
     "tiiuae/falcon-7b-instruct",
     "tiiuae/falcon-40b-instruct",
     "Qwen/Qwen2.5-7B-Instruct",
     "Qwen/Qwen2.5-72B-Instruct",
     "Qwen/Qwen2.5-Coder-32B",
+    "Qwen/Qwen2.5-VL-32B-Instruct",
+    "Qwen/Qwen2.5-VL-72B-Instruct",
     "Qwen/Qwen3-32B",
+]
+
+OTHER_MODELS = [
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    "stabilityai/stable-diffusion-xl-refiner-1.0",
 ]
 
 # TODO: add configs, splits, etc
@@ -95,9 +103,9 @@ ARGUMENT_TO_MODELS = {
     "bh": BH_MODELS,
     "tg": TG_MODELS,
     "upstream": UPSTREAM_MODELS,
-    "python": PYTHON_MODELS,
     "single": SINGLE_CARD_MODELS,
     "t3k": T3K_MODELS,
+    "other": OTHER_MODELS,
 }
 
 
@@ -173,9 +181,9 @@ def get_parser():
     parser.add_argument("--bh", action="store_true", help="download BlackHole models")
     parser.add_argument("--tg", action="store_true", help="download TG models")
     parser.add_argument("--upstream", action="store_true", help="download Upstream models")
-    parser.add_argument("--python", action="store_true", help="download Python models")
     parser.add_argument("--single", action="store_true", help="download Single Card models")
     parser.add_argument("--t3k", action="store_true", help="download T3000 models")
+    parser.add_argument("--other", action="store_true", help="download T3000 models")
     parser.add_argument("--datasets", action="store_true", help="download datasets")
     parser.add_argument("--metrics", action="store_true", help="download metrics")
     return parser

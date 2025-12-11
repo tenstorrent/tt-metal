@@ -3,8 +3,9 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
@@ -26,6 +27,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
@@ -34,6 +36,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
@@ -50,6 +54,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp
@@ -59,8 +64,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
@@ -183,7 +188,7 @@ target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatb
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
 
 # Generate Inspector RPC stub file
-set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/scripts/debugging_scripts/inspector_capnp.pyi)
+set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)
 add_custom_command(
     OUTPUT
         ${INSPECTOR_RPC_STUB_FILE}

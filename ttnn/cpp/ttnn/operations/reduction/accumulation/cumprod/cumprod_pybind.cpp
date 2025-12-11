@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:
@@ -26,7 +26,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
 
 
         Args:
-            input (ttnn.Tensor): input tensor
+            input (ttnn.Tensor): input tensor. Must be on the device.
             dim (int): dimension along which to compute cumulative product
 
         Keyword Args:
@@ -36,10 +36,6 @@ void bind_reduction_cumprod_operation(py::module& module) {
 
         Returns:
             ttnn.Tensor: the output tensor.
-
-        Example:
-            input_tensor = ttnn.rand((N, N), device=device)
-            output_tensor = ttnn.cumprod(input_tensor, dim=0)
 
         Note:
             If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.
@@ -62,22 +58,12 @@ void bind_reduction_cumprod_operation(py::module& module) {
                  - 3, 4, 5
                  - dim in {0, 1, ..., rank - 3} or dim in {-rank, -rank + 1, ..., -3}
 
-        Example:
+        Memory Support:
+            - Interleaved: DRAM and L1
 
-        .. code-block:: python
-
-            import ttnn
-
-            # Create tensor
-            tensor_input = ttnn.rand((2,3,4), device=device)
-
-            # Apply ttnn.cumprod() on dim=0
-            tensor_output = ttnn.cumprod(tensor_input, dim=0)
-
-            # With preallocated output and dtype
-            preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
-
-            tensor_output = ttnn.cumprod(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
+        Limitations:
+            - Preallocated output must have the same shape as the input
+            - Preallocated output for integer types is not supported
         )doc";
 
     using OperationType = decltype(ttnn::cumprod);

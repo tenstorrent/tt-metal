@@ -84,7 +84,7 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
         "tt_metal/tests/test_generic_binary_reader_matmul_large_block",
         "test_generic_binary_reader_matmul_large_block",
     ),
-    void_for_bh(TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc")),
+    TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc"),
     TestEntry("tt_metal/tests/test_bmm", "test_bmm"),
     # TestEntry("tt_metal/tests/test_flatten", "test_flatten"),
     TestEntry("tt_metal/tests/test_multiple_programs", "test_multiple_programs"),
@@ -112,8 +112,8 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
 )
 
 TT_METAL_FAST_DISPATCH_TEST_ENTRIES = (
-    TestEntry("tt_metal/tests/unit_tests_noc", "unit_tests_noc"),
     TestEntry("tt_metal/tests/test_eltwise_binary", "test_eltwise_binary"),
+    TestEntry("tt_metal/tests/unit_tests_noc", "unit_tests_noc"),
     # TestEntry(
     #     "tt_metal/tests/test_matmul_multi_core_multi_dram",
     #     "test_matmul_multi_core_multi_dram",

@@ -2,18 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_pybind.hpp"
+#include "ttnn/operations/reduction/topk/topk_pybind.hpp"
 
-#include "ttnn/operations/reduction/topk/topk.hpp"
+#include <cstdint>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/reduction/topk/topk.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_reduction_topk_operation(py::module& module) {
-    auto doc =
-        R"doc(topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, ) -> Tuple[ttnn.Tensor, ttnn.Tensor]
-
+    const auto* doc =
+        R"doc(
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
             If :attr:`dim` is not provided, the last dimension of the :attr:`input_tensor` is used.
@@ -51,21 +56,26 @@ void bind_reduction_topk_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT8, BFLOAT16
-                        - TILE
+                      - TILE
 
                 .. list-table:: index_tensor
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT16, UINT32
-                        - TILE
+                      - TILE
 
-                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
+                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
+                The :attr:`output_index_tensor` will be UINT16 and will be in TILE layout.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
 
             Limitations:
+                - Inputs must be located on-device.
                 - The op fundamentally operates on 4D tensors with shape [N, C, H, W], and with :attr:`dim` of -1. The tensor will be manipulated as needed when this is not the case, and restored afterwards.
                 - For :attr:`input_tensor`, N*C*H must be a multiple of 32
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.
@@ -73,14 +83,11 @@ void bind_reduction_topk_operation(py::module& module) {
                 - The padding is currently only supported for bfloat16, float32, int32, and uint32.
                 - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
                 - All shape validations are performed on padded shapes.
-
-            Example:
-                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
-                topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)
-
+                - Sharded output memory configs are not supported for this operation.
         )doc";
 
     using OperationType = decltype(ttnn::topk);
+
     bind_registered_operation(
         module,
         ttnn::topk,
@@ -92,7 +99,7 @@ void bind_reduction_topk_operation(py::module& module) {
                const int8_t dim,
                const bool largest,
                const bool sorted,
-               std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
+               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
                const std::optional<ttnn::Tensor>& indices_tensor) {
@@ -105,7 +112,7 @@ void bind_reduction_topk_operation(py::module& module) {
                     memory_config,
                     sub_core_grids,
                     indices_tensor,
-                    optional_output_tensors);
+                    preallocated_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("k") = 32,

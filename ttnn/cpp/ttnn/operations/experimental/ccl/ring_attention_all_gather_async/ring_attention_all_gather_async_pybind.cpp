@@ -81,7 +81,7 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear; callers must supply the desired value.
 
         Returns:
             ttnn.Tensor: the output tensor.

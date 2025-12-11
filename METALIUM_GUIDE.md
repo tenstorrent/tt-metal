@@ -301,7 +301,7 @@ Metalium follows a similar design philosophy to OpenCL, which is reflected in it
 
 The following example demonstrates vector addition implementation using the Metalium API. This code shows the complete workflow: device initialization, buffer allocation, kernel compilation, circular buffer configuration, program execution, and result retrieval.
 
-First, we initialize the device connection and allocate the necessary buffers. In Metalium, everything belongs to a mesh. Even a single chip is treated as a 1x1 mesh. This design exnables seamless scaling from one chip to multiple chips:
+First, we initialize the device connection and allocate the necessary buffers. In Metalium, everything belongs to a mesh. Even a single chip is treated as a 1x1 mesh. This design enables seamless scaling from one chip to multiple chips:
 
 ```c++
 auto device = MeshDevice::create_unit_mesh(/*device_id=*/0);
@@ -399,7 +399,7 @@ Following setting the arguments, the program is added to a `MeshWorkload` and is
 
 ```c++
 MeshWorkload workload;
-AddProgramToMeshWorkload(workload, std::move(program), MeshCoordinateRange(device->shape()));
+workload.add_program(MeshCoordinateRange(device->shape()), std::move(program));
 EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 std::vector<bfloat16> c_data(n_tiles * elements_per_tile, 0.0f);
 EnqueueReadMeshBuffer(cq, c, c_data, /*blocking=*/true);
@@ -537,8 +537,9 @@ Unlike OpenCL's command queue which optionally supports out-of-order execution, 
 ```c++
 // Wait for the current tail operation on queue 0 to complete
 // before proceeding on command queue 1
-auto event = EnqueueRecordEvent(device->command_queue(0));
-EnqueueWaitForEvent(device->command_queue(1), event);
+auto event = std::make_shared<Event>();
+device->command_queue(0).enqueue_record_event(event);
+device->command_queue(1).enqueue_wait_for_event(event);
 ```
 
 ### SPMD in Metalium

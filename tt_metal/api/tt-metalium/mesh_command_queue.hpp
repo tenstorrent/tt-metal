@@ -19,8 +19,6 @@
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -32,8 +30,7 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
@@ -42,8 +39,7 @@ class MeshDevice;
 class MeshWorkload;
 }  // namespace distributed
 struct ProgramCommandSequence;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 
@@ -133,6 +129,11 @@ public:
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
+
+    // Internal function.
+    virtual void wait_for_completion(bool) {}
+    // May only be called after wait_for_completion has been called on both command queues on the device.
+    virtual void finish_and_reset_in_use() {}
 };
 
 }  // namespace tt::tt_metal::distributed

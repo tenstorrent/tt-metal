@@ -174,7 +174,7 @@ bool flatten(
 
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles * 32});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> result_vec;
@@ -261,7 +261,7 @@ bool flatten_stress(
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_on_workload = workload.get_programs().at(device_range);
     // Inside the loop, run async runtime functions
     for (int i = 0; i < 1000; i++) {
@@ -319,8 +319,6 @@ bool flatten_stress(
 }  // namespace test_flatten
 
 TEST_F(MeshDispatchFixture, TensixFlatten) {
-    // TODO: Re-enable when #7264 is fixed
-    GTEST_SKIP();
     uint32_t num_tiles_r = 2;
     uint32_t num_tiles_c = 2;
     if (!this->IsSlowDispatch()) {

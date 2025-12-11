@@ -216,8 +216,8 @@ def test_vit_image_classification_eval(
 ):
     from transformers import ViTForImageClassification
 
+    from models.demos.vit.tests.vit_helper_funcs import get_batch
     from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
-    from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch
 
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     if model_type == "torch_model":
@@ -250,7 +250,7 @@ def test_vit_image_classification_eval(
 def run_resnet50_image_classification_eval(
     device, model_type, batch_size_per_device, act_dtype, weight_dtype, model_location_generator, resolution=224
 ):
-    from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
+    from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
     from models.demos.utils.common_demo_utils import get_batch
     from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 

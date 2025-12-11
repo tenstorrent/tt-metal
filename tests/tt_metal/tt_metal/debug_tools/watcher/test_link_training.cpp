@@ -35,9 +35,9 @@ static void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribut
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord logical_core, virtual_core;
     if (device->get_active_ethernet_cores(true).empty()) {
@@ -87,7 +87,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
 
     // Just try forcing an eth retrain on Device 0
     auto mesh_device = this->devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     vector<uint32_t> reset_val = {0x1};
     uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);

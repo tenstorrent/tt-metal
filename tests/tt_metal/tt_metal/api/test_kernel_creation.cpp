@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
@@ -23,7 +23,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
@@ -38,7 +38,7 @@ TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
@@ -52,49 +52,19 @@ TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
     }
 }
 
-TEST_F(MeshDispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
-    for (unsigned int id = 0; id < this->devices_.size(); id++) {
-        auto mesh_device = this->devices_.at(id);
-        if (mesh_device->storage_only_cores().empty()) {
-            GTEST_SKIP() << "This test only runs on devices with storage only cores";
-        }
-
-        distributed::MeshWorkload workload;
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
-
-        const std::set<CoreCoord>& storage_only_cores = mesh_device->storage_only_cores();
-        std::set<CoreRange> storage_only_core_ranges;
-        for (CoreCoord core : storage_only_cores) {
-            storage_only_core_ranges.emplace(core);
-        }
-        CoreRangeSet storage_core_range_set(storage_only_core_ranges);
-        EXPECT_ANY_THROW(
-            tt_metal::CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
-                storage_core_range_set,
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
-    }
-}
-
 TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
 
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         const auto& dispatch_core_config = get_dispatch_core_config();

@@ -27,11 +27,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -66,7 +64,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Write runtime args
     auto get_first_arg =
         [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
-            return (uint32_t)mesh_device->get_devices()[0]->id() + (uint32_t)core.x * 10 * multiplier;
+            return (uint32_t)mesh_device->get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
         };
     auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                              CoreCoord& core,
@@ -82,15 +80,14 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     }
 
     distributed::MeshWorkload workload;
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 
     // Check results
     for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
@@ -120,7 +117,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
 }
 
 TEST(DispatchStress, TensixRunManyTimes) {
-    auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     // Skip fast dispatch until it's supported for remote device.
     if (!slow_dispatch) {
         GTEST_SKIP();
@@ -130,7 +127,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
         log_info(LogTest, "Running iteration #{}", idx);
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<chip_id_t> chip_ids;
+        std::vector<ChipId> chip_ids;
         chip_ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             chip_ids.push_back(id);

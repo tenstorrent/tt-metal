@@ -59,7 +59,6 @@
 
 using std::vector;
 using namespace tt;
-using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -336,8 +335,8 @@ create_mesh_workloads(
     std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
     for (auto& program : programs) {
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        mesh_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
         mesh_workloads.push_back(std::move(mesh_workload));
     }
 
@@ -513,7 +512,7 @@ bool validation_mixed_df(
         uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
         fifo_wr_ptr =
-            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
+            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - (num_blocks_till_fifo_limit * block_size);
         // start index to read, fifo_wr_ptr / 2 because fp16 format
         start_index = fifo_wr_ptr == cb_size_block_aligned ? 0 : fifo_wr_ptr / 2;
         // end pointer addr of current layer
@@ -527,7 +526,7 @@ bool validation_mixed_df(
     for (int k = 0; k < kt; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
-                values_fp16_split[n][i + k * nt * 32 * 32 / num_receivers] = to_float(values_fp16[index]);
+                values_fp16_split[n][i + (k * nt * 32 * 32 / num_receivers)] = to_float(values_fp16[index]);
                 index++;
             }
         }
@@ -552,7 +551,7 @@ bool validation_mixed_df(
     for (int k = 0; k < kt / num_blocks * cb_num_blocks; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
-                golden_vec[index] = golden_vec_split[n][i + k * nt * 32 * 32 / num_receivers];
+                golden_vec[index] = golden_vec_split[n][i + (k * nt * 32 * 32 / num_receivers)];
                 index++;
             }
         }
@@ -702,13 +701,7 @@ int main(int argc, char** argv) {
         }
 
         if (use_device_profiler) {
-#if !defined(TRACY_ENABLE)
-            log_error(
-                LogTest,
-                "Metal library and test code should be build with "
-                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
-#endif
-            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "

@@ -42,9 +42,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
@@ -94,8 +94,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     bool has_idle_eth_cores = !device->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
-    if (!fixture->IsSlowDispatch())
+    if (!fixture->IsSlowDispatch()) {
         has_idle_eth_cores = false;
+    }
 
     if (has_eth_cores) {
         KernelHandle erisc_kid;
@@ -164,10 +165,17 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                     // blank | prefetch, dispatch | tensix kernels
                     int k_id = 1 + 2 + 3;
                     std::string k_id_s = fmt::format("{:3}", k_id);
-                    if (device->arch() == ARCH::BLACKHOLE)
+                    if (device->arch() == ARCH::BLACKHOLE) {
                         k_id_s += fmt::format("|{:3}", k_id + 1);
+                    }
                 } else {
                     k_id_s = "";
+                }
+                std::string erisc1_s = "   X";
+                if (device->arch() == ARCH::BLACKHOLE &&
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    // There is a second erisc on Blackhole
+                    erisc1_s = "   W";
                 }
                 expected = fmt::format(
                     "Device {} {}eth core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
@@ -180,7 +188,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
                     // Active eth core only has one available erisc to test on.
-                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : erisc1_s);
                 if (device->arch() == ARCH::BLACKHOLE) {
                     expected += fmt::format("rmsg:???|?? h_id:  ? smsg:? k_ids:{}", k_id_s);
                 } else {
@@ -192,6 +200,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch
                     int k_id = 1 + 2;
+                    // NOLINTNEXTLINE(bugprone-unused-local-non-trivial-variable)
                     std::string k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
                 } else {
                     k_id_s = "";

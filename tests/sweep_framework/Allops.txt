@@ -105,8 +105,6 @@ ttnn.experimental.add
 ttnn.experimental.all_gather_async
 ttnn.experimental.all_gather_matmul
 ttnn.experimental.all_reduce
-ttnn.experimental.argmax
-ttnn.experimental.argmin
 ttnn.experimental.attn_matmul
 ttnn.experimental.attn_matmul_from_cache
 ttnn.experimental.bias_gelu
@@ -146,7 +144,6 @@ ttnn.experimental.paged_fill_cache
 ttnn.experimental.paged_fused_update_cache
 ttnn.experimental.paged_update_cache
 ttnn.experimental.prefix_scan
-ttnn.experimental.reduce_scatter_async
 ttnn.experimental.repeat_and_interleave_eltwise_mul
 ttnn.experimental.rotary_embedding
 ttnn.experimental.rotary_embedding_llama

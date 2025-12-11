@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_kv_cache)
 set_target_properties(
     ttnn_op_kv_cache
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -24,18 +24,14 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/update_cache_op.cpp
-        device/update_cache_op_multi_core.cpp
+        device/update_cache_device_operation.cpp
+        device/fill_cache_multi_core_program_factory.cpp
+        device/update_cache_multi_core_program_factory.cpp
         kv_cache.cpp
 )
 
 target_include_directories(ttnn_op_kv_cache PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_kv_cache
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_kv_cache PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

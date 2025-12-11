@@ -33,11 +33,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -150,7 +148,7 @@ bool vecadd_multi_core(
     distributed::WriteShard(cq, a, a_data, zero_coord);
     distributed::WriteShard(cq, b, b_data, zero_coord);
     // Enqueue the program
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     log_debug(LogTest, "Kernel execution finished");

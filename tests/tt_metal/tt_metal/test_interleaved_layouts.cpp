@@ -37,12 +37,11 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "common/tt_backend_api_types.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -465,13 +464,21 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     std::shared_ptr<tt_metal::Buffer> src, dst;
     if constexpr (src_is_in_l1) {
-        TT_FATAL((buffer_size % num_l1_banks) == 0, "Error");
+        TT_FATAL(
+            (buffer_size % num_l1_banks) == 0,
+            "Buffer size ({}) must be divisible by number of L1 banks ({})",
+            buffer_size,
+            num_l1_banks);
 
         src = CreateBuffer(l1_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
     } else {
-        TT_FATAL((buffer_size % num_dram_banks) == 0, "Error");
+        TT_FATAL(
+            (buffer_size % num_dram_banks) == 0,
+            "Buffer size ({}) must be divisible by number of DRAM banks ({})",
+            buffer_size,
+            num_dram_banks);
 
         src = CreateBuffer(dram_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
@@ -521,13 +528,13 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     pass &= tt_metal::CloseDevice(device);
 
-    TT_FATAL(pass, "Error");
+    TT_FATAL(pass, "Test failed - buffer comparison did not match");
 
     return pass;
 }
 
 int main(int argc, char** argv) {
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
@@ -535,7 +542,7 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    std::string arch_name = "";
+    std::string arch_name;
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");

@@ -34,14 +34,11 @@ def test_perplexity_huggingface(
     expected_ppl,
     expected_top1,
     expected_top5,
-    model_location_generator,
 ):
     run_test_perplexity(
         llm_mode,
         batch_size,
         max_seq_len,
-        None,
-        model_location_generator,
         None,
         None,
         num_samples,

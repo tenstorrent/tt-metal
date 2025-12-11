@@ -8,8 +8,7 @@
 #include <string>
 #include <tt_stl/assert.hpp>
 
-namespace ttnn {
-namespace operations::experimental::adaptive_pool {
+namespace ttnn::operations::experimental::adaptive_pool {
 
 // Kernels dimension (width or height) can be only uniform and give correct result by padding the border elements
 // Therefore for feasibility of making kernels uniform we need to make sure that the middle elements already are
@@ -151,8 +150,8 @@ AdaptivePoolingParams calculate_adaptive_pool_params(
 
     uint32_t padded_h = input_h + params.padding[0] + params.padding[1];
     uint32_t padded_w = input_w + params.padding[2] + params.padding[3];
-    uint32_t final_out_h = (padded_h - params.kernel_size[0]) / params.stride[0] + 1;
-    uint32_t final_out_w = (padded_w - params.kernel_size[1]) / params.stride[1] + 1;
+    uint32_t final_out_h = ((padded_h - params.kernel_size[0]) / params.stride[0]) + 1;
+    uint32_t final_out_w = ((padded_w - params.kernel_size[1]) / params.stride[1]) + 1;
 
     if (final_out_h != output_h || final_out_w != output_w) {
         params.kernel_size = {base_kernel_h, base_kernel_w};
@@ -278,5 +277,4 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
     }
 }
 
-}  // namespace operations::experimental::adaptive_pool
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::adaptive_pool

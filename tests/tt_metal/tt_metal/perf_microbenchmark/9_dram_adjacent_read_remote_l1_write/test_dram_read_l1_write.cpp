@@ -249,12 +249,12 @@ bool validate_data(
     for (uint32_t r = 0; r < block_h; ++r) {
         for (uint32_t c = 0; c < block_w_per_receiver; ++c) {
             uint32_t one_row_bytes = block_w * datums_per_tile * num_banks;
-            uint32_t input_step = input_start_index_for_core + r * one_row_bytes + c * datums_per_tile * num_banks;
+            uint32_t input_step = input_start_index_for_core + (r * one_row_bytes) + (c * datums_per_tile * num_banks);
             auto input_begin = input_data.begin() + input_step;
             auto input_end = input_begin + datums_per_tile;
             std::vector<T> input_slice(input_begin, input_end);
 
-            uint32_t result_step = r * (datums_per_tile * block_w_per_receiver) + c * datums_per_tile;
+            uint32_t result_step = (r * (datums_per_tile * block_w_per_receiver)) + (c * datums_per_tile);
             auto result_begin = result_data.begin() + result_step;
             auto result_end = result_begin + datums_per_tile;
             std::vector<T> result_slice(result_begin, result_end);
@@ -477,13 +477,7 @@ int main(int argc, char** argv) {
         }
 
         if (use_device_profiler) {
-#if !defined(TRACY_ENABLE)
-            log_error(
-                LogTest,
-                "Metal library and test code should be build with "
-                "profiler option using ./build_metal.sh --enable-profiler");
-#endif
-            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "
@@ -639,8 +633,7 @@ int main(int argc, char** argv) {
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {

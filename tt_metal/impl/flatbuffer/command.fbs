@@ -73,12 +73,6 @@ table ProgramConstructorCommand {
   global_id: uint32;
 }
 
-table EnqueueProgramCommand {
-  cq_global_id: uint32;       // reference to CommandQueue
-  program_global_id: uint32;  // Reference to Program
-  blocking: bool;
-}
-
 table CreateKernelCommand {
   global_id: uint32;          // Reference to Kernel
   program_global_id: uint32;  // Reference to Program
@@ -133,7 +127,6 @@ union CommandType {
   EnqueueReadBufferCommand,
   FinishCommand,
   ProgramConstructorCommand,
-  EnqueueProgramCommand,
   CreateKernelCommand,
   SetRuntimeArgsUint32Command,
   SetRuntimeArgsUint32VecPerCoreCommand,

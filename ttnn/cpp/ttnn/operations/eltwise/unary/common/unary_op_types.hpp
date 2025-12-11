@@ -83,6 +83,7 @@ enum class UnaryOpType {
     UNARY_LE,
     TILED_PROD,
     TYPECAST,
+    BITCAST,
     BITWISE_XOR,
     BITWISE_NOT,
     BITWISE_AND,
@@ -102,6 +103,7 @@ enum class UnaryOpType {
     ZERO_POINT,
     ALT_COMPLEX_ROTATE90,
     MISH,
+    HARDMISH,
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
@@ -118,6 +120,7 @@ enum class UnaryOpType {
     SELU,
     RPOW,
     CBRT,
+    LOGSIGMOID,
 };
 
 enum class VecMode {
@@ -198,7 +201,7 @@ struct BasicUnaryWithParam {
 template <typename T>
 struct BasicUnaryWithParam<T> {
     UnaryOpType op_type;
-    std::vector<T> params;
+    std::vector<T> params{};
 
     BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) : op_type{op_type}, params{params} {}
     BasicUnaryWithParam(UnaryOpType op_type, std::initializer_list<T> params) : op_type{op_type}, params{params} {}
@@ -235,6 +238,8 @@ using BasicFusedActivations = std::vector<ttnn::operations::unary::BasicUnaryWit
 using EltwiseFusedActivations = std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>;
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
+
+using ScalarVariant = std::variant<std::uint32_t, std::int32_t, float>;
 
 }  // namespace ttnn::operations::unary
 

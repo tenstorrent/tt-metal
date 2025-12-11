@@ -609,7 +609,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == BoardType::P100 || board == BoardType::P150) {
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
     }
     SDPATestConfig config{
@@ -625,7 +625,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == BoardType::P100 || board == BoardType::P150) {
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
     }
     SDPATestConfig config{

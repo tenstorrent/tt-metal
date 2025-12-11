@@ -67,7 +67,14 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
  */
 // clang-format on
-ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
+template <bool enforce_fp32_accumulation = false>
+ALWI void reduce_uninit() {
+    if constexpr (enforce_fp32_accumulation) {
+        MATH((tensix_sync()));
+        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
+    }
+    PACK((llk_pack_reduce_mask_clear()));
+}
 
 // clang-format off
 /**
@@ -129,5 +136,4 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, num_faces)));
 }
-
 }  // namespace ckernel

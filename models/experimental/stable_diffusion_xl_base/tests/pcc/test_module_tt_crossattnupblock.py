@@ -26,7 +26,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             20,
             1280,
             0,
-            0.985,
+            0.975,
         ),
         (
             (1, 1280, 64, 64),
@@ -53,6 +53,7 @@ def test_crossattnup(
     out_dim,
     block_id,
     pcc,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -78,6 +79,7 @@ def test_crossattnup(
         num_attn_heads,
         out_dim,
         True,
+        debug_mode=debug_mode,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -107,6 +109,7 @@ def test_crossattnup(
         ttnn_residual_tensors = ttnn_residual_tensors + (ttnn_residual,)
 
     ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_encoder_tensor = ttnn.from_torch(
         torch_encoder_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
     )

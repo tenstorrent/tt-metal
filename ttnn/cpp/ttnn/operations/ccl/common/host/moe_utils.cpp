@@ -98,7 +98,7 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
 }
 
 uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view) {
-    return mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+    return (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 }
 
 // TODO: once #27196 is fixed we can remove the is_mesh_mmio_capable check
@@ -143,7 +143,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         // TODO: remove usage of get_device, need api to return correct routing planes accounting for fast dispatch
         // usage should only be active for T3K
         if (mesh_device.is_local(coord)) {
-            auto device = mesh_device.get_device(coord);
+            auto* device = mesh_device.get_device(coord);
             bool is_mmio_capable = device->is_mmio_capable();
             is_mesh_mmio_capable &= is_mmio_capable;
             log_debug(tt::LogOp, "mesh_coordinate: {}, is_mmio_capable: {}", coord, is_mmio_capable);

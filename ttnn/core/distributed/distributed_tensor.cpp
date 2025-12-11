@@ -33,9 +33,6 @@
 namespace ttnn::distributed {
 namespace {
 
-using ::tt::tt_metal::DistributedHostBuffer;
-using ::tt::tt_metal::distributed::MeshContainer;
-
 // Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
 // shape. `global_range` must outlive the use of the returned function.
 auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* global_range) {
@@ -68,7 +65,7 @@ TensorSpec compute_tensor_spec_for_shards(
         if (!xtensor_view.has_value()) {
             continue;
         }
-        auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
+        auto xtensor_shard_shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
         if (shard_shape.has_value()) {
             TT_FATAL(
                 shard_shape.value() == xtensor_shard_shape,
@@ -197,9 +194,10 @@ public:
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
-        auto input_xtensor = experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
+        auto input_xtensor =
+            tt::tt_metal::experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
 
-        auto chunks = experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
+        auto chunks = tt::tt_metal::experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
         TT_FATAL(chunks.size() >= 1, "No chunks were produced");
         TT_FATAL(
             distribution_shape_.dims() == 1 || chunks.size() == sharded_mesh_size,
@@ -207,8 +205,10 @@ public:
             chunks.size(),
             sharded_mesh_size);
 
-        using StridedViewRef = std::reference_wrapper<experimental::xtensor::StridedView<decltype(input_xtensor)>>;
-        MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(distribution_shape_, std::nullopt);
+        using StridedViewRef =
+            std::reference_wrapper<tt::tt_metal::experimental::xtensor::StridedView<decltype(input_xtensor)>>;
+        tt::tt_metal::distributed::MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(
+            distribution_shape_, std::nullopt);
 
         // Distribute chunks to appropriate mesh coordinates.
         size_t chunk_idx = 0;
@@ -358,29 +358,34 @@ public:
         }
 
         // Convert shards into a linear buffer of xtensor views.
-        std::vector<experimental::xtensor::AdaptedView<const T>> xtensor_views;
+        std::vector<tt::tt_metal::experimental::xtensor::AdaptedView<const T>> xtensor_views;
         xtensor_views.reserve(distribution_shape_.mesh_size());
         std::vector<size_t> shard_shape(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
         dst_buffer.apply([&xtensor_views, &shard_shape](const tt::tt_metal::HostBuffer& shard) {
-            xtensor_views.push_back(experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
+            xtensor_views.push_back(tt::tt_metal::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
         });
 
         tt::stl::SmallVector<int> num_chunks;
-        if (config_.dims.size() == 1) {
-            num_chunks.push_back(xtensor_views.size());
-        } else {
-            TT_FATAL(
-                xtensor_views.size() == distribution_shape_.mesh_size(),
-                "ND composition requires the number of tensors {} to match the mesh shape {}",
-                xtensor_views.size(),
-                distribution_shape_);
-            for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
-                num_chunks.push_back(distribution_shape_[i]);
+        // Scalar (0-dim tensor)
+        bool is_single_views = xtensor_views.size() == 1;
+        if (!is_single_views) {
+            if (config_.dims.size() == 1) {
+                num_chunks.push_back(xtensor_views.size());
+            } else {
+                TT_FATAL(
+                    xtensor_views.size() == distribution_shape_.mesh_size(),
+                    "ND composition requires the number of tensors {} to match the mesh shape {}",
+                    xtensor_views.size(),
+                    distribution_shape_);
+                for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
+                    num_chunks.push_back(distribution_shape_[i]);
+                }
             }
         }
 
-        auto xtensor_adapter = experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
-        auto&& shape = experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
+        auto xtensor_adapter =
+            tt::tt_metal::experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
+        auto&& shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
         return {std::move(xtensor_adapter).data(), std::move(shape)};
     }
 

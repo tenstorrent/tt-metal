@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/trace.hpp"
 
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/distributed.hpp>
 

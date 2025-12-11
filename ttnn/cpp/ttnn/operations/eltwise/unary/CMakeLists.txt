@@ -5,8 +5,8 @@ target_precompile_headers(ttnn_op_eltwise_unary REUSE_FROM TT::CommonPCH)
 set_target_properties(
     ttnn_op_eltwise_unary
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -28,20 +28,11 @@ target_sources(
         device/unary_device_operation.cpp
         device/unary_program_factory.cpp
         device/unary_sharded_program_factory.cpp
-        tanh_accurate/device/tanh_accurate_device_operation.cpp
-        tanh_accurate/device/tanh_accurate_pgm_factory.cpp
-        tanh_accurate/device/tanh_accurate_sharded_pgm_factory.cpp
-        tanh_accurate/tanh_accurate.cpp
         unary.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_unary
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_unary PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

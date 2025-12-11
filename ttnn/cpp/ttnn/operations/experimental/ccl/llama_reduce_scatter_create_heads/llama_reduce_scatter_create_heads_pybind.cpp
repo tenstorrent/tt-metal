@@ -9,9 +9,8 @@ namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 
 void py_bind_llama_rs_create_heads(py::module& module) {
-    auto doc =
-        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
-
+    const auto* doc =
+        R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 
             Args:
@@ -22,6 +21,7 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                 subdevice_id (ttnn.SubDeviceId): the subdevice id.
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
+                topology (ttnn.Topology): Communication topology for the reduce-scatter stage.
                 num_links (number, optional): the number of links. Defaults to `3`.
 
             Keyword Args:

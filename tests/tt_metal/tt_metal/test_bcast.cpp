@@ -40,11 +40,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -88,7 +86,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 // Tests reduce_h kernel in H dimension (NCHW->NC1W)
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
@@ -221,7 +219,7 @@ int main(int argc, char** argv) {
                         // add something not too large but different between tiles
                         auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
+                        ref_bcast_values_with_tile_padding[(j % W) + ((j / W) * TILE_HEIGHT * W)] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,

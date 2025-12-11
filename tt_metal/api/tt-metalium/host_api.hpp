@@ -5,6 +5,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -15,7 +16,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 
@@ -31,14 +31,8 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
-class CoreRange;
-class CoreRangeSet;
+namespace tt::tt_metal {
 
-namespace tt {
-
-namespace tt_metal {
-
-class CommandQueue;
 struct TraceDescriptor;
 
 class Program;
@@ -48,10 +42,25 @@ class CircularBuffer;
 struct Event;
 class Buffer;
 class GlobalSemaphore;
+class CoreRange;
+class CoreRangeSet;
 
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
+
+// clang-format off
+/**
+ * Sets the root directory for TT Metal meta data files like kernel sources.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                 | Type                | Valid range | Required |
+ * |-----------|---------------------------------------------|---------------------|-------------|----------|
+ * | root_dir  | Path to the root directory                  | const std::string & |             | No       |
+ */
+// clang-format on
+void SetRootDir(const std::string& root_dir);
 
 /**
  * Returns number of Tenstorrent devices that can be targeted
@@ -74,7 +83,7 @@ bool IsGalaxyCluster();
  */
 size_t GetNumPCIeDevices();
 
-chip_id_t GetPCIeDeviceID(chip_id_t device_id);
+ChipId GetPCIeDeviceID(ChipId device_id);
 
 // clang-format off
 /**
@@ -84,11 +93,11 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
 IDevice* CreateDevice(
-    chip_id_t device_id,
+    ChipId device_id,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -104,11 +113,11 @@ IDevice* CreateDevice(
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
 IDevice* CreateDeviceMinimal(
-    chip_id_t device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+    ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
 // clang-format off
 /**
@@ -589,27 +598,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 
 // clang-format off
 /**
- * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
- * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
- * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
- *
- * Return value: void
- */
-// clang-format on
-void LightMetalBeginCapture();
-
-// clang-format off
-/**
- * Ends Light Metal Binary capturing on host and all devices returns the binary blob to the user.
- * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
- *
- * Return value: LightMetalBinary
- */
-// clang-format on
-LightMetalBinary LightMetalEndCapture();
-
-// clang-format off
-/**
  * Read device side profiler data for all devices in the mesh device
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
@@ -666,6 +654,4 @@ uint8_t PopCurrentCommandQueueIdForThread();
 // clang-format on
 uint8_t GetCurrentCommandQueueIdForThread();
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

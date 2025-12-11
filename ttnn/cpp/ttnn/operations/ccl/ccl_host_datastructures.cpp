@@ -9,8 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 std::size_t EriscDatamoverConfig::get_eth_channel_sync_size_bytes() { return eth_channel_sync_size_bytes; }
 
@@ -59,14 +58,15 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
 // TODO: #24600
 CCLOpConfig::CCLOpConfig(
     std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
-    input_tensors(&input_tensors),
-    output_tensors(&output_tensors),
-    input_sharded(input_tensors.at(0).is_sharded()),
-    output_sharded(output_tensors.at(0).is_sharded()),
-    df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype())),
+    page_size(0),
     shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
     topology(topology),
-    is_row_major(input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
+    input_sharded(input_tensors.at(0).is_sharded()),
+    output_sharded(output_tensors.at(0).is_sharded()),
+    is_row_major(input_tensors.at(0).layout() == Layout::ROW_MAJOR),
+    df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype())),
+    input_tensors(&input_tensors),
+    output_tensors(&output_tensors) {
     if (input_tensors.at(0).layout() == Layout::TILE) {
         this->tile = input_tensors.at(0).tensor_spec().tile();
         this->page_size = this->tile.get_tile_size(this->df);
@@ -109,5 +109,4 @@ std::map<std::string, std::string> CCLOpConfig::emit_worker_defines() const {
     return worker_defines;
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

@@ -265,7 +265,7 @@ Finally, we add the program to the mesh workload and enqueue it for execution, t
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
     // Add the program to the workload for the mesh
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);

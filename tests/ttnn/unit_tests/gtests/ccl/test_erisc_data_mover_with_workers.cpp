@@ -50,6 +50,7 @@
 #include "ttnn/types.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 // #include <tt-metalium/kernel_types.hpp>
 
@@ -60,8 +61,8 @@ using namespace tt::test_utils::df;
 
 // Taken from ccl_common... some dependency annoyance to deal with so just copying it here for now... resolve before
 // merging
-namespace ttnn {
-namespace ccl {
+
+namespace ttnn::ccl {
 void set_edm_runtime_args(
     tt_metal::Program& program,
     tt_metal::KernelHandle edm_kernel_handle,
@@ -78,8 +79,7 @@ void set_edm_runtime_args(
     log_info(tt::LogOp, "{}", ss.str());
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl
 
 class N300TestDevice {
 public:
@@ -88,7 +88,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             devices_ = distributed::MeshDevice::create_unit_meshes(ids);
 
@@ -110,7 +110,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -151,7 +151,7 @@ void generate_receiver_worker_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Just want a dummy DF
     uint32_t src0_cb_index = CBIndex::c_0;
@@ -238,7 +238,7 @@ void generate_sender_worker_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     std::vector<uint32_t> sender_worker_reader_compile_args{
         num_pages_total,  //
@@ -331,12 +331,12 @@ bool RunWriteBWTest(
 
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program_{};
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program_), device_range);
+    sender_workload.add_program(device_range, std::move(sender_program_));
     auto& sender_program = sender_workload.get_programs().at(device_range);
 
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program_{};
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program_), device_range);
+    receiver_workload.add_program(device_range, std::move(receiver_program_));
     auto& receiver_program = receiver_workload.get_programs().at(device_range);
 
     auto& sender_cq = sender_mesh_device->mesh_command_queue();
@@ -711,12 +711,12 @@ int TestEntrypoint(
     N300TestDevice test_fixture;
 
     const auto& mesh_device_0 = test_fixture.devices_.at(0);
-    auto device_0 = mesh_device_0->get_devices()[0];
+    auto* device_0 = mesh_device_0->get_devices()[0];
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
+    ChipId device_id = std::numeric_limits<ChipId>::max();
     tt_xy_pair eth_receiver_core;
     tt_xy_pair eth_sender_core;
     do {

@@ -14,10 +14,9 @@
 
 #include <tracy/Tracy.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
-ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
+tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
@@ -26,7 +25,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
                 std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
-                for (auto& s : shape) {
+                for (const auto& s : shape) {
                     error_msg += std::to_string(s) + ",";
                 }
                 error_msg += ")";
@@ -42,14 +41,14 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
     }
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
-        for (auto& s : shape) {
+        for (const auto& s : shape) {
             error_msg += std::to_string(s) + ",";
         }
         error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";
         TT_THROW("{}", error_msg);
     }
 
-    ttnn::SmallVector<uint32_t> new_shape(shape.size());
+    ttsl::SmallVector<uint32_t> new_shape(shape.size());
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (index_of_negative_1 == -1) {
         TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
@@ -58,7 +57,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
         new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
-    return ttnn::Shape(std::move(new_shape));
+    return tt::tt_metal::Shape(std::move(new_shape));
 }
 
 int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
@@ -69,7 +68,7 @@ int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const u
     return flat_index;
 };
 
-std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
+std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {
@@ -108,6 +107,19 @@ ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2
     return ShardDivisionSpec{num_shards_height, last_shard_height, num_shards_width, last_shard_width};
 };
 
-}  // namespace tt_metal
+CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor) {
+    TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to automatically create a CBDescriptor");
 
-}  // namespace tt
+    return CBDescriptor{
+        .total_size = tensor.buffer()->aligned_size_per_bank(),
+        .core_ranges = tensor.shard_spec()->grid,
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = cb_index,
+            .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
+            .page_size = tensor.buffer()->aligned_page_size(),
+            .tile = TileDescriptor(tensor.tensor_spec().tile())}},
+        .buffer = tensor.buffer(),
+        .global_circular_buffer = nullptr};
+}
+
+}  // namespace tt::tt_metal

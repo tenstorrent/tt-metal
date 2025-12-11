@@ -426,6 +426,8 @@ class TestStatus(Enum):
     fail_unsupported_device_perf = "fail_unsupported_device_perf"
     skipped = "skipped"
     error = "error"
+    xfail = "xfail"  # Expected failure - test failed as expected
+    xpass = "xpass"  # Unexpected pass - test passed when it was expected to fail
 
 
 class RunStatus(Enum):

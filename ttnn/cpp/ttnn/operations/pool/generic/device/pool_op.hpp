@@ -12,13 +12,12 @@
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations {
-namespace pool {
+namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {
     struct operation_attributes_t {
@@ -27,6 +26,7 @@ struct Pool2D {
         DataType output_dtype_;
         Layout output_layout_;
         MemoryConfig memory_config_;
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
         bool return_indices_;
@@ -34,7 +34,7 @@ struct Pool2D {
     };
 
     struct tensor_args_t {
-        const std::vector<Tensor>& input_tensors_;
+        const Tensor& input_tensor_;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -46,9 +46,22 @@ struct Pool2D {
             tt::tt_metal::KernelHandle reader1_kernel{};
             tt::tt_metal::KernelHandle compute_kernel{};
             tt::tt_metal::CBHandle raw_in_cb{};
-            tt::tt_metal::CBHandle raw_in_idx_cb{};
             tt::tt_metal::CBHandle out_cb{};
             tt::tt_metal::CBHandle out_idx_cb{};
+            tt::tt_metal::CBHandle in_scalar_cb_0{};
+            tt::tt_metal::CBHandle in_scalar_cb_1{};
+            tt::tt_metal::CBHandle clear_value_cb{};
+            tt::tt_metal::CBHandle in_reader_indices_cb{};
+            tt::tt_metal::CBHandle in_cb_0{};
+            tt::tt_metal::CBHandle in_cb_1{};
+            tt::tt_metal::CBHandle pre_tilize_cb{};
+            tt::tt_metal::CBHandle config_cb{};
+            tt::tt_metal::CBHandle in_idx_cb{};
+            tt::tt_metal::CBHandle pack_tmp_cb{};
+            tt::tt_metal::CBHandle pack_idx_tmp_cb{};
+            tt::tt_metal::CBHandle right_inc_cb{};
+            tt::tt_metal::CBHandle down_left_wrap_inc_cb{};
+            tt::tt_metal::CBHandle up_left_wrap_inc_cb{};
             uint32_t ncores{};
             tt::tt_metal::DeviceStorage reader_indices_storage;
             tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -79,20 +92,20 @@ struct Pool2D {
         const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
+        const Tensor& input_tensor,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
         Layout output_layout,
         MemoryConfig memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
         bool return_indices,
         uint32_t memory_used);
 };
 
-}  // namespace pool
-}  // namespace ttnn::operations
+}  // namespace ttnn::operations::pool
 
 namespace ttnn::prim {
 constexpr auto pool2d = ttnn::register_operation<"ttnn::prim::pool2d", ttnn::operations::pool::Pool2D>();

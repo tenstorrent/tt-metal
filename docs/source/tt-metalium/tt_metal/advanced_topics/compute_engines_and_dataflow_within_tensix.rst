@@ -26,12 +26,18 @@ Several key components work together to perform computations within Tensix:
 
 The compute engines rely on four main register sets:
 
-1. **SrcA**: The first source register set for the matrix engine.
-2. **SrcB**: The second source register set for the matrix engine.
+1. **SrcA**: The first source register of the matrix engine.
+2. **SrcB**: The second source register of the matrix engine.
 3. **Dst**: The destination register set for the matrix engine, also used by the vector engine. This register set is exposed in the higher-level API.
 4. **LReg**: Internal registers within the SFPU for holding vector data during computation.
 
 The following image illustrates the connection between the different components and the registers they can access.
+
+.. note::
+
+    The register names are historical and may not clearly reflect their roles. The matrix engine (FPU) was developed before the vector engine (SFPU), and the names ``SrcA``, ``SrcB``, and ``Dst`` were chosen based on their use in matrix operations: ``SrcA`` and ``SrcB`` as source operands, and ``Dst`` as the destination. These names remained unchanged when the vector engine was added.
+
+    ``SrcA`` and ``SrcB`` are physical registers inside the matrix engine. The names might suggest references to memory locations, but they are just hardware registers used for computation. And unlike ``Dst``, ``SrcA`` and ``SrcB`` are single registers, not a register set.
 
 .. note::
 
@@ -196,8 +202,8 @@ For example, to perform matrix multiplication:
         // Perform matrix multiplication:
         // - Take tile 0 from CB 0 and tile 0 from CB 1.
         // - Place the result into Dst tile 0.
-        //              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx   transp
-        matmul_tiles(CBIndex::c_0, CBIndex::c_1, 0         , 0         , 0      , false);
+        //              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx
+        matmul_tiles(CBIndex::c_0, CBIndex::c_1, 0         , 0         , 0);
 
         // Commit the results, transferring ownership of Dst registers to the packer.
         tile_regs_commit();

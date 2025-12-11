@@ -36,8 +36,9 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
 
-    constexpr auto out_args = TensorAccessorArgs<25>();
+    constexpr auto out_args = TensorAccessorArgs<26>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -81,8 +82,13 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
+        cur_pos,
+        cur_batch,
+        core_num_in_reduce,
+        num_cores_per_head,
+        k_chunk_size_dynamic,
+        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
@@ -118,6 +124,7 @@ void kernel_main() {
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
@@ -131,6 +138,12 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
+        // If this core processes the first chunk and we need to apply sliding window mask, generate it here
+        generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
+            k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
+    }
 
     if (is_worker) {
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
@@ -185,12 +198,6 @@ void kernel_main() {
                 cb_reserve_back(cb_m_in, PNHt);
                 cb_reserve_back(cb_l_in, PNHt);
 
-                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
-                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
-                intermed_l1_read_addr += q_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_out_o, out_chunk_tiles);
-
                 uint32_t m_write_ptr = get_read_ptr(cb_m_in);
                 noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
                 intermed_l1_read_addr += ml_read_size;
@@ -202,6 +209,12 @@ void kernel_main() {
                 intermed_l1_read_addr += ml_read_size;
                 noc_async_read_barrier();
                 cb_push_back(cb_l_in, PNHt);
+
+                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
+                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
+                intermed_l1_read_addr += q_read_size;
+                noc_async_read_barrier();
+                cb_push_back(cb_out_o, out_chunk_tiles);
             }
         }
         // Offset for current batch
@@ -223,7 +236,7 @@ void kernel_main() {
             constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
 
             if (!is_out_sharded) {
-                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold>(
+                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
                     out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
             }
             // sharded out case

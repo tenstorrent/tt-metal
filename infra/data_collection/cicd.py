@@ -12,6 +12,7 @@ from infra.data_collection.github.utils import (
     get_data_pipeline_datetime_from_datetime,
 )
 from infra.data_collection.github.workflows import (
+    deduplicate_tests_by_full_name,
     get_github_job_id_to_test_reports,
     get_github_job_id_to_annotations,
     get_tests_from_test_report_path,
@@ -74,6 +75,7 @@ def create_cicd_json_for_data_analysis(
             for test_report_path in test_reports:
                 logger.info(f"Job id:{github_job_id} Analyzing test report {test_report_path}")
                 tests += get_tests_from_test_report_path(test_report_path)
+            tests = deduplicate_tests_by_full_name(tests)
         else:
             tests = []
 

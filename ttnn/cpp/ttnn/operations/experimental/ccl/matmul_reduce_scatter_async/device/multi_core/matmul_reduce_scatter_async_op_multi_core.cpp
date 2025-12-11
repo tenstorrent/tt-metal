@@ -13,7 +13,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <sstream>
 #include <type_traits>
@@ -21,8 +20,6 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-
-using namespace tt::constants;
 
 namespace ttnn {
 
@@ -37,9 +34,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     Tensor& matmul_output_tensor,
 
     /* All Gather Params */
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -71,9 +68,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             program,
             matmul_output_tensor,
             persistent_intermediate_tensor,
-            target_device,
-            forward_device,
-            backward_device,
+            target_device_coord,
+            forward_coord,
+            backward_coord,
             reduce_scatter_output_tensor,
             dim,
             num_links,

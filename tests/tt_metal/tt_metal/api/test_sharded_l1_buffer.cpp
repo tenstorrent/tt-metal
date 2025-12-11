@@ -54,7 +54,7 @@ struct L1Config {
     ShardSpecBuffer shard_spec() const {
         return ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>(
-                {CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores_height * num_cores_width - 1))})),
+                {CoreRange(CoreCoord(0, 0), CoreCoord(0, (num_cores_height * num_cores_width) - 1))})),
             {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
              (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,
@@ -87,7 +87,7 @@ namespace local_test_functions {
 template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
@@ -227,7 +227,7 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
         for (const auto& core : cores) {
             physical_cores.push_back(mesh_device->worker_core_from_logical_core(core));
         }
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
         uint32_t total_size = cores.size() * page_size;
         auto buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{

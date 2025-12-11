@@ -43,24 +43,25 @@ constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 18;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
         invalidate_l1_cache();
     }
 
-    worker_interface.cache_producer_noc_addr();
+    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
     uint8_t channel_id,
     size_t buffer_size_bytes,
@@ -78,7 +79,7 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>(
+    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
@@ -93,7 +94,7 @@ void setup_channel(
 template <uint8_t NUM_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
@@ -128,7 +129,7 @@ void forward_data(
         }
     }
 
-    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
         worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 
@@ -151,15 +152,18 @@ void kernel_main() {
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
-    std::array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
+    std::array<
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
+        NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
-    std::
-        array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
-            header_only_channel_worker_interfaces;
+    std::array<
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
+        NUM_HEADER_ONLY_CHANNELS>
+        header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
 
     // Stream IDs
@@ -220,7 +224,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
             bool all_channels_drained = true;

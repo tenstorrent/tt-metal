@@ -27,11 +27,6 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                            const std::string& name,
                            const tt::tt_metal::Layout required_layout,
                            const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "Softmax operation is only supported on Wormhole. Device arch: {}. Tensor name: {}",
-            enchantum::to_string(tensor.device()->arch()),
-            name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,

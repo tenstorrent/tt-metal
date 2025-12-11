@@ -80,7 +80,7 @@ namespace {
 
 // Note: Moving this function into the header may cause performance regression.
 template <class Size_T>
-size_t getNewCapacity(size_t MinSize, size_t TSize, size_t OldCapacity) {
+size_t getNewCapacity(size_t MinSize, size_t OldCapacity) {
     constexpr size_t MaxSize = std::numeric_limits<Size_T>::max();
 
     // Ensure we can fit the new capacity.
@@ -99,7 +99,7 @@ size_t getNewCapacity(size_t MinSize, size_t TSize, size_t OldCapacity) {
 
     // In theory 2*capacity can overflow if the capacity is 64 bit, but the
     // original capacity would never be large enough for this to be a problem.
-    size_t NewCapacity = 2 * OldCapacity + 1;  // Always grow.
+    size_t NewCapacity = (2 * OldCapacity) + 1;  // Always grow.
     return std::clamp(NewCapacity, MinSize, MaxSize);
 }
 
@@ -127,7 +127,7 @@ void* replaceAllocation(void* NewElts, size_t TSize, size_t NewCapacity, size_t 
 // Note: Moving this function into the header may cause performance regression.
 template <class Size_T>
 void* SmallVectorBase<Size_T>::mallocForGrow(void* FirstEl, size_t MinSize, size_t TSize, size_t& NewCapacity) {
-    NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
+    NewCapacity = getNewCapacity<Size_T>(MinSize, this->capacity());
     // Even if capacity is not 0 now, if the vector was originally created with
     // capacity 0, it's possible for the malloc to return FirstEl.
     void* NewElts = safe_malloc(NewCapacity * TSize);
@@ -140,7 +140,7 @@ void* SmallVectorBase<Size_T>::mallocForGrow(void* FirstEl, size_t MinSize, size
 // Note: Moving this function into the header may cause performance regression.
 template <class Size_T>
 void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSize) {
-    size_t NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
+    size_t NewCapacity = getNewCapacity<Size_T>(MinSize, this->capacity());
     void* NewElts;
     if (BeginX == FirstEl) {
         NewElts = safe_malloc(NewCapacity * TSize);

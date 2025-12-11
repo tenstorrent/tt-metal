@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
     EnqueueWriteMeshBuffer(cq, a, a_data, false);
     EnqueueWriteMeshBuffer(cq, b, b_data, false);
     // Enqueue the program
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::cout << "Kernel execution finished" << std::endl;

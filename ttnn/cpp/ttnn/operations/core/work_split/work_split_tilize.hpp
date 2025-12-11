@@ -72,6 +72,76 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
+    CoreRangeSet& grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    // Compute grid area and initial blocks-per-core using integer math.
+    const uint32_t grid_area = grid.num_cores();
+    auto grid_cores = corerange_to_cores(grid);
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+
+    // Find the closest square larger than nblocks_per_core
+    auto [adjusted_nblocks_per_core, single_block_size] =
+        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
+    nblocks_per_core = adjusted_nblocks_per_core;
+
+    // Helper lambda for ceiling division.
+    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
+    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    // Sets to hold different core ranges.
+    std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
+    std::set<CoreRange> all_cores;
+    const uint32_t full_cores_per_row = width_tiles / single_block_size;
+    const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
+    const uint32_t full_cores_per_col = height_tiles / single_block_size;
+    const bool has_cliff_col = (full_cores_per_col < total_blocks_height);
+    const uint32_t single_block_size_cliff_row = width_tiles - (full_cores_per_row * single_block_size);
+    const uint32_t single_block_size_cliff_col = height_tiles - (full_cores_per_col * single_block_size);
+    // Coordinates for assigning cores sequentially.
+    uint32_t core_index = 0;
+    auto addCore = [&](std::set<CoreRange>& targetSet) {
+        CoreRange range{grid_cores.at(core_index), grid_cores.at(core_index)};
+        targetSet.insert(range);
+        all_cores.insert(range);
+        // Update core coordinates in a cyclic row-wise manner.
+        core_index++;
+    };
+    // Distribute cores over full rows (each row may have an extra "cliff" block at the end).
+    for (uint32_t row = 0; row < full_cores_per_col; row++) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(core_range);
+        }
+        if (has_cliff_row) {
+            addCore(cliff_row_core_range);
+        }
+    }
+    // Add the cliff column if present.
+    if (has_cliff_col) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(cliff_col_core_range);
+        }
+        if (has_cliff_row) {
+            addCore(cliff_col_row_core_range);
+        }
+    }
+    return BlockSplitWH{
+        ncores,
+        all_cores,
+        core_range,
+        cliff_row_core_range,
+        cliff_col_core_range,
+        cliff_col_row_core_range,
+        nblocks_per_core,
+        single_block_size,
+        single_block_size_cliff_row,
+        single_block_size_cliff_col,
+        has_cliff_row,
+        has_cliff_col,
+        full_cores_per_row,
+        full_cores_per_col};
+}
+
+inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid_size.x * grid_size.y;
@@ -83,9 +153,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     nblocks_per_core = adjusted_nblocks_per_core;
 
     // Helper lambda for ceiling division.
-    auto divCeil = [](uint32_t a, uint32_t b) -> uint32_t { return (a + b - 1) / b; };
-    const uint32_t total_blocks_width = divCeil(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
+    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     // Sets to hold different core ranges.
@@ -95,8 +164,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
     const uint32_t full_cores_per_col = height_tiles / single_block_size;
     const bool has_cliff_col = (full_cores_per_col < total_blocks_height);
-    const uint32_t single_block_size_cliff_row = width_tiles - full_cores_per_row * single_block_size;
-    const uint32_t single_block_size_cliff_col = height_tiles - full_cores_per_col * single_block_size;
+    const uint32_t single_block_size_cliff_row = width_tiles - (full_cores_per_row * single_block_size);
+    const uint32_t single_block_size_cliff_col = height_tiles - (full_cores_per_col * single_block_size);
     // Coordinates for assigning cores sequentially.
     uint32_t i_x = 0;
     uint32_t i_y = 0;
@@ -147,6 +216,39 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         full_cores_per_col};
 }
 
+inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nblocks) {
+    size_t grid_area = grid.num_cores();
+    auto grid_cores = corerange_to_cores(grid);
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
+    const uint32_t ncores_no_cliff = nblocks_per_core_cliff == 0 ? ncores : ncores - 1;
+
+    std::set<CoreRange> core_range, cliff_core_range;
+    std::optional<CoreCoord> cliff_core;
+
+    // Top non-cliff range
+    for (uint32_t core_id = 0; core_id < ncores_no_cliff; core_id++) {
+        CoreRange range{grid_cores.at(core_id), grid_cores.at(core_id)};
+        core_range.insert(range);
+    }
+
+    if (nblocks_per_core_cliff > 0) {
+        // Last partial row (excluding last core) and single cliff core
+        CoreRange range{grid_cores.at(ncores_no_cliff), grid_cores.at(ncores_no_cliff)};
+        cliff_core = grid_cores.at(ncores_no_cliff);
+    }
+
+    std::set<CoreRange> all_cores = core_range;
+
+    if (cliff_core.has_value()) {
+        cliff_core_range.insert(CoreRange{*cliff_core, *cliff_core});
+        all_cores.insert(CoreRange{*cliff_core, *cliff_core});
+    }
+
+    return BlockSplit{ncores, all_cores, core_range, cliff_core_range, nblocks_per_core, nblocks_per_core_cliff};
+}
+
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
     size_t grid_area = grid_size.x * grid_size.y;
     const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
@@ -154,7 +256,7 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
     const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
-    const uint32_t ncores_x_cliff = ncores - (ncores_y - 1) * ncores_x;
+    const uint32_t ncores_x_cliff = ncores - ((ncores_y - 1) * ncores_x);
 
     std::set<CoreRange> core_range, cliff_core_range;
     std::optional<CoreCoord> cliff_core;
@@ -285,7 +387,11 @@ struct FullRep {
         rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
         pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % tile_height == 0 && "total rows must be divisible by {}", "Error", tile_height);
+        TT_FATAL(
+            (n_rows + n_pads) % tile_height == 0,
+            "Total rows ({}) must be divisible by tile height ({})",
+            n_rows + n_pads,
+            tile_height);
     }
 
     std::vector<BlockRep> to_block_reps() const {

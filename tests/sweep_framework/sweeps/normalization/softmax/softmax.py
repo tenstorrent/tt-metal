@@ -75,11 +75,14 @@ def run_softmax(
 # Entry point for the sweep framework.
 # Takes one test vector (as defined above) as the input.
 def run(
-    params,
+    input_shape,
+    input_a_dtype,
+    input_a_layout,
+    input_a_memory_config,
+    output_memory_config,
     *,
     device,
 ) -> list:
-    [input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config] = params
     return run_softmax(
         input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device=device
     )

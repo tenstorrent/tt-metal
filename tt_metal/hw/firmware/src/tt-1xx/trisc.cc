@@ -19,7 +19,7 @@
 #include "circular_buffer.h"
 #include "circular_buffer_init.h"
 #endif
-#include "circular_buffer_constants.h"
+#include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -42,12 +42,19 @@ uint8_t my_relative_y_ __attribute__((used));
 namespace ckernel {
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
-
-volatile tt_reg_ptr uint* reg_base = reinterpret_cast<volatile uint*>(0xFFB10000);
-volatile tt_reg_ptr uint* pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
-volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
-tt_reg_ptr uint* regmem = reinterpret_cast<tt_reg_ptr uint*>(REGFILE_BASE);
-
+// Transition shim
+#if defined(__PTR_CONST)
+#define PTR_CONST const
+#else
+#define PTR_CONST
+#endif
+volatile tt_reg_ptr uint* PTR_CONST reg_base = reinterpret_cast<volatile uint*>(0xFFB10000);
+volatile tt_reg_ptr uint* PTR_CONST pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
+volatile tt_reg_ptr uint* PTR_CONST regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
+#undef PTR_CONST
+#if defined(__INSTRN_BUFFER_TOS)
+volatile tt_reg_ptr uint32_t* const instrn_buffer = reinterpret_cast<volatile uint32_t*>(INSTRN_BUF_BASE);
+#endif
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
 
@@ -105,6 +112,12 @@ int main(int argc, char* argv[]) {
 
     reset_cfg_state_id();
 
+    {
+        // #31901: initialize PRNG seed to 0 to avoid nondeterministic behavior
+        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+        cfg[PRNG_SEED_Seed_Val_ADDR32] = 0;
+        riscv_wait(600);
+    }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;

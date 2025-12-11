@@ -169,7 +169,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -395,7 +395,7 @@ TO-DO:
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     uint32_t test_case_id = 310;
 
     /* Parameters */
@@ -414,7 +414,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     uint32_t test_case_id = 311;
 
@@ -518,7 +518,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     uint32_t test_case_id = 318;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Parameters
     CoreCoord mst_start_coord = {0, 0};

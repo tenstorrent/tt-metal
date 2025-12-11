@@ -40,8 +40,7 @@ int main(int argc, char** argv) {
         });
 
     tt_metal::distributed::MeshWorkload workload;
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), tt_metal::distributed::MeshCoordinateRange(device->shape()));
+    workload.add_program(tt_metal::distributed::MeshCoordinateRange(device->shape()), std::move(program));
     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, true);
     tt_metal::ReadMeshDeviceProfilerResults(*device);
     device->close();

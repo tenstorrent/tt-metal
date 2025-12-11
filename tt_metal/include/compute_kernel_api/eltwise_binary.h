@@ -56,11 +56,11 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(
-        icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    MATH((
+        llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(icb0, icb1, acc_to_dest)));
 
     if constexpr (full_init) {
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/)));
     }
 }
 
@@ -195,19 +195,19 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false, false)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
 }
 
 // clang-format off
 /**
  * Performs element-wise binary operations, such as multiply, add, or sub of tiles.
- * If binary_reuse_dest = EltwiseBinaryReuseDestType::DST_TO_SRCA, then the tile specified by idst will be loaded from
+ * If binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA, then the tile specified by idst will be loaded from
  * the DST register buffer into SRCA. The binary operation will operate on SRCA & SRCB inputs, and the result will be
- * written back to the DST register buffer specified by idst. Similar to DST_TO_SRCA, if binary_reuse_dest =
- * EltwiseBinaryReuseDestType::DST_TO_SRCB, then tile specified by idst will be loaded from the DST into SRCB register
+ * written back to the DST register buffer specified by idst. Similar to DEST_TO_SRCA, if binary_reuse_dest =
+ * EltwiseBinaryReuseDestType::DEST_TO_SRCB, then tile specified by idst will be loaded from the DST into SRCB register
  * buffer.
  *
- * EltwiseBinaryReuseDestType::DST_TO_SRCA and EltwiseBinaryReuseDestType::DST_TO_SRCB assume that another operation has
+ * EltwiseBinaryReuseDestType::DEST_TO_SRCA and EltwiseBinaryReuseDestType::DEST_TO_SRCB assume that another operation has
  * populated the dest register, otherwise dest will contain zeroes.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call.

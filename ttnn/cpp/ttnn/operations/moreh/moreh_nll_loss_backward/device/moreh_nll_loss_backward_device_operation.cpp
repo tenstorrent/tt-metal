@@ -13,11 +13,11 @@ MorehNllLossBackwardDeviceOperation::program_factory_t MorehNllLossBackwardDevic
 
 void MorehNllLossBackwardDeviceOperation::validate_inputs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto& target_tensor = tensor_args.target_tensor;
-    auto& output_grad_tensor = tensor_args.output_grad_tensor;
-    auto& weight_tensor = tensor_args.weight_tensor;
-    auto& divisor_tensor = tensor_args.divisor_tensor;
-    auto& input_grad_tensor = tensor_args.input_grad_tensor;
+    const auto& target_tensor = tensor_args.target_tensor;
+    const auto& output_grad_tensor = tensor_args.output_grad_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& divisor_tensor = tensor_args.divisor_tensor;
+    const auto& input_grad_tensor = tensor_args.input_grad_tensor;
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");

@@ -35,11 +35,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
     constexpr size_t ELEMENTS_PER_TILE = 1024;
@@ -174,7 +172,7 @@ struct DestPrintTestConfig {
 
     size_t num_tiles = DEFAULT_NUM_TILES;
     tt::DataFormat data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
+    CoreCoord core;
     bool remap = false;
     bool swizzle = false;
     std::string reader_kernel;
@@ -382,13 +380,14 @@ static std::string generate_golden_output(const std::vector<uint32_t>& data, tt:
 static bool reader_datacopy_writer(
     DPrintMeshFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const DestPrintTestConfig& config) {
+    const DestPrintTestConfig& config,
+    ARCH arch) {
     // Create program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& cq = mesh_device->mesh_command_queue();
 
     // Prepare reader kernel and get input DRAM buffer
@@ -415,6 +414,11 @@ static bool reader_datacopy_writer(
 
     auto golden_output = generate_golden_output(input_data, config.data_format);
     // Check the print log against golden output.
+    if (config.data_format == tt::DataFormat::Float32 && arch == ARCH::WORMHOLE_B0) {
+        // Skip all device-side warning lines added before each tile print
+        DeleteLinesStartingWith(
+            DPrintMeshFixture::dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
+    }
     EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 
     // Compare input and output data
@@ -425,9 +429,10 @@ static bool reader_datacopy_writer(
 static void run_test_with_config(
     DPrintMeshFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const DestPrintTestConfig& config) {
+    const DestPrintTestConfig& config,
+    ARCH arch) {
     try {
-        reader_datacopy_writer(fixture, mesh_device, config);
+        reader_datacopy_writer(fixture, mesh_device, config, arch);
     } catch (const std::exception& e) {
         FAIL() << "Test failed with error: " << e.what();
     }
@@ -460,7 +465,7 @@ protected:
 
         this->RunTestOnDevice(
             [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                run_test_with_config(fixture, mesh_device, config);
+                run_test_with_config(fixture, mesh_device, config, this->arch_);
             },
             this->devices_[0]);
     }
