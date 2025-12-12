@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <optional>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -37,37 +37,6 @@ void ClearProfilerControlBuffer(IDevice* device);
  * True     |
  * */
 void InitDeviceProfiler(IDevice* device);
-
-/**
- * Sync TT devices with host
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * */
-void ProfilerSync(ProfilerSyncState state);
-
-// clang-format off
-/**
- * Read device side profiler data for the device
- *
- * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
- *
- * Return value: void
- *
- * | Argument      | Description                                           | Type                     | Valid Range               | Required |
- * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
- * | device        | The device to be profiled                             | IDevice*                 |                           | Yes      |
- * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
- * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
- * */
-// clang-format on
-void ReadDeviceProfilerResults(
-    IDevice* device,
-    ProfilerReadState = ProfilerReadState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
