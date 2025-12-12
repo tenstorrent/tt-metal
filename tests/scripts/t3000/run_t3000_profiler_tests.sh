@@ -84,6 +84,9 @@ run_async_tracing_T3000_test() {
                 exit 1
             fi
 
+            rm -rf $PROFILER_ARTIFACTS_DIR/reports/legacy_comparison
+
+
             # Testing device only report on the same artifacts
             rm -rf $PROFILER_OUTPUT_DIR/$runDate
             ./tools/tracy/process_ops_logs.py --device-only --date
@@ -184,7 +187,14 @@ main() {
         source python_env/bin/activate
     fi
 
-    run_profiling_test
+    # If a function name is provided as first argument, run that function
+    if [[ -n "$1" ]] && [[ "$(type -t "$1")" == "function" ]]; then
+        echo "Running function: $1"
+        "$@"
+    else
+        # Otherwise run all tests
+        run_profiling_test
+    fi
 }
 
 main "$@"

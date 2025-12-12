@@ -42,13 +42,13 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None, only
 
     assert common_columns.size >= 12, f"Only {common_columns.size} common columns found"
 
-    python_df_filtered = python_df[common_columns].astype(float)
+    python_df_filtered = python_df[common_columns].copy()
     assert (
         "DEVICE FW DURATION [ns]" in python_df_filtered.columns
     ), f"'DEVICE FW DURATION [ns]' column not found in {python_ops_perf_report}"
     python_df_filtered = python_df_filtered[python_df_filtered["DEVICE FW DURATION [ns]"].notna()]
 
-    cpp_df_filtered = cpp_df[common_columns].astype(float)
+    cpp_df_filtered = cpp_df[common_columns].copy()
     cpp_df_filtered = cpp_df_filtered[cpp_df_filtered["GLOBAL CALL COUNT"] != 0]
 
     sort_columns = ["GLOBAL CALL COUNT"]
@@ -67,6 +67,23 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None, only
 
     python_df_compare = python_df_sorted.copy()
     cpp_df_compare = cpp_df_sorted.copy()
+
+    # Normalize dtypes for consistent comparison (only needed because pandas .equals() checks dtypes)
+    # This handles cases where same values are stored as int vs float (e.g., 1024 vs 1024.0)
+    for col in common_columns:
+        if col in python_df_compare.columns and col in cpp_df_compare.columns:
+            # Try to convert to numeric - if successful, normalize to float64 for both
+            # If not numeric, ensure both are same dtype (object for strings)
+            try:
+                python_numeric = pd.to_numeric(python_df_compare[col], errors="raise")
+                cpp_numeric = pd.to_numeric(cpp_df_compare[col], errors="raise")
+                # Both are numeric - normalize to float64
+                python_df_compare[col] = python_numeric.astype("float64")
+                cpp_df_compare[col] = cpp_numeric.astype("float64")
+            except (ValueError, TypeError):
+                # Not numeric - ensure both are object type for consistent comparison
+                python_df_compare[col] = python_df_compare[col].astype("object")
+                cpp_df_compare[col] = cpp_df_compare[col].astype("object")
 
     ignored_zero_latency_counts: dict[str, int] = {}
     latency_columns = {
