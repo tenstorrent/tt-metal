@@ -1313,7 +1313,8 @@ class ModelArgs:
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
-            # e.g. "Llama-3.1-8B": 4096
+            # Qwen3-32B hangs at 8192, so we cap at 4096
+            "Qwen3-32B": 4096,
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
