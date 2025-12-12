@@ -187,17 +187,18 @@ def test_rdiv_bw(device):
     logger.info(f"Reverse Division Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_repeat_bw(device):
     # Create sample tensors for backward repeat operation
-    grad_tensor = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
+    # Input tensor that will be repeated
     input_tensor = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
+        torch.rand([1, 1, 32, 32], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    # Grad tensor matching the shape after repeat operation (2x repeat in dim 0)
+    grad_tensor = ttnn.from_torch(
+        torch.rand([2, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
     # Define the shape for repeat operation
-    shape = [1, 1, 32, 32]
+    shape = [2, 1, 1, 1]
 
     # Call the repeat_bw function
     output = ttnn.repeat_bw(grad_tensor, input_tensor, shape)
@@ -1043,56 +1044,104 @@ def test_polygamma_bw(device):
 
 
 # Complex backward operations
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_polar_bw(device):
     # Create sample tensors for backward polar coordinate operation
-    grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    # Create complex input tensor
+    input_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(input_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(input_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
+
+    # Create complex gradient tensor
+    grad_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(grad_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(grad_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Call the polar_bw function
-    output = ttnn.polar_bw(grad_tensor, tensor)
+    output = ttnn.polar_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Polar Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_imag_bw(device):
     # Create sample tensors for backward imaginary part operation
-    grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    # Create a complex input tensor
+    input_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(input_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(input_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
+
+    # Gradient tensor for the imaginary part (regular tensor, not complex)
+    grad_data = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_tensor = ttnn.Tensor(grad_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     # Call the imag_bw function
-    output = ttnn.imag_bw(grad_tensor, tensor)
+    output = ttnn.imag_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Imaginary Part Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_real_bw(device):
     # Create sample tensors for backward real part operation
-    grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    # Create a complex input tensor
+    input_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(input_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(input_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
+
+    # Gradient tensor for the real part (regular tensor, not complex)
+    grad_data = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_tensor = ttnn.Tensor(grad_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     # Call the real_bw function
-    output = ttnn.real_bw(grad_tensor, tensor)
+    output = ttnn.real_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Real Part Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_angle_bw(device):
     # Create sample tensors for backward angle operation
-    grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    # Create a complex input tensor
+    input_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(input_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(input_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
+
+    # Gradient tensor for the angle (regular tensor, not complex)
+    grad_data = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_tensor = ttnn.Tensor(grad_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     # Call the angle_bw function
-    output = ttnn.angle_bw(grad_tensor, tensor)
+    output = ttnn.angle_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Angle Backward: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_conj_bw(device):
     # Create sample tensors for backward complex conjugate operation
-    grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-    tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    # Create a complex input tensor
+    input_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    input_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(input_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(input_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
+
+    # Create complex gradient tensor
+    grad_real = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_imag = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    grad_tensor = ttnn.complex_tensor(
+        ttnn.Tensor(grad_real, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(grad_imag, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device),
+    )
 
     # Call the conj_bw function
-    output = ttnn.conj_bw(grad_tensor, tensor)
+    output = ttnn.conj_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Complex Conjugate Backward: {output}")

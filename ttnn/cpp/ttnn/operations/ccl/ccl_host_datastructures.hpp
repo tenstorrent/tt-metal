@@ -53,14 +53,12 @@ public:
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
-    bool get_shard_grid_size() const;
     Tensor const& get_input_tensor(std::size_t i) const;
     Tensor const& get_output_tensor(std::size_t i) const;
     std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
     uint32_t page_size;
-    uint32_t shard_grid_size;
     Topology topology;
     bool input_sharded;
     bool output_sharded;

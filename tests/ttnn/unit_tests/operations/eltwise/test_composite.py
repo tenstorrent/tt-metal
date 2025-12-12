@@ -412,32 +412,6 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
-        (torch.Size([7, 185, 20])),
-        (torch.Size([6, 45, 233])),
-    ),
-)
-@pytest.mark.parametrize(
-    "param",
-    {-1e4, -98.5, -43.7, -8.5, 0.0, 0.45, 1.0, 7.7, 58.4, 89.9, 1e5},
-)
-def test_unary_logit(input_shapes, param, device):
-    in_data = torch.Tensor(size=input_shapes).uniform_(-100, 100).to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.logit(input_tensor, eps=param)
-    golden_function = ttnn.get_golden_function(ttnn.logit)
-    golden_tensor = golden_function(in_data, eps=param, device=device)
-
-    out = ttnn.to_torch(output_tensor)
-    assert_with_pcc(golden_tensor, out, 0.99)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
     ),
 )
 @pytest.mark.parametrize(

@@ -48,7 +48,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
     auto temp_tensor2 = ttnn::prim::reshape(
-        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
+        temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid, std::nullopt);
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
@@ -176,7 +176,8 @@ ttnn::Tensor reshape_tiled(
     const MemoryConfig& memory_config,
     const PadValue& pad_value,
     const bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
     // squeeze input tensor and requested shape to 3D
 
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
@@ -213,13 +214,35 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
-    auto output_tensor_3d = ttnn::prim::reshape(
-        tensor3d,
-        requested_shape_3d,
-        requested_padded_shape_3d,
-        working_output_memory_config,
-        recreate_mapping_tensor,
-        sub_core_grid);
+    Tensor output_tensor_3d;
+    auto rt_args_estimate = reshape::detail::estimate_reshape_rt_args(
+        tensor3d, requested_shape_3d, requested_padded_shape_3d, memory_config);
+
+    if ((!rt_args_estimate.can_fit_in_rt_args()) && (on_device_mappings.has_value() && !on_device_mappings.value())) {
+        // run untilize + reshape + tilize
+        bool typecast_back = false;
+        if (tensor3d.dtype() == DataType::FLOAT32) {
+            tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
+            typecast_back = true;
+        }
+        auto untilize_tensor = ttnn::to_layout(
+            tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config(), sub_core_grid);
+        auto reshaped_tensor = ttnn::reshape(untilize_tensor, requested_shape_3d);
+        output_tensor_3d = ttnn::to_layout(
+            reshaped_tensor, ttnn::TILE_LAYOUT, reshaped_tensor.dtype(), working_output_memory_config, sub_core_grid);
+        if (typecast_back) {
+            output_tensor_3d = ttnn::typecast(output_tensor_3d, DataType::FLOAT32);
+        }
+    } else {
+        output_tensor_3d = ttnn::prim::reshape(
+            tensor3d,
+            requested_shape_3d,
+            requested_padded_shape_3d,
+            working_output_memory_config,
+            recreate_mapping_tensor,
+            sub_core_grid,
+            on_device_mappings);
+    }
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
@@ -241,7 +264,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -325,7 +349,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             mem_config,
             pad_value.value_or(default_pad_value),
             reshape_map_mode == TileReshapeMapMode::RECREATE,
-            sub_core_grid);
+            sub_core_grid,
+            on_device_mappings);
     }
 }
 
@@ -335,8 +360,9 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
-    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
+    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid, on_device_mappings);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
@@ -345,14 +371,16 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
     return invoke(
         tensor,
         tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
         reshape_map_mode,
-        sub_core_grid);
+        sub_core_grid,
+        on_device_mappings);
 }
 
 }  // namespace ttnn::operations::data_movement

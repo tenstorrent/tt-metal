@@ -24,7 +24,6 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const Tensor& target = tensor_args.target_tensor;
     const std::optional<Tensor>& weight = tensor_args.weight_tensor;
     const Tensor& output = tensor_return_value;
-    const std::string reduction = operation_attributes.reduction;
     const uint32_t ignore_index = operation_attributes.ignore_index;
     const uint32_t channel_size = operation_attributes.channel_size;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
