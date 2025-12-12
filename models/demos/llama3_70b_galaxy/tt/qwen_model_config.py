@@ -1540,7 +1540,7 @@ class TtQwenModelArgs(TtModelArgs):
             x = ttnn.from_torch(
                 x,
                 device=self.mesh_device if not on_host else None,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
                 memory_config=input_mem_cfg if not on_host else None,

@@ -133,8 +133,10 @@ class TtTransformer(LightweightModule):
             if not self.args.is_qwen:
                 self.setup_prefill()
             self.is_prefill_setup = True
-
-        if mode == "decode":
+            # Switch back to decode mode if needed (to restore decode prefetcher with tensors)
+            if mode == "decode":
+                self.switch_mode("decode")
+        elif mode == "decode":
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -682,11 +684,6 @@ class TtTransformer(LightweightModule):
         # ttnn.deallocate(h)
         if mode == "decode":
             ttnn.deallocate(garbage_tensor)
-
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
-            self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
-                self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
-            )
 
         if mode == "prefill":
             return x

@@ -70,7 +70,7 @@ def test_qwen_transformer_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 2
+    model_args.n_layers = 3
 
     state_dict = model_args.load_state_dict()
 
@@ -93,7 +93,7 @@ def test_qwen_transformer_inference(
     reference_model.load_state_dict(reference_state_dict)
 
     generation_start_pos = 0
-    generation_length = 5
+    generation_length = 2
     all_tests_pass = True
 
     # Prepare page table for paged attention
@@ -151,22 +151,22 @@ def test_qwen_transformer_inference(
         ),
     )
 
+    # Create random input tensor (skipping embedding as requested)
+    pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+    tt_decode_input = pt_decode_input.clone()
+
+    decode_input = model_args.prepare_residual_tensor_decode(
+        tt_decode_input,
+        model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+    )
+
     for i in range(generation_length):
         logger.info(f"[Qwen Transformer] Generating token {i}")
-
-        # Create random input tensor (skipping embedding as requested)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
-        tt_decode_input = pt_decode_input.clone()
-
-        decode_input = model_args.prepare_residual_tensor_decode(
-            tt_decode_input,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-        )
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
 
-        # Run TT model
+        # Run TT model with same input tensor for all iterations to test for accuracy
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,

@@ -180,6 +180,10 @@ class LMHead(LightweightModule):
                 outputs.append(output)
 
         outputs_reduced = []
+        # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
+        self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
+            self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
+        )
         for output in outputs:
             output_reduced = self.tt_ccl.line_all_reduce(
                 output,
