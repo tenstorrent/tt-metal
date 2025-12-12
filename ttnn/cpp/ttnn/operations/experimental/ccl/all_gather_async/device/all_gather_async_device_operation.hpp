@@ -105,31 +105,6 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
     const Tensor& input,
     const Tensor& output);
 
-// TODO: Remove this once dependent ops are migrated to the new infra
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset = CoreCoord(0, 0),
-    bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
-
 }  // namespace ttnn
 namespace ttnn::prim {
 constexpr auto all_gather_async = ttnn::register_operation<
