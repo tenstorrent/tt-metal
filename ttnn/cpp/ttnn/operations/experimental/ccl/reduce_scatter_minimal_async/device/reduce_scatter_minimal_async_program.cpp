@@ -40,7 +40,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 // Import types from the new TMP pattern
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::ReduceScatterProgramArtifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
 
 namespace ttnn {
 
@@ -2091,7 +2091,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 }  // namespace ttnn
 
 // Implementations for the TMP namespace - wrappers to ttnn namespace functions
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
 
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
@@ -2281,7 +2281,8 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     const auto backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, mesh_coordinate, -1, operation_attributes.topology, operation_attributes.cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "forward_coord or backward_coord is null");
+    TT_FATAL(forward_coord.has_value(), "forward_coord is null");
+    TT_FATAL(backward_coord.has_value(), "backward_coord is null");
 
     const uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
@@ -2442,4 +2443,4 @@ void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail

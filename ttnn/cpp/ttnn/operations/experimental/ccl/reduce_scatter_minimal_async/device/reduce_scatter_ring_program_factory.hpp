@@ -11,7 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
 
 // Use ReduceScatterProgramArtifacts as the shared variables type for consistency
 using RingReduceScatterSharedVariables = ReduceScatterProgramArtifacts;
@@ -80,4 +80,4 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& intermed,
     const Tensor& output);
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail

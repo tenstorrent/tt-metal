@@ -62,9 +62,9 @@ std::vector<ttnn::TensorSpec> MatmulReduceScatterAsync::compute_output_specs(
     ttnn::TensorSpec matmul_output_specs = this->matmul_struct.compute_output_specs(input_tensors, {})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
-    using ReduceScatterOp = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::
+    using ReduceScatterOp = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
         ReduceScatterMinimalAsyncDeviceOperation;
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::tensor_args_t tensor_args{
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::tensor_args_t tensor_args{
         input_tensors[0], std::nullopt, std::nullopt};
     auto reduce_scatter_output_specs = ReduceScatterOp::compute_output_specs(this->reduce_scatter_params, tensor_args);
     return {reduce_scatter_output_specs[0], matmul_output_specs};

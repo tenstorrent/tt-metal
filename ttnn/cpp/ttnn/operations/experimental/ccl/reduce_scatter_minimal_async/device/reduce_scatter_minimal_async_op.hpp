@@ -30,7 +30,7 @@ using ccl::EriscDatamoverBuilder;
 
 // Import the ReduceScatterProgramArtifacts from the detail namespace for backward compatibility
 using ReduceScatterProgramArtifacts =
-    operations::experimental::ccl::reduce_scatter_minimal_async_detail::ReduceScatterProgramArtifacts;
+    operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
 
 struct ReduceScatterMinimalAsync {
     uint32_t dim;

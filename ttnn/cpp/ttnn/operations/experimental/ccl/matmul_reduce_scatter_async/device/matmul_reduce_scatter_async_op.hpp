@@ -29,7 +29,7 @@ namespace ttnn {
 
 // Type alias for the reduce scatter operation attributes used in fusion
 using ReduceScatterMinimalAsyncParams =
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::operation_attributes_t;
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::operation_attributes_t;
 
 struct MatmulReduceScatterAsync {
     /* Reduce Scatter Params */

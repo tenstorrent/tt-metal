@@ -8,7 +8,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
@@ -218,7 +218,7 @@ void reduce_scatter_common_validates(
     const auto page_size = input_tensor.buffer()->page_size();
     TT_FATAL(
         topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
-        "Topology must be Ring or Linear");
+        "Topology must be either Ring or Linear");
     TT_FATAL(
         page_size % input_tensor.buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
@@ -303,4 +303,4 @@ void reduce_scatter_common_validates(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
