@@ -144,24 +144,6 @@ private:
     static std::string extract_torus_architecture(const std::string& desc);
 
     static bool has_torus_variant(const std::string& desc, const std::string& variant);
-
-    static void add_wh_x_torus_connections(
-        cabling_generator::proto::PortConnections* connections, const std::string& node);
-    static void add_wh_y_torus_connections(
-        cabling_generator::proto::PortConnections* connections, const std::string& node);
-    static void add_bh_x_torus_connections(
-        cabling_generator::proto::PortConnections* connections, const std::string& node);
-    static void add_bh_y_torus_connections(
-        cabling_generator::proto::PortConnections* connections, const std::string& node);
-
-    static void add_internal_connection(
-        cabling_generator::proto::PortConnections* connections,
-        const std::string& node_a,
-        int tray_a,
-        int port_a,
-        const std::string& node_b,
-        int tray_b,
-        int port_b);
 };
 
 }  // namespace tt::scaleout_tools

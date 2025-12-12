@@ -19,6 +19,9 @@
 #include "node/node.hpp"
 #include "node/node_types.hpp"
 
+#include <enchantum/enchantum.hpp>
+#include <tt_stl/caseless_comparison.hpp>
+
 namespace tt::scaleout_tools {
 
 std::string MergeValidationResult::format_messages() const {
@@ -374,107 +377,79 @@ bool DescriptorMerger::has_torus_variant(const std::string& desc, const std::str
     return desc.find(variant) != std::string::npos;
 }
 
+// Helper to get the combined torus type for merging
+NodeType get_combined_torus_type(const std::string& desc1, const std::string& desc2) {
+    const bool desc1_x = desc1.find("_X_TORUS") != std::string::npos;
+    const bool desc1_y = desc1.find("_Y_TORUS") != std::string::npos;
+    const bool desc1_xy = desc1.find("_XY_TORUS") != std::string::npos;
+    const bool desc2_x = desc2.find("_X_TORUS") != std::string::npos;
+    const bool desc2_y = desc2.find("_Y_TORUS") != std::string::npos;
+    const bool desc2_xy = desc2.find("_XY_TORUS") != std::string::npos;
+
+    // Determine if we need XY torus
+    const bool needs_x = desc1_x || desc1_xy || desc2_x || desc2_xy;
+    const bool needs_y = desc1_y || desc1_xy || desc2_y || desc2_xy;
+
+    if (needs_x && needs_y) {
+        if (desc1.find("WH_GALAXY") == 0) {
+            return NodeType::WH_GALAXY_XY_TORUS;
+        } else if (desc1.find("BH_GALAXY") == 0) {
+            return NodeType::BH_GALAXY_XY_TORUS;
+        }
+    } else if (needs_x) {
+        if (desc1.find("WH_GALAXY") == 0) {
+            return NodeType::WH_GALAXY_X_TORUS;
+        } else if (desc1.find("BH_GALAXY") == 0) {
+            return NodeType::BH_GALAXY_X_TORUS;
+        }
+    } else if (needs_y) {
+        if (desc1.find("WH_GALAXY") == 0) {
+            return NodeType::WH_GALAXY_Y_TORUS;
+        } else if (desc1.find("BH_GALAXY") == 0) {
+            return NodeType::BH_GALAXY_Y_TORUS;
+        }
+    }
+    
+    throw std::runtime_error("Unable to determine combined torus type from: " + desc1 + " and " + desc2);
+}
+
 void DescriptorMerger::add_torus_internal_connections(
     cabling_generator::proto::GraphTemplate& target_template,
     const std::string& target_desc,
     const std::string& source_desc,
     const std::string& child_name) {
-    // Determine which torus dimensions to add
-    const bool has_x = has_torus_variant(target_desc, "_X_TORUS") || has_torus_variant(target_desc, "_XY_TORUS") ||
-                       has_torus_variant(source_desc, "_X_TORUS") || has_torus_variant(source_desc, "_XY_TORUS");
-
-    const bool has_y = has_torus_variant(target_desc, "_Y_TORUS") || has_torus_variant(target_desc, "_XY_TORUS") ||
-                       has_torus_variant(source_desc, "_Y_TORUS") || has_torus_variant(source_desc, "_XY_TORUS");
-
-    const bool is_wh = target_desc.find("WH_GALAXY") == 0;
-    const bool is_bh = target_desc.find("BH_GALAXY") == 0;
-
-    if (!is_wh && !is_bh) {
-        return;
-    }
-
-    // Get or create QSFP_DD port connections
-    auto& port_connections_map = *target_template.mutable_internal_connections();
-    auto* qsfp_connections = &port_connections_map["QSFP_DD"];
-
-    // Add X-torus connections (from node.cpp)
-    if (has_x) {
-        if (is_wh) {
-            add_wh_x_torus_connections(qsfp_connections, child_name);
-        } else if (is_bh) {
-            add_bh_x_torus_connections(qsfp_connections, child_name);
+    
+    // Get the combined torus type
+    NodeType combined_type = get_combined_torus_type(target_desc, source_desc);
+    
+    // Create a NodeDescriptor using node.cpp (which has all the torus connection logic!)
+    auto combined_node_descriptor = create_node_descriptor(combined_type);
+    
+    // Extract base architecture name (e.g., "WH_GALAXY" from "WH_GALAXY_XY_TORUS")
+    std::string base_arch = extract_torus_architecture(target_desc);
+    
+    // Only copy QSFP_DD connections (the torus-specific ones)
+    // Don't copy LINKING_BOARD connections as those are already in the merged descriptor
+    if (combined_node_descriptor.port_type_connections().contains("QSFP_DD")) {
+        const auto& qsfp_connections = combined_node_descriptor.port_type_connections().at("QSFP_DD");
+        auto& target_qsfp_connections = (*target_template.mutable_internal_connections())["QSFP_DD"];
+        
+        for (const auto& conn : qsfp_connections.connections()) {
+            auto* new_conn = target_qsfp_connections.add_connections();
+            
+            // Copy port_a with child_name as path
+            auto* port_a = new_conn->mutable_port_a();
+            port_a->add_path(child_name);
+            port_a->set_tray_id(conn.port_a().tray_id());
+            port_a->set_port_id(conn.port_a().port_id());
+            
+            // Copy port_b with child_name as path
+            auto* port_b = new_conn->mutable_port_b();
+            port_b->add_path(child_name);
+            port_b->set_tray_id(conn.port_b().tray_id());
+            port_b->set_port_id(conn.port_b().port_id());
         }
     }
-
-    // Add Y-torus connections (from node.cpp)
-    if (has_y) {
-        if (is_wh) {
-            add_wh_y_torus_connections(qsfp_connections, child_name);
-        } else if (is_bh) {
-            add_bh_y_torus_connections(qsfp_connections, child_name);
-        }
-    }
-}
-
-void DescriptorMerger::add_wh_x_torus_connections(
-    cabling_generator::proto::PortConnections* connections, const std::string& node) {
-    // WH Galaxy X-torus connections (from node.cpp WHGalaxyNode::add_x_torus_connections)
-    add_internal_connection(connections, node, 1, 3, node, 2, 3);
-    add_internal_connection(connections, node, 1, 4, node, 2, 4);
-    add_internal_connection(connections, node, 1, 5, node, 2, 5);
-    add_internal_connection(connections, node, 1, 6, node, 2, 6);
-    add_internal_connection(connections, node, 3, 6, node, 4, 6);
-    add_internal_connection(connections, node, 3, 5, node, 4, 5);
-    add_internal_connection(connections, node, 3, 4, node, 4, 4);
-    add_internal_connection(connections, node, 3, 3, node, 4, 3);
-}
-
-void DescriptorMerger::add_wh_y_torus_connections(
-    cabling_generator::proto::PortConnections* connections, const std::string& node) {
-    // WH Galaxy Y-torus connections (from node.cpp WHGalaxyNode::add_y_torus_connections)
-    add_internal_connection(connections, node, 1, 2, node, 3, 2);
-    add_internal_connection(connections, node, 1, 1, node, 3, 1);
-    add_internal_connection(connections, node, 2, 1, node, 4, 1);
-    add_internal_connection(connections, node, 2, 2, node, 4, 2);
-}
-
-void DescriptorMerger::add_bh_x_torus_connections(
-    cabling_generator::proto::PortConnections* connections, const std::string& node) {
-    // BH Galaxy X-torus connections (from node.cpp BHGalaxyNode::add_x_torus_connections)
-    add_internal_connection(connections, node, 1, 3, node, 3, 3);
-    add_internal_connection(connections, node, 1, 4, node, 3, 4);
-    add_internal_connection(connections, node, 1, 5, node, 3, 5);
-    add_internal_connection(connections, node, 1, 6, node, 3, 6);
-    add_internal_connection(connections, node, 2, 6, node, 4, 6);
-    add_internal_connection(connections, node, 2, 5, node, 4, 5);
-    add_internal_connection(connections, node, 2, 4, node, 4, 4);
-    add_internal_connection(connections, node, 2, 3, node, 4, 3);
-}
-
-void DescriptorMerger::add_bh_y_torus_connections(
-    cabling_generator::proto::PortConnections* connections, const std::string& node) {
-    // BH Galaxy Y-torus connections (from node.cpp BHGalaxyNode::add_y_torus_connections)
-    add_internal_connection(connections, node, 1, 2, node, 2, 2);
-    add_internal_connection(connections, node, 1, 1, node, 2, 1);
-    add_internal_connection(connections, node, 3, 1, node, 4, 1);
-    add_internal_connection(connections, node, 3, 2, node, 4, 2);
-}
-
-void DescriptorMerger::add_internal_connection(
-    cabling_generator::proto::PortConnections* connections,
-    const std::string& node_a,
-    int tray_a,
-    int port_a,
-    const std::string& node_b,
-    int tray_b,
-    int port_b) {
-    auto* conn = connections->add_connections();
-    conn->mutable_port_a()->add_path(node_a);
-    conn->mutable_port_a()->set_tray_id(tray_a);
-    conn->mutable_port_a()->set_port_id(port_a);
-    conn->mutable_port_b()->add_path(node_b);
-    conn->mutable_port_b()->set_tray_id(tray_b);
-    conn->mutable_port_b()->set_port_id(port_b);
 }
 
 std::set<uint32_t> DescriptorMerger::extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor) {
