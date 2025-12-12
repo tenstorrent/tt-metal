@@ -37,7 +37,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@ebanerjee/fixing-main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
