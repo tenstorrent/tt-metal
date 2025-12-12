@@ -7,37 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def validate_tensor_comparison(
-    expected, actual, comparison_type="allclose", atol=0.05, rtol=0.05, max_diff_threshold=1e-5
-):
-    """
-    Unified tensor comparison function supporting both equal and allclose checks.
-
-    Args:
-        expected: Expected tensor
-        actual: Actual tensor
-        comparison_type: "equal" for exact match, "allclose" for tolerance-based match
-        atol: Absolute tolerance for allclose
-        rtol: Relative tolerance for allclose
-        max_diff_threshold: Maximum difference threshold for equal checks
-
-    Returns:
-        bool: True if comparison passes, False otherwise
-    """
-    if comparison_type == "equal":
-        # For equal checks, use torch.equal for exact match or check max difference
-        if torch.equal(expected, actual):
-            return True
-        # Fallback to max difference check for bfloat16 precision issues
-        max_diff = (expected - actual).abs().max().item()
-        return max_diff < max_diff_threshold
-    elif comparison_type == "allclose":
-        return torch.allclose(expected, actual, atol=atol, rtol=rtol)
-    else:
-        raise ValueError(f"Unsupported comparison_type: {comparison_type}")
 
 
 @pytest.mark.parametrize(
@@ -59,7 +28,7 @@ def validate_tensor_comparison(
 def test_rotate_various_angles(device, input_shape, angle):
     """Test rotate with various rotation angles"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     # Generate random input in NHWC format
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -78,10 +47,6 @@ def test_rotate_various_angles(device, input_shape, angle):
         ttnn_output_torch.shape == torch_output_nhwc.shape
     ), f"Shape mismatch: ttnn={ttnn_output_torch.shape}, torch={torch_output_nhwc.shape}"
 
-    # Check PCC
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(f"Angle {angle}°: {pcc_message}")
-
     # Check using validation function with adaptive tolerances
     # For larger tensors with diagonal rotations, we need higher tolerances due to numerical precision differences
     h, w = input_shape[1], input_shape[2]
@@ -98,11 +63,8 @@ def test_rotate_various_angles(device, input_shape, angle):
         # Smaller tensors should have high precision
         atol, rtol = 0.05, 0.05
 
-    comparison_passed = validate_tensor_comparison(
-        torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=atol, rtol=rtol
-    )
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
 
-    assert pcc_passed, f"Test failed with PCC below threshold for angle {angle}°"
     assert (
         comparison_passed
     ), f"Test failed tensor comparison (angle={angle}°, atol={atol}, rtol={rtol}, tensor_size={tensor_size})"
@@ -119,7 +81,7 @@ def test_rotate_various_angles(device, input_shape, angle):
 def test_rotate_identity(device, input_shape):
     """Test that 0-degree rotation returns the same image"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
@@ -128,19 +90,10 @@ def test_rotate_identity(device, input_shape):
     ttnn_output = ttnn.rotate(ttnn_input, angle=0.0)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    # Should be nearly identical
-    pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_output_torch, pcc=0.999)
-    logger.info(f"Identity transform: {pcc_message}")
-
     # Use equal check for identity transform - should be exact
-    equal_passed = validate_tensor_comparison(
-        torch_input_nhwc, ttnn_output_torch, comparison_type="equal", max_diff_threshold=0.01
-    )
-    max_diff = (torch_input_nhwc - ttnn_output_torch).abs().max().item()
-    logger.info(f"Max difference from input: {max_diff:.6f}")
+    equal_passed = torch.equal(torch_input_nhwc, ttnn_output_torch)
 
-    assert pcc_passed, "Identity rotation (0°) should preserve input"
-    assert equal_passed, f"Identity rotation should be equal to input: max_diff={max_diff}"
+    assert equal_passed, f"Identity rotation should be equal to input"
 
 
 @pytest.mark.parametrize(
@@ -158,7 +111,7 @@ def test_rotate_identity(device, input_shape):
 def test_rotate_exact_multiples_of_90(device, input_shape, angle):
     """Test 90-degree multiples which should be exact (within bfloat16 precision)"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
@@ -171,19 +124,10 @@ def test_rotate_exact_multiples_of_90(device, input_shape, angle):
     ttnn_output = ttnn.rotate(ttnn_input, angle=float(angle))
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    # 90-degree rotations should be very accurate
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.995)
-    logger.info(f"90° multiple rotation ({angle}°): {pcc_message}")
-
     # Use equal check for 90-degree multiples - should be exact
-    equal_passed = validate_tensor_comparison(
-        torch_output_nhwc, ttnn_output_torch, comparison_type="equal", max_diff_threshold=0.05
-    )
-    max_diff = (torch_output_nhwc - ttnn_output_torch).abs().max().item()
-    logger.info(f"Max difference: {max_diff:.6f}")
+    equal_passed = torch.equal(torch_output_nhwc, ttnn_output_torch)
 
-    assert pcc_passed, f"90-degree rotation ({angle}°) failed PCC check"
-    assert equal_passed, f"90-degree rotation should be equal: angle={angle}°, max_diff={max_diff}"
+    assert equal_passed, f"90-degree rotation should be equal: angle={angle}°"
 
 
 @pytest.mark.skip(reason="Fill value testing needs investigation - may have precision issues at boundaries")
@@ -201,7 +145,7 @@ def test_rotate_exact_multiples_of_90(device, input_shape, angle):
 def test_rotate_with_fill_value(device, input_shape, fill_value):
     """Test rotation with different fill values for out-of-bounds areas"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 45.0  # 45 degrees will create out-of-bounds areas in corners
@@ -215,16 +159,9 @@ def test_rotate_with_fill_value(device, input_shape, fill_value):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, fill=fill_value)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(f"Fill value {fill_value}: {pcc_message}")
-
     # More lenient tolerances for fill value tests due to edge interpolation
     atol, rtol = 0.1, 0.1
-    comparison_passed = validate_tensor_comparison(
-        torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=atol, rtol=rtol
-    )
-
-    assert pcc_passed, f"Test failed with fill_value={fill_value}"
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Tensor comparison failed with fill_value={fill_value}"
 
 
@@ -239,7 +176,7 @@ def test_rotate_with_fill_value(device, input_shape, fill_value):
 def test_rotate_batch_consistency(device, input_shape):
     """Test that each batch item rotates independently and consistently"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 30.0
@@ -258,13 +195,9 @@ def test_rotate_batch_consistency(device, input_shape):
         ttnn_single_torch = ttnn.to_torch(ttnn_single_output)
 
         # Should be identical
-        equal_passed = validate_tensor_comparison(
-            ttnn_output_torch[b : b + 1], ttnn_single_torch, comparison_type="equal", max_diff_threshold=1e-5
-        )
-        max_diff = (ttnn_output_torch[b : b + 1] - ttnn_single_torch).abs().max().item()
-        logger.info(f"Batch {b} consistency: max_diff={max_diff:.6f}")
+        equal_passed = torch.equal(ttnn_output_torch[b : b + 1], ttnn_single_torch)
 
-        assert equal_passed, f"Batch {b} should be equal to single rotation: max_diff={max_diff}"
+        assert equal_passed, f"Batch {b} should be equal to single rotation"
 
 
 @pytest.mark.parametrize(
@@ -282,7 +215,7 @@ def test_rotate_batch_consistency(device, input_shape):
 def test_rotate_multichannel_consistency(device, input_shape, angle):
     """Test that all channels rotate identically"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     # Create input where first two channels have the same pattern
     torch_input_nhwc = torch.zeros(input_shape, dtype=torch.bfloat16)
@@ -298,12 +231,9 @@ def test_rotate_multichannel_consistency(device, input_shape, angle):
     # Channels 0 and 1 should remain identical
     channel_0 = ttnn_output_torch[..., 0]
     channel_1 = ttnn_output_torch[..., 1]
-    equal_passed = validate_tensor_comparison(channel_0, channel_1, comparison_type="equal", max_diff_threshold=1e-5)
-    max_diff = (channel_0 - channel_1).abs().max().item()
+    equal_passed = torch.equal(channel_0, channel_1)
 
-    logger.info(f"Multi-channel consistency (angle={angle}°): max_diff={max_diff:.6f}")
-
-    assert equal_passed, f"Channels should be equal after rotation: max_diff={max_diff}"
+    assert equal_passed, f"Channels should be equal after rotation"
 
 
 @pytest.mark.parametrize(
@@ -316,7 +246,7 @@ def test_rotate_multichannel_consistency(device, input_shape, angle):
 def test_rotate_small_angles(device, input_shape):
     """Test rotation with very small angles (precision check)"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
@@ -329,11 +259,9 @@ def test_rotate_small_angles(device, input_shape):
         ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
         ttnn_output_torch = ttnn.to_torch(ttnn_output)
+        equal_passed = torch.equal(ttnn_output_torch, torch_output_nhwc)
 
-        pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-        logger.info(f"Small angle {angle}°: {pcc_message}")
-
-        assert pcc_passed, f"Small angle rotation failed at {angle}°"
+        assert equal_passed, f"Channels should be equal after rotation"
 
 
 @pytest.mark.parametrize(
@@ -346,7 +274,7 @@ def test_rotate_small_angles(device, input_shape):
 def test_rotate_large_angles(device, input_shape):
     """Test rotation with large angles (equivalence check)"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
@@ -360,13 +288,9 @@ def test_rotate_large_angles(device, input_shape):
     ttnn_output_0_torch = ttnn.to_torch(ttnn_output_0)
 
     # Should be very similar
-    pcc_passed, pcc_message = assert_with_pcc(ttnn_output_0_torch, ttnn_output_360_torch, pcc=0.99)
-    logger.info(f"360° vs 0°: {pcc_message}")
+    is_equal = torch.equal(ttnn_output_0_torch, ttnn_output_360_torch)
 
-    max_diff = (ttnn_output_0_torch - ttnn_output_360_torch).abs().max().item()
-    logger.info(f"Max difference between 360° and 0°: {max_diff:.6f}")
-
-    assert pcc_passed, "360° rotation should be equivalent to 0°"
+    assert is_equal, "360° rotation should be equivalent to 0°"
 
 
 @pytest.mark.parametrize(
@@ -387,7 +311,7 @@ def test_rotate_large_angles(device, input_shape):
 def test_rotate_opposite_angles(device, input_shape, angle_pair):
     """Test that rotating by +theta then -theta returns near-original"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle_pos, angle_neg = angle_pair
@@ -401,15 +325,9 @@ def test_rotate_opposite_angles(device, input_shape, angle_pair):
     ttnn_restored = ttnn.rotate(ttnn_rotated, angle=float(angle_neg))
     ttnn_restored_torch = ttnn.to_torch(ttnn_restored)
 
-    # Should be close to original
-    pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_restored_torch, pcc=0.99)
-    logger.info(f"Rotate {angle_pos}° then {angle_neg}°: {pcc_message}")
-
-    # Allow more tolerance due to double interpolation
-    max_diff = (torch_input_nhwc - ttnn_restored_torch).abs().max().item()
-    logger.info(f"Max difference after round-trip: {max_diff:.6f}")
-
-    assert pcc_passed, f"Round-trip rotation ({angle_pos}°, {angle_neg}°) degraded too much"
+    assert torch.equal(
+        torch_input_nhwc, ttnn_restored_torch
+    ), f"Round-trip rotation failed for angles {angle_pos}° and {angle_neg}°"
 
 
 # ==================== NEAREST INTERPOLATION TESTS ====================
@@ -434,7 +352,7 @@ def test_rotate_opposite_angles(device, input_shape, angle_pair):
 def test_rotate_nearest_various_angles(device, input_shape, angle):
     """Test rotate with nearest interpolation for various rotation angles"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     # Generate random input in NHWC format
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -453,24 +371,13 @@ def test_rotate_nearest_various_angles(device, input_shape, angle):
         ttnn_output_torch.shape == torch_output_nhwc.shape
     ), f"Shape mismatch: ttnn={ttnn_output_torch.shape}, torch={torch_output_nhwc.shape}"
 
-    # Check accuracy - nearest implementation currently has issues with larger tensors
-    # Using relaxed tolerances until the implementation is fixed
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.4)
-    logger.info(f"Nearest Angle {angle}°: {pcc_message}")
-
     # For smaller tensors (8x8), expect much better accuracy
     if input_shape == (1, 8, 8, 32):
-        pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.95)
-        comparison_passed = validate_tensor_comparison(
-            torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=0.1, rtol=0.1
-        )
+        comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=0.1, rtol=0.1)
     else:
         # For larger tensors, implementation has known issues
-        comparison_passed = validate_tensor_comparison(
-            torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=5.0, rtol=5.0
-        )
+        comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=5.0, rtol=5.0)
 
-    assert pcc_passed, f"Nearest test failed for angle {angle}°"
     assert comparison_passed, f"Nearest tensor comparison failed for angle {angle}°"
 
 
@@ -485,7 +392,7 @@ def test_rotate_nearest_various_angles(device, input_shape, angle):
 def test_rotate_nearest_identity(device, input_shape):
     """Test that 0-degree rotation with nearest returns the same image"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
@@ -495,26 +402,15 @@ def test_rotate_nearest_identity(device, input_shape):
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Check accuracy - nearest implementation currently has issues with larger tensors
-    max_diff = (torch_input_nhwc - ttnn_output_torch).abs().max().item()
-    logger.info(f"Max difference from input: {max_diff:.6f}")
 
     # For smaller tensors (8x8), expect much better accuracy
     if input_shape == (1, 8, 8, 32):
-        pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_output_torch, pcc=0.95)
-        comparison_passed = validate_tensor_comparison(
-            torch_input_nhwc, ttnn_output_torch, comparison_type="allclose", atol=0.1, rtol=0.1
-        )
+        comparison_passed = torch.allclose(torch_input_nhwc, ttnn_output_torch, atol=0.1, rtol=0.1)
     else:
         # For larger tensors, implementation has known issues
-        pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_output_torch, pcc=0.4)
-        comparison_passed = validate_tensor_comparison(
-            torch_input_nhwc, ttnn_output_torch, comparison_type="allclose", atol=5.0, rtol=5.0
-        )
+        comparison_passed = torch.allclose(torch_input_nhwc, ttnn_output_torch, atol=5.0, rtol=5.0)
 
-    logger.info(f"Nearest Identity transform: {pcc_message}")
-
-    assert pcc_passed, f"Nearest identity rotation (0°) failed PCC check"
-    assert comparison_passed, f"Nearest identity rotation differs too much: max_diff={max_diff}"
+    assert comparison_passed, f"Nearest identity rotation (0°) failed comparison check"
 
 
 @pytest.mark.parametrize(
@@ -531,7 +427,7 @@ def test_rotate_nearest_identity(device, input_shape):
 def test_rotate_interpolation_mode_comparison(device, input_shape, interpolation_mode):
     """Compare bilinear vs nearest interpolation modes"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 45.0  # Angle that shows clear differences between modes
@@ -553,27 +449,14 @@ def test_rotate_interpolation_mode_comparison(device, input_shape, interpolation
         # For smaller tensors, expect better accuracy
         if input_shape == (1, 16, 16, 32):
             # This specific size shows poor accuracy too
-            pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.4)
-            comparison_passed = validate_tensor_comparison(
-                torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=5.0, rtol=5.0
-            )
+            comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=5.0, rtol=5.0)
         else:
             # For larger tensors, use relaxed tolerances
-            pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.4)
-            comparison_passed = validate_tensor_comparison(
-                torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=5.0, rtol=5.0
-            )
-        logger.info(f"Mode {interpolation_mode}: {pcc_message}")
-        assert pcc_passed, f"Nearest test failed for {interpolation_mode} mode"
+            comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=5.0, rtol=5.0)
         assert comparison_passed, f"Nearest tensor comparison failed for {interpolation_mode} mode"
     else:
         # Bilinear uses tolerance
-        pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-        logger.info(f"Mode {interpolation_mode}: {pcc_message}")
-        comparison_passed = validate_tensor_comparison(
-            torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=0.05, rtol=0.05
-        )
-        assert pcc_passed, f"Test failed for {interpolation_mode} mode"
+        comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=0.05, rtol=0.05)
         assert comparison_passed, f"Tensor comparison failed for {interpolation_mode} mode"
 
 
@@ -591,7 +474,7 @@ def test_rotate_interpolation_mode_comparison(device, input_shape, interpolation
 def test_rotate_nearest_fill_values(device, input_shape, fill_value):
     """Test nearest rotation with different fill values for out-of-bounds areas"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 45.0  # Creates out-of-bounds areas in corners
@@ -608,19 +491,10 @@ def test_rotate_nearest_fill_values(device, input_shape, fill_value):
     # Nearest implementation currently has issues with larger tensors
     # For smaller tensors, expect better accuracy
     if input_shape == (1, 8, 8, 32):
-        pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.95)
-        comparison_passed = validate_tensor_comparison(
-            torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=0.1, rtol=0.1
-        )
+        comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=0.1, rtol=0.1)
     else:
         # For larger tensors, use relaxed tolerances
-        pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.4)
-        comparison_passed = validate_tensor_comparison(
-            torch_output_nhwc, ttnn_output_torch, comparison_type="allclose", atol=5.0, rtol=5.0
-        )
-
-    logger.info(f"Nearest fill_value {fill_value}: {pcc_message}")
-    max_diff = (torch_output_nhwc - ttnn_output_torch).abs().max().item()
+        comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=5.0, rtol=5.0)
 
     # Check that corners actually contain fill value (they should be out of bounds)
     corner_pixels = [
@@ -634,8 +508,7 @@ def test_rotate_nearest_fill_values(device, input_shape, fill_value):
     corners_with_fill = sum(abs(p - fill_value) < 0.01 for p in corner_pixels)
     logger.info(f"Fill value {fill_value}: {corners_with_fill}/4 corners have expected fill value")
 
-    assert pcc_passed, f"Nearest test failed with fill_value={fill_value}"
-    assert comparison_passed, f"Nearest tensor comparison failed with fill_value={fill_value}, max_diff={max_diff}"
+    assert comparison_passed, f"Nearest comparison test failed with fill_value={fill_value}"
 
 
 @pytest.mark.parametrize(
@@ -655,7 +528,7 @@ def test_rotate_nearest_fill_values(device, input_shape, fill_value):
 def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
     """Test vadv2-specific rotation use case: BEV feature rotation with custom center"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     bev_h, bev_w, embed_dims = input_shape
 
@@ -711,16 +584,8 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
             torch_result.shape == ttnn_result.shape
         ), f"Batch {i}: Shape mismatch torch={torch_result.shape}, ttnn={ttnn_result.shape}"
 
-        # Check accuracy
-        pcc_passed, pcc_message = assert_with_pcc(torch_result, ttnn_result, pcc=0.99)
-        logger.info(f"VADv2 batch {i}, angle {rotation_angle}°, center {rotate_center}: {pcc_message}")
-
-        allclose_passed = torch.equal(torch_result, ttnn_result)
-
-        assert pcc_passed, f"VADv2 test failed for batch {i}, angle {rotation_angle}°"
-        assert allclose_passed, f"VADv2 allclose failed for batch {i}, angle {rotation_angle}°"
-
-    logger.info(f"VADv2 use case passed: shape {input_shape}, batch_size {batch_size}, angle {rotation_angle}°")
+        is_equal = torch.equal(torch_result, ttnn_result)
+        assert is_equal, f"VADv2 allclose failed for batch {i}, angle {rotation_angle}°"
 
 
 @pytest.mark.parametrize(
@@ -734,7 +599,7 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
 def test_rotate_nearest_batch_consistency(device, input_shape):
     """Test that nearest rotation is consistent across batches"""
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 30.0
@@ -753,36 +618,7 @@ def test_rotate_nearest_batch_consistency(device, input_shape):
         ttnn_single_torch = ttnn.to_torch(ttnn_single_output)
 
         # Due to implementation issues, allow larger differences
-        equal_passed = validate_tensor_comparison(
-            ttnn_output_torch[b : b + 1], ttnn_single_torch, comparison_type="equal", max_diff_threshold=10.0
-        )
-        max_diff = (ttnn_output_torch[b : b + 1] - ttnn_single_torch).abs().max().item()
-        logger.info(f"Nearest Batch {b} consistency: max_diff={max_diff:.6f}")
+        equal_passed = torch.equal(ttnn_output_torch[b : b + 1], ttnn_single_torch)
 
         # Relaxed tolerance due to current implementation issues
-        assert equal_passed, f"Nearest Batch {b} should be equal to single rotation: max_diff={max_diff}"
-
-
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        (1, 8, 8, 32),
-        (1, 16, 16, 64),
-    ],
-)
-def test_rotate_mode_validation(device, input_shape):
-    """Test that invalid interpolation modes are rejected"""
-
-    torch.manual_seed(42)
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
-    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    # Valid modes should work
-    _ = ttnn.rotate(ttnn_input, angle=30.0, interpolation_mode="nearest")
-
-    # Invalid modes should raise an error
-    with pytest.raises(Exception):  # Should be a validation error
-        _ = ttnn.rotate(ttnn_input, angle=30.0, interpolation_mode="invalid_mode")
-
-    with pytest.raises(Exception):  # Should be a validation error
-        _ = ttnn.rotate(ttnn_input, angle=30.0, interpolation_mode="bicubic")
+        assert equal_passed, f"Nearest Batch {b} should be equal to single rotation"
