@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "device/tilize_with_val_padding_op.hpp"
+#include "device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/types.hpp"
