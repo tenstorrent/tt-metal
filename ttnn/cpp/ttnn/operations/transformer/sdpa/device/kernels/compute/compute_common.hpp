@@ -296,6 +296,7 @@ template <
     uint32_t rows,
     uint32_t scale_fp32,
     bool write_result_inplace = true,
+    bool do_reduce = true,
     int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
@@ -347,7 +348,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 PACK((llk_pack_reconfig_l1_acc(1)));
             }
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile<true>(j, reduce_cb, i);
+                if (do_reduce) {
+                    pack_tile<true>(j, reduce_cb, i);
+                }
                 if (u == 0 && j == 0) {
                     // If this was the first tile of a row, start accumulating
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -361,7 +364,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             cb_push_back(in0_cb, cols);
         }
     }
-    cb_push_back(reduce_cb, rows);
+    if (do_reduce) {
+        cb_push_back(reduce_cb, rows);
+    }
 }
 
 /**
