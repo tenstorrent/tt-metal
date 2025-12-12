@@ -773,38 +773,22 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::FLOOR:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::FLOAT32) {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("floor_tile_float32({});", idst)};
-            } else {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("floor_tile({});", idst)};
-            }
+            op_init_and_name = {"rounding_op_tile_init();", fmt::format("floor_tile({});", idst)};
             break;
         case UnaryOpType::CEIL:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::FLOAT32) {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile_float32({});", idst)};
-            } else {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
-            }
+            op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
             break;
         case UnaryOpType::TRUNC:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::FLOAT32) {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
-            } else {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
-            }
+            op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
             break;
         case UnaryOpType::FRAC:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::FLOAT32) {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("frac_tile_float32({});", idst)};
-            } else {
-                op_init_and_name = {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
-            }
+            op_init_and_name = {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
             break;
         case UnaryOpType::RELU6:
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
