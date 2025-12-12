@@ -14,7 +14,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-#include "layernorm_utils.h"
+#include "layernorm_compute_utils.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
