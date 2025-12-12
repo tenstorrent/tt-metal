@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t in_h = get_compile_time_arg_val(6);
 
     constexpr uint32_t halo_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t tilize_reduce_cb_0_or_1 = get_compile_time_arg_val(8);
+    constexpr uint32_t tilize_reduce_cb_id = get_compile_time_arg_val(8);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(9);
     // These are now already in fixed-point format from the host
     constexpr uint32_t scale_h_inv_fixed_u32 = get_compile_time_arg_val(10);
@@ -273,7 +273,7 @@ void kernel_main() {
 
             uint32_t block_offset = 0;
             for (uint32_t i = 0; i < blocks; i++) {
-                cb_reserve_back(tilize_reduce_cb_0_or_1, 4);
+                cb_reserve_back(tilize_reduce_cb_id, 4);
 
                 // Calculate the correct block size for this iteration
                 // For the last block, we may need to read fewer tiles than MAX_TILES_PER_REDUCTION
@@ -285,11 +285,16 @@ void kernel_main() {
                     current_block_size_bytes = remaining_size_bytes;
                 }
 
-                uint32_t l1_write_addr = get_write_ptr(tilize_reduce_cb_0_or_1);
+                uint32_t l1_write_addr = get_write_ptr(tilize_reduce_cb_id);
                 uint32_t l1_read_addr_temp = y1_base + x1_offset + block_offset;
                 // 1st stick
                 uint64_t src_noc_addr = get_noc_addr(l1_read_addr_temp);
                 noc_async_read(src_noc_addr, l1_write_addr, current_block_size_bytes);
+
+                // The write address in still increamented by input_block_size_bytes, as the cb
+                // Has width of input_block_size_bytes per stick
+                // To ensure proper tilization, the "cursor" always needs to move to the start of the row
+
                 l1_write_addr += input_block_size_bytes;
 
                 // 2nd stick
@@ -315,7 +320,7 @@ void kernel_main() {
 
                 // push scaler and data into cb.
                 noc_async_read_barrier();
-                cb_push_back(tilize_reduce_cb_0_or_1, 4);
+                cb_push_back(tilize_reduce_cb_id, 4);
                 block_offset += current_block_size_bytes;
             }
             x_coordinate += (scale_w_inv_x2);  // scale_w_inv * 2 in fixed-point
