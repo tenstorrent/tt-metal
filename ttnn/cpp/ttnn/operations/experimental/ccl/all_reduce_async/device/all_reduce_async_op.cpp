@@ -165,7 +165,9 @@ tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::ve
         output_dtype);
 }
 
-namespace operations::experimental::ccl {
+namespace operations {
+namespace experimental {
+namespace ccl {
 namespace {
 Tensor all_reduce_async_impl(
     const Tensor& input_tensor,
@@ -264,7 +266,9 @@ std::vector<Tensor> all_reduce_async(
     return output_tensors;
 }
 
-}  // namespace operations::experimental::ccl
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores) {

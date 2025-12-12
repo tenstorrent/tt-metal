@@ -12,7 +12,10 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation.hpp"
 
-namespace ttnn::operations::matmul {
+namespace ttnn {
+
+namespace operations {
+namespace matmul {
 
 namespace detail {
 
@@ -487,4 +490,6 @@ Tensor SparseMatmulOperation::invoke(
         optional_output_tensor);
 }
 
-}  // namespace ttnn::operations::matmul
+}  // namespace matmul
+}  // namespace operations
+}  // namespace ttnn

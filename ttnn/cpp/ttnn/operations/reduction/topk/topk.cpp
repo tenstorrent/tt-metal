@@ -116,9 +116,6 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
     const bool is_rank_le_4d = rank <= 4;
 
-    const auto adjusted_dim = dim < 0 ? dim + rank : dim;
-    TT_FATAL(input_tensor.logical_shape()[adjusted_dim] >= k, "K cannot be larger than the dimension size!");
-
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto used_sub_core_grids = sub_core_grids.value_or(ttnn::CoreRangeSet(
         ttnn::CoreRange(ttnn::CoreCoord(0, 0), input_tensor.device()->compute_with_storage_grid_size())));

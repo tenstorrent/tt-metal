@@ -517,49 +517,6 @@ void ControlPlane::init_control_plane(
     this->mesh_graph_->print_connectivity();
 }
 
-void ControlPlane::init_control_plane_auto_discovery() {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& driver = cluster.get_driver();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
-    // NOTE: This algorithm is only supported for single host systems for now
-    TT_FATAL(
-        *distributed_context->size() == 1,
-        "Auto discovery is only supported for single host systems, since you are running on a {} process,"
-        " please specify a rank binding file via the tt-run argument --rank-binding argument",
-        *distributed_context->size());
-
-    // Initialize physical system descriptor
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
-
-    // Generate Mesh graph based on physical system descriptor
-    // Reliability mode is obtained from MetalContext inside the function
-    this->mesh_graph_ = std::make_unique<tt::tt_fabric::MeshGraph>(
-        tt::tt_fabric::TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-            *this->physical_system_descriptor_, fabric_config));
-
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-
-    this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-        *this->mesh_graph_, *this->physical_system_descriptor_, this->local_mesh_binding_);
-    this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
-
-    // Initialize routing table generator after topology_mapper is created
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
-
-    // Initialize distributed contexts after topology_mapper is created so we can use its helper function
-    this->initialize_distributed_contexts();
-    this->generate_intermesh_connectivity();
-
-    // Printing, only enabled with log_debug
-    this->mesh_graph_->print_connectivity();
-}
-
-ControlPlane::ControlPlane() { init_control_plane_auto_discovery(); }
-
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
 }
@@ -1020,6 +977,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                 } else {
                     auto host_rank_for_chip =
                         this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
+
+                    auto neighbor_host = this->topology_mapper_->get_hostname_for_fabric_node_id(
+                        FabricNodeId(mesh_id, logical_connected_chip_id));
 
                     TT_ASSERT(
                         host_rank_for_chip.has_value(),

@@ -5,7 +5,8 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn {
+namespace operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
     const ttnn::Tensor& input_tensor,
@@ -59,4 +60,5 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
         num_buffers_per_channel);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace operations::experimental::ccl
+}  // namespace ttnn

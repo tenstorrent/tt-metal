@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List
 from PIL import Image
 
 import torch
@@ -17,9 +18,8 @@ from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel 
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
-from models.perf.benchmarking_utils import BenchmarkProfiler
 from ...encoders.clip.model_clip import CLIPEncoder, CLIPConfig
 from ...encoders.t5.model_t5 import T5Encoder, T5Config
 
@@ -32,6 +32,53 @@ from ...utils.padding import PaddingConfig
 from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
 
 TILE_SIZE = 32
+
+
+@dataclass
+class TimingData:
+    clip_encoding_time: float = 0.0
+    t5_encoding_time: float = 0.0
+    total_encoding_time: float = 0.0
+    denoising_step_times: List[float] = field(default_factory=list)
+    vae_decoding_time: float = 0.0
+    total_time: float = 0.0
+
+
+class TimingCollector:
+    def __init__(self):
+        self.timings: Dict[str, float] = {}
+        self.step_timings: Dict[str, List[float]] = {}
+
+    @contextmanager
+    def time_section(self, name: str):
+        start = time.time()
+        yield
+        end = time.time()
+        self.timings[name] = end - start
+
+    @contextmanager
+    def time_step(self, name: str):
+        start = time.time()
+        yield
+        end = time.time()
+        if name not in self.step_timings:
+            self.step_timings[name] = []
+        self.step_timings[name].append(end - start)
+
+    def get_timing_data(self) -> TimingData:
+        return TimingData(
+            clip_encoding_time=self.timings.get("clip_encoding", 0.0),
+            t5_encoding_time=self.timings.get("t5_encoding", 0.0),
+            total_encoding_time=self.timings.get("total_encoding", 0.0),
+            denoising_step_times=self.step_timings.get("denoising_step", []),
+            vae_decoding_time=self.timings.get("vae_decoding", 0.0),
+            total_time=self.timings.get("total", 0.0),
+        )
+
+    def reset(self):
+        self.timings = {}
+        self.step_timings = {}
+        return self
 
 
 @dataclass
@@ -302,6 +349,8 @@ class StableDiffusion3Pipeline:
         else:
             self._text_encoder_3 = None
 
+        self.timing_collector = None  # Set externally when timing is needed
+
         self._trace = None
 
         # intermediate buffers for safe tracing
@@ -444,10 +493,12 @@ class StableDiffusion3Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
     ) -> List[Image.Image]:
-        with timer("total", timer_iteration) if timer else nullcontext():
+        timer = self.timing_collector.reset() if self.timing_collector else None
+
+        with timer.time_section("total") if timer else nullcontext():
+            start_time = time.time()
+
             batch_size = self._prepared_batch_size
             num_images_per_prompt = self._prepared_num_images_per_prompt
             width = self._prepared_width
@@ -474,10 +525,11 @@ class StableDiffusion3Pipeline:
 
             logger.info("encoding prompts...")
 
-            with timer("encoder", timer_iteration) if timer else nullcontext():
+            with timer.time_section("total_encoding") if timer else nullcontext():
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
+                prompt_encoding_start_time = time.time()
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
@@ -489,14 +541,12 @@ class StableDiffusion3Pipeline:
                     max_t5_sequence_length=max_t5_sequence_length,
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     clip_skip=clip_skip,
-                    timer=timer,
-                    timer_iteration=timer_iteration,
                 )
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 1D to 2D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
-
-            logger.info("preparing timesteps...")
+                prompt_encoding_end_time = time.time()
+                logger.info("preparing timesteps...")
 
             self._scheduler.set_timesteps(num_inference_steps)
             timesteps = self._scheduler.timesteps
@@ -590,50 +640,53 @@ class StableDiffusion3Pipeline:
                 tt_latents_step_list.append(tt_initial_latents)
 
             logger.info("denoising...")
+            denoising_start_time = time.time()
 
-            with timer("denoising", timer_iteration) if timer else nullcontext():
-                for i, t in enumerate(tqdm.tqdm(timesteps)):
-                    with timer(f"denoising_step_{i}", timer_iteration) if timer else nullcontext():
-                        sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
+            for i, t in enumerate(tqdm.tqdm(timesteps)):
+                with timer.time_step("denoising_step") if timer else nullcontext():
+                    sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
-                        tt_timestep_list = []
-                        tt_sigma_difference_list = []
-                        for submesh_device in self.submesh_devices:
-                            tt_timestep = ttnn.full(
-                                [1, 1, 1, 1],
-                                fill_value=t,
-                                layout=ttnn.TILE_LAYOUT,
-                                dtype=ttnn.float32,
-                                device=submesh_device if not traced else None,
-                            )
-                            tt_timestep_list.append(tt_timestep)
-
-                            tt_sigma_difference_list.append(
-                                ttnn.full(
-                                    tt_latents_step_list[0].shape,
-                                    fill_value=sigma_difference,
-                                    layout=ttnn.TILE_LAYOUT,
-                                    dtype=ttnn.bfloat16,
-                                    device=None,  # We'll copy to device when needed
-                                )
-                            )
-
-                        tt_latents_step_list = self._step(
-                            timestep=tt_timestep_list,
-                            latents=tt_latents_step_list,  # tt_latents,
-                            do_classifier_free_guidance=do_classifier_free_guidance,
-                            prompt_embeds=tt_prompt_embeds_list,
-                            pooled_prompt_embeds=tt_pooled_prompt_embeds_list,
-                            guidance_scale=guidance_scale,
-                            sigma_difference=tt_sigma_difference_list,
-                            prompt_sequence_length=333,
-                            spatial_sequence_length=4096,
-                            traced=traced,
+                    tt_timestep_list = []
+                    tt_sigma_difference_list = []
+                    for submesh_device in self.submesh_devices:
+                        tt_timestep = ttnn.full(
+                            [1, 1, 1, 1],
+                            fill_value=t,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.float32,
+                            device=submesh_device if not traced else None,
                         )
+                        tt_timestep_list.append(tt_timestep)
+
+                        tt_sigma_difference_list.append(
+                            ttnn.full(
+                                tt_latents_step_list[0].shape,
+                                fill_value=sigma_difference,
+                                layout=ttnn.TILE_LAYOUT,
+                                dtype=ttnn.bfloat16,
+                                device=None,  # We'll copy to device when needed
+                            )
+                        )
+
+                    tt_latents_step_list = self._step(
+                        timestep=tt_timestep_list,
+                        latents=tt_latents_step_list,  # tt_latents,
+                        do_classifier_free_guidance=do_classifier_free_guidance,
+                        prompt_embeds=tt_prompt_embeds_list,
+                        pooled_prompt_embeds=tt_pooled_prompt_embeds_list,
+                        guidance_scale=guidance_scale,
+                        sigma_difference=tt_sigma_difference_list,
+                        prompt_sequence_length=333,
+                        spatial_sequence_length=4096,
+                        traced=traced,
+                    )
+
+            denoising_end_time = time.time()
 
             logger.info("decoding image...")
 
-            with timer("vae", timer_iteration) if timer else nullcontext():
+            with timer.time_section("vae_decoding") if timer else nullcontext():
+                image_decoding_start_time = time.time()
                 decoded_output = self._vae_decode(tt_latents_step_list[self.vae_submesh_idx], width, height)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
 
@@ -645,14 +698,16 @@ class StableDiffusion3Pipeline:
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 print(f"postprocessed image shape: {image.shape}")
                 assert isinstance(image, torch.Tensor)
+                image_decoding_end_time = time.time()
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
 
-        if timer:
-            logger.info(f"prompt encoding duration: {timer.get_duration('encoder', timer_iteration)}")
-            logger.info(f"denoising duration: {timer.get_duration('denoising', timer_iteration)}")
-            logger.info(f"image decoding duration: {timer.get_duration('vae', timer_iteration)}")
-            logger.info(f"total runtime: {timer.get_duration('total', timer_iteration)}")
+                end_time = time.time()
+
+                logger.info(f"prompt encoding duration: {prompt_encoding_end_time - prompt_encoding_start_time}")
+                logger.info(f"denoising duration: {denoising_end_time - denoising_start_time}")
+                logger.info(f"image decoding duration: {image_decoding_end_time - image_decoding_start_time}")
+                logger.info(f"total runtime: {end_time - start_time}")
 
         return output
 
@@ -856,12 +911,12 @@ class StableDiffusion3Pipeline:
         max_t5_sequence_length: int,
         do_classifier_free_guidance: bool,
         clip_skip: int | None = None,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        timer = self.timing_collector
+
         tokenizer_max_length = self._tokenizer_1.model_max_length
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with timer.time_section("clip_encoding") if timer else nullcontext():
             prompt_embed, pooled_prompt_embed = _get_clip_prompt_embeds(
                 prompt=prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -885,7 +940,7 @@ class StableDiffusion3Pipeline:
             )
             clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with timer.time_section("t5_encoding") if timer else nullcontext():
             t5_prompt_embed = _get_t5_prompt_embeds(
                 device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,
@@ -909,7 +964,7 @@ class StableDiffusion3Pipeline:
         if not do_classifier_free_guidance:
             return prompt_embeds, pooled_prompt_embeds
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with timer.time_section("clip_encoding") if timer else nullcontext():
             negative_prompt_embed, negative_pooled_prompt_embed = _get_clip_prompt_embeds(
                 prompt=negative_prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -932,7 +987,7 @@ class StableDiffusion3Pipeline:
             )
             negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with timer.time_section("t5_encoding") if timer else nullcontext():
             t5_negative_prompt_embed = _get_t5_prompt_embeds(
                 device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,

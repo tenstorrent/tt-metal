@@ -14,31 +14,12 @@ void CloneOperation::validate_inputs(
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
-
-    auto input_memory_layout = input.memory_config().memory_layout();
-    auto output_memory_layout = operation_attributes.memory_config.memory_layout();
-    bool input_sharded = input_memory_layout != TensorMemoryLayout::INTERLEAVED;
-    bool output_sharded = output_memory_layout != TensorMemoryLayout::INTERLEAVED;
-
-    if (input_sharded && output_sharded) {
-        TT_FATAL(
-            input_memory_layout == output_memory_layout,
-            "Clone: input and output must have the same memory layout when both are sharded");
-
-        auto input_shard_spec = input.buffer()->shard_spec();
-        auto output_shard_spec = operation_attributes.memory_config.shard_spec();
-
-        TT_FATAL(output_shard_spec.has_value(), "Clone: output memory config must have shard spec when sharded");
-
-        TT_FATAL(
-            input_shard_spec.tensor_shard_spec == output_shard_spec.value(),
-            "Clone: input and output shard specs must be identical (same grid, shape, and orientation)");
-    } else if (input_sharded || output_sharded) {
-        TT_FATAL(
-            false,
-            "Clone: mixed sharded/interleaved layout not currently supported. Both input and output must have the same "
-            "layout.");
-    }
+    TT_FATAL(
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Clone: not currently support sharding");
+    TT_FATAL(
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Clone: not currently support sharding");
 }
 
 CloneOperation::program_factory_t CloneOperation::select_program_factory(

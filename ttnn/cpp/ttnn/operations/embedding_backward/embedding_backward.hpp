@@ -8,7 +8,9 @@
 
 namespace ttnn {
 
-namespace operations::embedding_backward {
+namespace operations {
+
+namespace embedding_backward {
 
 struct EmbeddingBackwardOperation {
     static Tensor invoke(
@@ -20,7 +22,8 @@ struct EmbeddingBackwardOperation {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-}  // namespace operations::embedding_backward
+}  // namespace embedding_backward
+}  // namespace operations
 
 constexpr auto embedding_bw =
     ttnn::register_operation<"ttnn::embedding_bw", ttnn::operations::embedding_backward::EmbeddingBackwardOperation>();

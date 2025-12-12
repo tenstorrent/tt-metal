@@ -4,7 +4,8 @@
 
 #include "emitc.hpp"
 
-namespace ttnn::test {
+namespace ttnn {
+namespace test {
 
 ttnn::Tensor add(ttnn::Tensor v1, ttnn::Tensor v2) {
     ttnn::Tensor v3 = ttnn::add(
@@ -42,4 +43,5 @@ TEST(EmitC, Sanity) {
     ttnn::Tensor v3 = add(v1, v2);
 }
 
-}  // namespace ttnn::test
+}  // namespace test
+}  // namespace ttnn

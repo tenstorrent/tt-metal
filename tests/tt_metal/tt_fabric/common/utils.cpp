@@ -10,7 +10,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_fabric::fabric_router_tests {
+namespace tt::tt_fabric {
+namespace fabric_router_tests {
 
 // Find a device with enough neighbours in the specified direction
 bool find_device_with_neighbor_in_multi_direction(
@@ -107,4 +108,5 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     return physical_chip_ids_mapping;
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests
+}  // namespace fabric_router_tests
+}  // namespace tt::tt_fabric

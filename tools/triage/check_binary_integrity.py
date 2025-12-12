@@ -28,7 +28,7 @@ script_config = ScriptConfig(
 def check_binary_integrity(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ):
-    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
     # Check firmware ELF binary state on the device
     log_check_risc(

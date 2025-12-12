@@ -75,7 +75,6 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
-    ControlPlane();
     explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_file,
@@ -227,8 +226,6 @@ private:
         const std::string& mesh_graph_desc_file,
         std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
             logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
-
-    void init_control_plane_auto_discovery();
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane

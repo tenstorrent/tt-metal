@@ -17,7 +17,6 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
         protobuf::libprotobuf
-        yaml-cpp::yaml-cpp
 )
 
 # Test for link retraining validation
@@ -40,13 +39,8 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
-)
-target_include_directories(
-    test_link_retraining
-    SYSTEM
-    PRIVATE
         ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 
 target_link_libraries(

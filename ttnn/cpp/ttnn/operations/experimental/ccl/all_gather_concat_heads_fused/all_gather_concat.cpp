@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
+#include "all_gather_concat.hpp"
+#include <utility>
+#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <utility>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -24,7 +24,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    return ttnn::prim::all_gather_concat(
+    return ttnn::operations::experimental::ccl::all_gather_concat(
         input_tensor,
         buffer_tensor,
         dim,
@@ -32,8 +32,8 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
         mesh_device,
         global_semaphore,
         num_heads,
-        memory_config,
         use_noc1_only,
+        memory_config,
         num_links,
         topology_,
         subdevice_id);

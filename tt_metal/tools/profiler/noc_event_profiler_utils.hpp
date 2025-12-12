@@ -22,7 +22,9 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 // precomputes the mapping between EDM router physical coordinate locations and their associated fabric channel IDs
 class FabricRoutingLookup {
@@ -173,4 +175,5 @@ inline std::tuple<int, int> get_routing_start_distance_and_range(uint8_t routing
     return {start_distance, range};
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

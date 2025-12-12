@@ -41,10 +41,12 @@ INSTANTIATE_TEST_SUITE_P(
     BigMeshDualRankMeshShapeSweepFixture,
     ::testing::Values(
         MeshShape(2, 4),
+        /* Issue #25355: Cannot create a MeshDevice with only one rank active.
         MeshShape(1, 1),
         MeshShape(1, 2),
         MeshShape(2, 1),
         MeshShape(2, 2),
+        */
         MeshShape(1, 8),
         MeshShape(8, 1)));
 
@@ -206,21 +208,6 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
         if (mesh_device_->is_local(MeshCoordinate(device_row, device_col))) {
             EXPECT_EQ(dst_vec[i], src_vec[i]) << "Mismatch at index: " << i;
         }
-    }
-}
-
-TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
-    auto submesh = mesh_device_->create_submesh(MeshShape(2, 2));
-    ASSERT_NE(submesh, nullptr);
-    EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
-}
-
-TEST_F(BigMeshDualRankTest2x4, SubmeshCreationMultipleSubmeshes) {
-    auto submeshes = mesh_device_->create_submeshes(MeshShape(2, 2));
-    EXPECT_EQ(submeshes.size(), 2);
-    for (const auto& submesh : submeshes) {
-        ASSERT_NE(submesh, nullptr);
-        EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
     }
 }
 

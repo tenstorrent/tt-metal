@@ -10,8 +10,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
-
-namespace operations::normalization {
+namespace operations {
+namespace normalization {
 
 struct ExecuteGroupNorm {
     static ttnn::Tensor invoke(
@@ -33,7 +33,8 @@ struct ExecuteGroupNorm {
         bool use_welford = false);
 };
 
-}  // namespace operations::normalization
+}  // namespace normalization
+}  // namespace operations
 
 constexpr auto group_norm =
     ttnn::register_operation<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();

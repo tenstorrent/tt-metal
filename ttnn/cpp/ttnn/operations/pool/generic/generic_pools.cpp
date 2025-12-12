@@ -23,7 +23,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn::operations::pool {
+namespace ttnn {
+namespace operations::pool {
 
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
@@ -389,4 +390,5 @@ Tensor AvgPool2DOp::invoke(
     return result.at(0);
 }
 
-}  // namespace ttnn::operations::pool
+}  // namespace operations::pool
+}  // namespace ttnn

@@ -36,7 +36,7 @@ from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDev
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "metal_device_id_mapping"],
+    depends=["inspector_data"],
 )
 
 # List of block types that script returns, can be extended if other block types are needed
@@ -77,12 +77,26 @@ class CheckResult:
 
 @dataclass
 class DeviceDescription:
+    """
+    Wrapper for Device that determines whether to use unique_id for display
+    based on Metal/Exalens ID mismatch.
+    """
+
     device: Device
-    use_unique_id: bool
+    use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
+
+    def __init__(self, device: Device, metal_device_id_mapping: MetalDeviceIdMapping):
+        self.device = device
+        # Check if exalens device._id maps to the same unique_id as device.unique_id
+        inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
+        self.use_unique_id = inspector_unique_id != device.unique_id
 
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
-    return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device._id)
+    if device_desc.use_unique_id:
+        return str(device_desc.device.unique_id)
+    else:
+        return str(device_desc.device._id)
 
 
 @dataclass
@@ -173,7 +187,8 @@ def get_devices(
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
-        device_ids = [int(id) for id in devices]
+        metal_device_ids = [int(id) for id in devices]
+        device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
 
     return [context.devices[id] for id in device_ids]
 
@@ -182,12 +197,6 @@ class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
-        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
-        self._use_unique_id = any(
-            metal_device_id_mapping.has_metal_device_id(device._id)
-            and metal_device_id_mapping.get_unique_id(device._id) != device.unique_id
-            for device in devices
-        )
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices
@@ -227,7 +236,7 @@ class RunChecks:
                 result,
                 check_result,
                 PerDeviceCheckResult,
-                device_description=DeviceDescription(device, self._use_unique_id),
+                device_description=DeviceDescription(device, self.metal_device_id_mapping),
             )
         return result if len(result) > 0 else None
 
@@ -250,7 +259,7 @@ class RunChecks:
                         result,
                         check_result,
                         PerBlockCheckResult,
-                        device_description=DeviceDescription(device, self._use_unique_id),
+                        device_description=DeviceDescription(device, self.metal_device_id_mapping),
                         location=location,
                     )
             return result if len(result) > 0 else None
@@ -294,7 +303,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self._use_unique_id),
+                    device_description=DeviceDescription(location._device, self.metal_device_id_mapping),
                     location=location,
                     risc_name=risc_name,
                 )

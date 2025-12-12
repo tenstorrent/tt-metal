@@ -27,9 +27,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class CommandQueue;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;

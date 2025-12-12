@@ -60,10 +60,6 @@ def split_list(lst, n):
     return chunks
 
 
-def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
-    return sequence_length > max_prefill_chunk_size
-
-
 class Generator:
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -90,7 +86,6 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
-        self.already_warmed_up_prefill = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
         self.mode = None
@@ -106,52 +101,30 @@ class Generator:
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
-    def warmup_model_prefill(
+    def warmup_prefill_traces(
         self,
+        page_table,
         kv_cache,
         enable_trace,
-        sampling_params=None,
     ):
-        if self.already_warmed_up_prefill:
+        if self.prefill_traces_warmup or not enable_trace:
             return
-        self.already_warmed_up_prefill = True
 
-        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
-
+        self.prefill_traces_warmup = True
         for model_id in range(self.data_parallel):
-            for supported_length in sequence_lengths_to_warmup:
-                # When model_id = 0, we compile all operators for the first time
-                # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
-                if model_id != 0 and (
-                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
-                ):
-                    continue
-
+            for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
                 warmup_empty_slots = list(range(1))
 
-                logger.info(f"Warming up prefill for sequence length: {supported_length}")
+                # TODO: Currently working on enabling trace for all models that use tt_transformers
+                if not self.model_args[0].can_enable_trace(supported_length):
+                    continue
 
-                page_table_warmup = None
-                # second check is some tests set the kv_cache to [None] instead of None
-                if kv_cache is not None and kv_cache[model_id] is not None:
-                    block_size = get_block_size(kv_cache[model_id])
-                    num_blocks = num_blocks_in_seq(supported_length, block_size)
-                    page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
-
-                # chunked prefill not supported without paged attention
-                if page_table_warmup is None and max_prefill_chunk_size_cutoff(
-                    supported_length, self.model_args[0].max_prefill_chunk_size
-                ):
-                    logger.warning(
-                        "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
-                    )
-                    break
-
+                logger.info(f"Warming up prefill traces for sequence length: {supported_length}")
                 self.prefill_forward_text(
                     warmup_tokens,
-                    page_table_warmup,
+                    page_table,
                     kv_cache,
                     warmup_prompt_lens,
                     warmup_empty_slots,
@@ -276,8 +249,11 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        self.warmup_prefill_traces(
+            page_table,
+            kv_cache,
+            enable_trace,
+        )
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -291,7 +267,7 @@ class Generator:
 
         out_list = []
         for idx, user_id in enumerate(empty_slots):
-            # if model_id is not None, it means that prefill is called from warmup_prefill
+            # if model_id is not None, it means that prefill is called from warmup_prefill_traces
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])

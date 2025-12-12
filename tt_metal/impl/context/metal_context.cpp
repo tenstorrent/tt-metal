@@ -17,34 +17,32 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "fabric/fabric_host_utils.hpp"
-#include "allocator/l1_banking_allocator.hpp"
-#include "debug/dprint_server.hpp"
-#include "debug/inspector/inspector.hpp"
-
-#include <umd/device/types/xy_pair.hpp>
-#include "debug/inspector/data.hpp"
-#include "debug/noc_logging.hpp"
-#include "debug/watcher_server.hpp"
-#include "dispatch/topology.hpp"
-#include "profiler/profiler_state_manager.hpp"
-#include "jit_build/build_env_manager.hpp"
-#include "llrt/get_platform_architecture.hpp"
-#include "llrt/llrt.hpp"
-#include <experimental/fabric/control_plane.hpp>
-#include "device/device_manager.hpp"
-#include <distributed_context.hpp>
-#include <experimental/fabric/fabric.hpp>
-
-#include <tt_metal.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/data.hpp"
+#include "tt_metal/impl/debug/noc_logging.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/profiler/profiler_state_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/llrt/get_platform_architecture.hpp"
+#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include "dispatch/data_collector.hpp"
+#include "tt_metal/impl/dispatch/data_collector.hpp"
 
-#include <dispatch/dispatch_query_manager.hpp>
-#include <dispatch/dispatch_core_manager.hpp>
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <dispatch/dispatch_mem_map.hpp>
-#include "common/executor.hpp"
+#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "tt_metal/common/executor.hpp"
 
 namespace tt::tt_metal {
 
@@ -65,28 +63,6 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
 }
 
 }  // namespace
-
-void MetalContext::initialize_device_manager(
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size,
-    bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw) {
-    initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-    DeviceManager::initialize(
-        device_ids,
-        num_hw_cqs,
-        l1_small_size,
-        trace_region_size,
-        l1_bank_remap,
-        worker_l1_size,
-        init_profiler,
-        initialize_fabric_and_dispatch_fw);
-}
 
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config,
@@ -346,7 +322,7 @@ void MetalContext::teardown() {
     tt::tt_metal::reset_topology_state();
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
-    Inspector::clear_all_core_info();
+    tt::tt_metal::Inspector::clear_all_core_info();
     // Deinitialize inspector
     inspector_data_.reset();
 
@@ -491,8 +467,8 @@ void MetalContext::clear_l1_state(ChipId device_id) {
 
     // Clear erisc unreserved L1
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-        static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
-        auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
+        static uint32_t zero_vec_size = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
+        auto zero_vec_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
         static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
 
@@ -562,7 +538,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DeviceManager::is_initialized() || DeviceManager::instance().get_all_active_devices().empty(),
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -572,7 +548,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DeviceManager::is_initialized() || DeviceManager::instance().get_all_active_devices().empty(),
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
@@ -691,8 +667,6 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
-tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
-
 void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
     fabric_tensix_config_ = fabric_tensix_config;
 }
@@ -709,21 +683,6 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
     }
-}
-
-void MetalContext::construct_control_plane() {
-    // Use auto-discovery to generate mesh graph from physical system descriptor
-    // This uses MeshGraph::generate_from_physical_system_descriptor which internally
-    // uses map_mesh_to_physical to find a valid mapping
-    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
-        log_warning(
-            tt::LogDistributed,
-            "Custom Fabric Node Id to physical chip mapping provided but no mesh graph descriptor path. "
-            "Mapping will be ignored. Please provide a custom mesh graph descriptor path for custom logical to "
-            "physical mapping.");
-    }
-    log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
-    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
 }
 
 void MetalContext::initialize_control_plane() {
@@ -744,10 +703,24 @@ void MetalContext::initialize_control_plane_impl() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
-    // If no custom mesh graph descriptor use auto discovery to generate mesh graph
-    log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
+    log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
+    log_debug(tt::LogDistributed, "Using MGD mesh graph descriptor.");
 
-    this->construct_control_plane();
+    auto cluster_type = cluster_->get_cluster_type();
+    auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+    std::filesystem::path mesh_graph_desc_path =
+        tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+            cluster_type, rtoptions_.get_root_dir(), fabric_type);
+
+    log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+
+    TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+    TT_FATAL(
+        std::filesystem::exists(mesh_graph_desc_path),
+        "Mesh graph descriptor file not found: {}",
+        mesh_graph_desc_path.string());
+
+    this->construct_control_plane(mesh_graph_desc_path);
 }
 
 void MetalContext::reset_cores(ChipId device_id) {
@@ -785,7 +758,8 @@ void MetalContext::reset_cores(ChipId device_id) {
             // Only send reset to subordinate cores
             // Assert all cores except ERISC0, which is running base firmware.
             tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-            cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
+            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                tt_cxy_pair(device_id, virtual_core), reset_val);
         }
     }
 
@@ -827,8 +801,8 @@ void MetalContext::reset_cores(ChipId device_id) {
 }
 
 void MetalContext::assert_cores(ChipId device_id) {
-    auto dispatch_cores = get_virtual_dispatch_cores(device_id);
-    auto routing_cores = get_virtual_dispatch_routing_cores(device_id);
+    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(device_id);
+    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(device_id);
 
     // Assert riscs on Tensix
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -839,7 +813,7 @@ void MetalContext::assert_cores(ChipId device_id) {
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
-                if (!hal_->get_eth_fw_is_cooperative() &&
+                if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
                     this->get_control_plane().get_active_ethernet_cores(device_id, false).contains(logical_core)) {
                     // Cannot put these cores into reset because they are running base FW
                     // Below will return to base FW
@@ -1209,11 +1183,13 @@ void MetalContext::initialize_firmware(
             write_initial_go_launch_msg();
             if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
                 // Clear the ncrisc_halt message
-                DeviceAddr mailbox_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
+                tt::tt_metal::DeviceAddr mailbox_addr =
+                    hal_->get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::MAILBOX);
                 auto factory = hal_->get_dev_msgs_factory(core_type);
-                DeviceAddr ncrisc_halt_addr =
-                    mailbox_addr + factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::ncrisc_halt);
-                std::vector<uint8_t> data(factory.size_of<dev_msgs::ncrisc_halt_msg_t>(), 0);
+                tt::tt_metal::DeviceAddr ncrisc_halt_addr =
+                    mailbox_addr + factory.offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
+                                       tt::tt_metal::dev_msgs::mailboxes_t::Field::ncrisc_halt);
+                std::vector<uint8_t> data(factory.size_of<tt::tt_metal::dev_msgs::ncrisc_halt_msg_t>(), 0);
                 cluster_->write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
 
@@ -1222,7 +1198,7 @@ void MetalContext::initialize_firmware(
             if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
                 // PC
-                cluster_->write_core(
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     &jit_build_config.fw_launch_addr_value,
                     sizeof(uint32_t),
                     tt_cxy_pair(device_id, virtual_core),
@@ -1603,7 +1579,5 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
 }
-
-DeviceManager* MetalContext::device_manager() { return &(DeviceManager::instance()); }
 
 }  // namespace tt::tt_metal

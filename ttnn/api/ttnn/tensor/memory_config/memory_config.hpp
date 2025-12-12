@@ -17,7 +17,9 @@
 
 #include "ttnn/tensor/types.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 class MemoryConfig final {
 public:
@@ -82,7 +84,8 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 template <>
 struct ttsl::json::to_json_t<tt::tt_metal::MemoryConfig> {

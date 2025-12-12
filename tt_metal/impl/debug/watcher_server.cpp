@@ -247,7 +247,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
         s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(':') + 2));
+        kernel_names_.push_back(s.substr(s.find(":") + 2));
     }
 }
 

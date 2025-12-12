@@ -8,10 +8,12 @@
 #include <memory>
 #include <variant>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class Buffer;
 class CommandQueue;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -69,13 +69,15 @@ struct AllGatherMatmulAsync {
     }
 };
 
-namespace ccl::all_gather_matmul_async_detail {
+namespace ccl {
+namespace all_gather_matmul_async_detail {
 AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const ttnn::AllGatherAsync& all_gather_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
     CoreCoord all_gather_core_grid_offset,
     const std::vector<IDevice*>& devices);
-}  // namespace ccl::all_gather_matmul_async_detail
+}  // namespace all_gather_matmul_async_detail
+}  // namespace ccl
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core_with_workers(
 
@@ -109,7 +111,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out);
 
-namespace operations::experimental::ccl {
+namespace operations {
+namespace experimental {
+namespace ccl {
 
 std::vector<Tensor> all_gather_matmul_async(
     const Tensor& input_tensor,
@@ -136,6 +140,8 @@ std::vector<Tensor> all_gather_matmul_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
-}  // namespace operations::experimental::ccl
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
 }  // namespace ttnn

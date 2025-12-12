@@ -4,7 +4,8 @@
 
 #include "complex.hpp"
 
-namespace ttnn::operations::complex {
+namespace ttnn {
+namespace operations::complex {
 
 ComplexTensor::ComplexTensor(const std::tuple<const Tensor&, const Tensor&>& real_imag) :
     m_real_imag{std::get<0>(real_imag), std::get<1>(real_imag)} {}
@@ -35,4 +36,6 @@ ComplexTensor CreateComplexTensor::invoke(const Tensor& real, const Tensor& imag
     return ComplexTensor({real, imag});
 }
 
-}  // namespace ttnn::operations::complex
+}  // namespace operations::complex
+
+}  // namespace ttnn

@@ -48,7 +48,7 @@ jobs:
         version: ${{ inputs.version || 22.04 }}
         distro: ${{ inputs.distro || 'ubuntu' }}
         build-wheel: true
-        tracy: false
+        tracy: true
         fetch-depth: 0
         skip-tt-train: false
 

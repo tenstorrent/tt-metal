@@ -105,7 +105,8 @@ inline void compute_sum() {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ mean_register);
+        /* idst */ mean_register,
+        /* transpose */ 0);
 
     tile_regs_commit();
     cb_pop_front(cb_sum_idx, onetile);
@@ -162,7 +163,8 @@ inline void compute_sum() {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ mean_register);
+        /* idst */ mean_register,
+        /* transpose */ 0);
 
     tile_regs_commit();
     cb_pop_front(cb_sum_idx, onetile);
@@ -303,7 +305,8 @@ inline void compute_rstd() {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ rstd_register);
+        /* idst */ rstd_register,
+        /* transpose */ 0);
 
     // Load epsilon
     copy_tile_init(cb_eps_idx);

@@ -11,7 +11,9 @@
 #include "context/metal_context.hpp"
 #include "math.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 constexpr static uint32_t DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000;
 constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT = 2;
@@ -119,4 +121,6 @@ void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t tr
     device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

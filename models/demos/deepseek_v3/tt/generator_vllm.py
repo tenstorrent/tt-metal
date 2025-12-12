@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 import torch
-from loguru import logger
 
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
@@ -71,9 +70,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
-        kwargs.pop("enable_trace", None)
-        logger.warning(f"Prefill tracing not supported for DeepseekGenerator")
-
         tokens = kwargs["tokens"]
         lengths = kwargs["prompt_lens"]
         tokens = _pad_tokens(tokens, self.tokenizer.pad_token_id, block_size=self.mesh_device.shape[1])

@@ -4,7 +4,9 @@
 
 #include "bcast_types.hpp"
 
-namespace ttnn::bcast_op_utils {
+namespace ttnn {
+
+namespace bcast_op_utils {
 
 std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath bcast_math) {
     std::map<std::string, std::string> defines;
@@ -17,4 +19,6 @@ std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath
     return defines;
 }
 
-}  // namespace ttnn::bcast_op_utils
+}  // namespace bcast_op_utils
+
+}  // namespace ttnn

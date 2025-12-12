@@ -10,7 +10,9 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::binary {
+namespace ttnn {
+namespace operations {
+namespace binary {
 
 namespace detail {
 
@@ -2695,4 +2697,6 @@ void py_module(py::module& module) {
         R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.)doc");
 }
 
-}  // namespace ttnn::operations::binary
+}  // namespace binary
+}  // namespace operations
+}  // namespace ttnn

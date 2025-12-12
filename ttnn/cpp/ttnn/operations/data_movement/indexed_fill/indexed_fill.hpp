@@ -8,8 +8,8 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-
-namespace operations::data_movement {
+namespace operations {
+namespace data_movement {
 
 struct IndexedFillOperation {
     static ttnn::Tensor invoke(
@@ -20,7 +20,8 @@ struct IndexedFillOperation {
         int64_t dim = 0);
 };
 
-}  // namespace operations::data_movement
+}  // namespace data_movement
+}  // namespace operations
 
 constexpr auto indexed_fill =
     ttnn::register_operation<"ttnn::indexed_fill", ttnn::operations::data_movement::IndexedFillOperation>();

@@ -15,7 +15,6 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #include "tt_metal/fabric/hw/inc/udm/udm_memory_pool.hpp"
-#include "tt_metal/fabric/hw/inc/udm/udm_registered_response_pool.hpp"
 
 #include <cstddef>
 #include <array>
@@ -125,18 +124,14 @@ constexpr size_t udm_memory_pool_base_address = get_compile_time_arg_val(LOCAL_M
 constexpr size_t udm_memory_pool_slot_size = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 2);
 constexpr size_t udm_memory_pool_num_slots = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 3);
 constexpr size_t direction = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 4);
-constexpr size_t udm_registered_response_pool_base_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 5);
-constexpr size_t udm_registered_response_pool_num_slots = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 6);
-constexpr size_t router_noc_x = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 7);
-constexpr size_t router_noc_y = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 8);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 9);
+constexpr size_t router_noc_x = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 5);
+constexpr size_t router_noc_y = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 6);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 7);
 
 // Mux connection array indices: [0]=local, [1]=downstream_en, [2]=downstream_ws
 constexpr uint32_t LOCAL_MUX_IDX = 0;
 constexpr uint32_t DOWNSTREAM_EN_MUX_IDX = 1;
 constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
-
-constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
@@ -145,7 +140,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
+    worker_interface.cache_producer_noc_addr();
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -189,69 +184,24 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-// Helper function to register a response in the response pool
-// Precondition: response_pool.has_space() must be true before calling.
-// This invariant is critical for the deadlock avoidance mechanism.
-template <uint32_t Direction, tt::tt_fabric::NocSendType noc_send_type, typename RegisteredResponsePoolType>
-FORCE_INLINE void register_write_or_atomic_response(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header, RegisteredResponsePoolType& response_pool) {
-    ASSERT(response_pool.has_space());
-    // Only register non-posted operations
-    if (!packet_header->udm_control.write.posted) {
-        volatile tt::tt_fabric::udm::RegisteredResponse* response = response_pool.get_unregistered_slot();
-        uint8_t mux_idx =
-            tt::tt_fabric::udm::select_relay_to_mux_connection<Direction>(packet_header->udm_control.write.src_chip_id);
-        response->template populate_from_header<noc_send_type>(packet_header->udm_control.write, mux_idx);
-        response_pool.register_response();
-    }
-}
-
-// Helper function to register a read response in the response pool
-// Precondition: response_pool.has_space() must be true before calling.
-// This invariant is critical for the deadlock avoidance mechanism.
-template <uint32_t Direction, typename RegisteredResponsePoolType, typename UDMMemoryPoolType>
-FORCE_INLINE void register_read_response(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header,
-    RegisteredResponsePoolType& response_pool,
-    UDMMemoryPoolType& memory_pool) {
-    ASSERT(response_pool.has_space());
-    ASSERT(packet_header->udm_control.read.size_bytes > 0);
-
-    const uint64_t read_noc_addr = packet_header->command_fields.unicast_read.noc_address;
-    uint8_t mux_idx =
-        tt::tt_fabric::udm::select_relay_to_mux_connection<Direction>(packet_header->udm_control.read.src_chip_id);
-
-    volatile tt::tt_fabric::udm::RegisteredResponse* response = response_pool.get_unregistered_slot();
-    response->template populate_from_header<tt::tt_fabric::NocSendType::NOC_UNICAST_READ>(
-        packet_header->udm_control.read, mux_idx, read_noc_addr);
-
-    response_pool.register_response();
-}
-
-template <
-    uint32_t Direction,
-    typename RelayToMuxSenderType,
-    size_t NumMuxConnections,
-    typename UDMMemoryPoolType,
-    typename RegisteredResponsePoolType>
-__attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_or_register_response(
+template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections, typename UDMMemoryPoolType>
+__attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
     std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header,
-    UDMMemoryPoolType& memory_pool,
-    RegisteredResponsePoolType& response_pool) {
+    UDMMemoryPoolType& memory_pool) {
     const auto& header = *packet_header;
     uint16_t payload_size_bytes = header.payload_size_bytes;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
 
-    switch (header.noc_send_type) {
+    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+    switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto noc_addr = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet(payload_start_address, noc_addr, payload_size_bytes);
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
-            // Register response for non-posted writes
-            register_write_or_atomic_response<Direction, tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
-                packet_header, response_pool);
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -261,20 +211,19 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_or_re
                 noc_async_write_barrier();
             }
             noc_semaphore_inc(noc_addr, increment);
-            // Register response for non-posted atomics
-            register_write_or_atomic_response<Direction, tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
-                packet_header, response_pool);
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_atomic_ack<Direction>(mux_connections, packet_header);
+
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto noc_addr = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write(noc_addr, value);
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(noc_addr, value);
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
-            // Register response for non-posted writes
-            register_write_or_atomic_response<Direction, tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE>(
-                packet_header, response_pool);
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -287,9 +236,8 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_or_re
                 noc_async_write_barrier();
             }
             noc_semaphore_inc(semaphore_dest_address, increment);
-            // Register response for non-posted fused atomics
-            register_write_or_atomic_response<Direction, tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
-                packet_header, response_pool);
+            // writes done, send ack back - Do we also need to send atomic inc response back?
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
@@ -307,14 +255,24 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_or_re
             }
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
-            // Register response for non-posted scatter writes
-            register_write_or_atomic_response<Direction, tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE>(
-                packet_header, response_pool);
+            // writes done, send ack back
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_READ: {
-            // Register the read response
-            register_read_response<Direction>(packet_header, response_pool, memory_pool);
+            const auto noc_addr = header.command_fields.unicast_read.noc_address;
+            const auto size_bytes = header.udm_control.read.size_bytes;
+            const auto num_slots = memory_pool.slots_needed(size_bytes);
+            // wait for space, allocate slots, and fill with noc_async_read (handles wrap)
+            while (!memory_pool.cb_has_enough_slots(num_slots)) {
+            }
+            memory_pool.cb_allocate_and_fill_slots(noc_addr, size_bytes);
+            // temporarily place here until we have txn id support
+            noc_async_read_barrier();
+            // reads done, send ack back (reads slot by slot from memory pool)
+            tt::tt_fabric::udm::fabric_fast_read_any_len_ack<Direction>(mux_connections, packet_header, memory_pool);
+            // free slots (FIFO)
+            memory_pool.cb_deallocate_slots(num_slots);
         } break;
         default: {
             ASSERT(false);
@@ -322,28 +280,21 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_or_re
     };
 }
 
-// Main function to process inbound packets from the local router
-template <
-    uint32_t Direction,
-    uint8_t NUM_BUFFERS,
-    uint8_t NUM_MUX_BUFFERS,
-    typename UDMMemoryPoolType,
-    typename RegisteredResponsePoolType>
-void process_inbound_packet(
+template <uint32_t Direction, uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS, typename UDMMemoryPoolType>
+void forward_data(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>& channel,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     std::array<tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>, NUM_MUX_CONNECTIONS>& mux_connections,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
-    UDMMemoryPoolType& memory_pool,
-    RegisteredResponsePoolType& response_pool) {
+    UDMMemoryPoolType& memory_pool) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        execute_noc_txn_or_register_response<Direction>(mux_connections, packet_header, memory_pool, response_pool);
+        execute_noc_txn_to_local_chip<Direction>(mux_connections, packet_header, memory_pool);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -352,107 +303,6 @@ void process_inbound_packet(
 
         constexpr bool enable_deadlock_avoidance = true;  // not used
         worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1);
-    }
-}
-
-// Helper: Send write/atomic response using existing fabric_fast_ack functions
-template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections>
-FORCE_INLINE bool send_write_or_atomic_response(
-    std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
-    volatile tt::tt_fabric::udm::RegisteredResponse* response) {
-    uint32_t mux_idx = response->mux_index;
-    bool has_space_for_packet = mux_connections[mux_idx].edm_has_space_for_packet();
-    if (has_space_for_packet) {
-        switch (response->noc_send_type) {
-            case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC:
-            case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
-                tt::tt_fabric::udm::fabric_fast_atomic_ack(mux_connections[mux_idx], response);
-                break;
-            case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE:
-            case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE:
-            case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE:
-                tt::tt_fabric::udm::fabric_fast_write_ack(mux_connections[mux_idx], response);
-                break;
-            default: ASSERT(false); break;
-        }
-    }
-    return has_space_for_packet;
-}
-
-// Helper: Try to allocate memory pool slots for current read response chunk
-// Returns true if we allocated any slots (caller should then send them)
-template <typename UDMMemoryPoolType>
-FORCE_INLINE void allocate_read_memory(
-    UDMMemoryPoolType& memory_pool, volatile tt::tt_fabric::udm::RegisteredResponse* response) {
-    memory_pool.cb_allocate_and_fill_slots(response);
-}
-
-// Helper: Send ONE read response slot using fabric_fast_read_ack
-// Returns true if ALL slots have been sent (response complete)
-template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections, typename UDMMemoryPoolType>
-FORCE_INLINE bool send_read_response_data(
-    std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
-    UDMMemoryPoolType& memory_pool,
-    volatile tt::tt_fabric::udm::RegisteredResponse* response) {
-    uint32_t mux_idx = response->mux_index;
-    bool response_completed = false;
-    bool has_space_for_packet = mux_connections[mux_idx].edm_has_space_for_packet();
-    if (has_space_for_packet && response->has_data_to_send()) {
-        constexpr uint32_t num_slots_dealloc = 1;
-        // Send one slot (helper handles fused atomic on last slot)
-        tt::tt_fabric::udm::fabric_fast_read_ack(mux_connections[mux_idx], response, memory_pool);
-
-        // Deallocate ONE slot from memory pool
-        memory_pool.cb_deallocate_slots(num_slots_dealloc);
-
-        // Update response: advance dest address, decrement counters
-        response_completed = response->complete_send(memory_pool.get_slot_size());
-    }
-    return response_completed;
-}
-
-// Helper: Process read response - allocate memory and send data back in chunks
-// Returns true when ALL chunks have been sent (response complete)
-template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections, typename UDMMemoryPoolType>
-FORCE_INLINE bool process_read_response(
-    std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
-    UDMMemoryPoolType& memory_pool,
-    volatile tt::tt_fabric::udm::RegisteredResponse* response) {
-    // Allocate more slots if needed and space available
-    allocate_read_memory(memory_pool, response);
-
-    // Send if we have bytes in memory pool
-    bool response_completed = send_read_response_data<Direction>(mux_connections, memory_pool, response);
-    return response_completed;
-}
-
-// Main function to process responses from the registered response pool
-template <
-    uint32_t Direction,
-    typename RelayToMuxSenderType,
-    size_t NumMuxConnections,
-    typename UDMMemoryPoolType,
-    typename RegisteredResponsePoolType>
-FORCE_INLINE void process_response(
-    std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
-    UDMMemoryPoolType& memory_pool,
-    RegisteredResponsePoolType& response_pool) {
-    if (!response_pool.is_empty()) {
-        // Get the current response to process
-        volatile tt::tt_fabric::udm::RegisteredResponse* response = response_pool.get_registered_slot();
-
-        bool response_complete = false;
-        if (response->noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_READ) {
-            // Handle read response - allocate memory, read data, send back
-            response_complete = process_read_response<Direction>(mux_connections, memory_pool, response);
-        } else {
-            // Handle write/atomic response
-            response_complete = send_write_or_atomic_response<Direction>(mux_connections, response);
-        }
-        // Unregister response if complete
-        if (response_complete) {
-            response_pool.unregister_response();
-        }
     }
 }
 
@@ -466,11 +316,6 @@ void kernel_main() {
     tt::tt_fabric::udm::
         UDMMemoryPool<udm_memory_pool_base_address, udm_memory_pool_slot_size, udm_memory_pool_num_slots>
             memory_pool;
-
-    // Initialize the registered response pool for tracking pending responses
-    tt::tt_fabric::udm::
-        RegisteredResponsePool<udm_registered_response_pool_base_address, udm_registered_response_pool_num_slots>
-            response_pool;
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -564,20 +409,15 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 
-    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            process_inbound_packet<direction, NUM_BUFFERS, mux_num_buffers>(
+            forward_data<direction, NUM_BUFFERS, mux_num_buffers>(
                 channel,
                 worker_interface,
                 mux_connections,
                 channel_connection_established,
                 StreamId{channel_stream_id},
-                memory_pool,
-                response_pool);
-
-            // Process registered responses (send acks for completed operations)
-            process_response<direction, tt::tt_fabric::FabricRelayToMuxSender<mux_num_buffers>, NUM_MUX_CONNECTIONS>(
-                mux_connections, memory_pool, response_pool);
+                memory_pool);
         }
     }
 

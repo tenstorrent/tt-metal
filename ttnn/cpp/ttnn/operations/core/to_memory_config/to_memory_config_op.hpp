@@ -16,7 +16,11 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
-namespace ttnn::operations::core {
+namespace ttnn {
+
+namespace operations {
+
+namespace core {
 
 struct ToMemoryConfig {
     // TODO: Move to cpp once we merge with tt_eager
@@ -110,4 +114,6 @@ struct ToMemoryConfig {
     }
 };
 
-}  // namespace ttnn::operations::core
+}  // namespace core
+}  // namespace operations
+}  // namespace ttnn

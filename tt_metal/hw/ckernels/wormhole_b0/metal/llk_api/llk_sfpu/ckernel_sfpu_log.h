@@ -11,7 +11,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
+template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
     ///////////////////////////////////
     // "normalize to calculation range"
@@ -56,13 +56,12 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
 
     if constexpr (!FAST_APPROX) {
         sfpi::vInt exp = sfpi::exexp(in);
-        v_if(sfpi::reinterpret<sfpi::vInt>(in) == 0x7F800000) {
-            // If input is infinity, return infinity
-            result = std::numeric_limits<float>::infinity();
-        }
-        v_elseif(exp == 128 || in < 0.f) {                     // +inf or negative input -> NaN
+        sfpi::vInt man = sfpi::exman9(in);
+        sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
+        v_if((exp == 128 && man != 0) || in < 0.0F) {
             result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
         }
+        v_elseif(signbit == 0 && exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
         v_endif;
     }
 
@@ -83,21 +82,29 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
  */
 template <bool HAS_BASE_SCALING>
 sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log_base_scale_factor) {
-    sfpi::vFloat result;
+    sfpi::vFloat result = sfpi::vConst0;
 
     // Check for special cases
-    sfpi::vInt exp = sfpi::exexp(val);  // Get debiased exponent
+    sfpi::vInt exp = sfpi::exexp(val);        // Get debiased exponent
+    sfpi::vInt man_bits = sfpi::exman9(val);  // Get mantissa bits
 
-    v_if(sfpi::reinterpret<sfpi::vInt>(val) == 0x7F800000) {
-        // If input is infinity, return infinity
-        result = std::numeric_limits<float>::infinity();
+    // Check for NaN: exponent = 128 (255 - 127, meaning original exp = 255) and mantissa != 0
+    // Note: exexp returns debiased, so exp == 128 means original exp = 255
+    v_if(exp == 128 && man_bits != 0) {
+        // NaN: exponent = 255 and mantissa != 0
+        result = std::numeric_limits<float>::quiet_NaN();
     }
-    v_elseif(exp == 128 || val < 0.f) {                    // +inf or negative input -> NaN
-        result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
+    v_elseif(val < sfpi::vConst0) {
+        // Negative input -> NaN
+        result = std::numeric_limits<float>::quiet_NaN();
     }
-    v_elseif(val == 0.0f) {
+    v_elseif(val == sfpi::vConst0) {
         // Zero input -> -inf
         result = -std::numeric_limits<float>::infinity();
+    }
+    v_elseif(exp == 128 && man_bits == 0) {
+        // Infinity: exponent = 255 and mantissa = 0
+        result = std::numeric_limits<float>::infinity();
     }
     v_else {
         // Step 1: Extract exponent and mantissa
@@ -108,7 +115,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         // Step 2: Range reduction
         // If m >= sqrt(2), divide by 2 and increment exponent
         // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-        constexpr float SQRT2 = 1.4142135381698608f;  // sqrt(2)
+        constexpr float SQRT2 = 1.4142135623730951f;  // sqrt(2)
         v_if(m >= SQRT2) {
             // m = m * 0.5f;  // Divide by 2
             m = m * 0.5f;
@@ -165,7 +172,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
 
         // Step 5: Combine: ln(x) = exp×ln(2) + ln(m)
-        constexpr float LN2 = 0.69314718246459961f;  // log(2)
+        constexpr float LN2 = 0.6931471805599453f;  // log(2)
         result = expf * LN2 + ln_m;                 // log(x) = log2(x) / log(2)
 
         if constexpr (HAS_BASE_SCALING) {
@@ -181,7 +188,7 @@ template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
     bool HAS_BASE_SCALING,
-    bool is_fp32_dest_acc_en,
+    bool is_fp32_dest_acc_en = false,
     int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
@@ -198,10 +205,10 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en = false>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm0 = 0.69314718246459961f;  // ln(2)
+        sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {

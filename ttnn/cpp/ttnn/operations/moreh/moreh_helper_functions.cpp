@@ -12,7 +12,8 @@
 
 #include "tt-metalium/hal.hpp"
 
-namespace ttnn::operations {
+namespace ttnn {
+namespace operations {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -502,4 +503,5 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     return {Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
-}  // namespace ttnn::operations
+}  // namespace operations
+}  // namespace ttnn

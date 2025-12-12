@@ -14,8 +14,9 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+namespace ttnn {
 
-namespace ttnn::operations::conv {
+namespace operations::conv {
 using namespace conv2d;
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
@@ -339,4 +340,5 @@ std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
     std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
-}  // namespace ttnn::operations::conv
+}  // namespace operations::conv
+}  // namespace ttnn

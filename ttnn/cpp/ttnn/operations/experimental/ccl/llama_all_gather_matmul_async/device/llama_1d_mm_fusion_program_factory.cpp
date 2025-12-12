@@ -712,7 +712,11 @@ void override_program_parameters(
 
 }  // namespace llama_agmm_fusion_helpers
 
-namespace ttnn::operations::llama_matmul {
+namespace ttnn {
+
+namespace operations {
+
+namespace llama_matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
     tt_metal::Program& program,
@@ -1088,4 +1092,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace ttnn::operations::llama_matmul
+}  // namespace llama_matmul
+
+}  // namespace operations
+
+}  // namespace ttnn

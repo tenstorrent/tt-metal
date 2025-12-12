@@ -17,7 +17,6 @@ void write_mean_rstd(
     uint32_t Ht,
     uint32_t Wt,
     T addrg) {
-    using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
@@ -86,7 +85,6 @@ void write_mean_rstd(
 }
 
 void kernel_main() {
-    using namespace tt::constants;
     const auto output_addr = get_arg_val<uint32_t>(0);
     const auto mean_addr = get_arg_val<uint32_t>(1);
     const auto rstd_addr = get_arg_val<uint32_t>(2);

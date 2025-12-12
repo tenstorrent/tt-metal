@@ -147,8 +147,7 @@ ContextPtr SingleHostContext::duplicate() const {
 }
 
 ContextPtr SingleHostContext::split(Color color [[maybe_unused]], Key key [[maybe_unused]]) const {
-    // nop on single-host context
-    return get_current_world();
+    TT_THROW("method split is unsupported for single-host distributed contexts.");
 }
 
 ContextPtr SingleHostContext::create_sub_context(tt::stl::Span<int> ranks [[maybe_unused]]) const {

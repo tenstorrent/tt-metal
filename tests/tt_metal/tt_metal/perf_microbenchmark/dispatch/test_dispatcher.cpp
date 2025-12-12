@@ -57,7 +57,8 @@ bool send_to_all_g = true;                                               // Send
 bool perf_test_g = false;                                                // Perf mode: use consistent sizes
 uint32_t hugepage_issue_buffer_size_g;                                   // Hugepage issue buffer size (runtime)
 
-namespace tt::tt_dispatch::dispatcher_tests {
+namespace tt::tt_dispatch {
+namespace dispatcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS_LINEAR_WRITE = 3;
 constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
@@ -1409,4 +1410,5 @@ INSTANTIATE_TEST_SUITE_P(
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
     });
 
-}  // namespace tt::tt_dispatch::dispatcher_tests
+}  // namespace dispatcher_tests
+}  // namespace tt::tt_dispatch

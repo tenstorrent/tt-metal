@@ -9,8 +9,8 @@
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 
 namespace ttnn {
-
-namespace operations::unary {
+namespace operations {
+namespace unary {
 
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOp {
@@ -91,7 +91,8 @@ struct ExecuteUnaryCompositeOpWithInt {
     }
 };
 
-}  // namespace operations::unary
+}  // namespace unary
+}  // namespace operations
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 

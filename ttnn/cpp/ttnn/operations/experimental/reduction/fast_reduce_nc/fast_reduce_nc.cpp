@@ -9,7 +9,8 @@
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn {
+namespace operations::experimental::reduction {
 
 ttnn::Tensor FastReduceNCOperation::invoke(
     const ttnn::Tensor& input,
@@ -39,4 +40,6 @@ ttnn::Tensor FastReduceNCOperation::invoke(
     return ttnn::prim::fast_reduce_nc(temp_input, sorted_dims.front(), output, memory_config, kernel_config_val);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace operations::experimental::reduction
+
+}  // namespace ttnn

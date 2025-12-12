@@ -4,7 +4,8 @@
 
 #include "tt_fabric_test_device_setup.hpp"
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_fabric {
+namespace fabric_tests {
 
 // ====================================
 // FabricConnectionManager Implementation
@@ -1464,4 +1465,5 @@ uint64_t TestSender::get_total_packets() const {
     return total;
 }
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace fabric_tests
+}  // namespace tt::tt_fabric

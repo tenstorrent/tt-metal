@@ -15,7 +15,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // Writer config
     const uint32_t writer_addr = get_write_ptr(cb_id);
     volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(writer_addr);
-    const uint32_t w = wt << 5;  // wt * 2^(5)
+    const uint16_t w = wt << 5;  // wt * 2^(5)
 
     // Writer loop
     uint32_t count = 0;

@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [-v ...]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -15,7 +15,6 @@ Options:
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
     --skip-version-check             Do not enforce debugger version check. [default: False]
-    --print-script-times             Print the execution time of each script. [default: False]
     -v                               Increase verbosity level (can be repeated: -v, -vv, -vvv).
                                      Controls which columns/fields are displayed:
                                      Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
@@ -35,8 +34,6 @@ Description:
 # Check if tt-exalens is installed
 import inspect
 import os
-import threading
-from time import time
 import traceback
 import utils
 from collections.abc import Iterable
@@ -405,15 +402,13 @@ def parse_arguments(
     raise DocoptExit()
 
 
-FAILURE_CHECKS_LOCK = threading.Lock()
 FAILURE_CHECKS: list[str] = []
 
 
 def log_check(success: bool, message: str) -> None:
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
+    global FAILURE_CHECKS
     if not success:
-        with FAILURE_CHECKS_LOCK:
-            FAILURE_CHECKS.append(message)
+        FAILURE_CHECKS.append(message)
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
@@ -434,17 +429,16 @@ def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, me
     log_check_location(location, success, formatted_message)
 
 
-def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
+def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 
     if script is not None:
         print()
-        utils.INFO(f"{script.name}{execution_time}:")
+        utils.INFO(f"{script.name}:")
 
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
-    with FAILURE_CHECKS_LOCK:
-        failures = FAILURE_CHECKS
-        FAILURE_CHECKS = []
+    global FAILURE_CHECKS
+    failures = FAILURE_CHECKS
+    FAILURE_CHECKS = []
     if result is None:
         if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
@@ -503,7 +497,7 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                     )
                     assert "serializer" in metadata, "Serializer must be provided for combined field."
                     row.append(metadata["serializer"](all_values))
-                elif "serializer" in metadata:
+                else:
                     row.append(metadata["serializer"](getattr(obj, field.name)))
 
         # Create table header
@@ -682,8 +676,6 @@ class TTTriageError(Exception):
 
 
 def main():
-    triage_start = time()
-
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
     script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
@@ -743,11 +735,6 @@ def main():
             run_script(script_name, args, context)
     else:
         # Execute all scripts
-        triage_init_end = time()
-        if args["--print-script-times"]:
-            utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
-        total_time = triage_init_end - triage_start
-        serialization_time = 0.0
         for script in script_queue:
             if not all(not dep.failed for dep in script.depends):
                 utils.INFO(f"{script.name}:")
@@ -755,33 +742,15 @@ def main():
                 script.failed = True
                 script.failure_message = "Cannot run script due to failed dependencies."
             else:
-                start_time = time()
                 result = script.run(args=args, context=context)
-                end_time = time()
-                total_time += end_time - start_time
-                execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
-                if script.config.data_provider:
-                    if result is None:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        if script.failure_message is not None:
-                            utils.ERROR(f"  Data provider script failed: {script.failure_message}")
-                        else:
-                            utils.ERROR(f"  Data provider script did not return any data.")
-                    elif execution_time:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        utils.INFO("  pass")
-                else:
-                    start_time = time()
-                    serialize_result(script, result, execution_time)
-                    end_time = time()
-                    total_time += end_time - start_time
-                    serialization_time += end_time - start_time
-        if args["--print-script-times"]:
-            print()
-            utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
-            utils.INFO(f"Total execution time: {total_time:.2f}s")
+                if script.config.data_provider and result is None:
+                    utils.INFO(f"{script.name}:")
+                    if script.failure_message is not None:
+                        utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                    else:
+                        utils.ERROR(f"  Data provider script did not return any data.")
+                if not script.config.data_provider:
+                    serialize_result(script, result)
 
 
 if __name__ == "__main__":

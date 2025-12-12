@@ -161,14 +161,16 @@ void test_shape_padding() {
     TT_FATAL(output_tensor.logical_shape() == input_shape, "Error");
 }
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
         return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 void test_numerically() {
     log_info(tt::LogTest, "Running {}", __func__);

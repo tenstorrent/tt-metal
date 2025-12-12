@@ -52,7 +52,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
-        all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.cpp
+        all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_op.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
         concatenate_heads/device/concatenate_heads_device_operation.cpp
         concatenate_heads/device/concatenate_heads_program_factory.cpp

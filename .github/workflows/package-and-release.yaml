@@ -445,7 +445,7 @@ jobs:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run }}
+    if: ${{ !inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -152,6 +152,6 @@ FORCE_INLINE uint32_t get_tile_id(
     return tile_id;
 }
 
-FORCE_INLINE constexpr uint32_t ceil(uint32_t value, uint32_t block_depth) {
+FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_depth = 32) {
     return (value + block_depth - 1) / block_depth;
 }

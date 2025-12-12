@@ -402,12 +402,6 @@ private:
     static constexpr size_t udm_memory_pool_num_slots_ = 8;
     size_t udm_memory_pool_slot_size_ = 0;
     MemoryRegion udm_memory_pool_region_{};
-
-    // Response pool for tracking pending responses
-    // Size of RegisteredResponse is 32 bytes (defined in udm_registered_response_pool.hpp)
-    static constexpr size_t udm_registered_response_slot_size_ = 32;
-    size_t udm_registered_response_num_slots_ = 0;
-    MemoryRegion udm_registered_response_pool_region_{};
 };
 
 /**

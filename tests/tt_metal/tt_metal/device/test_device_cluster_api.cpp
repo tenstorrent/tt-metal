@@ -18,7 +18,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal::unit_tests::multichip::cluster {
+namespace tt::tt_metal {
+
+namespace unit_tests::multichip::cluster {
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -176,4 +178,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthValidateEthernetSockets) {
         std::make_tuple(device_1->id(), device_1_sockets.at(0)));
     EXPECT_ANY_THROW(device_0->get_ethernet_sockets(2));
 }
-}  // namespace tt::tt_metal::unit_tests::multichip::cluster
+}  // namespace unit_tests::multichip::cluster
+
+}  // namespace tt::tt_metal

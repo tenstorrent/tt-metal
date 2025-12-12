@@ -41,9 +41,11 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.

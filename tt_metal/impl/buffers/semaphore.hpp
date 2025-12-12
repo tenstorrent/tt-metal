@@ -10,7 +10,9 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 constexpr std::uint32_t NUM_SEMAPHORES = 16;
 
@@ -47,4 +49,6 @@ private:
     CoreType core_type_;
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

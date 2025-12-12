@@ -15,7 +15,8 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 
 struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
@@ -119,4 +120,5 @@ private:
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

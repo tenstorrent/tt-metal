@@ -6,7 +6,9 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
 
-namespace ttnn::operations::copy {
+namespace ttnn {
+namespace operations {
+namespace copy {
 
 namespace detail {
 
@@ -70,4 +72,6 @@ Tensor Typecast::invoke(
     return detail::typecast_impl(input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
 }
 
-}  // namespace ttnn::operations::copy
+}  // namespace copy
+}  // namespace operations
+}  // namespace ttnn

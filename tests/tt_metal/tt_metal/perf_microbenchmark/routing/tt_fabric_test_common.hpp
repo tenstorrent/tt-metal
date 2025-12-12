@@ -57,7 +57,8 @@ using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_fabric {
+namespace fabric_tests {
 
 struct pair_hash {
     template <class T1, class T2>
@@ -1885,4 +1886,5 @@ private:
     }
 };
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace fabric_tests
+}  // namespace tt::tt_fabric

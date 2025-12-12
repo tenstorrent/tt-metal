@@ -5,7 +5,9 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 
-namespace ttnn::ccl::cmd {
+namespace ttnn {
+namespace ccl {
+namespace cmd {
 
 void pack_field_without_header(ttnn::ccl::cmd::args_elem_t* args, ttnn::ccl::Shape4D<uint32_t> const& out) {
     std::size_t i = 0;
@@ -15,4 +17,6 @@ void pack_field_without_header(ttnn::ccl::cmd::args_elem_t* args, ttnn::ccl::Sha
     args[i++] = out.x;
 }
 
-}  // namespace ttnn::ccl::cmd
+}  // namespace cmd
+}  // namespace ccl
+}  // namespace ttnn

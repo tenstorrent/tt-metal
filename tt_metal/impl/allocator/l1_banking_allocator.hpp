@@ -11,7 +11,9 @@
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/allocator.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 struct AllocatorConfig;
 
@@ -27,4 +29,6 @@ public:
         BankMapping l1_bank_remap);
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

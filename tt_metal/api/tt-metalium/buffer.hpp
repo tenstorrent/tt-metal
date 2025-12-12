@@ -34,10 +34,14 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::stl::json {
+namespace tt {
+namespace stl {
+namespace json {
 template <typename T>
 struct from_json_t;
-}  // namespace tt::stl::json
+}  // namespace json
+}  // namespace stl
+}  // namespace tt
 
 namespace tt::tt_metal {
 

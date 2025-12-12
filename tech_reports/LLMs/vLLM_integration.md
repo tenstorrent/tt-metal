@@ -40,10 +40,6 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```python
       process_decode_output_host(tt_out : ttnn.Tensor, is_tokens : bool)
       ```
-    - `warmup_model_prefill` (V0 and V1): wrapper function that calls the model specific prefill warmup function that compiles the model and captures the traces (for prefill). The `kv_cache`, `enable_trace` and `sampling_params` are passed from vLLM. The `enable_trace` [True/False] argument determines whether tracing in prefill will be used or not. The `sampling_params` [List] argument is a list of all types of samplings that a model can perform. The `sampling_params` list argument contains `TTSamplingParams` objects, and always contains at the end of the list a `None` value which resembles host sampling.
-      ```python
-      warmup_model_prefill(kv_cache : list, enable_trace : bool, sampling_params : list)
-      ```
 3. **(Multi-modal models only)** Currently, we only support image+text input modalities. An example generation class is `Gemma3ForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). For more info on multi-modal models see also [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)). These models have the same interface requirements as the text-only models, as well as the following:
    - `prefill_forward` (**image+text models**): same as text-only models with an additional kwarg (`images` for V0, `pixel_values` for V1) for the image inputs.
 

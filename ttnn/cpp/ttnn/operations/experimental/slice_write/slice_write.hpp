@@ -6,7 +6,9 @@
 
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn {
+namespace operations {
+namespace experimental {
 
 struct SliceWriteOperation {
     static ttnn::Tensor invoke(
@@ -17,7 +19,9 @@ struct SliceWriteOperation {
         const ttnn::SmallVector<uint32_t>& step);
 };
 
-}  // namespace ttnn::operations::experimental
+}  // namespace experimental
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::experimental {
 constexpr auto slice_write =

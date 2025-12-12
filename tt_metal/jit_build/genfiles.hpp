@@ -8,9 +8,11 @@
 #include <string>
 #include <vector>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 struct KernelSource;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -45,9 +45,11 @@
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 enum NOC : uint8_t;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 namespace {

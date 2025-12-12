@@ -554,32 +554,6 @@ def get_padded_prefill_len(seq_len: int) -> int:
     return min_extended_pad
 
 
-def get_all_padded_prefill_lengths(max_len: int = 8192):
-    # Powers of 2 up to max_length (but max 2048)
-    padded_lengths = [v for v in (1 << n for n in range(7, 12)) if v <= max_len]
-
-    # Multiples of 2048 up to max_len (skip dup 2048)
-    padded_lengths += [v for v in range(2048, max_len + 1, 2048) if v not in padded_lengths]
-
-    return sorted(list(padded_lengths))
-
-
-def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens, model_args_max_seq_len):
-    max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
-    to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
-    for trace_supported_seq_len in trace_supported_seq_lens:
-        if trace_supported_seq_len not in to_warmup_seq_lens:
-            to_warmup_seq_lens.append(trace_supported_seq_len)
-    to_warmup_seq_lens.sort()
-
-    for seq_len in to_warmup_seq_lens:
-        if seq_len > model_args_max_seq_len:
-            to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
-            break
-
-    return to_warmup_seq_lens
-
-
 def get_block_size(kv_cache):
     return kv_cache[0][0].shape[2]
 

@@ -18,7 +18,8 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail::rs_heads_fusion {
+namespace detail {
+namespace rs_heads_fusion {
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
     ttnn::SmallVector<uint32_t> device_order;
@@ -256,7 +257,8 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
     return worker_cores;
 }
 
-}  // namespace detail::rs_heads_fusion
+}  // namespace rs_heads_fusion
+}  // namespace detail
 
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cached_mesh_workload_t
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::create_mesh_workload(

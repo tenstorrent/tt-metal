@@ -148,7 +148,8 @@ void matmul_qk_by_v(
                 cb_value,
                 /* tile_idx */ 0,
                 /* tile_idx */ tile_idx + block_idx,
-                block_idx);
+                block_idx,
+                0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -318,7 +319,7 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     tile_regs_acquire();
 
     mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
-    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
+    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx, 0);
 
     recip_tile_init();
     recip_tile(reduce_dst_idx);

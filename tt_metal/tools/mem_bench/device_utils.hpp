@@ -12,15 +12,17 @@
 
 #include "context.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
 class Program;
-
-namespace tools::mem_bench {
+namespace tools {
+namespace mem_bench {
 struct Context;
-}  // namespace tools::mem_bench
-
-}  // namespace tt::tt_metal
+}  // namespace mem_bench
+}  // namespace tools
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::tools::mem_bench {
 

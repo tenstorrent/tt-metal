@@ -9,8 +9,8 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-
-namespace operations::upsample {
+namespace operations {
+namespace upsample {
 
 struct ExecuteUpSample {
     static ttnn::Tensor invoke(
@@ -20,7 +20,7 @@ struct ExecuteUpSample {
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
-}  // namespace operations::upsample
-
+}  // namespace upsample
+}  // namespace operations
 constexpr auto upsample = ttnn::register_operation<"ttnn::upsample", ttnn::operations::upsample::ExecuteUpSample>();
 }  // namespace ttnn

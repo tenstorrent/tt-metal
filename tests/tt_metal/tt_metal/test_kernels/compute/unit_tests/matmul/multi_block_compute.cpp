@@ -20,6 +20,7 @@ void MAIN {
     const uint32_t out_c = get_compile_time_arg_val(8);
     const uint32_t in0_k = get_compile_time_arg_val(9);
     const uint32_t num_blocks = get_compile_time_arg_val(10);
+    const bool transpose = false;
     const uint32_t last_block_id = num_blocks - 1;
 
     // we are looking at block
@@ -46,7 +47,7 @@ void MAIN {
                 for (uint32_t k = 0; k < in0_k; k++) {
                     int in0_tile_index = in0_index_r_offset + k;
                     int in1_tile_index = in1_index_c_offset + c;
-                    matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
+                    matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
                     in1_index_c_offset += k;
                 }
                 out_tile_index++;

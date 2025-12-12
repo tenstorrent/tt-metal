@@ -225,7 +225,8 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reduced_scale_register);
+        reduced_scale_register,
+        /* transpose */ 0);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
@@ -303,7 +304,8 @@ inline void compute_scale(const uint32_t row) {
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        reduced_scale_register);
+        reduced_scale_register,
+        /* transpose */ 0);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.

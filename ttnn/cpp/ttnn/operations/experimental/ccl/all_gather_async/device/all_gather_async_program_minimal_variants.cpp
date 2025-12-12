@@ -70,14 +70,8 @@ uint32_t default_workers(
     // for 2 workers. for ring, half the data is moved per link, so we divide by 2
     double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ccl::Topology::Ring ? 2 : 1);
-    // At a single packet size (4KB) we should just have one worker with the optimal packet size and save on mux
-    // overheads At 256KB we observe that the perf improves if we have four workers per link
-    constexpr double DATA_THRESHOLD = 256.0 * 1024;
-    constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
-    if (data_moved_per_link_bytes > DATA_THRESHOLD) {
+    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
         candidate_worker_counts = {4, 2, 1};
-    } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
-        candidate_worker_counts = {1};
     } else {
         candidate_worker_counts = {2, 1};
     }

@@ -33,9 +33,11 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class CommandQueue;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.

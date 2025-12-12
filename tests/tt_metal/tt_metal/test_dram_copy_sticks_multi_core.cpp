@@ -31,9 +31,11 @@
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

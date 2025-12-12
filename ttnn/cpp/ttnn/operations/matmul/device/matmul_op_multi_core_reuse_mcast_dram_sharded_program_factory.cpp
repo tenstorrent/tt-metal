@@ -923,7 +923,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 }
 }  // namespace reuse_dram_sharded_optimized_helpers
 
-namespace ttnn::operations::matmul {
+namespace ttnn {
+
+namespace operations {
+
+namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const ttnn::MeshCoordinate& mesh_coord,
@@ -1110,4 +1114,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         skip_write_back);
 }
 
-}  // namespace ttnn::operations::matmul
+}  // namespace matmul
+
+}  // namespace operations
+
+}  // namespace ttnn

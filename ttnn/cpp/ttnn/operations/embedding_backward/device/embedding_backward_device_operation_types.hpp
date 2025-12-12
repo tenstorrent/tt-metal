@@ -6,7 +6,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::embedding_backward::embedding_backward {
+namespace ttnn::operations::embedding_backward {
+
+namespace embedding_backward {
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -23,4 +25,6 @@ struct tensor_args_t {
 using spec_return_value_t = ttnn::TensorSpec;
 using tensor_return_value_t = Tensor;
 
-}  // namespace ttnn::operations::embedding_backward::embedding_backward
+}  // namespace embedding_backward
+
+}  // namespace ttnn::operations::embedding_backward

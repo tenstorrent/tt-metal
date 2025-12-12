@@ -1,15 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <optional>
 #include "ttnn/decorators.hpp"
+
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-#include <optional>
-
-namespace ttnn::operations::experimental::ccl::transformer {
+namespace ttnn {
+namespace operations {
+namespace experimental {
+namespace ccl {
+namespace transformer {
 
 struct ExecuteAllReduceCreateQkvHeads {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
@@ -26,19 +33,23 @@ struct ExecuteAllReduceCreateQkvHeads {
         std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
         // create qkv heads optional parameters
-        std::optional<uint32_t> num_kv_heads,
-        std::optional<uint32_t> slice_size = std::nullopt,
+        std::optional<const uint32_t> num_kv_heads,
+        std::optional<const uint32_t> slice_size = std::nullopt,
         const std::optional<MemoryConfig>& final_memory_config = std::nullopt,
-        std::optional<DataType> dtype = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
         bool use_noc1_only = false);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::transformer
+}  // namespace transformer
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
-namespace ttnn::experimental {
+namespace experimental {
 
 constexpr auto all_reduce_create_qkv_heads = ttnn::register_operation<
     "ttnn::experimental::all_reduce_create_qkv_heads",
     ttnn::operations::experimental::ccl::transformer::ExecuteAllReduceCreateQkvHeads>();
 
-}  // namespace ttnn::experimental
+}  // namespace experimental
+}  // namespace ttnn

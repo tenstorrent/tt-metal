@@ -13,7 +13,9 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 enum class HalProgrammableCoreType;
 
 constexpr uint32_t kernel_config_entry_count = 8;
@@ -236,4 +238,6 @@ void WorkerConfigBufferMgr::PrintStatus() {
     }
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

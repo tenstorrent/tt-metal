@@ -40,7 +40,7 @@ def dump_callstacks(
     try:
         # Skip DONE cores unless --all-cores is specified
         if not show_all_cores:
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+            dispatcher_core_data = callstack_provider.dispatcher_data.get_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
         return callstack_provider.get_callstacks(location, risc_name)

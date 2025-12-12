@@ -10,7 +10,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
-namespace tt::test_utils {
+namespace tt {
+namespace test_utils {
 
 //! Generic Library of templated comparison functions.
 //! Custom type is supported as long as the custom type supports the following custom functions
@@ -81,4 +82,5 @@ bool is_close_packed_vectors(
         argfail);
 }
 
-}  // namespace tt::test_utils
+}  // namespace test_utils
+}  // namespace tt

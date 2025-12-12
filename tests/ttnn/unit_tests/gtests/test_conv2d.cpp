@@ -26,7 +26,10 @@
 #include "ttnn/operations/core/core.hpp"
 #include "common_test_utils.hpp"
 
-namespace ttnn::operations::conv::conv2d::test {
+namespace ttnn {
+namespace operations {
+namespace conv::conv2d {
+namespace test {
 
 struct Conv2DParam {
     uint32_t input_channels;
@@ -256,4 +259,7 @@ INSTANTIATE_TEST_SUITE_P(
             .padding = {1, 1},
         }));
 
-}  // namespace ttnn::operations::conv::conv2d::test
+}  // namespace test
+}  // namespace conv::conv2d
+}  // namespace operations
+}  // namespace ttnn

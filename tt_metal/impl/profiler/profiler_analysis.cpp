@@ -50,7 +50,9 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::ERISC, "ERISC"}});
 }  // namespace tracy
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 // INVALID_NUM_PROGRAM_EXECUTION_UID and INVALID_NUM must be equal to ensure proper translation between TTDeviceMarker
 // IDs and ProgramExecutionUID. INVALID_NUM cannot be used directly because ProgramExecutionUID is exposed in the public
@@ -471,4 +473,6 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     }
     return configs;
 }
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

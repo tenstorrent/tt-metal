@@ -4,7 +4,8 @@
 
 #pragma once
 
-namespace tt::test_utils {
+namespace tt {
+namespace test_utils {
 /// @brief generic vector printer
 /// @tparam T
 /// @param const std::vector<T>& vec
@@ -28,4 +29,5 @@ void print_vector_fixed_numel_per_row(const std::vector<T>& vec, const unsigned 
     }
     std::cout << std::endl;
 }
-}  // namespace tt::test_utils
+}  // namespace test_utils
+}  // namespace tt

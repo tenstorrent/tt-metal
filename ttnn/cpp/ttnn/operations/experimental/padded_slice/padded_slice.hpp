@@ -6,7 +6,9 @@
 
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn {
+namespace operations {
+namespace experimental {
 
 struct PaddedSliceOperation {
     template <typename T>
@@ -39,7 +41,9 @@ struct PaddedSliceOperation {
     }
 };
 
-}  // namespace ttnn::operations::experimental
+}  // namespace experimental
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::experimental {
 constexpr auto padded_slice =

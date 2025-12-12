@@ -15,10 +15,14 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt {
+namespace tt_metal {
+namespace distributed {
 class MeshBuffer;
 class MeshDevice;
-}  // namespace tt::tt_metal::distributed
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed::test::utils {
 

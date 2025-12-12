@@ -54,34 +54,6 @@ def run(
     else:
         shape = input_shape
 
-    # Try to infer num_heads and num_kv_heads from shape if missing
-    if num_heads is None or num_kv_heads is None:
-        if len(shape) == 4:
-            # Input shape: [1, 1, 1, hidden_dim] where hidden_dim = (num_heads + 2*num_kv_heads) * head_dim
-            hidden_dim = shape[3]
-            # Try common ratios: if num_kv_heads = num_heads, then hidden_dim = 3 * num_heads * head_dim
-            # If num_kv_heads = num_heads / 2 (GQA), then hidden_dim = 2 * num_heads * head_dim
-            # Try to infer: assume head_dim = 64 (common), then num_heads + 2*num_kv_heads = hidden_dim / 64
-            head_dim_guess = 64
-            total_heads = hidden_dim // head_dim_guess
-            if num_heads is None and num_kv_heads is None:
-                # Assume GQA: num_kv_heads = num_heads / 2
-                # So: num_heads + 2*(num_heads/2) = 2*num_heads = total_heads
-                num_heads = total_heads // 2
-                num_kv_heads = num_heads // 2
-            elif num_heads is None:
-                # num_kv_heads is known, solve for num_heads
-                num_heads = total_heads - 2 * num_kv_heads
-            elif num_kv_heads is None:
-                # num_heads is known, solve for num_kv_heads
-                num_kv_heads = (total_heads - num_heads) // 2
-        else:
-            # Default fallbacks
-            if num_heads is None:
-                num_heads = 16
-            if num_kv_heads is None:
-                num_kv_heads = num_heads // 2
-
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)

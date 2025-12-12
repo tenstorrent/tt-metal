@@ -18,9 +18,11 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;

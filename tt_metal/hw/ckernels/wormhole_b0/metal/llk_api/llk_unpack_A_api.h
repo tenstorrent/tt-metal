@@ -89,7 +89,8 @@ template <
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+inline void llk_unpack_A(
+    const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
@@ -97,7 +98,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-        address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     WAYPOINT("UPAD");
 }
 
@@ -107,7 +108,10 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand,
+    const std::uint32_t start_tile_index,
+    const std::uint32_t ntiles,
+    const bool transpose_of_faces = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
@@ -116,7 +120,7 @@ inline void llk_unpack_A_block(
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-            address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+            address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
         address += offset_address;
         WAYPOINT("UPAD");
     }

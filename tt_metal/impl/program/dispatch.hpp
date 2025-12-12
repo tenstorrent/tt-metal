@@ -25,7 +25,9 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 class IDevice;
 class Program;
 class Semaphore;
@@ -203,4 +205,6 @@ uint32_t program_base_addr_on_core(
 
 }  // namespace program_dispatch
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

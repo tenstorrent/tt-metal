@@ -178,12 +178,8 @@ def run(args, context) -> InspectorData:
     try:
         return InspectorRpcSerialized(log_directory)
     except:
-        raise InspectorException(
-            "There is no Inspector RPC data, cannot continue. "
-            "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
-            "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
-            "TT_METAL_INSPECTOR_RPC=1."
-        )
+        # Fall back to reading Inspector logs
+        return get_logs_data(log_directory)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async {
+namespace ttnn::operations::experimental::ccl {
+namespace all_to_all_async {
 
 struct AllToAllAsyncProgram {
     struct shared_variables_t {
@@ -42,4 +43,5 @@ struct AllToAllAsyncProgram {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async
+}  // namespace all_to_all_async
+}  // namespace ttnn::operations::experimental::ccl

@@ -16,7 +16,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::ccl {
+namespace ttnn {
+namespace ccl {
 
 bool is_fabric_2d() {
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
@@ -1885,4 +1886,5 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
-}  // namespace ttnn::ccl
+}  // namespace ccl
+}  // namespace ttnn

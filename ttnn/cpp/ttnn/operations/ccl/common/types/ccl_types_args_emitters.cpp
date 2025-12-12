@@ -11,7 +11,8 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::ccl {
+namespace ttnn {
+namespace ccl {
 
 args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) {
     return {
@@ -235,4 +236,5 @@ void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, s
     log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix, static_cast<uint32_t>(shard_grid_transposed));
 }
 
-}  // namespace ttnn::ccl
+}  // namespace ccl
+}  // namespace ttnn

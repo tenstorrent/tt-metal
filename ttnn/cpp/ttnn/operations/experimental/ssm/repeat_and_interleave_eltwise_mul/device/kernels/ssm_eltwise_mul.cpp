@@ -161,8 +161,9 @@ void MAIN {
                 mul_bcast_rows_init_short(cb_in0_transposed, cb_in1_bcast_row);
                 mul_tiles_bcast_rows(cb_in0_transposed, cb_in1_bcast_row, 0, 0, 0);
 
-                MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(cb_id_out)));
-                MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(0) ));
+                MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true,
+                cb_id_out)
+                )); MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(0) ));
 
                 pack_tile(0, cb_id_out);
 

@@ -24,9 +24,11 @@
 
 // NOLINTBEGIN(cppcoreguidelines-no-malloc)
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
 

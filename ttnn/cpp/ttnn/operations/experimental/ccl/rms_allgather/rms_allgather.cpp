@@ -6,8 +6,8 @@
 #include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp"
 
 #include <ttnn/device.hpp>
-
-namespace ttnn::operations::fused::normalization {
+namespace ttnn {
+namespace operations::fused::normalization {
 
 ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
@@ -47,4 +47,6 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
         use_noc1_only);
 }
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace operations::fused::normalization
+
+}  // namespace ttnn

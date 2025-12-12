@@ -133,8 +133,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 namespace operations {
-
-namespace experimental::ccl {
+namespace experimental {
+namespace ccl {
 
 Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
@@ -159,7 +159,8 @@ LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
     const operations::matmul::Matmul& matmul_struct,
     const std::vector<IDevice*>& devices);
 
-}  // namespace experimental::ccl
+}  // namespace ccl
+}  // namespace experimental
 
 namespace llama_matmul {
 

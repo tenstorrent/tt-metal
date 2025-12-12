@@ -20,7 +20,8 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <hostdevcommon/fabric_common.h>
 
-namespace tt::tt_fabric::multi_host_tests {
+namespace tt::tt_fabric {
+namespace multi_host_tests {
 
 std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intermesh_connections(const ControlPlane& control_plane) {
     std::vector<std::pair<FabricNodeId, FabricNodeId>> all_intermesh_connections;
@@ -805,4 +806,5 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     EXPECT_EQ(z_channel_count, 8) << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
 }
 
-}  // namespace tt::tt_fabric::multi_host_tests
+}  // namespace multi_host_tests
+}  // namespace tt::tt_fabric

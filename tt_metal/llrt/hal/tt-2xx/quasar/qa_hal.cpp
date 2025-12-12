@@ -61,7 +61,9 @@ static constexpr float EPS_QA = 1.19209e-7f;  // TODO: verify
 static constexpr float NAN_QA = 7.0040e+19;   // TODO: verify
 static constexpr float INF_QA = 1.7014e+38;   // TODO: verify
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
@@ -316,7 +318,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
-    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;                      // TODO: add correct value
+    this->noc_coord_reg_offset_ = 0;                                         // TODO: add correct value
     this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value
     this->noc_stream_reg_space_size_ = 0;                                    // TODO: add correct value
     this->noc_stream_remote_dest_buf_size_reg_index_ = 0;                    // TODO: add correct value
@@ -350,4 +352,5 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     };
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

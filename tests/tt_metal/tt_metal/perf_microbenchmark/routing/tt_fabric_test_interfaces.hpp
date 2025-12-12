@@ -12,11 +12,14 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <random>
 
-namespace tt::tt_fabric {
+namespace tt {
+namespace tt_fabric {
 class FabricNodeId;
-}  // namespace tt::tt_fabric
+}  // namespace tt_fabric
+}  // namespace tt
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_fabric {
+namespace fabric_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
@@ -121,4 +124,5 @@ private:
     virtual void barrier() const = 0;
 };
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace fabric_tests
+}  // namespace tt::tt_fabric

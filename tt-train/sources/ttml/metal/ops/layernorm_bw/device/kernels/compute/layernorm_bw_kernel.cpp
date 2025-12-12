@@ -149,7 +149,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register);
+        /* idst */ reduced_sum_register,
+        /* transpose */ 0);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
@@ -227,7 +228,8 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register);
+        /* idst */ reduced_sum_register,
+        /* transpose */ 0);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
@@ -307,7 +309,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register);
+        /* idst */ reduced_sum_register,
+        /* transpose */ 0);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
@@ -401,7 +404,8 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register);
+        /* idst */ reduced_sum_register,
+        /* transpose */ 0);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);

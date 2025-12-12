@@ -89,8 +89,11 @@ void jit_build_genfiles_triscs_src(
     string math_base = out_dir + "chlkc_math";
     string pack_base = out_dir + "chlkc_pack";
     string unpack_cpp = unpack_base + ".cpp";
+    string unpack_llk_args_h = unpack_base + "_llk_args.h";
     string math_cpp = math_base + ".cpp";
+    string math_llk_args_h = math_base + "_llk_args.h";
     string pack_cpp = pack_base + ".cpp";
+    string pack_llk_args_h = pack_base + "_llk_args.h";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 

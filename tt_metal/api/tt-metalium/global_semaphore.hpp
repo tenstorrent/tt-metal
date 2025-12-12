@@ -15,9 +15,11 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -39,7 +39,7 @@ def check_noc_status(
     and stores them in dictionary creating summary of checking process
     """
 
-    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
     fw_elf_path = dispatcher_core_data.firmware_path
     fw_elf = elfs_cache[fw_elf_path]

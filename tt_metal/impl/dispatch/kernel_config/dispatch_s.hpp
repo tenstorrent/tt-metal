@@ -9,7 +9,8 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 
 struct dispatch_s_static_config_t {
     std::optional<uint32_t> cb_base;
@@ -48,4 +49,5 @@ private:
     dispatch_s_dependent_config_t dependent_config_;
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

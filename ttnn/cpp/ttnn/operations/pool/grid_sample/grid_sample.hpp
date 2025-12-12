@@ -8,8 +8,8 @@
 #include "grid_sample_prepare_grid.hpp"
 
 namespace ttnn {
-
-namespace operations::grid_sample {
+namespace operations {
+namespace grid_sample {
 
 struct ExecuteGridSample {
     /**
@@ -41,7 +41,8 @@ struct ExecuteGridSample {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace operations::grid_sample
+}  // namespace grid_sample
+}  // namespace operations
 
 // Register the operation
 constexpr auto grid_sample =

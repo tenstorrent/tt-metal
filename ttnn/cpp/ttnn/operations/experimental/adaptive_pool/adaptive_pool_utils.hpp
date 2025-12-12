@@ -6,7 +6,8 @@
 #include <array>
 #include <cstdint>
 
-namespace ttnn::operations::experimental::adaptive_pool {
+namespace ttnn {
+namespace operations::experimental::adaptive_pool {
 
 struct AdaptivePoolingParams {
     std::array<uint32_t, 2> kernel_size;
@@ -19,4 +20,5 @@ AdaptivePoolingParams calculate_adaptive_pool_params(
 
 void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w);
 
-}  // namespace ttnn::operations::experimental::adaptive_pool
+}  // namespace operations::experimental::adaptive_pool
+}  // namespace ttnn

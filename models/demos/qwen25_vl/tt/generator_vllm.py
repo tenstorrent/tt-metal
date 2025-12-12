@@ -176,13 +176,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
-        enable_trace,
-        **kwargs,  # images for V0, pixel_values and image_grid_thw for V1,
+        **kwargs,  # images for V0, pixel_values and image_grid_thw for V1
     ):
-        # Must add this so that vLLM can call without errors
-        enable_trace = False
-        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
-
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
         padded_seq_len = tokens.shape[-1]

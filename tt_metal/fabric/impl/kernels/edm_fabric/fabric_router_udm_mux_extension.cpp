@@ -180,7 +180,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.template cache_producer_noc_addr<true>();
+    worker_interface.cache_producer_noc_addr();
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -254,27 +254,26 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        bool can_forward = tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
+        tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
             packet_header, fabric_connection, downstream_mux_connections);
-        if (can_forward) {
-            worker_interface.local_write_counter.increment();
-            worker_interface.local_read_counter.increment();
 
-            // not handling/processing acks for now, re-evaluate if needed
-            increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
+        worker_interface.local_write_counter.increment();
+        worker_interface.local_read_counter.increment();
 
-            noc_async_writes_flushed();
+        // not handling/processing acks for now, re-evaluate if needed
+        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
 
-            if (is_persistent_channel) {
-                worker_interface.notify_worker_of_read_counter_update();
-            } else if (channel_connection_established) {
-                worker_interface.notify_worker_of_read_counter_update();
-            }
+        noc_async_writes_flushed();
+
+        if (is_persistent_channel) {
+            worker_interface.notify_worker_of_read_counter_update();
+        } else if (channel_connection_established) {
+            worker_interface.notify_worker_of_read_counter_update();
         }
     }
 
     if (!is_persistent_channel) {
-        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
+        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
             worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
     }
 }
@@ -525,7 +524,7 @@ void kernel_main() {
         }
     }
 
-    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             // Process worker channels (WORKER_CHANNEL)
             for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {

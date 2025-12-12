@@ -18,7 +18,7 @@ void MAIN {
         for (uint32_t nt = 0; nt < sub_Nt; ++nt) {
             acquire_dst();
             for (uint32_t kt = 0; kt < Kt; ++kt) {
-                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, mt * Kt + kt, nt * Kt + kt, 0);
+                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, mt * Kt + kt, nt * Kt + kt, 0, false);
             }
             cb_reserve_back(tt::CBIndex::c_16, onetile);
             pack_tile(0, tt::CBIndex::c_16);

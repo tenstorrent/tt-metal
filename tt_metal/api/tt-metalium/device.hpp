@@ -27,7 +27,9 @@
 
 #include <tt_stl/span.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -227,4 +229,6 @@ public:
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

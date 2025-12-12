@@ -5,7 +5,8 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn {
+namespace operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const ttnn::Tensor& input_tensor,
@@ -56,4 +57,5 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
         core_grid);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace operations::experimental::ccl
+}  // namespace ttnn

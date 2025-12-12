@@ -21,10 +21,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
-#include <cabling_generator/cabling_generator.hpp>
-#include <google/protobuf/text_format.h>
-#include <yaml-cpp/yaml.h>
-#include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
@@ -951,17 +947,20 @@ void handle_workload_timeout(
         log_output_rank0("Re-running discovery to check for link failures");
         ctx.physical_system_descriptor.run_discovery(true, true);
 
-        log_output_rank0("Generating Global System Descriptor in-memory");
-        YAML::Node gsd_yaml_node = ctx.physical_system_descriptor.generate_yaml_node();
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        std::string gsd_yaml_filename =
+            "timeout_global_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".yaml";
+        std::string gsd_yaml_path = validation_config.output_path / gsd_yaml_filename;
+        ctx.physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
 
-        log_output_rank0("Obtaining Factory System Descriptor");
-        auto fsd_proto = get_factory_system_descriptor(
+        const auto fsd_file_path = get_factory_system_descriptor_path(
             validation_config.cabling_descriptor_path,
             validation_config.deployment_descriptor_path,
             validation_config.fsd_path,
+            validation_config.output_path.string(),
             ctx.physical_system_descriptor.get_all_hostnames());
         validate_connectivity(
-            fsd_proto, gsd_yaml_node, validation_config.fail_on_warning, ctx.physical_system_descriptor);
+            fsd_file_path, gsd_yaml_path, validation_config.fail_on_warning, ctx.physical_system_descriptor);
     } else {
         log_output_rank0(
             "WARNING: Cannot validate Global System Descriptor against Factory System Descriptor, "
@@ -1512,65 +1511,48 @@ void perform_link_reset(
     log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
-fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
+std::string get_factory_system_descriptor_path(
     const std::optional<std::string>& cabling_descriptor_path,
     const std::optional<std::string>& deployment_descriptor_path,
     const std::optional<std::string>& fsd_path,
+    const std::string& output_path,
     const std::vector<std::string>& hostnames) {
-    if (!cabling_descriptor_path.has_value() && !fsd_path.has_value()) {
-        TT_THROW("Either cabling_descriptor_path or fsd_path must be provided");
-    }
-
+    std::string fsd_file_path;
     if (cabling_descriptor_path.has_value()) {
-        if (fsd_path.has_value()) {
-            log_warning(
-                tt::LogDistributed,
-                "Both cabling_descriptor_path and fsd_path provided; using cabling_descriptor_path to generate FSD");
-        }
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
+        CablingGenerator cabling_generator;
+        std::string filename =
+            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+        fsd_file_path = std::filesystem::path(output_path) / filename;
+
         if (!deployment_descriptor_path.has_value()) {
-            TT_FATAL(
-                hostnames.size() == 1,
-                "Expected exactly one host in the cluster when no deployment descriptor is provided");
-            return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
-                .generate_factory_system_descriptor();
+            TT_FATAL(hostnames.size() == 1, "Expected exactly one host in the cluster when no deployment descriptor is provided");
+            cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
         } else {
-            return tt::scaleout_tools::CablingGenerator(
-                       cabling_descriptor_path.value(), deployment_descriptor_path.value())
-                .generate_factory_system_descriptor();
+            cabling_generator = tt::scaleout_tools::CablingGenerator(
+                cabling_descriptor_path.value(), deployment_descriptor_path.value());
         }
+        cabling_generator.emit_factory_system_descriptor(fsd_file_path);
     } else {
-        // Load FSD from file
-        fsd::proto::FactorySystemDescriptor fsd_proto;
-        std::ifstream fsd_file(fsd_path.value());
-        if (!fsd_file.is_open()) {
-            TT_THROW("Failed to open FSD file: {}", fsd_path.value());
-        }
-        std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
-        fsd_file.close();
-        if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
-            TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
-        }
-        return fsd_proto;
+        fsd_file_path = fsd_path.value();
     }
+    return fsd_file_path;
 }
 
 tt_metal::AsicTopology validate_connectivity(
-    const fsd::proto::FactorySystemDescriptor& fsd_proto,
-    const YAML::Node& gsd_yaml_node,
+    const std::string& fsd_path,
+    const std::string& gsd_yaml_path,
     bool fail_on_warning,
-    PhysicalSystemDescriptor& physical_system_descriptor,
-    std::optional<uint32_t> min_connections) {
-    log_output_rank0(
-        "Validating Factory System Descriptor (Golden Representation) against Global System Descriptor (in-memory)");
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        fsd_proto,
-        gsd_yaml_node,
+        fsd_path,
+        gsd_yaml_path,
         true /* strict_validation */,
         fail_on_warning,
-        *distributed_context.rank() == 0 /* log_output */,
-        min_connections);
+        *distributed_context.rank() == 0 /* log_output */);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }

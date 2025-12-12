@@ -14,7 +14,10 @@ namespace ttnn::operations::sliding_window {
 struct ParallelConfig;
 }
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn {
+
+namespace operations::conv {
+namespace conv2d {
 
 // Device validation functions for conv2d tensors (after preparation/on device)
 bool is_valid_device_conv_weights(
@@ -233,4 +236,6 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     const Conv2dWeightsBiasPrepConfig& params,
     DataType weight_dtype,
     MeshDevice* device);
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace conv2d
+}  // namespace operations::conv
+}  // namespace ttnn

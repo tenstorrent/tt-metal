@@ -50,8 +50,6 @@ jobs:
       direct-ping-users: ${{ steps.parse.outputs.direct-ping-users }}
       is-direct-ping: ${{ steps.parse.outputs.is-direct-ping }}
       comment-author: ${{ steps.parse.outputs.comment-author }}
-      is-bypass-command: ${{ steps.parse.outputs.is-bypass-command }}
-      bypass-authorized: ${{ steps.parse.outputs.bypass-authorized }}
     steps:
       - name: Parse comment and get PR info
         id: parse
@@ -103,58 +101,23 @@ jobs:
               echo "Found branch: $BRANCH"
 
               # Parse command options
-              if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+bypass(\s|$)" > /dev/null; then
-                echo "create-new-comment=false" >> $GITHUB_OUTPUT
-                echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
-                echo "send-slack-notification=false" >> $GITHUB_OUTPUT
-                echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=true" >> $GITHUB_OUTPUT
-                echo "Command: bypass approval"
-
-                # Check if user is member of metalium-developers-infra team
-                INFRA_TEAM_API="https://api.github.com/orgs/tenstorrent/teams/metalium-developers-infra/members"
-                INFRA_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                         -H "Accept: application/vnd.github.v3+json" \
-                                         "$INFRA_TEAM_API" 2>/dev/null)
-
-                # Verify the API call was successful and returned valid JSON
-                if ! echo "$INFRA_MEMBERS_DATA" | jq -e '.[0]' > /dev/null 2>&1; then
-                  echo "❌ Failed to fetch team members, denying access"
-                  echo "bypass-authorized=false" >> $GITHUB_OUTPUT
-                else
-                  # Use jq to perform exact username matching
-                  IS_MEMBER=$(echo "$INFRA_MEMBERS_DATA" | jq -r --arg user "$COMMENT_AUTHOR" '[.[].login] | contains([$user])')
-                  if [ "$IS_MEMBER" = "true" ]; then
-                    echo "✅ User $COMMENT_AUTHOR is authorized (metalium-developers-infra member)"
-                    echo "bypass-authorized=true" >> $GITHUB_OUTPUT
-                  else
-                    echo "❌ User $COMMENT_AUTHOR is NOT authorized (not in metalium-developers-infra)"
-                    echo "bypass-authorized=false" >> $GITHUB_OUTPUT
-                  fi
-                fi
-              elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
+              if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
                 echo "create-new-comment=true" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=false" >> $GITHUB_OUTPUT
                 echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: new comment"
               elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping(\s|$)" > /dev/null; then
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=true" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=true" >> $GITHUB_OUTPUT
                 echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: ping owners"
               elif echo "$COMMENT_BODY" | grep -E "^/ping\s+" > /dev/null; then
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=true" >> $GITHUB_OUTPUT
                 echo "is-direct-ping=true" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: direct ping"
 
                 # Extract GitHub usernames and optional author notes from /ping command
@@ -183,8 +146,6 @@ jobs:
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=false" >> $GITHUB_OUTPUT
                 echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: update existing comment"
               fi
 
@@ -296,124 +257,6 @@ jobs:
           fi
 
 
-  bypass-approval:
-    needs: [parse-comment, find-pr]
-    if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'true' && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Approve PR using WILDER_PAT
-        run: |
-          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-          COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
-
-          echo "Approving PR #$PR_NUMBER as requested by authorized user: $COMMENT_AUTHOR"
-
-          # Create approval using WILDER_PAT
-          REVIEW_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
-
-          REVIEW_PAYLOAD=$(jq -n \
-            --arg event "APPROVE" \
-            --arg body "✅ CodeOwners bypass approval granted by @$COMMENT_AUTHOR (metalium-developers-infra team)" \
-            '{
-              event: $event,
-              body: $body
-            }')
-
-          REVIEW_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.WILDER_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Content-Type: application/json" \
-            -d "$REVIEW_PAYLOAD" \
-            "$REVIEW_API")
-
-          REVIEW_ID=$(echo "$REVIEW_RESPONSE" | jq -r '.id // empty')
-
-          if [ -n "$REVIEW_ID" ] && [ "$REVIEW_ID" != "null" ]; then
-            echo "✅ Successfully approved PR #$PR_NUMBER (Review ID: $REVIEW_ID)"
-
-            # Add success reaction to the command comment
-            curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "Content-Type: application/json" \
-              -d '{"content": "+1"}' \
-              "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
-          else
-            echo "❌ Failed to approve PR #$PR_NUMBER"
-            echo "Response: $REVIEW_RESPONSE"
-
-            # Post failure comment with explanation
-            curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "Content-Type: application/json" \
-              -d "{\"body\": \"❌ **Bypass Approval Failed**\\n\\nFailed to approve PR #$PR_NUMBER. This might be a temporary issue with the GitHub API.\\n\\nPlease try again or contact the infra team if the problem persists.\"}" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
-
-            # Add failure reaction
-            curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "Content-Type: application/json" \
-              -d '{"content": "-1"}' \
-              "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
-
-            exit 1
-          fi
-
-      - name: Post confirmation comment
-        if: success()
-        run: |
-          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-          COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
-
-          CONFIRMATION="✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @$COMMENT_AUTHOR (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked."
-
-          TEMP_JSON_FILE=$(mktemp)
-          jq -n --arg body "$CONFIRMATION" '{"body": $body}' > "$TEMP_JSON_FILE"
-
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Content-Type: application/json" \
-            --data-binary @"$TEMP_JSON_FILE" \
-            "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
-
-          rm -f "$TEMP_JSON_FILE"
-          echo "Confirmation comment posted for PR #$PR_NUMBER"
-
-  bypass-unauthorized:
-    needs: [parse-comment, find-pr]
-    if: needs.parse-comment.outputs.is-bypass-command == 'true' && needs.parse-comment.outputs.bypass-authorized == 'false' && needs.find-pr.outputs.pr-exists == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Post unauthorized message
-        run: |
-          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-          COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
-
-          UNAUTHORIZED_MSG="❌ **Access Denied**: The \`/codeowners bypass\` command can only be used by members of the \`@tenstorrent/metalium-developers-infra\` team.\n\nUser @$COMMENT_AUTHOR is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team."
-
-          TEMP_JSON_FILE=$(mktemp)
-          jq -n --arg body "$UNAUTHORIZED_MSG" '{"body": $body}' > "$TEMP_JSON_FILE"
-
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Content-Type: application/json" \
-            --data-binary @"$TEMP_JSON_FILE" \
-            "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
-
-          rm -f "$TEMP_JSON_FILE"
-
-          # Add thumbs down reaction to the command comment
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Content-Type: application/json" \
-            -d '{"content": "-1"}' \
-            "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
-
   get-reviews:
     needs: [find-pr]
     if: always() && needs.find-pr.outputs.pr-exists == 'true'
@@ -498,8 +341,8 @@ jobs:
           echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
 
   analyze-codeowners:
-    needs: [find-pr, get-reviews, parse-comment]
-    if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
+    needs: [find-pr, get-reviews]
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     outputs:
       codeowners-groups: ${{ steps.analyze.outputs.codeowners-groups }}
@@ -859,7 +702,7 @@ jobs:
 
   post-comment:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
-    if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Generate comment data

@@ -21,7 +21,8 @@ inline std::string get_string_lowercase(tt::ARCH arch) {
     }
 }
 
-namespace tt::test_utils {
+namespace tt {
+namespace test_utils {
 inline std::string get_env_arch_name() {
     constexpr auto ARCH_NAME_ENV_VAR = "ARCH_NAME";
 
@@ -57,4 +58,6 @@ inline std::string get_umd_arch_name() {
 
 }
 
-}  // namespace tt::test_utils
+
+}  // namespace test_utils
+}  // namespace tt

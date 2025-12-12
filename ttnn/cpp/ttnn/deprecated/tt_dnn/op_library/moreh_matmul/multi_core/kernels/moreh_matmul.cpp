@@ -289,7 +289,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
-            matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
+            matmul_tiles(mm_src0, mm_src1, 0, 0, 0, false);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
@@ -329,7 +329,7 @@ FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
         for (uint32_t kt = 0; kt < Kt; kt++) {
             cb_wait_front(cb_in0, onetile);
             cb_wait_front(cb_in1, onetile);
-            matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+            matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
             cb_pop_front(cb_in0, onetile);
             cb_pop_front(cb_in1, onetile);
         }

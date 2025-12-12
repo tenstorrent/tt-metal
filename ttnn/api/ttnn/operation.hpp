@@ -18,7 +18,10 @@
 
 #include <tracy/Tracy.hpp>
 
-namespace tt::tt_metal::operation {
+namespace tt {
+
+namespace tt_metal {
+namespace operation {
 
 using Hash = tt::stl::hash::hash_t;
 
@@ -1154,4 +1157,6 @@ using MeshWorkloadWithOptionalOutputTensors = CacheableMeshWorkload<OptionalTens
 
 using Operation = std::variant<DeviceOperation<Tensors>, DeviceOperation<OptionalTensors>, ExternalOperation>;
 
-}  // namespace tt::tt_metal::operation
+}  // namespace operation
+}  // namespace tt_metal
+}  // namespace tt

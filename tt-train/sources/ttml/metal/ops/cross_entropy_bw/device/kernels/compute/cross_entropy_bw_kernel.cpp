@@ -345,7 +345,7 @@ void reduce_sum_exp_x() {
     // been observed in moreh’s ops.
     mm_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, cb_exp_sum_after_reduction, 0);
     matmul_tiles(
-        cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
+        cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register, 0);
 
     recip_tile_init();
     recip_tile(reduction_register);  // DST[0] = 1/sum(exp(x))

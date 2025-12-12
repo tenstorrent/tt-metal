@@ -10,8 +10,8 @@
 #include <ranges>
 
 namespace ttnn {
-
-namespace operations::data_movement {
+namespace operations {
+namespace data_movement {
 
 struct ConcatOperation {
     // Wrapper for TTDNN
@@ -23,7 +23,8 @@ struct ConcatOperation {
         unsigned int groups = 1);
 };
 
-}  // namespace operations::data_movement
+}  // namespace data_movement
+}  // namespace operations
 
 constexpr auto concat = ttnn::register_operation<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
 

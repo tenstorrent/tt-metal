@@ -8,11 +8,13 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
 class Shape;
 class TensorLayout;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace test_utils {
 void test_tensor_on_device(

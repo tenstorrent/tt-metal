@@ -40,9 +40,11 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class Program;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_fabric {
 
@@ -382,79 +384,24 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
+    this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
+    this->num_used_receiver_channels = builder_config::get_receiver_channel_count(is_2D_routing);
 
-    // Determine if VC1 is needed based on mesh count
-    // VC1 is required for inter-mesh routing (when mesh_count > 1)
-    // Note: is_2D_routing already checks for Mesh/Torus topology, so no need to check topology again
-    // However, MUX mode always uses VC0 only (no VC1)
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto user_mesh_ids = control_plane.get_mesh_graph().get_mesh_ids();
-    size_t mesh_count = user_mesh_ids.size();
-    bool needs_vc1 = is_2D_routing && (mesh_count > 1);
-
-    // MUX mode always uses VC0 only, disable VC1
-    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
-        needs_vc1 = false;
-        log_trace(tt::LogFabric, "MUX mode detected: Disabling VC1 (VC0 only)");
-    }
-
-    // Get per-VC channel counts based on routing type
-    auto sender_channels_per_vc = builder_config::get_sender_channel_count_per_vc(is_2D_routing);
-    auto receiver_channels_per_vc = builder_config::get_receiver_channel_count_per_vc(is_2D_routing);
-
-    // Distribute channels between VC0 and VC1 based on mesh count
-    if (needs_vc1) {
-        // Multi-mesh: Use both VC0 and VC1
-        this->num_used_sender_channels_per_vc[0] = sender_channels_per_vc[0];  // VC0 (intra-mesh)
-        this->num_used_sender_channels_per_vc[1] = sender_channels_per_vc[1];  // VC1 (inter-mesh)
-
-        this->num_used_receiver_channels_per_vc[0] = receiver_channels_per_vc[0];  // VC0 receiver
-        this->num_used_receiver_channels_per_vc[1] = receiver_channels_per_vc[1];  // VC1 receiver
-
-        log_debug(tt::LogFabric, "Multi-mesh topology (mesh_count={}): Allocating VC0 and VC1 channels", mesh_count);
-        log_debug(
-            tt::LogFabric,
-            "  VC0: {} senders, {} receivers (intra-mesh)",
-            this->num_used_sender_channels_per_vc[0],
-            this->num_used_receiver_channels_per_vc[0]);
-        log_debug(
-            tt::LogFabric,
-            "  VC1: {} senders, {} receivers (inter-mesh)",
-            this->num_used_sender_channels_per_vc[1],
-            this->num_used_receiver_channels_per_vc[1]);
-    } else {
-        // Single mesh or 1D: All channels in VC0, no VC1
-        this->num_used_sender_channels_per_vc[0] = sender_channels_per_vc[0];
-        this->num_used_sender_channels_per_vc[1] = 0;
-
-        this->num_used_receiver_channels_per_vc[0] = receiver_channels_per_vc[0];
-        this->num_used_receiver_channels_per_vc[1] = 0;
-
-        log_debug(tt::LogFabric, "Single-mesh or 1D topology (mesh_count={}): All channels in VC0", mesh_count);
-        log_debug(
-            tt::LogFabric,
-            "  VC0: {} senders, {} receivers",
-            this->num_used_sender_channels_per_vc[0],
-            this->num_used_receiver_channels_per_vc[0]);
-    }
-
-    // Set total counts for backward compatibility
-    this->num_used_sender_channels =
-        this->num_used_sender_channels_per_vc[0] + this->num_used_sender_channels_per_vc[1];
-    this->num_used_receiver_channels =
-        this->num_used_receiver_channels_per_vc[0] + this->num_used_receiver_channels_per_vc[1];
-
-    // Update is_sender_channel_serviced_ to mark unused channels as false
-    // Used channels (0 to num_used_sender_channels - 1) are set by update_sender_channel_servicing in MUX mode,
-    // and by configure_risc_settings in non-MUX modes. Unused channels (num_used_sender_channels to num_max_sender_channels - 1) should be false.
-    for (auto& risc_config : this->risc_configs) {
-        for (size_t i = this->num_used_sender_channels; i < builder_config::num_max_sender_channels; i++) {
-            risc_config.set_sender_channel_serviced(i, false);
-        }
-    }
-
-    // num_fwd_paths = total sender channels - 1 (worker channel)
+    // Default, assuming deadlock avoidance is enabled
+    // -1 to discount for the tensix worker channel
     this->num_fwd_paths = this->num_used_sender_channels - 1;
+
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/32561
+    // Remove VC1 adjustments once VC1 sender/receiver channels are fully implemented
+    // For 2D routing (Mesh/Torus), VC1 channels (sender channels 4-6, receiver channel 1) are not yet implemented
+    // so we exclude them from allocation
+    // Also diccount for the Z edge channel
+    if ((topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing) {
+        // discount vc1 and z channels.
+        this->num_used_sender_channels -= builder_config::get_vc1_downstream_edm_count(is_2D_routing) + 1;
+        this->num_used_receiver_channels = 1;  // Only VC0 receiver implemented
+        this->num_fwd_paths -= builder_config::get_vc1_downstream_edm_count(is_2D_routing) + 1;
+    }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         TT_FATAL(
@@ -512,12 +459,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     auto remote_channels_recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
         0, this->num_used_receiver_channels);
 
-    // Create the single static pool allocator with per-VC channel distribution
+    // Create the single static pool allocator
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
         topology,
         options,
-        this->num_used_sender_channels_per_vc,
-        this->num_used_receiver_channels_per_vc,
+        this->num_used_sender_channels,
+        this->num_used_receiver_channels,
         this->channel_buffer_size_bytes,
         available_channel_buffering_space,
         this->available_buffer_memory_regions);
@@ -951,7 +898,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
     const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
-    constexpr bool enable_risc_cpu_data_cache = false;
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
@@ -984,8 +930,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->handshake_address,
         this->channel_buffer_size,
         this->has_tensix_extension,
-        this->enable_first_level_ack,
-        enable_risc_cpu_data_cache};
+        this->enable_first_level_ack};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.sender_channels_worker_conn_info_base_address[0],

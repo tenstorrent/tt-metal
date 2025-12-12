@@ -30,7 +30,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void untilize_init(uint32_t icb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
+        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
 

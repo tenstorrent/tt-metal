@@ -9,7 +9,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::experimental::ccl {
+namespace ttnn {
+namespace experimental {
+namespace ccl {
 
 void AllGatherFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -524,4 +526,6 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
 }
 
-}  // namespace ttnn::experimental::ccl
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace ttnn

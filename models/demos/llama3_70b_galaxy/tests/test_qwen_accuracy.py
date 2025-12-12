@@ -283,6 +283,17 @@ def test_qwen_model_acc(
         model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
     )
 
+    # Create initial tt_out_tok for sampling (matching demo_decode.py pattern)
+    ref_token_for_tok = input_ids[0, 0].item()  # First token
+    tt_out_tok = ttnn.from_torch(
+        torch.tensor([[ref_token_for_tok]]).repeat(1, 1, 1, batch_size).reshape(1, 1, 1, batch_size),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     def run_model():
         rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
 
@@ -295,13 +306,12 @@ def test_qwen_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0])
+        tt_out_tok = tt_sampling(tt_out[0], seed)
 
         # Update the idxs
         ttnn.plus_one(
             current_pos_tensor,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-            skip_negative_entries=True,
         )
         ttnn.plus_one(
             rot_mat_idxs,

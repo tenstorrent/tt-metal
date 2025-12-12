@@ -24,9 +24,11 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class CommandQueue;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

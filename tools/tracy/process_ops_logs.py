@@ -462,10 +462,8 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
             traceOps = {}
 
             # Check if perf counters data is available
-            riscData = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
-            perf_counter_df = None
-            if "events" in riscData and "perf_counter_data" in riscData["events"]:
-                perf_counter_df = extract_perf_counters(riscData["events"]["perf_counter_data"])
+            events = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]
+            perf_counter_df = extract_perf_counters(events["perf_counter_data"])
             if perf_counter_df is not None and not perf_counter_df.empty:
                 total_compute_cores = deviceData["deviceInfo"]["max_compute_cores"]
 

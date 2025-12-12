@@ -673,10 +673,11 @@ def timeseries_analysis(riscData, name, analysis):
 
 
 def timeseries_events(riscData, name, analysis):
-    if "events" not in riscData:
-        riscData["events"] = {}
     if analysis["type"] == "event":
-        riscData["events"][name] = []
+        if "events" not in riscData:
+            riscData["events"] = {name: []}
+        else:
+            riscData["events"][name] = []
 
         for index, (timerID, timestamp, attachedData, risc, *_) in enumerate(riscData["timeseries"]):
             if (timerID["type"] == "TS_EVENT" or timerID["type"] == "TS_DATA") and (

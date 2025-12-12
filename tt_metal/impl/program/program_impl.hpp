@@ -36,7 +36,8 @@
 #include <utility>
 #include <tt_stl/span.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 
 class CircularBufferConfig;
 class IDevice;
@@ -406,4 +407,5 @@ private:
 };
 
 }  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

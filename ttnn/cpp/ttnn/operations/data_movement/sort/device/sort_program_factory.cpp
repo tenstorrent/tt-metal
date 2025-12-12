@@ -655,13 +655,8 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     CrossCoreDataExchangeSortSlicingStrategy slicing_strategy) {
     switch (slicing_strategy) {
         case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
-            // Minimum of 2 tiles per core is required because the LLK (Low-Level Kernel) needs at least two tiles per
-            // core to perform sorting operations. Maximum is capped at 128 tiles (power of 2) based on hardware memory
-            // constraints, ensuring that tiles can fit into a single core's available memory.
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
-            constexpr uint32_t MAX_TILES_PER_CORE = 128;
-            const auto max_val = std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
-            return std::min(MAX_TILES_PER_CORE, max_val);
+            return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
         }
         case CrossCoreDataExchangeSortSlicingStrategy::FILL_CORES_FIRST:
         default: {

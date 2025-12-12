@@ -16,7 +16,8 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 
 struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -123,4 +124,5 @@ private:
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

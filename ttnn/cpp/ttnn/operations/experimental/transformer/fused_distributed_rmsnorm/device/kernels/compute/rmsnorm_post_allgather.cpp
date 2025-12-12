@@ -196,7 +196,7 @@ void MAIN {
                 tile_regs_wait();
 
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
+                    matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i, false);
                     pack_tile(i, rotated_input_cb);
                 }
 

@@ -36,7 +36,11 @@ inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregate
     return std::clamp(count, ssize_t{2}, max_count);
 }
 
-namespace tt::tt_metal::allocator {
+namespace tt {
+
+namespace tt_metal {
+
+namespace allocator {
 
 FreeListOpt::FreeListOpt(
     DeviceAddr max_size_bytes,
@@ -666,4 +670,6 @@ void FreeListOpt::update_lowest_occupied_address(DeviceAddr address) {
     }
 }
 
-}  // namespace tt::tt_metal::allocator
+}  // namespace allocator
+}  // namespace tt_metal
+}  // namespace tt

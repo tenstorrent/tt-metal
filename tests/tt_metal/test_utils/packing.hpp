@@ -8,7 +8,8 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::test_utils {
+namespace tt {
+namespace test_utils {
 
 //! Generic Library of templated packing/unpacking functions.
 //! Custom type is supported as long as the custom type supports the following custom functions
@@ -99,4 +100,5 @@ std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
     return results;
 }
 
-}  // namespace tt::test_utils
+}  // namespace test_utils
+}  // namespace tt

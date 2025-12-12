@@ -11,7 +11,8 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async_generic {
+namespace ttnn::operations::experimental::ccl {
+namespace all_to_all_async_generic {
 
 struct AllToAllAsyncGenericProgram {
     struct shared_variables_t {
@@ -44,4 +45,5 @@ struct AllToAllAsyncGenericProgram {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async_generic
+}  // namespace all_to_all_async_generic
+}  // namespace ttnn::operations::experimental::ccl

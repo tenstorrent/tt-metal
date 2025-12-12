@@ -102,11 +102,8 @@ template <typename... Args>
         trace_message_ss << fmt::format(args...) << std::endl;
         log_critical(tt::LogAlways, "{}: {}", assert_type, fmt::format(args...));
     }
-    static const bool disable_backtrace = std::getenv("TT_METAL_DISABLE_BACKTRACE") != nullptr;
-    if (!disable_backtrace) {
-        trace_message_ss << "backtrace:\n";
-        trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
-    }
+    trace_message_ss << "backtrace:\n";
+    trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
     trace_message_ss << std::flush;
     throw std::runtime_error(trace_message_ss.str());
 }

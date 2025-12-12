@@ -8,7 +8,9 @@
 #include <vector>
 #include <tt-metalium/hal_types.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 struct ConfigBufferEntry {
     uint32_t addr;
@@ -56,4 +58,5 @@ private:
     std::vector<ConfigBufferEntry> reservation_;
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

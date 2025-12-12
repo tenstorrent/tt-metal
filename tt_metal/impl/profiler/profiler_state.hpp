@@ -4,9 +4,13 @@
 
 #pragma once
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 // Get global device profiling state based on build flag and environment variables
 bool getDeviceProfilerState();
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

@@ -29,7 +29,8 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
+namespace experimental {
 
 GlobalCircularBuffer::GlobalCircularBuffer(
     IDevice* device,
@@ -154,7 +155,9 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
     return sender_receiver_core_mapping_;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace experimental
+
+}  // namespace tt::tt_metal
 
 namespace std {
 

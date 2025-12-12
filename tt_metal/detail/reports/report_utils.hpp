@@ -5,7 +5,9 @@
 #include <string>
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::detail {
+namespace tt::tt_metal {
+
+namespace detail {
 
 inline const std::string& get_reports_dir() {
     static std::string outpath;
@@ -20,4 +22,6 @@ inline const std::string& metal_reports_dir() {
     return reports_path;
 }
 
-}  // namespace tt::tt_metal::detail
+}  // namespace detail
+
+}  // namespace tt::tt_metal

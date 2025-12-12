@@ -24,7 +24,11 @@
 
 using json = nlohmann::json;
 
-namespace tt::tt_metal::op_profiler {
+namespace tt {
+
+namespace tt_metal {
+
+namespace op_profiler {
 
 enum class OpType { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };
 
@@ -284,6 +288,7 @@ static inline json get_kernels_json(ChipId device_id, const Program& program) {
 
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
+    std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =
@@ -580,4 +585,6 @@ inline std::string op_meta_data_serialized_json(
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)
 
 #endif
-}  // namespace tt::tt_metal::op_profiler
+}  // namespace op_profiler
+}  // namespace tt_metal
+}  // namespace tt

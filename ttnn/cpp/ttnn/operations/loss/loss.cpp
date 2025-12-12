@@ -11,7 +11,9 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-namespace ttnn::operations::loss {
+namespace ttnn {
+
+namespace operations::loss {
 
 namespace loss_utils {
 
@@ -73,4 +75,6 @@ Tensor MaeLossOperation::invoke(
         ref, prediction, LossFunction::MAE, mode, memory_config, std::move(optional_output_tensor));
 }
 
-}  // namespace ttnn::operations::loss
+}  // namespace operations::loss
+
+}  // namespace ttnn

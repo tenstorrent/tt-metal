@@ -28,7 +28,9 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::device_operation {
+namespace ttnn {
+
+namespace device_operation {
 
 template <typename T>
 using CachedProgram = tt::tt_metal::program_cache::detail::CachedProgram<T>;
@@ -573,4 +575,6 @@ typename device_operation_t::tensor_return_value_t invoke(
 
 }  // namespace detail
 
-}  // namespace ttnn::device_operation
+}  // namespace device_operation
+
+}  // namespace ttnn

@@ -18,8 +18,6 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
-#include <yaml-cpp/yaml.h>
-#include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
@@ -50,7 +48,6 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
-    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -100,10 +97,7 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<uint32_t>()->default_value("64"))(
         "sweep-traffic-configs",
         "Sweep pre-generated traffic configurations across detected links (stress testing)",
-        cxxopts::value<bool>()->default_value("false"))(
-        "min-connections",
-        "Minimum connections per ASIC pair required for relaxed validation mode",
-        cxxopts::value<uint32_t>())("h,help", "Print usage information");
+        cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
 
     return options;
 }
@@ -228,16 +222,6 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.validate_connectivity =
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
-        // Parse min-connections
-        if (result.count("min-connections")) {
-            uint32_t min_conn_value = result["min-connections"].as<uint32_t>();
-            TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
-            input_args.min_connections = min_conn_value;
-            log_output_rank0(
-                "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
-                std::to_string(input_args.min_connections.value()));
-        }
-
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Error parsing arguments: " << e.what() << std::endl;
         std::cerr << options.help() << std::endl;
@@ -295,20 +279,42 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     }
 }
 
+void cleanup_metadata(const InputArgs& input_args, const std::string& gsd_file, const std::string& fsd_file) {
+    // Remove GSD file
+    std::filesystem::remove(gsd_file);
+    if (!input_args.fsd_path.has_value()) {
+        // Remove FSD file
+        std::filesystem::remove(fsd_file);
+    } else {
+        TT_FATAL(fsd_file == input_args.fsd_path.value(), "Internal error: Expected FSD File Paths to match");
+    }
+}
+
 AsicTopology run_connectivity_validation(
     const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     if (!input_args.validate_connectivity) {
         return {};
     }
-    YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
-    auto fsd_proto = get_factory_system_descriptor(
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    std::string gsd_yaml_filename = "global_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".yaml";
+    std::string gsd_yaml_path = input_args.output_path / gsd_yaml_filename;
+    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
+
+    const auto fsd_path = get_factory_system_descriptor_path(
         input_args.cabling_descriptor_path,
         input_args.deployment_descriptor_path,
         input_args.fsd_path,
+        input_args.output_path.string(),
         physical_system_descriptor.get_all_hostnames());
-    auto missing_topology = validate_connectivity(
-        fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
+    auto missing_topology =
+        validate_connectivity(fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor);
 
+    // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
+    // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
+    // post validation (for all ranks except rank 0).
+    if (*distributed_context.rank() != 0) {
+        cleanup_metadata(input_args, gsd_yaml_path, fsd_path);
+    }
     return missing_topology;
 }
 

@@ -34,7 +34,7 @@
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
 // compiler will complain (ODR violation when compiling with LTO).
 // Wrap the definitions in a unique namespace to avoid that.
-namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
+namespace HAL_BUILD {
 #endif
 
 // TODO: move these to processor specific files

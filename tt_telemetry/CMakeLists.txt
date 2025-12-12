@@ -93,11 +93,6 @@ target_include_directories(
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
-)
-target_include_directories(
-    tt_telemetry_server
-    SYSTEM
-    PRIVATE
         ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 target_link_libraries(

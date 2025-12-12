@@ -15,7 +15,11 @@
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::core {
+namespace ttnn {
+
+namespace operations {
+
+namespace core {
 
 struct ToLayout {
     static Tensor invoke(
@@ -26,4 +30,6 @@ struct ToLayout {
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
-}  // namespace ttnn::operations::core
+}  // namespace core
+}  // namespace operations
+}  // namespace ttnn

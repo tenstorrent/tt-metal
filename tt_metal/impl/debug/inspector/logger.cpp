@@ -216,7 +216,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
         if (mesh_device) {
             mesh_devices_ostream << "    devices: [";
             bool first = true;
-            for (const auto& device : mesh_device->get_view().get_devices()) {
+            for (const auto& device : mesh_device->get_devices()) {
                 if (!first) {
                     mesh_devices_ostream << ", ";
                 }

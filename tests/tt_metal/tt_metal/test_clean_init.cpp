@@ -30,9 +30,11 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class CommandQueue;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can

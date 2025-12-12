@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
@@ -277,21 +276,6 @@ STABLE_DIFFUSION_V1_4_MODEL_LOCATION = "CompVis/stable-diffusion-v1-4"
 CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION = "openai/clip-vit-large-patch14"
 STABLE_DIFFUSION_CIV2_MODEL_LOCATION = "stable-diffusion-v1-4"
 CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION = "clip-vit-large-patch14"
-SD_HF_DOWNLOAD_OVERRIDE = os.getenv("SD_HF_DOWNLOAD_OVERRIDE", "0") == "1"
-
-
-def sd_use_local_files_only(is_ci_env, is_ci_v2_env):
-    """
-    Determines whether to use local files only when loading Stable Diffusion v1.4 model.
-    By default, CI environments use locally cached files. Set SD_HF_DOWNLOAD_OVERRIDE=1
-    to force downloading from HuggingFace even in CI (useful when local cache is unavailable).
-    Args:
-        is_ci_env (bool): Whether running in CI environment.
-        is_ci_v2_env (bool): Whether running in CI V2 environment.
-    Returns:
-        bool: True if should use local files only, False if should download from HuggingFace.
-    """
-    return (is_ci_env or is_ci_v2_env) and not SD_HF_DOWNLOAD_OVERRIDE
 
 
 def get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
@@ -301,7 +285,7 @@ def get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
     vae = AutoencoderKL.from_pretrained(
         STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
         subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=sd_use_local_files_only(is_ci_env, is_ci_v2_env),
+        local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
     return vae.to("cpu")
@@ -314,7 +298,7 @@ def get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
     unet = UNet2DConditionModel.from_pretrained(
         STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
         subfolder="unet" if not is_ci_v2_env else None,
-        local_files_only=sd_use_local_files_only(is_ci_env, is_ci_v2_env),
+        local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
     return unet.to("cpu")
@@ -326,7 +310,7 @@ def get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generat
     )
     tokenizer = CLIPTokenizer.from_pretrained(
         CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION if not is_ci_v2_env else model_location,
-        local_files_only=sd_use_local_files_only(is_ci_env, is_ci_v2_env),
+        local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
     return tokenizer
@@ -338,7 +322,7 @@ def get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_gene
     )
     text_encoder = CLIPTextModel.from_pretrained(
         CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION if not is_ci_v2_env else model_location,
-        local_files_only=sd_use_local_files_only(is_ci_env, is_ci_v2_env),
+        local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
     return text_encoder
@@ -350,7 +334,7 @@ def get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_locat
     )
     pipeline = StableDiffusionPipeline.from_pretrained(
         STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
-        local_files_only=sd_use_local_files_only(is_ci_env, is_ci_v2_env),
+        local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
     return pipeline.to("cpu")

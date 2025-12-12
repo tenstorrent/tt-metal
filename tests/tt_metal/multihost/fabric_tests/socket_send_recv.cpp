@@ -19,7 +19,8 @@
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric::fabric_router_tests::multihost {
+namespace tt::tt_fabric {
+namespace fabric_router_tests::multihost {
 
 using namespace multihost_utils;
 
@@ -225,4 +226,5 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests::multihost
+}  // namespace fabric_router_tests::multihost
+}  // namespace tt::tt_fabric

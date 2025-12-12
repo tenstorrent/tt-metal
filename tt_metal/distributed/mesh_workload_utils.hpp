@@ -9,10 +9,12 @@
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
 class SystemMemoryManager;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 // Utility functions for dispatch MeshWorkloads
 // Used by MeshCommandQueue

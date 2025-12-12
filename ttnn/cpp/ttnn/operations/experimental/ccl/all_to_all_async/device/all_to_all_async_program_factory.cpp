@@ -22,7 +22,8 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async {
+namespace ttnn::operations::experimental::ccl {
+namespace all_to_all_async {
 
 namespace detail {
 // Configuration constants
@@ -617,4 +618,5 @@ void AllToAllAsyncProgram::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async
+}  // namespace all_to_all_async
+}  // namespace ttnn::operations::experimental::ccl

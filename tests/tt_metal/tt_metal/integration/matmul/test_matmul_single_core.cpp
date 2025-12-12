@@ -40,6 +40,10 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
+namespace tt {
+namespace tt_metal {}  // namespace tt_metal
+}  // namespace tt
+
 namespace tt::tt_metal {
 
 using std::vector;

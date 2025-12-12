@@ -15,7 +15,9 @@
 #include "allocator_algorithm.hpp"
 #include "hal_types.hpp"
 
-namespace tt::tt_metal::allocator {
+namespace tt {
+namespace tt_metal {
+namespace allocator {
 // Essentially the same free list algorithm as FreeList with BestFit policy, but with (IMO absurdly) optimized code.
 // Including
 // - SoA instead of linked list for the free list
@@ -137,4 +139,6 @@ private:
     SearchPolicy policy_;
 };
 
-}  // namespace tt::tt_metal::allocator
+}  // namespace allocator
+}  // namespace tt_metal
+}  // namespace tt

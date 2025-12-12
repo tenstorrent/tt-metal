@@ -5,7 +5,8 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn {
+namespace operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     const ttnn::Tensor& input_tensor,
@@ -48,4 +49,5 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
         read_local_slice_from_input);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace operations::experimental::ccl
+}  // namespace ttnn

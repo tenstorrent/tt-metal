@@ -10,7 +10,8 @@
 
 #include "compile_time_args.h"
 
-namespace tensor_accessor::detail {
+namespace tensor_accessor {
+namespace detail {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
 constexpr auto make_struct_from_sequence_wrapper(std::index_sequence<Is...>)
     -> Wrapper<get_compile_time_arg_val(BASE_IDX + Is)...>;
@@ -88,4 +89,5 @@ struct Span {
     std::size_t size() const { return _size; }
 };
 
-}  // namespace tensor_accessor::detail
+}  // namespace detail
+}  // namespace tensor_accessor

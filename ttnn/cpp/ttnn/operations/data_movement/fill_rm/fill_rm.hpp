@@ -7,8 +7,8 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-
-namespace operations::data_movement {
+namespace operations {
+namespace data_movement {
 
 struct FillRMOperation {
     static ttnn::Tensor invoke(
@@ -36,7 +36,8 @@ struct FillOnesRMOperation {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace operations::data_movement
+}  // namespace data_movement
+}  // namespace operations
 
 constexpr auto fill_rm = ttnn::register_operation<"ttnn::fill_rm", ttnn::operations::data_movement::FillRMOperation>();
 constexpr auto fill_ones_rm =

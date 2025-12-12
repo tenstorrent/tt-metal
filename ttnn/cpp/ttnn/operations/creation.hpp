@@ -20,8 +20,8 @@
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
-
-namespace operations::creation {
+namespace operations {
+namespace creation {
 
 namespace detail {
 
@@ -361,7 +361,8 @@ struct Arange {
     }
 };
 
-}  // namespace operations::creation
+}  // namespace creation
+}  // namespace operations
 
 constexpr auto full = ttnn::decorators::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
 constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();

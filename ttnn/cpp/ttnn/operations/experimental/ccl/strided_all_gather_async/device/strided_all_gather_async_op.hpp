@@ -25,7 +25,8 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
+namespace ttnn::operations::experimental::ccl {
+namespace strided_all_gather_async {
 
 struct StridedAllGatherAsync {
     using operation_attributes_t = strided_all_gather_async::operation_attributes_t;
@@ -61,7 +62,8 @@ struct StridedAllGatherAsync {
         const std::optional<uint32_t>& mm_block_ht,
         const std::optional<uint32_t>& mm_block_wt);
 };
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
+}  // namespace strided_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
 

@@ -15,7 +15,8 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn {
+namespace operations::reduction {
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -502,4 +503,5 @@ template struct Reduce<ReduceType::Max>;
 template struct Reduce<ReduceType::Min>;
 template struct Reduce<ReduceType::Std>;
 template struct Reduce<ReduceType::Var>;
-}  // namespace ttnn::operations::reduction
+}  // namespace operations::reduction
+}  // namespace ttnn

@@ -39,9 +39,6 @@ struct FabricEriscDatamoverOptions {
 };
 
 namespace builder_config {
-// Number of Virtual Channels supported (VC0 and VC1)
-static constexpr std::size_t MAX_NUM_VCS = 2;
-
 // linear/mesh/ring/torus: for fabric with tensix extension, only one sender channel will be present on fabric router
 static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 
@@ -50,11 +47,10 @@ static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-// VC0: Worker + 3 of [N/E/S/W] = 4 channels
-// VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels
-// Total 2D: 4 + 3 = 7 channels (channel 7 reserved for future Z-axis)
+// VC0: Up to Worker + 3 of [N/E/S/W]
+// VC1: Z + Up to 3 of [N/E/S/W]
 static constexpr std::size_t num_sender_channels_2d = 8;
-static constexpr std::size_t num_max_sender_channels = 8;  // Reserve space for future expansion (Z-axis channel)
+static constexpr std::size_t num_max_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;
 static constexpr std::size_t num_max_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d);
@@ -69,11 +65,6 @@ static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms_
 uint32_t get_sender_channel_count(bool is_2D_routing);
 
 uint32_t get_receiver_channel_count(bool is_2D_routing);
-
-// Per-VC channel counts (index 0 = VC0, index 1 = VC1)
-std::array<uint32_t, 2> get_sender_channel_count_per_vc(bool is_2D_routing);
-
-std::array<uint32_t, 2> get_receiver_channel_count_per_vc(bool is_2D_routing);
 
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config);
 

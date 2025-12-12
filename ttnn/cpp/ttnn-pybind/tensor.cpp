@@ -159,14 +159,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_property_readonly("partial_face", &Tile::get_partial_face)
         .def_property_readonly("narrow_tile", &Tile::get_narrow_tile)
         .def_property_readonly("transpose_within_face", &Tile::get_transpose_within_face)
-        .def_property_readonly("transpose_of_faces", &Tile::get_transpose_of_faces)
-        .def(
-            "get_tile_size",
-            [](const Tile& self, DataType dtype) {
-                return self.get_tile_size(datatype_to_dataformat_converter(dtype));
-            },
-            py::arg("dtype"),
-            "Get tile size in bytes for the given data type");
+        .def_property_readonly("transpose_of_faces", &Tile::get_transpose_of_faces);
 
     auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
@@ -420,36 +413,13 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::init<>([](const std::vector<CoreRange>& core_ranges) {
             return CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges));
         }))
-        .def(py::init<>([](const std::vector<CoreCoord>& core_coords) {
-            return CoreRangeSet(tt::stl::Span<const CoreCoord>(core_coords));
-        }))
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
             "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
         .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet")
-        .def("size", &CoreRangeSet::size, "Returns number of core ranges in the CoreRangeSet")
-        .def("empty", &CoreRangeSet::empty, "Returns true if the CoreRangeSet has no core ranges")
         .def("subtract", &CoreRangeSet::subtract, "Subtract common CoreRanges from current i.e. it returns A - (AnB)")
-        .def("ranges", &CoreRangeSet::ranges, "Returns the core ranges in the CoreRangeSet")
-        .def(
-            "contains",
-            py::overload_cast<const CoreCoord&>(&CoreRangeSet::contains, py::const_),
-            py::arg("core"),
-            "Check if a core coordinate is contained in this CoreRangeSet")
-        .def(
-            "merge",
-            &CoreRangeSet::merge<CoreRangeSet>,
-            py::arg("other"),
-            "Merge this CoreRangeSet with another CoreRangeSet and return the result");
-
-    m_tensor.def(
-        "corerange_to_cores",
-        &tt::tt_metal::corerange_to_cores,
-        py::arg("core_range_set"),
-        py::arg("max_cores") = std::nullopt,
-        py::arg("row_wise") = false,
-        "Convert a CoreRangeSet to a vector of CoreCoords");
+        .def("ranges", &CoreRangeSet::ranges, "Returns the core ranges in the CoreRangeSet");
 
     auto pyShardSpec = static_cast<py::class_<ShardSpec>>(m_tensor.attr("ShardSpec"));
     pyShardSpec

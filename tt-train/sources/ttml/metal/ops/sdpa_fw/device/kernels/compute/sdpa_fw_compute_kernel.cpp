@@ -96,7 +96,8 @@ void MAIN {
                     cb_key,
                     /* tile_idx */ tile_idx,
                     /* tile_idx */ tile_idx,
-                    /* dst_reg_idx*/ matmul_accum_reg);
+                    /* dst_reg_idx*/ matmul_accum_reg,
+                    /* transpose */ 1);  // accumulate in dest_reg 0
             }
 
 #ifdef USE_ATTN_MASK

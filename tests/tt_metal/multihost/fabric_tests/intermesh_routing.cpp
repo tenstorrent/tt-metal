@@ -17,7 +17,8 @@
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric::fabric_router_tests::multihost {
+namespace tt::tt_fabric {
+namespace fabric_router_tests::multihost {
 
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
@@ -229,4 +230,5 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
     distributed_context->barrier();
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests::multihost
+}  // namespace fabric_router_tests::multihost
+}  // namespace tt::tt_fabric

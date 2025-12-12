@@ -12,7 +12,9 @@
 
 namespace ttnn {
 
-namespace operations::ternary {
+namespace operations {
+
+namespace ternary {
 
 // Where Operation
 struct WhereOperation {
@@ -46,7 +48,8 @@ struct AddcmulOperation {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
-}  // namespace operations::ternary
+}  // namespace ternary
+}  // namespace operations
 
 // Register the operations
 constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();

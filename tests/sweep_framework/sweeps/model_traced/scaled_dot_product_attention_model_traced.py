@@ -120,9 +120,8 @@ def run(
         raise ValueError("input_b_memory_config is None - required parameter missing")
     if input_c_memory_config is None:
         raise ValueError("input_c_memory_config is None - required parameter missing")
-    # Fall back to input_a_memory_config if output_memory_config is not provided
     if output_memory_config is None:
-        output_memory_config = input_a_memory_config
+        raise ValueError("output_memory_config is None - required parameter missing")
     mem_config_k = input_b_memory_config
     mem_config_v = input_c_memory_config
     output_mem_config = output_memory_config

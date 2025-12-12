@@ -69,6 +69,9 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: 180
         run: |
+          if [[ "${{ matrix.test-group.model }}" == *"llama"* ]]; then
+            pip install -r models/tt_transformers/requirements.txt
+          fi
           ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

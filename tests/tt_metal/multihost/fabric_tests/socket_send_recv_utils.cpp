@@ -18,7 +18,10 @@
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
+namespace tt::tt_fabric {
+namespace fabric_router_tests::multihost {
+
+namespace multihost_utils {
 
 std::string get_system_config_name(SystemConfig system_config) {
     switch (system_config) {
@@ -534,4 +537,7 @@ void test_multi_mesh_multi_conn_bidirectional(
     distributed_context->barrier();
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils
+}  // namespace multihost_utils
+
+}  // namespace fabric_router_tests::multihost
+}  // namespace tt::tt_fabric

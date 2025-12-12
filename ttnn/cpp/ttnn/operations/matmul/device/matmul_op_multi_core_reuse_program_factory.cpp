@@ -238,7 +238,11 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     return {std::move(program), override_runtime_args_callback};
 }
 
-namespace ttnn::operations::matmul {
+namespace ttnn {
+
+namespace operations {
+
+namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
@@ -317,4 +321,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
         out_buffer);
 }
 
-}  // namespace ttnn::operations::matmul
+}  // namespace matmul
+
+}  // namespace operations
+
+}  // namespace ttnn

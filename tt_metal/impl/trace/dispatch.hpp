@@ -16,12 +16,14 @@
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
 class LaunchMessageRingBufferState;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::trace_dispatch {
 

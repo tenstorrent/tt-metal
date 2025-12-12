@@ -10,7 +10,9 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
-namespace ttnn::experimental::ccl {
+namespace ttnn {
+namespace experimental {
+namespace ccl {
 
 struct CoreSemPair {
     CoreCoord core = {0, 0};
@@ -274,4 +276,6 @@ struct MinimalMatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
-}  // namespace ttnn::experimental::ccl
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace ttnn

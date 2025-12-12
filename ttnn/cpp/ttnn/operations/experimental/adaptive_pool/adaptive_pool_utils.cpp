@@ -8,7 +8,8 @@
 #include <string>
 #include <tt_stl/assert.hpp>
 
-namespace ttnn::operations::experimental::adaptive_pool {
+namespace ttnn {
+namespace operations::experimental::adaptive_pool {
 
 // Kernels dimension (width or height) can be only uniform and give correct result by padding the border elements
 // Therefore for feasibility of making kernels uniform we need to make sure that the middle elements already are
@@ -277,4 +278,5 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
     }
 }
 
-}  // namespace ttnn::operations::experimental::adaptive_pool
+}  // namespace operations::experimental::adaptive_pool
+}  // namespace ttnn

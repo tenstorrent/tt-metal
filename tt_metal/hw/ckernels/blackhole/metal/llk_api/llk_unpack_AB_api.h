@@ -51,14 +51,17 @@ inline void llk_unpack_AB_mop_config(const bool transpose_of_faces = false, cons
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose = 0) {
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t transpose = 0,
+    const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
     const bool narrow_tile =
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
 
-    _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose);
+    _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose, acc_to_dest);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

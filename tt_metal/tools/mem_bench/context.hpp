@@ -47,7 +47,7 @@ struct Context {
     int threads{0};
     int number_reader_kernels{0};
     int number_writer_kernels{0};
-    bool enable_host_copy_with_kernels{false};
+    bool enable_host_copy_with_kernels{0};
     int iterations{0};
 
     Context(

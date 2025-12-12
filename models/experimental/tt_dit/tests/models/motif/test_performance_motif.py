@@ -6,9 +6,9 @@ import statistics
 import pytest
 import ttnn
 from loguru import logger
-from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from ....pipelines.motif.pipeline_motif import MotifPipeline
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import TimingCollector
 
 
 # TODO: Factor out commonalities with motif pipeline
@@ -100,15 +100,19 @@ def test_motif_pipeline_performance(
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
+    # timer_warmup = TimingCollector()
+    timer = TimingCollector()
+    pipeline.timing_collector = timer
 
-    with benchmark_profiler("run", iteration=0):
-        images = pipeline.run_single_prompt(prompt=prompts[0], num_inference_steps=num_inference_steps, seed=0)
+    images = pipeline.run_single_prompt(prompt=prompts[0], num_inference_steps=num_inference_steps, seed=0)
     images[0].save(f"motif_{image_w}_{image_h}_warmup.png")
 
-    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+    warmup_timing = timer.get_timing_data()
+    logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
+    all_timings = []
     num_perf_runs = 4  # Use 4 different prompts for performance testing
 
     # Optional Tracy profiling (if available)
@@ -130,15 +134,14 @@ def test_motif_pipeline_performance(
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
                 images = pipeline.run_single_prompt(
-                    prompt=prompts[prompt_idx],
-                    num_inference_steps=num_inference_steps,
-                    seed=0,
-                    timer=benchmark_profiler,
-                    timer_iteration=i,
+                    prompt=prompts[prompt_idx], num_inference_steps=num_inference_steps, seed=0
                 )
             images[0].save(f"motif_{image_w}_{image_h}_perf_run{i}.png")
 
-            logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+            # Collect timing data
+            timing_data = timer.get_timing_data()
+            all_timings.append(timing_data)
+            logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s")
 
     finally:
         if profiler:
@@ -146,20 +149,16 @@ def test_motif_pipeline_performance(
             logger.info("Tracy profiling disabled")
 
     # Calculate statistics
-    clip_times = [benchmark_profiler.get_duration("clip_encoding", i) for i in range(num_perf_runs)]
-    t5_times = [benchmark_profiler.get_duration("t5_encoding", i) for i in range(num_perf_runs)]
-    total_encoding_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
-    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
-    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
+    clip_times = [t.clip_encoding_time for t in all_timings]
+    t5_times = [t.t5_encoding_time for t in all_timings]
+    total_encoding_times = [t.total_encoding_time for t in all_timings]
+    vae_times = [t.vae_decoding_time for t in all_timings]
+    total_times = [t.total_time for t in all_timings]
 
     # Calculate per-step denoising times
     all_denoising_steps = []
-    for i in range(num_perf_runs):
-        for j in range(num_inference_steps):
-            assert benchmark_profiler.contains_step(
-                f"denoising_step_{j}", i
-            ), f"All runs should have {num_inference_steps} denoising steps"
-            all_denoising_steps.append(benchmark_profiler.get_duration(f"denoising_step_{j}", i))
+    for timing in all_timings:
+        all_denoising_steps.extend(timing.denoising_step_times)
 
     # Report results
     cfg_factor = cfg[0]  # pipeline.dit_parallel_config.cfg_parallel.factor
@@ -224,6 +223,16 @@ def test_motif_pipeline_performance(
 
     print("=" * 80)
 
+    # Validate that we got reasonable results
+    assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
+    assert all(t.total_time > 0 for t in all_timings), "All runs should have positive total time"
+    assert all(
+        len(t.denoising_step_times) == num_inference_steps for t in all_timings
+    ), f"All runs should have {num_inference_steps} denoising steps"
+
+    # Clean up
+    pipeline.timing_collector = None
+
     # Validate performance
     measurements = {
         "clip_encoding_time": statistics.mean(clip_times),
@@ -256,45 +265,14 @@ def test_motif_pipeline_performance(
 
     if is_ci_env:
         # In CI, dump a performance report
+        profiler_model_name = (
+            f"motif_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
+        )
         benchmark_data = BenchmarkData()
-        for iteration in range(num_perf_runs):
-            for step_name, target in zip(
-                ["encoder", "denoising", "vae", "run"],
-                [
-                    None,
-                    expected_metrics["denoising_steps_time"],
-                    expected_metrics["vae_decoding_time"],
-                    expected_metrics["total_time"],
-                ],
-            ):
-                benchmark_data.add_measurement(
-                    profiler=benchmark_profiler,
-                    iteration=iteration,
-                    step_name=step_name,
-                    name=step_name,
-                    value=benchmark_profiler.get_duration(step_name, iteration),
-                    target=target,
-                )
-        device_name_map = {
-            (2, 4): "WH_T3K",
-            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
-        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=device_name_map[tuple(mesh_device.shape)],
-            ml_model_name="Motif",
-            batch_size=1,
-            config_params={
-                "width": image_w,
-                "height": image_h,
-                "num_frames": 1,
-                "num_steps": num_inference_steps,
-                "sp_factor": sp_factor,
-                "tp_factor": tp_factor,
-                "topology": str(topology),
-                "num_links": num_links,
-                "fsdp": False,
-            },
+            run_type="motif_traced",
+            ml_model_name=profiler_model_name,
         )
 
     pass_perf_check = True

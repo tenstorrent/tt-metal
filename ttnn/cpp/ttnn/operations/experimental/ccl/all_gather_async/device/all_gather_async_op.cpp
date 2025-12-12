@@ -20,6 +20,7 @@ void AllGatherAsync::validate_with_output_tensors(
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
@@ -268,7 +269,9 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         input_memory_config);
 }
 
-namespace operations::experimental::ccl {
+namespace operations {
+namespace experimental {
+namespace ccl {
 
 namespace {
 Tensor all_gather_async_impl(
@@ -578,6 +581,8 @@ Tensor all_gather_async(
         sub_core_grid);
 }
 
-}  // namespace operations::experimental::ccl
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
 }  // namespace ttnn

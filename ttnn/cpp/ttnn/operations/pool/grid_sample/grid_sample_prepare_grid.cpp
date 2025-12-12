@@ -14,7 +14,9 @@
 #include <algorithm>
 #include <vector>
 
-namespace ttnn::operations::grid_sample {
+namespace ttnn {
+namespace operations {
+namespace grid_sample {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -239,4 +241,6 @@ ttnn::Tensor prepare_grid_sample_grid(
     }
 }
 
-}  // namespace ttnn::operations::grid_sample
+}  // namespace grid_sample
+}  // namespace operations
+}  // namespace ttnn

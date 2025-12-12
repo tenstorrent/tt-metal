@@ -16,7 +16,10 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
-namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
+namespace tt::tt_fabric {
+namespace fabric_router_tests::multihost {
+
+namespace multihost_utils {
 
 // System Types currently supported for testing
 enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX };
@@ -74,4 +77,7 @@ void test_multi_mesh_multi_conn_bidirectional(
     uint32_t data_size,
     SystemConfig system_config);
 
-}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils
+}  // namespace multihost_utils
+
+}  // namespace fabric_router_tests::multihost
+}  // namespace tt::tt_fabric

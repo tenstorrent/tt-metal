@@ -36,7 +36,9 @@
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+
+namespace tt_metal {
 
 namespace fs = std::filesystem;
 
@@ -742,4 +744,6 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     return os;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+
+}  // namespace tt

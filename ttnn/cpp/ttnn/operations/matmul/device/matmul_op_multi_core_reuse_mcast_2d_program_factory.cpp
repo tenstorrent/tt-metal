@@ -1407,7 +1407,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
 }  // namespace reuse_mcast_optimized_helpers
 
-namespace ttnn::operations::matmul {
+namespace ttnn {
+
+namespace operations {
+
+namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     tt::tt_metal::Program& program,
@@ -1677,4 +1681,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         fused_op_signaler);
 }
 
-}  // namespace ttnn::operations::matmul
+}  // namespace matmul
+
+}  // namespace operations
+
+}  // namespace ttnn

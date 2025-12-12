@@ -36,7 +36,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(icb)));
+          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(ocb)));
 #endif
@@ -64,7 +64,7 @@ ALWI void tilize_init_no_pack(uint32_t icb, uint32_t block) {
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(icb)));
+          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
@@ -129,7 +129,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(new_icb)));
+          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
@@ -163,7 +163,7 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(new_icb)));
+          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));

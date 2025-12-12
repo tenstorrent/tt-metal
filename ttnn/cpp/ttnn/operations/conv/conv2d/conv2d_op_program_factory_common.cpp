@@ -17,8 +17,8 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::operations::conv {
+namespace conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -752,4 +752,5 @@ void post_conv2d_op_memory_checks(
         l1_usage.tensor_allocation_size);
 }
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace conv2d
+}  // namespace ttnn::operations::conv

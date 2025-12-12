@@ -127,12 +127,13 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-
             cb_wait_front(cb_index_id, 1);
-            cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
-            cb_pop_front(cb_index_id, 1);
+            volatile uint32_t* index_addr_ptr;
+            cb_get_tile(cb_index_id, 0, &index_addr_ptr);
+            uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
+            cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
+            cb_release_tile(cb_index_id);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped

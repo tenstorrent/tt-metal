@@ -54,7 +54,7 @@ void MAIN {
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
                     mm_init_short(cb_input, cb_scaler, false);
-                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
                     cb_pop_front(cb_input, onetile);
                 }
                 tile_regs_commit();
@@ -103,7 +103,7 @@ void MAIN {
             reconfig_data_format(cb_input, cb_scaler);
 #endif
             mm_init_short(cb_input, cb_scaler, false);
-            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

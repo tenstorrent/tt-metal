@@ -19,7 +19,10 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
+namespace tt::tt_fabric {
+namespace fabric_router_tests {
+
+namespace multihost_utils {
 std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
@@ -546,4 +549,7 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     return physical_chip_ids_mapping;
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests::multihost_utils
+}  // namespace multihost_utils
+
+}  // namespace fabric_router_tests
+}  // namespace tt::tt_fabric

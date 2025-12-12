@@ -10,10 +10,12 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
 class SystemMemoryManager;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

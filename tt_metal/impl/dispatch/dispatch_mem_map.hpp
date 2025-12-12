@@ -12,9 +12,11 @@
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 enum class CommandQueueDeviceAddrType : uint8_t;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

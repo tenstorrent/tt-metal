@@ -6,10 +6,12 @@
 
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class Buffer;
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

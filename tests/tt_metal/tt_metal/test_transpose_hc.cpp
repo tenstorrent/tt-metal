@@ -2,38 +2,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hostdevcommon/kernel_structs.h"
-#include "test_gold_impls.hpp"
-
-#include <tt-logger/tt-logger.hpp>
+#include <errno.h>
+#include <fmt/base.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <map>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
+#include "test_gold_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <cstdlib>
-#include <iterator>
-#include <vector>
-
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
+using std::vector;
 using namespace tt;
+
+using std::uint16_t;
+using std::uint32_t;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Reference CPU implementation of transpose_HC
@@ -44,9 +58,9 @@ using namespace tt;
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
     bool pass = true;
-    constexpr bool multibank = true;
+    bool multibank = true;
 
-    const auto* const slow_dispatch_mode = ::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
@@ -63,70 +77,52 @@ int main(int argc, char** argv) {
 
         CoreCoord core = {0, 0};
 
-        constexpr uint32_t subtile_elements = 16U;
-        constexpr uint32_t subtile_line_bytes = subtile_elements * 2U;  // FP16 is 2 bytes
-        constexpr uint32_t tile_elements = 32U;
-        constexpr uint32_t tile_size = tile_elements * tile_elements;
+        // vector<uint32_t> shape = {1, 96, 32*4, 32*5};
+        vector<uint32_t> shape = {2, 32 * 3, 32 * 5, 32 * 2};
+        uint32_t num_tensor_tiles = shape.at(0) * shape.at(1) * shape.at(2) * shape.at(3) / (32 * 32);
 
-        // shape of this vector is [N, C, H, W]
-        // It is laid out in memory as addr = W + ShapeW * H + ShapeW * ShapeH * C + ShapeW * SHapeH * ShapeC * N
-        const std::vector<uint32_t> shape = {2U, tile_elements * 3U, tile_elements * 5U, tile_elements * 2U};
-        const uint32_t num_elements =
-            std::accumulate(std::cbegin(shape), std::cend(shape), 1U, [](const uint32_t left, const uint32_t right) {
-                return left * right;
-            });
-        const uint32_t num_tensor_tiles = num_elements / tile_size;
-
-        const uint32_t single_tile_bytes = 2U * tile_size;  // FP16_B is 2 bytes
-        const uint32_t dram_buffer_bytes =
+        uint32_t single_tile_bytes = 2 * 1024;
+        uint32_t dram_buffer_bytes =
             single_tile_bytes * num_tensor_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        const uint32_t page_size = (!multibank) ? dram_buffer_bytes : single_tile_bytes;
 
-        const tt_metal::InterleavedBufferConfig dram_config = {
+        uint32_t page_size = single_tile_bytes;
+        if (not multibank) {
+            page_size = dram_buffer_bytes;
+        }
+
+        tt_metal::InterleavedBufferConfig dram_config{
             .device = device,
             .size = dram_buffer_bytes,
             .page_size = page_size,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         auto src0_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
+        uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-        const uint32_t alignment = dst_dram_buffer->alignment();
-        const bool misaligned = alignment > subtile_line_bytes;
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        const uint32_t src0_cb_index = 0U;
-        const uint32_t num_buffer_tiles = 2U;
+        uint32_t src0_cb_index = 0;
+        uint32_t num_buffer_tiles = 2;
         // this buffer is used in transpose_hc.cpp NCRISC kernel
-        const tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
                 num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_bytes);
         tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-        const uint32_t output_cb_index = tt::CBIndex::c_16;
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
         // this buffer is used in writer_unary.cpp BRISC kernel
-        const tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
-                num_buffer_tiles * single_tile_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(output_cb_index, single_tile_bytes);
+                num_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_bytes);
         tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-        // need some scratch memory here - if we need data from a misaligned address then we need to read from the
-        // nearest aligned address and then copy the data to the correct location
-        if (misaligned) {
-            const uint32_t src1_cb_index = 1U;
-            tt::tt_metal::CircularBufferConfig cb_src1_config =
-                tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                    .set_page_size(src1_cb_index, alignment);
-            tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-        }
+        uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
+        uint32_t HW = H * W;
+        uint32_t CHW = C * H * W;
 
-        const uint32_t W = shape[3U], H = shape[2U], C = shape[1U], N = shape[0U];
-        const uint32_t HW = H * W;
-        const uint32_t CHW = C * H * W;
         std::vector<uint32_t> reader_compile_time_args;
-        reader_compile_time_args.emplace_back(alignment);
         tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
         auto reader_kernel = tt_metal::CreateKernel(
             program,
@@ -150,7 +146,7 @@ int main(int argc, char** argv) {
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = writer_compile_time_args});
 
-        std::vector<uint32_t> compute_kernel_args = {num_tensor_tiles};
+        vector<uint32_t> compute_kernel_args = {uint(num_tensor_tiles)};
 
         tt_metal::CreateKernel(
             program,
@@ -165,13 +161,15 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100U, 0x1234);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100, 0x1234);
         auto src_4f_16 = u16_from_u32_vector(src0_vec);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
-        tt_metal::SetRuntimeArgs(program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW});
+        tt_metal::SetRuntimeArgs(
+            program, reader_kernel, core, {dram_buffer_src0_addr, (uint32_t)0, W, H, C, HW, N, CHW});
 
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0U, num_tensor_tiles});
+        tt_metal::SetRuntimeArgs(
+            program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tensor_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -183,11 +181,11 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int argfail = -1;
         auto comparison_function = [](float a, float b) {
-            const float rtol{0.001f};
-            const float atol{1e-3f};
-            const float maxabs{std::fmaxf(std::abs(a), std::abs(b))};
-            float absdiff{std::abs(a - b)};
-            const auto result{(absdiff <= atol) || (absdiff < rtol * maxabs)};
+            const float rtol = 0.001f;
+            const float atol = 1e-3f;
+            float maxabs = fmaxf(fabsf(a), fabsf(b));
+            float absdiff = fabsf(a - b);
+            auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
             if (!result) {
                 absdiff *= 1.0f;  // breakpoint spot
             }
@@ -195,16 +193,16 @@ int main(int argc, char** argv) {
         };
 
         // recover a linear view of input vector for consumption by gold_ function
-        std::vector<uint16_t> src_linear =
+        vector<uint16_t> src_linear =
             convert_layout<uint16_t>(src_4f_16, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-        std::vector<uint16_t> gold_reduced = gold_transpose_hc(src_linear, shape);  // result is uint16_t untilized
+        vector<uint16_t> gold_reduced = gold_transpose_hc(src_linear, shape);  // result is uint16_t untilized
 
         // Tilize from row major and convert to pairs (uint32_t)
-        std::vector<uint32_t> shapeR = {shape[0U], shape[2U], shape[1U], shape[3U]};
-        const auto gold_16_4f = convert_layout<uint16_t>(
+        vector<uint32_t> shapeR{shape[0], shape[2], shape[1], shape[3]};
+        auto gold_16_4f = convert_layout<uint16_t>(
             gold_reduced, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
-        const auto gold_4f_u32 = u32_from_u16_vector(gold_16_4f);
-        const auto u16_result = u16_from_u32_vector(result_vec);
+        auto gold_4f_u32 = u32_from_u16_vector(gold_16_4f);
+        auto u16_result = u16_from_u32_vector(result_vec);
 
         pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
         if (!pass) {
@@ -229,5 +227,5 @@ int main(int argc, char** argv) {
 
     TT_FATAL(pass, "Error");
 
-    return EXIT_SUCCESS;
+    return 0;
 }

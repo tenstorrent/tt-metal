@@ -53,6 +53,7 @@ void kernel_main() {
     // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cores_to_coordinator_semaphore_id);
+    noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
     const uint64_t semaphore_global_multicast_addr = get_noc_multicast_addr(
         start_core_physical_coord_x,
         start_core_physical_coord_y,

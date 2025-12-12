@@ -21,10 +21,12 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
-namespace tt::tt_metal {
+namespace tt {
+namespace tt_metal {
 class Buffer;
 class IDevice;
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
