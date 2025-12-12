@@ -1,17 +1,43 @@
 ---
-# Clang Analyzer is disabled as we may prefer to run a dedicated scan with a report
-# TODO: Evaluate the other checks
+# === Forward Plan ===
+#
+# Goal: Enable all checks in these categories (unless in Intentionally Disabled):
+#   bugprone-*, cppcoreguidelines-*, misc-*, modernize-*, readability-*
+#
+# === Disabled Check Groups ===
+#
+# Irrelevant platforms/frameworks:
+#   abseil-*, altera-*, android-*, darwin-*, fuchsia-*, google-objc-*,
+#   linuxkernel-*, llvm-*, llvmlibc-*, openmp-*, zircon-*
+#
+# Run separately:
+#   clang-analyzer-*  (dedicated scan with report)
+#
+# === Evaluated ===
+#
+# bugprone-branch-clone:
+#   Attempted, no fixit, lots of violations.
+#
+# bugprone-unchecked-optional-access:
+#   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
+#
+# cppcoreguidelines-init-variables:
+#   Attempted, has fixit, results in massive diff. Somewhat desireable for ND avoidance.
+#
+# === Intentionally Disabled ===
+#
+# bugprone-sizeof-expression:
+#   Attempted, no fixit, developers rejected stating lack of value.
+#
+# concurrency-mt-unsafe:
+#   Attempted, no fixit, may not be realistic to fix as it flags std::getenv();
+#
+# performance-avoid-endl:
+#   Attempted, but developers rejected auto-fixits due to concerns about
+#   potential flush dependency.
 Checks: >
   *,
-  -abseil-string-find-startswith,
-  -abseil-string-find-str-contains,
-  -altera-id-dependent-backward-branch,
-  -altera-struct-pack-align,
-  -altera-unroll-loops,
-  -android-cloexec-fopen,
-  -boost-*,
   -bugprone-branch-clone,
-  -bugprone-crtp-constructor-accessibility,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-forwarding-reference-overload,
@@ -20,27 +46,6 @@ Checks: >
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
   -bugprone-unchecked-optional-access,
-  -bugprone-unhandled-self-assignment,
-  -bugprone-unused-local-non-trivial-variable,
-  -cert-arr39-c,
-  -cert-dcl16-c,
-  -cert-dcl21-cpp,
-  -cert-dcl37-c,
-  -cert-dcl51-cpp,
-  -cert-dcl58-cpp,
-  -cert-env33-c,
-  -cert-err33-c,
-  -cert-err34-c,
-  -cert-err58-cpp,
-  -cert-flp30-c,
-  -cert-int09-c,
-  -cert-msc30-c,
-  -cert-msc32-c,
-  -cert-msc50-cpp,
-  -cert-msc51-cpp,
-  -cert-oop11-cpp,
-  -cert-oop54-cpp,
-  -clang-analyzer-*,
   -concurrency-mt-unsafe,
   -cppcoreguidelines-avoid-c-arrays,
   -cppcoreguidelines-avoid-const-or-ref-data-members,
@@ -66,17 +71,11 @@ Checks: >
   -cppcoreguidelines-rvalue-reference-param-not-moved,
   -cppcoreguidelines-special-member-functions,
   -cppcoreguidelines-use-default-member-init,
-  -fuchsia-default-arguments-calls,
-  -fuchsia-default-arguments-declarations,
-  -fuchsia-multiple-inheritance,
-  -fuchsia-overloaded-operator,
-  -fuchsia-statically-constructed-objects,
-  -fuchsia-trailing-return,
-  -fuchsia-virtual-inheritance,
   -google-build-using-namespace,
   -google-default-arguments,
   -google-explicit-constructor,
   -google-global-names-in-headers,
+  -google-objc-*,
   -google-readability-avoid-underscore-in-googletest-name,
   -google-readability-braces-around-statements,
   -google-readability-casting,
@@ -84,36 +83,6 @@ Checks: >
   -google-readability-namespace-comments,
   -google-readability-todo,
   -google-runtime-int,
-  -hicpp-avoid-c-arrays,
-  -hicpp-avoid-goto,
-  -hicpp-braces-around-statements,
-  -hicpp-deprecated-headers,
-  -hicpp-exception-baseclass,
-  -hicpp-explicit-conversions,
-  -hicpp-function-size,
-  -hicpp-invalid-access-moved,
-  -hicpp-move-const-arg,
-  -hicpp-multiway-paths-covered,
-  -hicpp-named-parameter,
-  -hicpp-no-array-decay,
-  -hicpp-no-malloc,
-  -hicpp-noexcept-move,
-  -hicpp-signed-bitwise,
-  -hicpp-special-member-functions,
-  -hicpp-uppercase-literal-suffix,
-  -hicpp-use-auto,
-  -hicpp-use-emplace,
-  -hicpp-use-nullptr,
-  -hicpp-vararg,
-  -llvm-else-after-return,
-  -llvm-header-guard,
-  -llvm-include-order,
-  -llvm-namespace-comment,
-  -llvm-qualified-auto,
-  -llvmlibc-callee-namespace,
-  -llvmlibc-implementation-in-namespace,
-  -llvmlibc-inline-function-decl,
-  -llvmlibc-restrict-system-libc-headers,
   -misc-const-correctness,
   -misc-header-include-cycle,
   -misc-include-cleaner,
@@ -124,7 +93,6 @@ Checks: >
   -misc-use-internal-linkage,
   -modernize-avoid-bind,
   -modernize-avoid-c-arrays,
-  -modernize-concat-nested-namespaces,
   -modernize-deprecated-headers,
   -modernize-loop-convert,
   -modernize-macro-to-enum,
@@ -132,12 +100,10 @@ Checks: >
   -modernize-return-braced-init-list,
   -modernize-type-traits,
   -modernize-use-auto,
-  -modernize-use-bool-literals,
   -modernize-use-constraints,
   -modernize-use-default-member-init,
   -modernize-use-designated-initializers,
   -modernize-use-emplace,
-  -modernize-use-integer-sign-comparison,
   -modernize-use-integer-sign-comparison,
   -modernize-use-nodiscard,
   -modernize-use-ranges,
@@ -147,7 +113,6 @@ Checks: >
   -modernize-use-transparent-functors,
   -performance-avoid-endl,
   -performance-enum-size,
-  -performance-faster-string-find,
   -performance-inefficient-string-concatenation,
   -performance-no-int-to-ptr,
   -portability-simd-intrinsics,
@@ -173,7 +138,58 @@ Checks: >
   -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
-  -readability-use-anyofallof
+  -readability-use-anyofallof,
+  -abseil-*,
+  -altera-*,
+  -android-*,
+  -boost-*,
+  -cert-arr39-c,
+  -cert-dcl16-c,
+  -cert-dcl21-cpp,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -cert-dcl58-cpp,
+  -cert-env33-c,
+  -cert-err33-c,
+  -cert-err34-c,
+  -cert-err58-cpp,
+  -cert-flp30-c,
+  -cert-int09-c,
+  -cert-msc30-c,
+  -cert-msc32-c,
+  -cert-msc50-cpp,
+  -cert-msc51-cpp,
+  -cert-oop11-cpp,
+  -cert-oop54-cpp,
+  -clang-analyzer-*,
+  -darwin-*,
+  -fuchsia-*,
+  -hicpp-avoid-c-arrays,
+  -hicpp-avoid-goto,
+  -hicpp-braces-around-statements,
+  -hicpp-deprecated-headers,
+  -hicpp-exception-baseclass,
+  -hicpp-explicit-conversions,
+  -hicpp-function-size,
+  -hicpp-invalid-access-moved,
+  -hicpp-move-const-arg,
+  -hicpp-multiway-paths-covered,
+  -hicpp-named-parameter,
+  -hicpp-no-array-decay,
+  -hicpp-no-malloc,
+  -hicpp-noexcept-move,
+  -hicpp-signed-bitwise,
+  -hicpp-special-member-functions,
+  -hicpp-uppercase-literal-suffix,
+  -hicpp-use-auto,
+  -hicpp-use-emplace,
+  -hicpp-use-nullptr,
+  -hicpp-vararg,
+  -linuxkernel-*,
+  -llvm-*,
+  -llvmlibc-*,
+  -openmp-*,
+  -zircon-*
 
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros

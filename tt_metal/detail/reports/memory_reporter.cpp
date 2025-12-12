@@ -18,9 +18,7 @@
 
 namespace fs = std::filesystem;
 
-namespace tt::tt_metal {
-
-namespace detail {
+namespace tt::tt_metal::detail {
 
 using bank_to_statistics = std::map<uint32_t, Statistics>;
 
@@ -188,6 +186,4 @@ MemoryReporter& MemoryReporter::inst() {
 void EnableMemoryReports() { MemoryReporter::toggle(true); }
 void DisableMemoryReports() { MemoryReporter::toggle(false); }
 
-}  // namespace detail
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::detail

@@ -21,9 +21,7 @@
 
 using std::vector;
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 
 const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
@@ -170,6 +168,11 @@ enum class EnvVarID {
     // LIGHTWEIGHT KERNEL DEBUGGING
     // ========================================
     TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,  // Enable lightweight kernel asserts
+
+    // ========================================
+    // LLK ASSERTIONS
+    // ========================================
+    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
 
     // ========================================
     // DEVICE MANAGER
@@ -1182,6 +1185,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
         case EnvVarID::TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: this->lightweight_kernel_asserts = true; break;
 
+        // TT_METAL_LLK_ASSERTS
+        // Enables LLK assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
+
         // ========================================
         // DEVICE MANAGER
         // ========================================
@@ -1587,6 +1596,4 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     return dispatch_core_config;
 }
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt
