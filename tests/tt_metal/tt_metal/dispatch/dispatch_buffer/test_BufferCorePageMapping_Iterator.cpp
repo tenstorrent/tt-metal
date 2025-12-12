@@ -11,6 +11,17 @@ namespace tt::tt_metal {
 
 constexpr uint32_t PADDING = UncompressedBufferPageMapping::PADDING;
 
+// Converts a simple page mapping vector to BufferCorePageMapping.
+// 
+// The input 'page_mapping' is a vector where each index represents a device page,
+// and the value at that index is either a host page number or PADDING.
+// Contiguous device pages with non-PADDING values are assumed to map to sequential host pages.
+// 
+// Example:
+//   {1, 2, 3, PADDING, 4, 5}
+// means device pages 0-2 map to host pages 1-3,
+// device page 3 is padding,
+// and device pages 4-5 map to host pages 4-5.
 BufferCorePageMapping core_page_mapping_from_page_mapping(const std::vector<uint32_t>& page_mapping) {
     BufferCorePageMapping core_page_mapping;
     core_page_mapping.device_start_page = 0;
