@@ -24,67 +24,58 @@ namespace deepseek_b1_ops {
 // ============================================================================
 struct Matmul {
     // ========================================================================
-    // Compile-time args structs - different layout per RISC
+    // Runtime args structs - different layout per RISC
     // ========================================================================
 
-    // Reader CTArgs: [in0_cb, in1_cb, num_tiles_k]
-    template <uint32_t In0CB, uint32_t In1CB, uint32_t NumTilesK>
-    struct ReaderCTArgs {
-        static constexpr uint32_t in0_cb = In0CB;
-        static constexpr uint32_t in1_cb = In1CB;
-        static constexpr uint32_t num_tiles_k = NumTilesK;
+    // Reader args (NCRISC): [in1, num_tiles]
+    struct ReaderArgs {
+        uint32_t in1;
+        uint32_t num_tiles;
     };
 
-    // Writer CTArgs: [out_cb]
-    template <uint32_t OutCB>
-    struct WriterCTArgs {
-        static constexpr uint32_t out_cb = OutCB;
+    // Writer args (BRISC): [out]
+    struct WriterArgs {
+        uint32_t out;
     };
 
-    // Compute CTArgs: [in0_cb, in1_cb, out_cb, interm_cb, num_tiles_k, fp32_acc]
-    template <uint32_t In0CB, uint32_t In1CB, uint32_t OutCB, uint32_t IntermCB, uint32_t NumTilesK, bool FP32Acc>
-    struct ComputeCTArgs {
-        static constexpr uint32_t in0_cb = In0CB;
-        static constexpr uint32_t in1_cb = In1CB;
-        static constexpr uint32_t out_cb = OutCB;
-        static constexpr uint32_t interm_cb = IntermCB;
-        static constexpr uint32_t num_tiles_k = NumTilesK;
-        static constexpr bool fp32_acc = FP32Acc;
+    // Compute args (TRISC): [in0, in1, out, num_tiles]
+    struct ComputeArgs {
+        uint32_t in0;
+        uint32_t in1;
+        uint32_t out;
+        uint32_t num_tiles;
     };
+
+    using RTArgs = SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
     // ========================================================================
-    // Op - the actual operation, templated on CTArgs
+    // Op - the actual operation, templated on IsActiveCore
     // ========================================================================
-    template <typename CTArgs>
+    template <bool IsActiveCore>
     class Op {
     public:
-        // ====================================================================
-        // Phase-specific RTArgs (none for this simple matmul)
-        // ====================================================================
-        struct ReaderArgs {};
-        struct WriterArgs {};
-        struct ComputeArgs {};
-
-        using RTArgs = SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
-
-        void operator()(const RTArgs& = {}) { impl(); }
+        void operator()(const RTArgs& args) {
+            if constexpr (IsActiveCore) {
+                impl(args);
+            }
+        }
 
     private:
-        void impl() {
+        void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Reader) - ReaderConfigDescriptor compiles as NCRISC
             // ================================================================
-            // Push weights (in1_cb) - backed by sharded tensor
-            cb_reserve_back(CTArgs::in1_cb, CTArgs::num_tiles_k);
-            cb_push_back(CTArgs::in1_cb, CTArgs::num_tiles_k);
+            // Push weights (in1) - backed by sharded tensor
+            cb_reserve_back(args.in1, args.num_tiles);
+            cb_push_back(args.in1, args.num_tiles);
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Writer) - WriterConfigDescriptor compiles as BRISC
             // ================================================================
             // Wait for output tile to be ready
-            // Note: out_cb is backed by sharded tensor, data written directly to L1
-            cb_wait_front(CTArgs::out_cb, 1);
+            // Note: out is backed by sharded tensor, data written directly to L1
+            cb_wait_front(args.out, 1);
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)
@@ -94,35 +85,34 @@ struct Matmul {
             constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
 
             // Initialize matmul
-            mm_block_init(
-                CTArgs::in0_cb, CTArgs::in1_cb, CTArgs::out_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+            mm_block_init(args.in0, args.in1, args.out, false, out_subblock_w, out_subblock_h, in0_block_w);
 
             // Wait for all input tiles (both from sharded tensors in L1)
-            cb_wait_front(CTArgs::in0_cb, CTArgs::num_tiles_k);
-            cb_wait_front(CTArgs::in1_cb, CTArgs::num_tiles_k);
+            cb_wait_front(args.in0, args.num_tiles);
+            cb_wait_front(args.in1, args.num_tiles);
 
             // Reserve output
-            cb_reserve_back(CTArgs::out_cb, 1);
+            cb_reserve_back(args.out, 1);
 
             // Accumulate across K dimension
             tile_regs_acquire();
 
-            for (uint32_t k = 0; k < CTArgs::num_tiles_k; k++) {
-                matmul_tiles(CTArgs::in0_cb, CTArgs::in1_cb, k, k, 0);
+            for (uint32_t k = 0; k < args.num_tiles; k++) {
+                matmul_tiles(args.in0, args.in1, k, k, 0);
             }
 
             tile_regs_commit();
 
             // Pop inputs
-            cb_pop_front(CTArgs::in0_cb, CTArgs::num_tiles_k);
-            cb_pop_front(CTArgs::in1_cb, CTArgs::num_tiles_k);
+            cb_pop_front(args.in0, args.num_tiles);
+            cb_pop_front(args.in1, args.num_tiles);
 
             // Pack output
             tile_regs_wait();
-            pack_tile(0, CTArgs::out_cb);
+            pack_tile(0, args.out);
             tile_regs_release();
 
-            cb_push_back(CTArgs::out_cb, 1);
+            cb_push_back(args.out, 1);
 #endif
         }
     };  // class Op

@@ -22,24 +22,14 @@ struct UnifiedCoreDescriptor {
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
 
-    // Runtime: core position (set by firmware)
-    uint8_t x;
-    uint8_t y;
-
-    // Constructor: initialize from firmware-set logical coordinates (available for all RISCs)
-    UnifiedCoreDescriptor() : x(my_logical_x_), y(my_logical_y_) {}
-
-    // Convenience: compute linear core ID (absolute)
-    uint32_t linear_id(uint32_t grid_width) const { return y * grid_width + x; }
-
-    // Compute linear index within a grid defined by start/end coordinates
+    // Compute linear index within a grid defined by start/end coordinates (static - no instance needed)
     // RowMajor=true:  index = rel_y * grid_width + rel_x  (iterate x first, then y)
     // RowMajor=false: index = rel_x * grid_height + rel_y (iterate y first, then x)
-    template <bool RowMajor = true>
-    uint32_t linear_id_in_grid(
-        uint32_t grid_start_x, uint32_t grid_start_y, uint32_t grid_end_x, uint32_t grid_end_y) const {
-        uint32_t rel_x = x - grid_start_x;
-        uint32_t rel_y = y - grid_start_y;
+    template <bool RowMajor>
+    static uint32_t linear_id_in_grid(
+        uint32_t grid_start_x, uint32_t grid_start_y, uint32_t grid_end_x, uint32_t grid_end_y) {
+        uint32_t rel_x = my_logical_x_ - grid_start_x;
+        uint32_t rel_y = my_logical_y_ - grid_start_y;
         if constexpr (RowMajor) {
             uint32_t grid_width = grid_end_x - grid_start_x + 1;
             return rel_y * grid_width + rel_x;

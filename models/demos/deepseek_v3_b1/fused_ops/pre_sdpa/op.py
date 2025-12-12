@@ -213,21 +213,23 @@ class PreSDPA:
         # Calculate matmul parameters
         # num_tiles_k = number of 1x32 tiles in the input (same as mcast_dst_num_pages)
         matmul_num_tiles_k = mcast_dst_num_pages
-        # interm_cb is not used, pass dummy value (0)
-        matmul_interm_cb_dummy = 0
 
-        # Matmul reader compile-time args (named args for NCRISC)
-        # ReaderCTArgs: in0_cb, in1_cb, num_tiles_k
-        matmul_reader_named_compile_time_args = [
-            ("matmul_in0_cb", matmul_input_cb),
-            ("matmul_in1_cb", matmul_weights_cb),
-            ("matmul_num_tiles_k", matmul_num_tiles_k),
+        # Matmul compile-time args (different per RISC, only pass what's used)
+        # NCRISC: in1, num_tiles
+        matmul_ncrisc_named_compile_time_args = [
+            ("matmul_in1", matmul_weights_cb),
+            ("matmul_num_tiles", matmul_num_tiles_k),
         ]
-
-        # Matmul writer compile-time args (named args for BRISC)
-        # WriterCTArgs: out_cb
-        matmul_writer_named_compile_time_args = [
-            ("matmul_out_cb", matmul_output_cb),
+        # BRISC: out
+        matmul_brisc_named_compile_time_args = [
+            ("matmul_out", matmul_output_cb),
+        ]
+        # TRISC: in0, in1, out, num_tiles
+        matmul_trisc_named_compile_time_args = [
+            ("matmul_in0", matmul_input_cb),
+            ("matmul_in1", matmul_weights_cb),
+            ("matmul_out", matmul_output_cb),
+            ("matmul_num_tiles", matmul_num_tiles_k),
         ]
 
         # RMSNorm compute compile-time args (named args for TRISC)
@@ -241,17 +243,6 @@ class PreSDPA:
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_epsilon_index", 0),
             ("rmsnorm_scalar_index", 1),
-        ]
-
-        # Matmul compute compile-time args (named args for TRISC)
-        # ComputeCTArgs: in0_cb, in1_cb, out_cb, interm_cb, num_tiles_k, fp32_acc
-        matmul_compute_named_compile_time_args = [
-            ("matmul_in0_cb", matmul_input_cb),
-            ("matmul_in1_cb", matmul_weights_cb),
-            ("matmul_out_cb", matmul_output_cb),
-            ("matmul_interm_cb", matmul_interm_cb_dummy),
-            ("matmul_num_tiles_k", matmul_num_tiles_k),
-            ("matmul_fp32_acc", 1 if fp32_dest_acc_en else 0),
         ]
 
         # ========================================================================
@@ -300,6 +291,7 @@ class PreSDPA:
             ("gather_sender_grid_start_y", gather_sender_grid_start_y),
             ("gather_sender_grid_end_x", gather_sender_grid_end_x),
             ("gather_sender_grid_end_y", gather_sender_grid_end_y),
+            ("gather_row_major", 1),  # 1 = row-major linearization
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
@@ -440,10 +432,10 @@ class PreSDPA:
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
             core_ranges=full_device_grid,
-            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul reader + gather sender
+            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul + gather sender
             ncrisc_named_compile_time_args=rmsnorm_reader_named_compile_time_args
             + mcast_sender_named_compile_time_args
-            + matmul_reader_named_compile_time_args
+            + matmul_ncrisc_named_compile_time_args
             + gather_sender_named_compile_time_args,
             # NCRISC common runtime args: epsilon + scalar + gather output address
             ncrisc_common_runtime_args=[
@@ -451,14 +443,14 @@ class PreSDPA:
                 scalar_packed,
                 output_tensor.buffer_address(),  # gather receiver data address
             ],
-            # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul writer + gather receiver
+            # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul + gather receiver
             brisc_named_compile_time_args=rmsnorm_writer_named_compile_time_args
             + mcast_receiver_named_compile_time_args
-            + matmul_writer_named_compile_time_args
+            + matmul_brisc_named_compile_time_args
             + gather_receiver_named_compile_time_args,
-            # TRISC named compile-time args: rmsnorm compute + matmul compute
+            # TRISC named compile-time args: rmsnorm compute + matmul
             trisc_named_compile_time_args=rmsnorm_compute_named_compile_time_args
-            + matmul_compute_named_compile_time_args,
+            + matmul_trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,

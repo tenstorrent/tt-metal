@@ -31,7 +31,7 @@ KERNEL_ENTRY {
                                         >;
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
-// Compile-time args: [in0_cb, in1_cb, out_cb, interm_cb, num_tiles_k, fp32_acc]
+// Compile-time args: [in0_cb, in1_cb, out_cb, interm_cb, num_tiles_k]
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     using CTArgs = Matmul::ComputeCTArgs<
@@ -39,9 +39,7 @@ KERNEL_ENTRY {
         get_compile_time_arg_val(1),  // in1_cb
         get_compile_time_arg_val(2),  // out_cb
         get_compile_time_arg_val(3),  // interm_cb
-        get_compile_time_arg_val(4),  // num_tiles_k
-        get_compile_time_arg_val(5),  // fp32_acc
-        true                          // pop_inputs
+        get_compile_time_arg_val(4)   // num_tiles_k
         >;
 #endif
 
