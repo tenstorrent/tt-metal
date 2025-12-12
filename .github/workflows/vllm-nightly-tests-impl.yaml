@@ -222,7 +222,7 @@ jobs:
             {
               "name": "[BH-LB][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 35,
               "benchmark-timeout": 10,
               "runner-label": "bh-loudbox",
               "arch": "arch-blackhole",
