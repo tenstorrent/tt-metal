@@ -151,9 +151,20 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
-        case UnaryOpType::POWER:
-            op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, (uint32_t)param0)};
+        case UnaryOpType::POWER: {
+            uint32_t exponent;
+            if constexpr (std::is_same_v<T, uint32_t>) {
+                exponent = params[0];
+            } else if constexpr (std::is_same_v<T, float>) {
+                exponent = std::bit_cast<uint32_t>(params[0]);
+            } else {
+                // For other types (int32_t), convert to float first, then to bits
+                float temp = static_cast<float>(params[0]);
+                exponent = std::bit_cast<uint32_t>(temp);
+            }
+            op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, exponent)};
             break;
+        }
         case UnaryOpType::LEAKY_RELU:
             op_init_and_name = {
                 "leaky_relu_tile_init();",
