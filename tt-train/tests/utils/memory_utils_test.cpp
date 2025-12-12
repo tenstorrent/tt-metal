@@ -46,8 +46,20 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
         auto shape1 = ttnn::Shape({64, 128});
         auto shape2 = ttnn::Shape({128, 64});
 
-        auto tensor1 = ttml::core::from_vector(data1, shape1, device, ttnn::TILE_LAYOUT);
-        auto tensor2 = ttml::core::from_vector(data2, shape2, device, ttnn::TILE_LAYOUT);
+        ttnn::TensorSpec spec1(
+            shape1,
+            ttnn::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                ttnn::PageConfig(ttnn::Layout::TILE),
+                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        ttnn::TensorSpec spec2(
+            shape2,
+            ttnn::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                ttnn::PageConfig(ttnn::Layout::TILE),
+                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        auto tensor1 = ttnn::Tensor::from_vector(data1, spec1, device);
+        auto tensor2 = ttnn::Tensor::from_vector(data2, spec2, device);
 
         tensor1_size = compute_tensor_size(tensor1);
         tensor2_size = compute_tensor_size(tensor2);
@@ -63,10 +75,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Get DRAM usage
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
 
-    // TODO: 10240 is a magic number. Memory leaked in from_vector? Why extra 16384?
-    size_t expected_size = 10240 * 2 + 16384;  // Calls are in scope - everything should be deallocated (0)
-    size_t expected_peak_size =
-        tensor1_size + tensor2_size + std::max(tensor1_size, tensor2_size) + result_size + 10240 * 2;
+    // TODO: Verify why 16384 bytes are allocated
+    size_t expected_size = 16384;  // Calls are inside scope - everything should be deallocated (0)
+    size_t expected_peak_size = tensor1_size + tensor2_size + std::max(tensor1_size, tensor2_size) + result_size;
 
     // Should have at least one device entry
     EXPECT_FALSE(dram_usage.peak.empty());
@@ -94,12 +105,36 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
 
     std::vector<float> data_kqv(1 * 6 * 256 * 64, 4.0F);
 
-    auto tensor1 = ttml::core::from_vector(data1, shape1, device, ttnn::TILE_LAYOUT);
-    auto tensor2 = ttml::core::from_vector(data2, shape2, device, ttnn::TILE_LAYOUT);
-    auto tensor3 = ttml::core::from_vector(data3, shape3, device, ttnn::TILE_LAYOUT);
-    auto q = ttml::core::from_vector(data_kqv, shape_kqv, device, ttnn::TILE_LAYOUT);
-    auto k = ttml::core::from_vector(data_kqv, shape_kqv, device, ttnn::TILE_LAYOUT);
-    auto v = ttml::core::from_vector(data_kqv, shape_kqv, device, ttnn::TILE_LAYOUT);
+    ttnn::TensorSpec spec1(
+        shape1,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    ttnn::TensorSpec spec2(
+        shape2,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    ttnn::TensorSpec spec3(
+        shape3,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    ttnn::TensorSpec spec_kqv(
+        shape_kqv,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    auto tensor1 = ttnn::Tensor::from_vector(data1, spec1, device);
+    auto tensor2 = ttnn::Tensor::from_vector(data2, spec2, device);
+    auto tensor3 = ttnn::Tensor::from_vector(data3, spec3, device);
+    auto q = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
+    auto k = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
+    auto v = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
 
     ttml::utils::MemoryUsageTracker::start_capture();
 
@@ -153,8 +188,20 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         std::vector<float> data(256 * 256, 1.0F);
 
         // Create tensors in DRAM first, then move to L1
-        auto tensor1_dram = ttml::core::from_vector(data, shape, device, ttnn::TILE_LAYOUT);
-        auto tensor2_dram = ttml::core::from_vector(data, shape, device, ttnn::TILE_LAYOUT);
+        ttnn::TensorSpec spec1(
+            shape,
+            ttnn::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                ttnn::PageConfig(ttnn::Layout::TILE),
+                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        ttnn::TensorSpec spec2(
+            shape,
+            ttnn::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                ttnn::PageConfig(ttnn::Layout::TILE),
+                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        auto tensor1_dram = ttnn::Tensor::from_vector(data, spec1, device);
+        auto tensor2_dram = ttnn::Tensor::from_vector(data, spec2, device);
         auto tensor1 = ttnn::to_memory_config(tensor1_dram, ttnn::L1_MEMORY_CONFIG);
         auto tensor2 = ttnn::to_memory_config(tensor2_dram, ttnn::L1_MEMORY_CONFIG);
 
