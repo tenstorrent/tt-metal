@@ -73,8 +73,8 @@ static std::string demangle(const char* str) {
     size_t size = 0;
     int status = 0;
     std::string rt(256, '\0');
-    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", &rt[0])) {
-        char* v = abi::__cxa_demangle(&rt[0], nullptr, &size, &status);
+    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", rt.data())) {
+        char* v = abi::__cxa_demangle(rt.data(), nullptr, &size, &status);
         if (v) {
             std::string result(v);
             free(v);
