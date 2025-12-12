@@ -15,7 +15,7 @@ from models.common.utility_functions import nearest_32
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 WHISPER_L1_SMALL_SIZE = 1024
-WHISPER_TRACE_REGION_SIZE = 10000000
+WHISPER_TRACE_REGION_SIZE = 100000000
 
 
 def gelu(tensor):
