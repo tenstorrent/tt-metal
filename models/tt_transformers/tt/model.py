@@ -272,6 +272,7 @@ class Transformer(LightweightModule):
             )
         else:
             tt_chunk_page_table = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,

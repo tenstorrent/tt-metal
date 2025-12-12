@@ -105,7 +105,7 @@ def test_chunked_prefill_single_user(
         max_num_blocks=page_params["page_max_num_blocks"],
     )
     # Implied shuffling of blocks
-    permutation = torch.randperm(paged_attention_config.max_num_blocks) + 1
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
     # Page table which maps virtual blocks to physical
     reverse_permutation = torch.argsort(permutation)
     static_page_table = reverse_permutation.reshape(
