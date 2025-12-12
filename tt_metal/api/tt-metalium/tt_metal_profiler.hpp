@@ -46,5 +46,16 @@ void ReadDeviceProfilerResults(
     ProfilerReadState = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+/**
+ * Sync TT devices with host
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * */
+void ProfilerSync(ProfilerSyncState state);
+
 }  // namespace detail
 }  // namespace tt::tt_metal
