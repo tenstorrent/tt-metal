@@ -26,7 +26,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <tt_stl/span.hpp>
-#include <tt_stl/guard.hpp>
 
 namespace tt::tt_metal {
 
