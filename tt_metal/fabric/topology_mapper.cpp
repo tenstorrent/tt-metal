@@ -346,6 +346,7 @@ TopologyMapper::TopologyMapper(
         std::vector<std::uint32_t> counts(world_size, 0);
         all_gather_with_timeout(
             global_context,
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
             ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
             ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
@@ -548,6 +549,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     std::vector<std::uint32_t> counts(world_size, 0);
     all_gather_with_timeout(
         global_context,
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         ttsl::Span<std::byte>(
             reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
         ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),

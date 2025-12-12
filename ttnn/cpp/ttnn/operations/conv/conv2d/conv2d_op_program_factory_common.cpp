@@ -375,6 +375,7 @@ const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb c
     return *it;
 }
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
 }
 

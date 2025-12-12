@@ -54,6 +54,7 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_a
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
             for (auto& [asic_id, mesh_coord] : asic_id_to_mesh_coord_map) {
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
                 distributed_context->broadcast(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(const_cast<tt_metal::AsicID*>(&asic_id)), sizeof(asic_id)),

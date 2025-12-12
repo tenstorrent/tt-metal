@@ -140,6 +140,7 @@ protected:
     /// with small-size of 0 for T with lots of alignment, it's important that
     /// SmallVectorStorage is properly-aligned even for small-size of 0.
     void* getFirstEl() const {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         return const_cast<void*>(reinterpret_cast<const void*>(
             reinterpret_cast<const char*>(this) + offsetof(SmallVectorAlignmentAndSize<T>, FirstEl)));
     }

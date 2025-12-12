@@ -541,6 +541,7 @@ void memcpy(
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
         .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         .host_data = const_cast<void*>(src),
         .region = region,
     }};

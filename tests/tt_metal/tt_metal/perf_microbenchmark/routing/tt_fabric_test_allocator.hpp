@@ -770,6 +770,7 @@ private:
                 const auto& dest = pattern.destination.value();
 
                 if (dest.hops.has_value()) {
+                    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
                     auto dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
                         sender.device,
                         const_cast<std::unordered_map<RoutingDirection, uint32_t>&>(dest.hops.value()),

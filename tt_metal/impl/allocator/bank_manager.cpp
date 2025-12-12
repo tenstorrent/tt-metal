@@ -209,6 +209,7 @@ allocator::Algorithm* BankManager::get_allocator_from_id(BankManager::AllocatorD
 
 const allocator::Algorithm* BankManager::get_allocator_from_id(
     BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
     return const_cast<BankManager*>(this)->get_allocator_from_id(allocator_id);
 }
 

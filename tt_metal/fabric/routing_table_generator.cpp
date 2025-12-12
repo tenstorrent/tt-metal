@@ -318,6 +318,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
 
 void RoutingTableGenerator::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
     const auto& mesh_graph = topology_mapper_.get_mesh_graph();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
     const_cast<MeshGraph&>(mesh_graph).load_intermesh_connections(intermesh_connections);
     this->generate_intermesh_routing_table(
         mesh_graph.get_inter_mesh_connectivity(), mesh_graph.get_intra_mesh_connectivity());

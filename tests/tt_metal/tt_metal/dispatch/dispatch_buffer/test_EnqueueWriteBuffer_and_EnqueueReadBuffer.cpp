@@ -272,6 +272,7 @@ void EnqueueWriteMeshSubBuffer(
     bool blocking) {
     auto shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = distributed::MeshCoordinate(0, 0),
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
         .region = region,
     };
