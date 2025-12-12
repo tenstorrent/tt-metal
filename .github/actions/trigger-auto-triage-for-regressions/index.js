@@ -73,6 +73,11 @@ async function run() {
     const slackBotToken = core.getInput('slack_bot_token') || '';
     const sendSlackMessage = core.getInput('send-slack-message') || 'true';
 
+    // Use the same ref as the workflow that is invoking this action so that
+    // auto-triage.yml runs on the same branch (and picks up any in-branch changes),
+    // while still defaulting to main when invoked from main.
+    const dispatchRef = github.context.ref || 'refs/heads/main';
+
     const regressedWorkflows = JSON.parse(regressedWorkflowsJson);
     const octokit = github.getOctokit(githubToken);
 
@@ -117,7 +122,7 @@ async function run() {
             owner: github.context.repo.owner,
             repo: github.context.repo.repo,
             workflow_id: 'auto-triage.yml',
-            ref: 'main',
+            ref: dispatchRef,
             inputs: {
               workflow_name: workflowFileName,
               job_name: jobName,
