@@ -315,8 +315,13 @@ def test_clone_sharded_tilized(
     torch.manual_seed(2024)
 
     compute_grid_size = device.compute_with_storage_grid_size()
-
-    shard_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+    x_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
+    while shape[-1] % x_grid_size != 0:
+        x_grid_size = x_grid_size - 1
+    while shape[-2] % y_grid_size != 0:
+        y_grid_size = y_grid_size - 1
+    shard_grid = ttnn.CoreGrid(y=y_grid_size, x=x_grid_size)
 
     shard_memory_config = ttnn.create_sharded_memory_config(
         shape=shape,
@@ -369,8 +374,14 @@ def test_clone_sharded_row_major(
     torch.manual_seed(2024)
 
     compute_grid_size = device.compute_with_storage_grid_size()
+    x_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
+    while shape[-1] % x_grid_size != 0:
+        x_grid_size = x_grid_size - 1
+    while shape[-2] % y_grid_size != 0:
+        y_grid_size = y_grid_size - 1
 
-    shard_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+    shard_grid = ttnn.CoreGrid(y=y_grid_size, x=x_grid_size)
 
     shard_memory_config = ttnn.create_sharded_memory_config(
         shape=shape,
@@ -413,7 +424,14 @@ def test_clone_sharded_dtype_conversion(
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
-    shard_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+    x_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
+    while shape[-1] % x_grid_size != 0:
+        x_grid_size = x_grid_size - 1
+    while shape[-2] % y_grid_size != 0:
+        y_grid_size = y_grid_size - 1
+
+    shard_grid = ttnn.CoreGrid(y=y_grid_size, x=x_grid_size)
 
     shard_memory_config = ttnn.create_sharded_memory_config(
         shape=shape,
