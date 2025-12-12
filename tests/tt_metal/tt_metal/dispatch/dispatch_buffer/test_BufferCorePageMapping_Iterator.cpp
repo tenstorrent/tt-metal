@@ -38,6 +38,13 @@ BufferCorePageMapping core_page_mapping_from_page_mapping(const std::vector<uint
             });
         } else if (i == page_mapping.size() - 1) {
             break;
+        } else if (page_mapping[i] != PADDING and page_mapping[i + 1] - page_mapping[i] != 1) {
+            core_page_mapping.host_ranges.push_back(BufferCorePageMapping::ContiguousHostPages{
+                .device_page_offset = device_page_offset,
+                .host_page_start = page_mapping[device_page_offset],
+                .num_pages = i - device_page_offset + 1,
+            });
+            device_page_offset = i + 1;
         } else if (page_mapping[i] == PADDING and page_mapping[i + 1] != PADDING) {
             device_page_offset = i + 1;
         }
@@ -223,6 +230,7 @@ INSTANTIATE_TEST_SUITE_P(
         Test_BufferCorePageMapping_Iterator_params{{1, 2, 3, PADDING, PADDING}, 5},
         Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 1},
         Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 2},
-        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 3}));
+        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 3},
+        Test_BufferCorePageMapping_Iterator_params{{1, 2, 8, 9, 10, PADDING, PADDING, 21, PADDING, 25, 26, 27}, 3}));
 
 }  // namespace tt::tt_metal
