@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "device/all_reduce_async_device_operation.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -48,6 +48,15 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
 
     auto end_it = shape_vec.crend();
     return (dim_it == end_it) ? rank : end_it - dim_it - 1;  // forward index
+}
+
+// True 2D mesh when both mesh axes have more than one device.
+bool is_true_2d_mesh(const ttnn::Tensor& input_tensor, tt::tt_fabric::Topology topology) {
+    if (topology != tt::tt_fabric::Topology::Mesh && topology != tt::tt_fabric::Topology::Torus) {
+        return false;
+    }
+    const auto mesh_shape = input_tensor.device()->shape();
+    return mesh_shape.dims() >= 2 && mesh_shape[0] > 1 && mesh_shape[1] > 1;
 }
 }  // namespace detail
 
@@ -174,8 +183,10 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
     }
 
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+    const bool composite_for_2d_mesh = tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
+                                       detail::is_true_2d_mesh(input_tensor, topology);
+
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // All reduce = all gather + local reduce
@@ -206,7 +217,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
-    ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+    ttnn::Tensor scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
         interleaved_tensor,
         std::nullopt,
         dim,
@@ -270,8 +281,10 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+    const bool composite_for_2d_mesh = tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
+                                       detail::is_true_2d_mesh(input_tensor, topology_);
+
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
         // All reduce = all gather + local reduce
         composite_dim = 0;
@@ -308,7 +321,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
-        scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+        scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
             dim,
