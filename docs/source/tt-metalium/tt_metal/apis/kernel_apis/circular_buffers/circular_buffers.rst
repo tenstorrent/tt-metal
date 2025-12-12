@@ -1,7 +1,7 @@
 Circular Buffer APIs
 ====================
 
-Circular buffers are used for communication between threads of the Tensix core. They act as limited capacity double-ended queues with producers pushing tiles to the back of the queue and consumers popping tiles off the front of the queue.
+Circular buffers are used for communication between threads of the Tensix core. They act as limited capacity double-ended queues with producers pushing tiles to the back of the queue and consumers popping tiles off the front of the queue. There can only be one reader that pushes data into the circular buffer and one writer that pops data out of the circular buffer.
 
 .. toctree::
   cb_pages_available_at_front
