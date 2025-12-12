@@ -291,7 +291,10 @@ class TtQwenModelArgs(TtModelArgs):
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
         device = mesh_device if mesh_device is not None else None
-        self.cluster_shape = list(mesh_device.shape)
+        self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else (1, 1)
+
+        if mesh_device is None:
+            return
 
         # Always assume Galaxy 6U configuration
         if self.num_devices != 32:

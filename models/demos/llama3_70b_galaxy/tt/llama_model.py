@@ -19,6 +19,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.common.sampling.generator import SamplingGenerator
 
+from models.common.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
+
 
 class TtTransformer(LightweightModule):
     def __init__(
@@ -34,6 +39,7 @@ class TtTransformer(LightweightModule):
         mode="decode",
         allocate_prefill_buffers=True,
         decode_mode_only=False,
+        reference_model=None,
     ):
         super().__init__()
         self.args = args
@@ -49,6 +55,7 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
+        self.reference_model = reference_model
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -93,6 +100,7 @@ class TtTransformer(LightweightModule):
                 use_paged_kv_cache=use_paged_kv_cache,
                 prefetcher_setup=self.prefetcher_setup,
                 tt_ccl=self.tt_ccl,
+                reference_model=self.reference_model,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -667,6 +675,8 @@ class TtTransformer(LightweightModule):
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
+
+        # breakpoint()
         for i, layer in enumerate(self.layers):
             x, h = layer(
                 x,
@@ -690,10 +700,39 @@ class TtTransformer(LightweightModule):
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
 
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_lmhead_norm_layers = self.reference_model.ref_after_lmhead_norm_layers
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(x, mesh_composer=mesh_composer)[:1, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+            comp_out = comp_out.squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_lmhead_norm_layers, comp_out)
+            print(f"LMHead norm PCC: {pcc_message}")
+            print(comp_allclose(ref_after_lmhead_norm_layers, comp_out))
+            print()
+
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        lm_head_out = self.lm_head(
+            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+        )
+
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_lmhead = self.reference_model.ref_after_lmhead
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 1), mesh_shape=[8, 4])
+            outs = ttnn.to_torch(lm_head_out[0], mesh_composer=mesh_composer)
+            comp_out = outs.permute(2, 1, 0, 3).squeeze(2)[:32, 0:1, : self.args.vocab_size]
+            passing, pcc_message = comp_pcc(ref_after_lmhead, comp_out)
+            print(f"LMHead out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_lmhead, comp_out))
+            print()
+
+        return lm_head_out
 
     def __del__(self):
         self.tt_ccl.close()

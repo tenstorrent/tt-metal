@@ -7,6 +7,12 @@ from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
+from models.common.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
+
+import torch
 
 
 class TtTransformerBlock(LightweightModule):
@@ -24,8 +30,11 @@ class TtTransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
+        reference_model=None,
     ):
         super().__init__()
+
+        self.reference_model = reference_model
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -72,6 +81,7 @@ class TtTransformerBlock(LightweightModule):
             model_config=self.model_config,
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
+            reference_model=reference_model,
         )
         self.attention_norm = DistributedNorm(
             RMSNorm(
@@ -140,6 +150,8 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
+        # breakpoint()
+        print(f"Layer nr: {self.layer_num}")
         if self.layer_num == 0 or mode == "prefill":
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
@@ -151,9 +163,36 @@ class TtTransformerBlock(LightweightModule):
             # In subsequent Layers we take the h tensor from before and modify it in place
             if self.unfuse_res_add:
                 h = ttnn.add(x, h, dtype=ttnn.bfloat16)
+
+                # debug pcc
+                if self.reference_model is not None:
+                    ref_after_ffn_add = self.reference_model.layers[self.layer_num - 1].ref_after_ffn_add
+                    # convert to torch
+                    mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+                    comp_out = ttnn.to_torch(h, mesh_composer=mesh_composer)[:1, :, :, :]
+                    comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+                    comp_out = comp_out.squeeze(0)
+                    passing, pcc_message = comp_pcc(ref_after_ffn_add, comp_out)
+                    print(f"MLP add PCC: {pcc_message}")
+                    print(comp_allclose(ref_after_ffn_add, comp_out))
+                    print()
+
                 attn_in_sharded, _ = self.attention_norm(h, None, mode)
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
+
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_attention_norm = self.reference_model.layers[self.layer_num].ref_after_attention_norm
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(attn_in_sharded, mesh_composer=mesh_composer)[:1, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+            comp_out = comp_out.squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_attention_norm, comp_out)
+            print(f"Attention norm PCC: {pcc_message}")
+            print(comp_allclose(ref_after_attention_norm, comp_out))
+            print()
 
         attn_out = self.attention.forward(
             attn_in_sharded,
@@ -167,6 +206,20 @@ class TtTransformerBlock(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_attention = self.reference_model.layers[self.layer_num].ref_after_attention
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(attn_out, mesh_composer=mesh_composer)[:1, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+            comp_out = comp_out.squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_attention, comp_out)
+            print(f"Attention out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_attention, comp_out))
+            print()
+
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
             x.deallocate(True)
@@ -174,15 +227,67 @@ class TtTransformerBlock(LightweightModule):
         if mode == "decode":
             if self.unfuse_res_add:
                 h = ttnn.add(attn_out, h, dtype=ttnn.bfloat16)
+
+            # debug pcc
+            if self.reference_model is not None:
+                ref_after_attention_add = self.reference_model.layers[self.layer_num].ref_after_attention_add
+                # convert to torch
+                mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+                comp_out = ttnn.to_torch(h, mesh_composer=mesh_composer)[:1, :, :, :]
+                comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+                comp_out = comp_out.squeeze(0)
+                passing, pcc_message = comp_pcc(ref_after_attention_add, comp_out)
+                print(f"Attention add PCC: {pcc_message}")
+                print(comp_allclose(ref_after_attention_add, comp_out))
+                print()
+
                 ff_in_sharded, _ = self.ff_norm(h, None, mode)
             else:
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
 
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_ffn_norm = self.reference_model.layers[self.layer_num].ref_after_ffn_norm
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(ff_in_sharded, mesh_composer=mesh_composer)[:1, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+            comp_out = comp_out.squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_ffn_norm, comp_out)
+            print(f"MLP norm PCC: {pcc_message}")
+            print(comp_allclose(ref_after_ffn_norm, comp_out))
+            print()
+
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
+
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_feed_forward = self.reference_model.layers[self.layer_num].ref_after_feed_forward
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(ff_out, mesh_composer=mesh_composer)[:1, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+            comp_out = comp_out.squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_feed_forward, comp_out)
+            print(f"MLP out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_feed_forward, comp_out))
+            print()
+
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+
+            # debug pcc
+            if self.reference_model is not None:
+                ref_after_ffn_add = self.reference_model.layers[self.layer_num].ref_after_ffn_add
+                # convert to torch
+                mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+                comp_out = ttnn.to_torch(out, mesh_composer=mesh_composer)[:1, :, :, :]
+                comp_out = torch.permute(comp_out, (0, 2, 1, 3))
+                comp_out = comp_out.squeeze(0)
+                print()
+
             if mode == "decode":
                 ff_out.deallocate(True)
             if mode == "prefill":

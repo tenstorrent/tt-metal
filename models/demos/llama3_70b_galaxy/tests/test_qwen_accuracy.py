@@ -391,6 +391,7 @@ def test_qwen_model_acc(
         decode_input_new = model_args.prepare_residual_tensor_decode(
             pt_decode_input, model_args.model_config["DECODE_RESIDUAL_MEMCFG"], on_host=True
         )
+        breakpoint()
 
         # Run the trace with a new input
         ttnn.copy_host_to_device_tensor(decode_input_new, decode_input)
@@ -415,6 +416,18 @@ def test_qwen_model_acc(
                 mesh_shape=model_args.cluster_shape,
             ),
         )[0, 0, 0, 0]
+
+        # Convert ttnn tensor to torch tensor
+        tt_logits = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+        )[0, 0, 0, : model_args.vocab_size]
+        # Get probabilities from model output
+        tt_argmax_token_host_sampling = torch.argmax(tt_logits, dim=-1)
+
+        assert (
+            tt_argmax_token.item() == tt_argmax_token_host_sampling.item()
+        ), f"TT argmax token {tt_argmax_token.item()} does not match host sampling {tt_argmax_token_host_sampling.item()}"
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:

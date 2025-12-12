@@ -7,6 +7,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
+from models.common.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
+
 
 def pad_to_next_multiple(tensor):
     # Get the current size of the last two dimensions
@@ -38,8 +43,12 @@ class TtLlamaMLP(LightweightModule):
         state_dict_prefix=None,
         prefetcher_setup=None,
         tt_ccl=None,
+        reference_model=None,
     ):
         super().__init__()
+
+        self.reference_model = reference_model
+        self.layer_num = layer_num
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -63,7 +72,8 @@ class TtLlamaMLP(LightweightModule):
         ]  # args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type if not args.is_qwen else ttnn.bfloat16,
+            dtype=type if not self.args.is_qwen else ttnn.bfloat16,
+            # dtype=type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
@@ -120,25 +130,101 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+        # w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+        #     x,
+        #     self.w1,
+        #     self.w3,
+        #     cluster_axis=1,
+        #     num_links=self.model_config["GALAXY_NUM_LINKS"],
+        #     RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+        #     compute_kernel_config=self.args.compute_kernel_config_lofi
+        #     if self.four_bit_mlp
+        #     else self.args.compute_kernel_config_hifi2,
+        #     dtype=ttnn.bfloat8_b,
+        #     program_config=pc_1_3,
+        #     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        #     global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        #     use_noc1_only=False,
+        # )
+
+        # ttnn.deallocate(x)
+
+        w1_out = ttnn.linear(
             x,
             self.w1,
-            self.w3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            use_noc1_only=False,
         )
 
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(w1_out, mesh_composer=mesh_composer).sum(0)
+            comp_out = torch.permute(comp_out, (1, 0, 2))
+            passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
+            print(f"W1 out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_w1, comp_out))
+            print()
+
+        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w1_out,
+            cluster_axis=1,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            use_noc1_only=False,
+        )
+        ttnn.deallocate(w1_out)
+
+        breakpoint()
+
+        # # debug pcc
+        # if self.reference_model is not None:
+        #     ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
+        #     # convert to torch
+        #     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 3), mesh_shape=[8,4])
+        #     comp_out = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)[:, :,:,:]
+        #     comp_out= torch.permute(comp_out, (0,2,1,3))
+        #     passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
+        #     print(f"W1 reduced PCC: {pcc_message}")
+        #     print(comp_allclose(ref_after_w1, comp_out))
+        #     print()
+
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            compute_kernel_config=self.args.compute_kernel_config_lofi
+            if self.four_bit_mlp
+            else self.args.compute_kernel_config_hifi2,
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_1_3,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        )
         ttnn.deallocate(x)
+
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(w3_out, mesh_composer=mesh_composer).sum(0)
+            comp_out = torch.permute(comp_out, (1, 0, 2))
+            passing, pcc_message = comp_pcc(ref_after_w3, comp_out)
+            print(f"W3 out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_w3, comp_out))
+            print()
 
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
@@ -149,6 +235,18 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w3_out)
 
+        # # debug pcc
+        # if self.reference_model is not None:
+        #     ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
+        #     # convert to torch
+        #     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 3), mesh_shape=[8,4])
+        #     comp_out = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer)
+        #     comp_out= torch.permute(comp_out, (0,2,1,3))
+        #     passing, pcc_message = comp_pcc(ref_after_w3, comp_out)
+        #     print(f"W3 reduced PCC: {pcc_message}")
+        #     print(comp_allclose(ref_after_w3, comp_out))
+        #     print()
+
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -156,6 +254,18 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
+
+        # # debug pcc
+        # if self.reference_model is not None:
+        #     ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
+        #     # convert to torch
+        #     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 3), mesh_shape=[8,4])
+        #     comp_out = ttnn.to_torch(ff1ff3, mesh_composer=mesh_composer)
+        #     comp_out= torch.permute(comp_out, (0,2,1,3))
+        #     passing, pcc_message = comp_pcc(ref_after_mul, comp_out)
+        #     print(f"W3 reduced PCC: {pcc_message}")
+        #     print(comp_allclose(ref_after_mul, comp_out))
+        #     print()
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
@@ -170,6 +280,19 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
 
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(w2_in, mesh_composer=mesh_composer)[:1, :, :, :]
+            comp_out = comp_out.squeeze(0)
+            comp_out = torch.permute(comp_out, (1, 0, 2))
+            passing, pcc_message = comp_pcc(ref_after_mul, comp_out)
+            print(f"All gather out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_mul, comp_out))
+            print()
+
         ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
@@ -183,6 +306,19 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_w2 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w2
+            # convert to torch
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            comp_out = ttnn.to_torch(w2_out, mesh_composer=mesh_composer).sum(0)
+            comp_out = torch.permute(comp_out, (1, 0, 2))
+            passing, pcc_message = comp_pcc(ref_after_w2, comp_out)
+            print(f"W2 out PCC: {pcc_message}")
+            print(comp_allclose(ref_after_w2, comp_out))
+            print()
+
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,

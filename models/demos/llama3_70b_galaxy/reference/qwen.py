@@ -11,6 +11,9 @@ from torch import nn
 from .args import ModelArgs
 
 
+from collections import defaultdict
+
+
 class FakeParallelLinear(nn.Linear):
     def __init__(
         self,
@@ -216,17 +219,36 @@ class FeedForward(nn.Module):
         hidden_dim: int,
         multiple_of: int,
         ffn_dim_multiplier: Optional[float],
+        layer_id: int,
     ):
         super().__init__()
         hidden_dim = 25600
         dim = 5120
 
+        self.layer_id = layer_id
+
         self.w1 = ColumnParallelLinear(dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x)
         self.w2 = RowParallelLinear(hidden_dim, dim, bias=False, input_is_parallel=True, init_method=lambda x: x)
         self.w3 = ColumnParallelLinear(dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x)
 
+        self.ref_after_w1 = defaultdict(lambda: None)
+        self.ref_after_w3 = defaultdict(lambda: None)
+        self.ref_after_silu = defaultdict(lambda: None)
+        self.ref_after_mul = defaultdict(lambda: None)
+        self.ref_after_w2 = defaultdict(lambda: None)
+
     def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        w1_out = self.w1(x)
+        self.ref_after_w1 = w1_out.clone()
+        w3_out = self.w3(x)
+        self.ref_after_w3 = w3_out.clone()
+        silu_out = F.silu(w1_out)
+        self.ref_after_silu = silu_out.clone()
+        mul_out = silu_out * w3_out
+        self.ref_after_mul = mul_out.clone()
+        out = self.w2(mul_out)
+        self.ref_after_w2 = out.clone()
+        return out
 
 
 class TransformerBlock(nn.Module):
@@ -241,10 +263,19 @@ class TransformerBlock(nn.Module):
             hidden_dim=4 * args.dim,
             multiple_of=args.multiple_of,
             ffn_dim_multiplier=args.ffn_dim_multiplier,
+            layer_id=layer_id,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+
+        self.ref_before_layers = defaultdict(lambda: None)
+        self.ref_after_attention_norm = defaultdict(lambda: None)
+        self.ref_after_attention = defaultdict(lambda: None)
+        self.ref_after_attention_add = defaultdict(lambda: None)
+        self.ref_after_ffn_norm = defaultdict(lambda: None)
+        self.ref_after_feed_forward = defaultdict(lambda: None)
+        self.ref_after_ffn_add = defaultdict(lambda: None)
 
     def forward(
         self,
@@ -253,13 +284,21 @@ class TransformerBlock(nn.Module):
         freqs_cis: torch.Tensor,
         mask: Optional[torch.Tensor],
     ):
+        self.ref_before_layers = x.clone()
         h = x
         an = self.attention_norm(x)
+        self.ref_after_attention_norm = an.clone()
         at = self.attention(an, start_pos, freqs_cis, mask)
+        self.ref_after_attention = at.clone()
         h = h + at
+        self.ref_after_attention_add = h.clone()
         res = h
         fin = self.ffn_norm(h)
-        out = res + self.feed_forward(fin)
+        self.ref_after_ffn_norm = fin.clone()
+        out = self.feed_forward(fin)
+        self.ref_after_feed_forward = out.clone()
+        out = res + out
+        self.ref_after_ffn_add = out.clone()
         return out
 
 
@@ -310,10 +349,13 @@ class Transformer(nn.Module):
             mask = torch.hstack([torch.zeros((seqlen, start_pos), device=embeddings.device), mask]).type_as(h)
 
         for layer in self.layers:
+            # self.ref_before_layers[layer.layer_id] = h.clone()
             h = layer(h, start_pos, freqs_cis, mask)
         if mode == "decode":
             h = self.norm(h)
+            self.ref_after_lmhead_norm_layers = h.clone()
             h = self.output(h)
+            self.ref_after_lmhead = h.clone()
         else:
             assert mode == "prefill", "Invalid mode, only decode and prefill are supported"
         return h.float()

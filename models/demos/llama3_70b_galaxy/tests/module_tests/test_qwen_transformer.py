@@ -70,7 +70,7 @@ def test_qwen_transformer_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 3
+    model_args.n_layers = 64
 
     state_dict = model_args.load_state_dict()
 
@@ -134,6 +134,7 @@ def test_qwen_transformer_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="decode",
+        reference_model=reference_model,
     )
 
     seqlen = 1
@@ -160,6 +161,9 @@ def test_qwen_transformer_inference(
         model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
     )
 
+    # Reference model - skip embedding, directly use input tensor
+    ref_output = reference_model(pt_decode_input, current_pos[0], mode="decode")
+
     for i in range(generation_length):
         logger.info(f"[Qwen Transformer] Generating token {i}")
 
@@ -181,9 +185,6 @@ def test_qwen_transformer_inference(
         outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
         outs = torch.concat(outs, dim=-1)
         tt_output_torch = outs.permute(2, 1, 0, 3).squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
-
-        # Reference model - skip embedding, directly use input tensor
-        ref_output = reference_model(pt_decode_input, current_pos[0], mode="decode")
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
