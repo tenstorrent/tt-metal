@@ -83,12 +83,11 @@ void MAIN {
         //      --------
         //         n
 #ifdef FUSE_PRE_ADD
-        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputWithRemainderPolicy>(
             cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #else
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputWithRemainderPolicy>(
             cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
-
 #endif
 #endif  // !RMS ifdef end
         // Start of
@@ -139,7 +138,7 @@ void MAIN {
             cb_push_back(cb_xmm2, block.size());
 
             tile_regs_acquire();
-            if (block.start() > 0) {
+            if (!block.is_first()) {
                 cb_wait_front(cb_accumulate, onetile);
                 reconfig_data_format_srca(cb_accumulate);
                 copy_tile_init(cb_accumulate);
@@ -176,7 +175,10 @@ void MAIN {
             cb_push_back(pack_cb, onetile);
         }
 
-        layernorm_compute_utils::adjust_variance_for_partial_last_tile<W>(cb_ex2, cb_ex);
+        // Account for any over-accumulation that might
+        // have been done if the last tile is only partially-filled
+        constexpr uint32_t extra_cols = Wt * tt::constants::TILE_WIDTH - W;
+        layernorm_compute_utils::adjust_variance_for_overaccumulation<W, extra_cols>(cb_ex2, cb_ex);
 
         // End of
         // Var Calculation

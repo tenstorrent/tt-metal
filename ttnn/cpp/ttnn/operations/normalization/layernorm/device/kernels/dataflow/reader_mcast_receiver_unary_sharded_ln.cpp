@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "hostdevcommon/common_values.hpp"
 #include "dataflow_api.h"
-#include "noc_addr_utils.h"
+#include "layernorm_dataflow_utils.h"
 
 namespace df = norm::layernorm::device::kernels::dataflow;
 

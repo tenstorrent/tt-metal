@@ -24,6 +24,7 @@ namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
+namespace layernorm_compute_utils = norm::layernorm::device::kernels::compute;
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -108,8 +109,8 @@ void MAIN {
             }
             REL();
             cb_push_back(cb_x, block.size());  // push the sum into the same buffer
-            cb_pop_front(cb_in, block.size());
-            cb_pop_front(cb_inb, block.size());
+            layernorm_compute_utils::pop_block(cb_in, block);
+            layernorm_compute_utils::pop_block(cb_inb, block);
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -135,13 +136,18 @@ void MAIN {
         for (auto block : generic::blocks(Wt, blk)) {
             ACQ();
             for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, block.to_global(i), 0, i);
+                sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
                 pack_tile(i, cb_xmm);
             }
             cb_push_back(cb_xmm, block.size());
+#ifdef FUSE_PRE_ADD
+            cb_pop_front(cb_x, block.size());
+#else
+            layernorm_compute_utils::pop_block(cb_x, block);
+#endif
+
             REL();
         }
-        cb_pop_front(cb_x, Wt);
 #ifndef FUSE_PRE_ADD
         reconfig_data_format_srca(cb_x, cb_xmm);
 #endif
@@ -168,11 +174,13 @@ void MAIN {
 #endif
 
         // Var[x]
-        // cb_reserve_back(cb_ex2, 2);
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputWithoutRemainderPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
 
-        norm::layernorm::device::kernels::compute::adjust_variance_for_partial_last_tile<W>(cb_ex2, cb_ex);
+        // Adjust variance for possible overaccumulation in the last tile
+        // (if partially-filled)
+        constexpr uint32_t extra_cols = Wt * tt::constants::TILE_WIDTH - W;
+        norm::layernorm::device::kernels::compute::adjust_variance_for_overaccumulation<W, extra_cols>(cb_ex2, cb_ex);
 
         cb_pop_front(cb_ex, 1);
 
@@ -220,6 +228,7 @@ void MAIN {
                 reconfig_data_format_srca(cb_xmm, cb_fusion);
 #endif
             }
+
             if constexpr (do_gamma) {
                 if constexpr (do_beta == 0) {
                     pack_reconfig_data_format(cb_out);

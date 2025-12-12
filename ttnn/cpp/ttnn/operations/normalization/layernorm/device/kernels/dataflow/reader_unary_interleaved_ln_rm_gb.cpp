@@ -7,9 +7,9 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-
+#include "layernorm_dataflow_utils.h"
 namespace generic = norm::kernel_util::generic;
-
+namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
@@ -74,7 +74,7 @@ void kernel_main() {
                 l1_write_addr += src0_tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_in0, block.size());
+            layernorm_dataflow_utils::push_block(cb_id_in0, block);
 
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
@@ -85,7 +85,7 @@ void kernel_main() {
                 l1_write_addr += src1_tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_in1, block.size());
+            layernorm_dataflow_utils::push_block(cb_id_in1, block);
 #endif
         }  // wt loop
 
@@ -105,7 +105,7 @@ void kernel_main() {
                         l1_write_addr += gamma_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_id_gamma, block.size());
+                    layernorm_dataflow_utils::push_block(cb_id_gamma, block);
                 }
 #endif
 
@@ -122,7 +122,7 @@ void kernel_main() {
                         l1_write_addr += beta_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_id_beta, block.size());
+                    layernorm_dataflow_utils::push_block(cb_id_beta, block);
                 }
 #endif
             }  // wt loop

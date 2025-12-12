@@ -16,10 +16,12 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "layernorm_compute_utils.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
 namespace generic = norm::kernel_util::generic;
+namespace layernorm_compute_utils = norm::layernorm::device::kernels::compute;
 
 namespace NAMESPACE {
 
@@ -69,8 +71,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             add_tiles(cb_in, cb_inb, i, i, i);
         }
         tile_regs_commit();
-        cb_pop_front(cb_inb, block.size());
-        cb_pop_front(cb_in, block.size());
+        layernorm_compute_utils::pop_block(cb_inb, block);
+        layernorm_compute_utils::pop_block(cb_in, block);
 
         // Pack to intermediate CB (needed
         // to workaround transpose_wh_dest bug)
@@ -156,7 +158,14 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
  * @param: W: width of the input
  * @param: p_reciprocals: pointer to the reciprocal LUT
  */
-template <tt::CBIndex cb_in, uint32_t input_dst, uint32_t mean_dst, uint32_t Wt, uint32_t tile_width, uint32_t W>
+template <
+    tt::CBIndex cb_in,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // The number of valid rows in the last tile in width dimension
     constexpr uint32_t last_tile_rows = W % tile_width;
@@ -195,6 +204,9 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_commit();
     cb_pop_front(cb_in, 1);
+
+    // Sync any remaining block tiles with the reader
+    layernorm_compute_utils::sync_remainder_block_tiles(cb_in, generic::blocks(Wt, blk).back());
 }
 
 void MAIN {
@@ -267,7 +279,7 @@ void MAIN {
                 W,
                 blk>(*p_reciprocals);
         } else {
-            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W>(*p_reciprocals);
+            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W, blk>(*p_reciprocals);
         }
         // We should expect that either of the two would have have populated dst regs with mean and
         // variance in mean_dst and var_dst respectively.
@@ -361,7 +373,7 @@ void MAIN {
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
-            cb_pop_front(cb_in, block.size());
+            layernorm_compute_utils::pop_block(cb_in, block);
 
             reconfig_data_format_srca(cb_in, cb_ex2pe);
             if constexpr (fuse_pre_add) {
@@ -372,7 +384,7 @@ void MAIN {
                 for (auto i : block.local()) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
                 }
-                cb_pop_front(cb_inb, block.size());
+                layernorm_compute_utils::pop_block(cb_inb, block);
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
@@ -407,7 +419,7 @@ void MAIN {
                     mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_gamma, block.size());
+                layernorm_compute_utils::pop_block(cb_gamma, block);
                 cb_pop_front(cb_xmm, block.size());
 
                 if constexpr (!do_beta) {
@@ -441,7 +453,7 @@ void MAIN {
                     add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_beta, block.size());
+                layernorm_compute_utils::pop_block(cb_beta, block);
                 cb_pop_front(cb_xmm, block.size());
 
                 pack_reconfig_data_format(cb_out);

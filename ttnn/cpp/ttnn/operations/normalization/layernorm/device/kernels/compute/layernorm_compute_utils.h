@@ -25,6 +25,7 @@ namespace norm::layernorm::device::kernels::compute {
  * Does nothing if tile-aligned
  *
  * @param W Width of the tensor
+ * @param extra_cols Extra columns that were overaccumulated
  * @param cb_var Variance CB. Must contain a computed
  * variance, and have space for 2 total tiles
  * @param cb_mean Mean CB. Must contain a computed
@@ -33,19 +34,14 @@ namespace norm::layernorm::device::kernels::compute {
  * @note cb_var must have space for 2 tiles
  * @note Uses destination registers dst0 and dst1
  */
-template <uint32_t W>
-inline void adjust_variance_for_partial_last_tile(uint32_t cb_var, uint32_t cb_mean) {
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr auto Wt = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
-
-    constexpr auto extra_cols = Wt * tt::constants::TILE_WIDTH - W;
+template <uint32_t W, uint32_t extra_cols>
+inline void adjust_variance_for_overaccumulation(uint32_t cb_var, uint32_t cb_mean) {
     if constexpr (extra_cols > 0) {
+        constexpr uint32_t dst0 = 0;
+        constexpr uint32_t dst1 = 1;
         cb_wait_front(cb_var, 1);
         cb_wait_front(cb_mean, 1);
-
         cb_reserve_back(cb_var, 1);
-
         reconfig_data_format_srca(cb_var);
         copy_tile_init(cb_var);
         tile_regs_acquire();
@@ -86,22 +82,36 @@ inline void adjust_variance_for_partial_last_tile(uint32_t cb_var, uint32_t cb_m
 }
 
 /**
+ * @brief Keep a CB in sync with the producer (reader)
+ * by waiting for and popping excess tiles to fill a block
+ *
+ * @tparam Block The block type
+ * @param cb CB to sync
+ * @param block Block to sync
+ */
+template <typename Block>
+inline void sync_remainder_block_tiles(uint32_t cb, const Block& block) {
+    const auto remainder = block.remainder();
+    if (remainder > 0) {
+        cb_wait_front(cb, remainder);
+        cb_pop_front(cb, remainder);
+    }
+}
+
+/**
  * @brief A special pop function that keeps the CB
  * in sync with the reader by making sure
  * that a full pass over the CB blocks puts
  * the read/write pointers back at the beginning
  * of the CB
  *
+ * @tparam Block The block type
  * @param cb CB to pop
  * @param block Block to pop
  */
 template <typename Block>
 inline void pop_block(uint32_t cb, const Block& block) {
-    cb_pop_front(cb, block.size());
-
-    if (block.remainder() > 0) {
-        cb_wait_front(cb, block.remainder());
-        cb_pop_front(cb, block.remainder());
-    }
+    cb_pop_front(cb, block.size() + block.remainder());
+    // sync_remainder_block_tiles(cb, block);
 }
 }  // namespace norm::layernorm::device::kernels::compute

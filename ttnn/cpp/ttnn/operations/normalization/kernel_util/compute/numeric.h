@@ -48,7 +48,7 @@ inline void scale_dest(uint32_t dst, uint32_t scalar) {
  * @brief The compute logic for accumulating a CB. Does
  * no src configuring or packing
  */
-template <bool FLOAT32_REDUCTION, policies::PopInputPolicy pop_input_policy, typename... AdditionalCBs>
+template <bool FLOAT32_REDUCTION, typename pop_input_policy, typename... AdditionalCBs>
 inline void accumulate_compute_loop(
     uint32_t cb_in,
     uint32_t cb_scalar,
@@ -59,23 +59,26 @@ inline void accumulate_compute_loop(
     static_assert(
         (std::conjunction_v<std::is_same<AdditionalCBs, uint32_t>...>), "All additional CBs must be uint32_t");
 
-    constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
+    constexpr bool pop_input = pop_input_policy::pop;
+    constexpr bool pop_remainder = pop_input_policy::pop_remainder;
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
-            cb_wait_front(cb, num_previous_tiles + block.size());
+            const uint32_t num_tiles_to_wait =
+                num_previous_tiles + block.size() + (pop_remainder ? block.remainder() : 0);
+            cb_wait_front(cb, num_tiles_to_wait);
             for (auto j : block.local()) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
-                cb_pop_front(cb, block.size());
-                if (block.remainder() > 0) {
+                if constexpr (pop_remainder) {
                     cb_wait_front(cb, block.remainder());
-                    cb_pop_front(cb, block.remainder());
                 }
+                const uint32_t num_tiles_to_pop = block.size() + (pop_remainder ? block.remainder() : 0);
+                cb_pop_front(cb, num_tiles_to_pop);
             }
         }
     };
@@ -133,7 +136,7 @@ inline void accumulate_compute_loop(
  */
 template <
     bool FLOAT32_REDUCTION,
-    policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
+    typename pop_input_policy = policies::NoPopInputPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
@@ -145,9 +148,9 @@ inline void row_wise_accumulate_with_epilogue(
     uint32_t block_size,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
-    constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
+    constexpr bool pop_input = pop_input_policy::pop;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
-
+    cb_wait_front(cb_scalar, 1);
     reconfig_data_format(cb_in, cb_scalar);
     tile_regs_acquire();
 
@@ -188,7 +191,7 @@ inline void row_wise_accumulate_with_epilogue(
  */
 template <
     bool FLOAT32_REDUCTION,
-    policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
+    typename pop_input_policy = policies::NoPopInputPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
@@ -217,7 +220,7 @@ inline void row_wise_mean(
  */
 template <
     bool FLOAT32_REDUCTION,
-    policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
+    typename pop_input_policy = policies::NoPopInputPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean_with_pre_add(
     uint32_t cb_in0,
