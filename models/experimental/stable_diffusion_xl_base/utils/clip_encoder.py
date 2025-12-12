@@ -54,7 +54,7 @@ class CLIPEncoder(nn.Module):
         self.pretrained = pretrained if pretrained else self._get_default_pretrained()
 
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            self.clip_version, pretrained=self.pretrained, cache_dir=cache_dir
+            self.clip_version, pretrained=self.pretrained, cache_dir=cache_dir, force_quick_gelu=True
         )
 
         self.model.eval()
