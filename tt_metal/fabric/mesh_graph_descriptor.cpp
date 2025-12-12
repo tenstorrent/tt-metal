@@ -148,6 +148,13 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 
     TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
 
+    MeshGraphDescriptor(temp_proto, backwards_compatible);
+}
+
+MeshGraphDescriptor::MeshGraphDescriptor(const proto::MeshGraphDescriptor& proto, const bool backwards_compatible) :
+    top_level_id_(static_cast<GlobalNodeId>(-1)) {
+    proto::MeshGraphDescriptor temp_proto = proto;
+
     // Set defaults for missing fields
     set_defaults(temp_proto);
 

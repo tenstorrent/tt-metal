@@ -10,7 +10,7 @@
 #include <memory>
 #include <unordered_set>
 
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"

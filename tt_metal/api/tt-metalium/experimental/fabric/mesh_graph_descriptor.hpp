@@ -89,6 +89,7 @@ public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+    explicit MeshGraphDescriptor(const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
     ~MeshGraphDescriptor();
 
     // Debugging/inspection

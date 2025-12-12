@@ -14,7 +14,7 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
@@ -462,7 +462,8 @@ void TopologyMapper::build_mapping() {
     // Build ASIC ID to mesh rank mapping using the gathered mesh bindings directly
     // This function gathers mesh_id and host_rank from all MPI ranks and maps them to ASICs
     auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
-    auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
+    auto fabric_node_id_to_mesh_rank =
+        tt::tt_metal::experimental::tt_fabric::build_fabric_node_id_to_mesh_rank_mapping(mesh_graph_);
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
@@ -500,19 +501,6 @@ void TopologyMapper::build_mapping() {
 
     // Build host rank containers now that mapping is complete
     rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
-}
-
-std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping()
-    const {
-    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
-    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
-        for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
-            auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
-            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
-            mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
-        }
-    }
-    return mapping;
 }
 
 std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper::build_asic_id_to_mesh_rank_mapping() {
