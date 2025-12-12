@@ -691,6 +691,25 @@ def prepare_generator_args(
             10,  # num_layers, if None -> defaults to all layers
             "prefill",  # mode
         ),
+        (  # [CI only] Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -713,6 +732,7 @@ def prepare_generator_args(
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
         "ci-eval-1",  # CI 6 repeat batches with output comparison
         "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
+        "ci-long-context-16k",  # 16k context, max_seq_len=32k, used for testing --max_seq_len=16k override
         "device-perf",  # Device perf
     ],
 )
