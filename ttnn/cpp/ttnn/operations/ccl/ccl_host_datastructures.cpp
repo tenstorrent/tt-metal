@@ -57,7 +57,6 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
 
 CCLOpConfig::CCLOpConfig(
     std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
-    page_size(0),
     topology(topology),
     input_sharded(input_tensors.at(0).is_sharded()),
     output_sharded(output_tensors.at(0).is_sharded()),
