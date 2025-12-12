@@ -103,7 +103,7 @@ class TtDecoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = None  # auto slicing generates 8 slices
+        self.conv_out_slice_config = None  # auto slicing
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):

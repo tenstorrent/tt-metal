@@ -121,7 +121,7 @@ class TtResnetBlock2D(LightweightModule):
             conv_bias_1,
             self.conv1_config.weights_dtype,
         )
-        self.conv1_slice_config = None
+        self.conv1_slice_config = None  # auto slicing
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
         self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
@@ -135,7 +135,7 @@ class TtResnetBlock2D(LightweightModule):
             conv_bias_2,
             self.conv2_config.weights_dtype,
         )
-        self.conv2_slice_config = None
+        self.conv2_slice_config = None  # auto slicing
 
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(

@@ -44,7 +44,7 @@ class TtUpsample2D(LightweightModule):
             bias,
             self.conv_config.weights_dtype,
         )
-        self.conv_slice_config = None
+        self.conv_slice_config = None  # auto slicing
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
