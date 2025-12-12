@@ -1,9 +1,9 @@
 training_config:
   project_name: "tt_train_nano_gpt"
+  model_type: "gpt2"
   seed: 5489
   model_save_interval: 500
-  batch_size: 8
-  gradient_accumulation_steps: 8
+  batch_size: 64
   num_epochs: 1
   max_steps: 5000
   learning_rate: 0.0003
@@ -12,15 +12,16 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "model_configs/tinyllama_loudbox_tp.yaml"
-  multihost_config: "multihost_configs/3worker_fabric.yaml"
-
-device_config:
-  enable_tp: true
-  mesh_shape: [1, 8]
+  data_path: "data/tokenized_shakespeare.csv"
+  multihost_config: "multihost_configs/1worker_fabric.yaml"
+  model_config: "model_configs/nanogpt.yaml"
 
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7
   top_k: 50
   top_p: 1.0
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [1, 8]
