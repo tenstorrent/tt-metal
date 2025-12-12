@@ -141,6 +141,9 @@ void MAIN {
         cb_push_back(in_idx_cb_id, 1);
     }
 
+    // if max out sticks is non-zero then this will be used as the number of out sticks for every core
+    // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
+    // runtime args are used while for grid sample the max out sticks is set
     uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : get_arg_val<uint32_t>(0);
     uint32_t last_tile_height =
         num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
