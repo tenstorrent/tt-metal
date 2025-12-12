@@ -78,7 +78,7 @@ void test_BufferCorePageMapping_Iterator(const std::vector<uint32_t>& page_mappi
             auto cmd_region_offset = page_size_to_write * (range.device_page_offset - start_device_page_offset);
             for (uint32_t i = 0; i < range.num_pages; i++) {
                 src_offsets_buffer_core_mapping.push_back(src_offset + (i * page_size_to_write));
-                dst_offsets_buffer_core_mapping.push_back(dst_offset + cmd_region_offset + i * page_size_to_write);
+                dst_offsets_buffer_core_mapping.push_back(dst_offset + cmd_region_offset + (i * page_size_to_write));
             }
         }
         dst_offset = end_device_page_offset * page_size_to_write;  // update for the next transaction
