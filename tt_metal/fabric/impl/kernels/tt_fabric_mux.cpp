@@ -129,7 +129,7 @@ void forward_data(
         }
     }
 
-    tt::tt_fabric::check_worker_connections<true>( // tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
+    tt::tt_fabric::check_worker_connections<true>(
         worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 

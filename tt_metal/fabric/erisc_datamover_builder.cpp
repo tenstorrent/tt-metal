@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
 #include <enchantum/enchantum.hpp>
 
 #include <stdint.h>
@@ -887,19 +888,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
-    /*
-    auto dispatch_core_type =
-        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
-    uint32_t my_eth_channel_ = [&]() -> uint32_t {
-        if (dispatch_core_type == CoreType::WORKER) {
-            return this->my_eth_channel;
-        } else if (dispatch_core_type == CoreType::ETH) {
-            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
-        } else {
-            TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
-        }
-    }();
-    */
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
@@ -1033,7 +1021,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         default_handshake_context_switch_timeout,
         static_cast<uint32_t>(
             this->firmware_context_switch_type == FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE),
-//        my_eth_channel_,
 
         risc_id,
         this->get_configured_risc_count(),
@@ -1169,7 +1156,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     }();
 
     std::vector<uint32_t> rt_args = {
-	my_eth_channel_,
+        my_eth_channel_,
         this->sender_channels_connection_semaphore_id[0],
         this->sender_channels_connection_semaphore_id[1],
         this->sender_channels_connection_semaphore_id[2],
