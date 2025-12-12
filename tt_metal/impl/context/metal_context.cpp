@@ -1008,23 +1008,23 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         "Size of bank_to_noc table is greater than available space");
 
     cluster_->write_core(
-        &dram_bank_to_noc_xy_[device_id][0],
+        dram_bank_to_noc_xy_[device_id].data(),
         dram_to_noc_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         mem_bank_to_noc_addr);
     uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
     cluster_->write_core(
-        &l1_bank_to_noc_xy_[device_id][0], l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
+        l1_bank_to_noc_xy_[device_id].data(), l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
 
     uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
     cluster_->write_core(
-        &dram_bank_offset_map_[device_id][0],
+        dram_bank_offset_map_[device_id].data(),
         dram_offset_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         dram_offset_addr);
     uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
     cluster_->write_core(
-        &l1_bank_offset_map_[device_id][0],
+        l1_bank_offset_map_[device_id].data(),
         l1_offset_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         l1_offset_addr);
@@ -1051,7 +1051,7 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
 
     uint64_t logical_col_to_virtual_col_addr = logical_to_virtual_map_addr;
     cluster_->write_core(
-        &worker_logical_col_to_virtual_col_[device_id][0],
+        worker_logical_col_to_virtual_col_[device_id].data(),
         logical_col_to_virtual_col_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_col_to_virtual_col_addr);
@@ -1060,7 +1060,7 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
     // Therefore, we must adjust the address to account for the full grid size.
     uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + (firmware_grid_size_x * sizeof(uint8_t));
     cluster_->write_core(
-        &worker_logical_row_to_virtual_row_[device_id][0],
+        worker_logical_row_to_virtual_row_[device_id].data(),
         logical_row_to_virtual_row_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_row_to_virtual_row_addr);

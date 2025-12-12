@@ -38,7 +38,6 @@
 Checks: >
   *,
   -bugprone-branch-clone,
-  -bugprone-crtp-constructor-accessibility,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-forwarding-reference-overload,
@@ -121,7 +120,6 @@ Checks: >
   -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-container-contains,
-  -readability-container-data-pointer,
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
   -readability-enum-initial-value,
