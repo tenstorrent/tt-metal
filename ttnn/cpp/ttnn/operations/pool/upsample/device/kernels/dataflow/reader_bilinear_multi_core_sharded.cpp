@@ -27,8 +27,8 @@ void kernel_main() {
     constexpr uint32_t out_w = get_compile_time_arg_val(5);
     constexpr uint32_t in_h = get_compile_time_arg_val(6);
 
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(8);
+    constexpr uint32_t halo_cb_id = get_compile_time_arg_val(7);
+    constexpr uint32_t tilize_reduce_cb_0_or_1 = get_compile_time_arg_val(8);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(9);
     // These are now already in fixed-point format from the host
     constexpr uint32_t scale_h_inv_fixed_u32 = get_compile_time_arg_val(10);
@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t blocks = get_compile_time_arg_val(15);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(16);
 
-    uint32_t l1_read_addr = get_read_ptr(in_cb_id);
+    uint32_t l1_read_addr = get_read_ptr(halo_cb_id);
     constexpr uint32_t number_output_sticks_per_input_row = in_w * scale_w;
     // Calculate the number of output sticks per row to process per core by dividing the total number of output sticks
     // per row (in width direction) by 2.
@@ -273,7 +273,7 @@ void kernel_main() {
 
             uint32_t block_offset = 0;
             for (uint32_t i = 0; i < blocks; i++) {
-                cb_reserve_back(out_cb_id, 4);
+                cb_reserve_back(tilize_reduce_cb_0_or_1, 4);
 
                 // Calculate the correct block size for this iteration
                 // For the last block, we may need to read fewer tiles than MAX_TILES_PER_REDUCTION
@@ -285,7 +285,7 @@ void kernel_main() {
                     current_block_size_bytes = remaining_size_bytes;
                 }
 
-                uint32_t l1_write_addr = get_write_ptr(out_cb_id);
+                uint32_t l1_write_addr = get_write_ptr(tilize_reduce_cb_0_or_1);
                 uint32_t l1_read_addr_temp = y1_base + x1_offset + block_offset;
                 // 1st stick
                 uint64_t src_noc_addr = get_noc_addr(l1_read_addr_temp);
@@ -315,7 +315,7 @@ void kernel_main() {
 
                 // push scaler and data into cb.
                 noc_async_read_barrier();
-                cb_push_back(out_cb_id, 4);
+                cb_push_back(tilize_reduce_cb_0_or_1, 4);
                 block_offset += current_block_size_bytes;
             }
             x_coordinate += (scale_w_inv_x2);  // scale_w_inv * 2 in fixed-point

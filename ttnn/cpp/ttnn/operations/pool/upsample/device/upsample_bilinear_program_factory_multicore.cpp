@@ -163,15 +163,15 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     uint32_t in_cb_npages = halo_shard_shape[0];
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
 
-    auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
+    auto [halo_cb_id, cb_src0] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, halo_in.buffer());
 
     // first intermediate CB
     uint32_t in1_cb_pagesize =
         std::min(tt::constants::TILE_WIDTH * input.element_size() * MAX_TILES_PER_REDUCTION, input_stick_nbytes);
-    uint32_t in_cb_id1 = next_cb_index++;
+    uint32_t tilize_reduce_cb_0 = next_cb_index++;
     tt::tt_metal::create_cb(
-        in_cb_id1,
+        tilize_reduce_cb_0,
         program,
         all_cores,
         in1_cb_pagesize,
@@ -179,9 +179,9 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
 
     // second intermediate CB
-    uint32_t in_cb_id2 = next_cb_index++;
+    uint32_t tilize_reduce_cb_1 = next_cb_index++;
     tt::tt_metal::create_cb(
-        in_cb_id2,
+        tilize_reduce_cb_1,
         program,
         all_cores,
         in_cb_pagesize,
@@ -207,7 +207,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
-    log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
+    log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
     log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
     log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
@@ -243,9 +243,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     uint32_t num_input_width_blocks =
         std::ceil((float)(input_shape[3]) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH));
 
-    // Updated compile-time args: moved runtime args here (except start_input_row_in_image_id)
     std::vector<uint32_t> reader_compile_time_args = {
-        // Former runtime args (now compile-time)
         input_stick_nbytes,             // [0] stick_nbytes
         input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
         scale_factor_h,                 // [2] scale_h
@@ -253,17 +251,16 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         in_w,                           // [4] in_w
         out_w,                          // [5] out_w
         in_h,                           // [6] in_h
-        // Original compile-time args
-        in_cb_id,                // [7] in_cb_id
-        in_cb_id1,               // [8] out_cb_id
-        in_scalar_cb_id1,        // [9] in_scalar_cb_id
-        scale_h_inv_u32,         // [10] scale_h_inv_comp
-        scale_w_inv_u32,         // [11] scale_w_inv_comp
-        y_index_u32,             // [12] y_starting_coordinate_u32
-        x_index_compute_u32,     // [13] x_starting_coordinate_u32
-        1,                       // [14] is_reader
-        num_input_width_blocks,  // [15] blocks
-        input_block_size_bytes,  // [16] input_block_size_bytes
+        halo_cb_id,                     // [7] halo_cb_id
+        tilize_reduce_cb_0,             // [8] tilize_reduce_cb_0
+        in_scalar_cb_id1,               // [9] in_scalar_cb_id
+        scale_h_inv_u32,                // [10] scale_h_inv_comp
+        scale_w_inv_u32,                // [11] scale_w_inv_comp
+        y_index_u32,                    // [12] y_starting_coordinate_u32
+        x_index_compute_u32,            // [13] x_starting_coordinate_u32
+        1,                              // [14] is_reader
+        num_input_width_blocks,         // [15] blocks
+        input_block_size_bytes,         // [16] input_block_size_bytes
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -275,17 +272,16 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         in_w,                           // [4] in_w
         out_w,                          // [5] out_w
         in_h,                           // [6] in_h
-        // Original compile-time args
-        in_cb_id,                // [7] in_cb_id
-        in_cb_id2,               // [8] out_cb_id
-        in_scalar_cb_id2,        // [9] in_scalar_cb_id
-        scale_h_inv_u32,         // [10] scale_h_inv_comp
-        scale_w_inv_u32,         // [11] scale_w_inv_comp
-        y_index_u32,             // [12] y_starting_coordinate_u32
-        x_index_compute_u32,     // [13] x_starting_coordinate_u32
-        0,                       // [14] is_reader (0 for writer)
-        num_input_width_blocks,  // [15] blocks
-        input_block_size_bytes,  // [16] input_block_size_bytes
+        halo_cb_id,                     // [7] halo_cb_id
+        tilize_reduce_cb_1,             // [8] tilize_reduce_cb_1
+        in_scalar_cb_id2,               // [9] in_scalar_cb_id
+        scale_h_inv_u32,                // [10] scale_h_inv_comp
+        scale_w_inv_u32,                // [11] scale_w_inv_comp
+        y_index_u32,                    // [12] y_starting_coordinate_u32
+        x_index_compute_u32,            // [13] x_starting_coordinate_u32
+        0,                              // [14] is_reader (0 for writer)
+        num_input_width_blocks,         // [15] blocks
+        input_block_size_bytes,         // [16] input_block_size_bytes
     };
 
     std::string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
@@ -297,8 +293,8 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     compute_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
 
     std::vector<uint32_t> compute_compile_time_args = {
-        in_cb_id1,
-        in_cb_id2,
+        tilize_reduce_cb_0,
+        tilize_reduce_cb_1,
         in_scalar_cb_id1,
         in_scalar_cb_id2,
         out_cb_id,
