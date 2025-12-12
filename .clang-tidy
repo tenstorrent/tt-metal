@@ -40,7 +40,6 @@ Checks: >
   -bugprone-branch-clone,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
-  -bugprone-forwarding-reference-overload,
   -bugprone-implicit-widening-of-multiplication-result,
   -bugprone-integer-division,
   -bugprone-narrowing-conversions,
