@@ -32,7 +32,7 @@ void py_bind_conv2d(py::module& module) {
         R"doc(
         Applies a 2D convolution over an input signal composed of several input planes.
 
-       Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region. For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
+        Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region. For more information, refer to `CNNs on Tenstorrent Architectures <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_ tech report.
 
         Args:
             input_tensor (ttnn.Tensor): The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
@@ -66,7 +66,7 @@ void py_bind_conv2d(py::module& module) {
             - tuple[ttnn.Tensor, tuple[int, int]]: The output tensor, and its height and width, if return_output_dim = True
 
         Note:
-            The :attr: `input_tensor` supports the following data type and layout:
+            The `input_tensor` supports the following data type and layout:
 
             .. list-table:: input_tensor
                 :header-rows: 1
@@ -80,7 +80,7 @@ void py_bind_conv2d(py::module& module) {
                 * - BFLOAT8_B
                   - TILE
 
-            The :attr: `output_tensor` supports the following data type and layout:
+            The `output_tensor` supports the following data type and layout:
 
             .. list-table:: output_tensor
                 :header-rows: 1
@@ -94,7 +94,7 @@ void py_bind_conv2d(py::module& module) {
                 * - BFLOAT8_B
                   - TILE
 
-            The :attr: `weights_tensor` on the host, supports the following data type and layout:
+            The `weights_tensor` on the host, supports the following data type and layout:
 
             .. list-table:: weights_tensor (host)
                 :header-rows: 1
@@ -106,7 +106,7 @@ void py_bind_conv2d(py::module& module) {
                 * - BFLOAT16
                   - ROW_MAJOR
 
-            The :attr: `weights_tensor` prepared on device, supports the following data type and layout:
+            The `weights_tensor` prepared on device, supports the following data type and layout:
 
             .. list-table:: weights_tensor (prepared on device)
                 :header-rows: 1
@@ -120,7 +120,7 @@ void py_bind_conv2d(py::module& module) {
                 * - BFLOAT8_B
                   - TILE
 
-            The :attr: `bias_tensor` on the host, supports the following data type and layout:
+            The `bias_tensor` on the host, supports the following data type and layout:
 
             .. list-table:: bias_tensor (host)
                 :header-rows: 1
@@ -132,7 +132,7 @@ void py_bind_conv2d(py::module& module) {
                 * - BFLOAT16
                   - ROW_MAJOR
 
-            The :attr: `bias_tensor` prepared on device, supports the following data type and layout:
+            The `bias_tensor` prepared on device, supports the following data type and layout:
 
             .. list-table:: bias_tensor (prepared on device)
                 :header-rows: 1
