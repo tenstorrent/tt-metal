@@ -73,16 +73,16 @@ def num_inference_steps(request):
 
 
 @pytest.fixture
-def create_dit_pipeline(mesh_device, model_id, model_location_generator):
+def dit_pipeline(model_id):
     pipeline_map = {
-        "flux.1-dev": Flux1Pipeline.create_pipeline,
-        "flux.1-schnell": Flux1Pipeline.create_pipeline,
-        "stable-diffusion-3.5-large": StableDiffusion3Pipeline.create_pipeline,
-        "motif-image-6b-preview": MotifPipeline.create_pipeline,
+        "flux.1-dev": Flux1Pipeline,
+        "flux.1-schnell": Flux1Pipeline,
+        "stable-diffusion-3.5-large": StableDiffusion3Pipeline,
+        "motif-image-6b-preview": MotifPipeline,
     }
     return pipeline_map[model_id]
 
 
 @pytest.fixture
-def model_setup(model_id):
+def model_metadata(model_id):
     return targets_setup[model_id]

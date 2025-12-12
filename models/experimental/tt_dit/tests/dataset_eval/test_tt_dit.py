@@ -15,36 +15,11 @@ from .clip_encoder import CLIPEncoder
 
 # from .fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
-from ...pipelines.motif.pipeline_motif import MotifPipeline
-from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 # COCO captions download path
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
-
-
-def get_pipeline(mesh_device, model_id, model_location_generator):
-    targets_setup = json.load(open("eval_targets.json"))
-    model_info = targets_setup[model_id]
-    pipeline_map = {
-        "flux1.dev": lambda: Flux1Pipeline.create_pipeline(
-            mesh_device=mesh_device, checkpoint_name=model_location_generator(model_info["hf_id"])
-        ),
-        "flux1.schnell": lambda: Flux1Pipeline.create_pipeline(
-            mesh_device=mesh_device, checkpoint_name=model_location_generator(model_info["hf_id"])
-        ),
-        "sd35.large": lambda: StableDiffusion3Pipeline.create_pipeline(
-            mesh_device=mesh_device,
-            checkpoint_name=model_location_generator(model_info["hf_id"]),
-        ),
-        "motif.image.6b.preview": lambda: MotifPipeline.create_pipeline(
-            mesh_device=mesh_device,
-            checkpoint_name=model_location_generator(model_info["hf_id"]),
-        ),
-    }
-    return pipeline_map[model_id]()
 
 
 def get_prompts(captions_path, start_from, num_prompts):
@@ -162,11 +137,12 @@ def check_accuracy(prompt, score, score_key, model_info):
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "device_name")[
-        ((1, 2), "P300"),
-        ((2, 2), "QBGE"),
-        ((2, 4), "T3K"),
-        ((4, 8), "Galaxy"),
+    "mesh_device,device_name",
+    [
+        [(1, 2), "p300"],
+        [(2, 2), "qbge"],
+        [(2, 4), "t3K"],
+        [(4, 8), "galaxy"],
     ],
     ids=[
         "1x2",
@@ -188,8 +164,8 @@ def test_tt_dit_accuracy(
     num_inference_steps,
     model_id,
     model_location_generator,
-    create_dit_pipeline,
-    model_setup,
+    dit_pipeline,
+    model_metadata,
     evaluation_range,
 ) -> None:
     """Accuracy test for TT-Metal DiT pipelines with CLIP and FID score evaluation.
@@ -197,8 +173,8 @@ def test_tt_dit_accuracy(
     """
 
     benchmark_profiler = BenchmarkProfiler()
-    if ttnn.device.is_blackhole() and device_name == "Galaxy":
-        device_name = device_name + "_BH"
+    if ttnn.device.is_blackhole() and device_name == "galaxy":
+        device_name = "bh_" + device_name
     captions_path = "coco_captions/captions.tsv"
     coco_statistics_path = "coco_statistics/val2014.npz"
     start_from, num_prompts = evaluation_range
@@ -210,8 +186,8 @@ def test_tt_dit_accuracy(
     logger.info(f"  Inference steps: {num_inference_steps}")
 
     # Create pipeline similar to test_performance_flux1.py
-    pipeline = create_dit_pipeline(
-        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_setup["hf_id"])
+    pipeline = dit_pipeline.create_pipeline(
+        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_metadata["hf_id"])
     )
 
     images = []
@@ -263,7 +239,6 @@ def test_tt_dit_accuracy(
             "start_from": start_from,
             "num_prompts": num_prompts,
             "num_inference_steps": num_inference_steps,
-            "backend": "tt-metal",
             "mesh_shape": list(mesh_device.shape),
         },
         "benchmarks_summary": [
@@ -280,14 +255,13 @@ def test_tt_dit_accuracy(
                 "max_inference_time": max_inference_time,
             }
         ],
-        "evals": get_vid_evals(model_id, model_setup, images, prompts)
+        "evals": get_vid_evals(model_id, model_metadata, images, prompts)
         if is_video
-        else get_img_evals(model_id, model_setup, images, prompts, coco_statistics_path),
+        else get_img_evals(model_id, model_metadata, images, prompts, coco_statistics_path),
     }
 
     out_root = "test_reports"
     os.makedirs(out_root, exist_ok=True)
-    # file_path = f"{out_root}/test_{model_id.replace('.', '')}_results.json"
     file_path = f"{out_root}/sdxl_test_results.json"
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
@@ -297,6 +271,4 @@ def test_tt_dit_accuracy(
     pipeline.synchronize_devices()
 
     print(f"\n🎉 Test completed successfully!")
-    print(f"📊 Average CLIP Score: {average_clip_score:.2f}")
     print(f"⚡ Average Inference Time: {average_inference_time:.2f}s")
-    print(f"🖼️  Images saved to: generated_images/")
