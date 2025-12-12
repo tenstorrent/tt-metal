@@ -1,0 +1,517 @@
+graph_templates {
+  key: "extracted_topology"
+  value {
+    children {
+      name: "host_1"
+      node_ref {
+        node_descriptor: "BH_GALAXY"
+      }
+    }
+    children {
+      name: "host_0"
+      node_ref {
+        node_descriptor: "BH_GALAXY"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 1
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 2
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 2
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 2
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 3
+            port_id: 1
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 4
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 3
+            port_id: 2
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 4
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 3
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 3
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 4
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 3
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 5
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 3
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 6
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 3
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 3
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 4
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 4
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 4
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 5
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 4
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 6
+          }
+          port_b {
+            path: "host_0"
+            tray_id: 4
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 1
+            port_id: 1
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 3
+            port_id: 1
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 1
+            port_id: 2
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 3
+            port_id: 2
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 1
+            port_id: 3
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 1
+            port_id: 4
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 1
+            port_id: 5
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 1
+            port_id: 6
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 4
+            port_id: 3
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 2
+            port_id: 4
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 2
+            port_id: 5
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "host_1"
+            tray_id: 2
+            port_id: 6
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 7
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 7
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 11
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 11
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 9
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 9
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 1
+            port_id: 13
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 3
+            port_id: 13
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 7
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 7
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 9
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 9
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 11
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 11
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 2
+            port_id: 13
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 4
+            port_id: 13
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 3
+            port_id: 7
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 1
+            port_id: 7
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 3
+            port_id: 9
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 1
+            port_id: 9
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 3
+            port_id: 11
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 1
+            port_id: 11
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 3
+            port_id: 13
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 1
+            port_id: 13
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 4
+            port_id: 7
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 7
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 4
+            port_id: 9
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 9
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 4
+            port_id: 11
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 11
+          }
+        }
+        connections {
+          port_a {
+            path: "host_0"
+            tray_id: 4
+            port_id: 13
+          }
+          port_b {
+            path: "host_1"
+            tray_id: 2
+            port_id: 13
+          }
+        }
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "extracted_topology"
+  child_mappings {
+    key: "host_0"
+    value {
+      host_id: 1
+    }
+  }
+  child_mappings {
+    key: "host_1"
+    value {
+      host_id: 0
+    }
+  }
+}

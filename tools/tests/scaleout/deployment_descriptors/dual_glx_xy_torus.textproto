@@ -1,0 +1,16 @@
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 12
+  node_type: "BH_GALAXY"
+  host: "g08blx04"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 28
+  node_type: "BH_GALAXY"
+  host: "g08blx03"
+}

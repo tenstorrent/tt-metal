@@ -996,7 +996,13 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
                         // they cause issues with uniform mesh mapping since topology mapper algorithm does not prefer
                         // taking the full connectivity path vs downgrading through z channels for intramesh
                         // connectivity https://github.com/tenstorrent/tt-metal/issues/31846
-                        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                        bool cross_host_connection =
+                            physical_system_descriptor.is_cross_host_eth_link(asic_id, eth_connection.src_chan);
+                        TT_ASSERT(
+                            cross_host_connection ==
+                                physical_system_descriptor.is_cross_host_eth_link(neighbor, eth_connection.dst_chan),
+                            "Cross host connection mismatch");
+                        if (!cross_host_connection && cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
                             (z_channels.contains(eth_connection.src_chan) ||
                              z_channels.contains(eth_connection.dst_chan))) {
                             continue;
