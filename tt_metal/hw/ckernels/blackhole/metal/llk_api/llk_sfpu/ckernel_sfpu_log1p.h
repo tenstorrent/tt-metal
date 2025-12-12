@@ -110,7 +110,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
             // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
             // Use vConstFloatPrgm1 which is set to sqrt(2) in log_init
             v_if(m >= sfpi::vConstFloatPrgm1) {
-                Cnay m = m * 0.5f;  // Divide by 2
+                m = m * 0.5f;   // Divide by 2
                 exp = exp + 1;  // Increment exponent
             }
             v_endif;
