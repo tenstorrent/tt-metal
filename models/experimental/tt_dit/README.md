@@ -7,6 +7,7 @@ This directory contains the implementation of the Tenstorrent Diffusion Transfor
 For detailed information about each model including performance metrics, usage instructions, and specific requirements, see:
 
 - **[Stable Diffusion 3.5 Large](models/StableDiffusion35.md)** - Text-to-image generation
+- **[Stable Diffusion 3.5 Medium](models/StableDiffusionMed35.md)** - Text-to-image generation
 - **[Flux 1](models/Flux1.md)** - Text-to-image generation (schnell & dev variants)
 - **[Motif](models/Motif.md)** - Text-to-image generation model
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
@@ -18,9 +19,10 @@ For detailed information about each model including performance metrics, usage i
 tt_dit/
 ├── layers/              # Core neural network layers
 ├── models/              # Model architectures and documentation
-│   ├── transformers/    # Transformer implementations (SD35, Mochi, Wan, Flux1, Motif)
+│   ├── transformers/    # Transformer implementations (SD35, SD35 medium, Mochi, Wan, Flux1, Motif)
 │   ├── vae/            # VAE/Autoencoder implementations
 │   ├── StableDiffusion35.md  # SD3.5 model documentation
+│   ├── StableDiffusionMed35.md  # SD3.5 medium model documentation
 │   ├── Flux1.md         # Flux 1 model documentation
 │   ├── Motif.md         # Motif model documentation
 │   ├── Mochi_1.md       # Mochi-1 model documentation
@@ -38,7 +40,7 @@ tt_dit/
 │   ├── flux1/
 │   └── motif/
 ├── tests/              # Test suite
-│   ├── models/         # Model-level tests (sd35, mochi, wan2_2, flux1, motif)
+│   ├── models/         # Model-level tests (sd35, sd35 medium, mochi, wan2_2, flux1, motif)
 │   ├── encoders/       # Encoder tests
 │   ├── blocks/         # Block-level tests
 │   └── unit/          # Unit tests for layers
@@ -59,7 +61,7 @@ tt_dit/
 
 ### Models
 - **Transformers**: DiT transformer implementations for various generative models
-  - Support for multiple architectures including SD3.5, Mochi, Wan2.2, Flux1, and Motif
+  - Support for multiple architectures including SD3.5, SD3.5 medium, Mochi, Wan2.2, Flux1, and Motif
   - Model-specific attention mechanisms and transformer architectures
 - **Autoencoders**: VAE implementations for different models
 
@@ -70,6 +72,7 @@ tt_dit/
 ### Pipelines
 End-to-end pipeline implementations for multiple generative models:
 - **Stable Diffusion 3.5 Large**: Text-to-image generation (1024x1024px)
+- **Stable Diffusion 3.5 Medium**: Text-to-image generation (512x512px)
 - **Flux 1**: Text-to-image generation (schnell & dev variants, 1024x1024px)
 - **Motif**: Text-to-image generation (6B model, 1024x1024px)
 - **Mochi-1**: Video generation model (824x480px, 168 frames)
@@ -104,6 +107,7 @@ python -m pytest tests/models/
 
 # Run specific model pipeline tests
 python -m pytest tests/models/sd35/test_pipeline_sd35.py -v
+python -m pytest tests/models/sd35_med/test_pipeline_sd35_medium.py -v
 python -m pytest tests/models/flux1/test_pipeline_flux1.py -v
 python -m pytest tests/models/motif/test_pipeline_motif.py -v
 python -m pytest tests/models/mochi/test_pipeline_mochi.py -v
