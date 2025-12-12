@@ -17,8 +17,8 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.common import (
-    calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
+    generate_warmup_prefill_seq_lens,
     get_base_model_name,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
@@ -112,10 +112,8 @@ class ModelArgs:
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
-        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
-            max_seq_len_to_warmup = self.capped_warmup_seq_len
 
-        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+        to_warmup_seq_lens = generate_warmup_prefill_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
