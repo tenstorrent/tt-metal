@@ -351,7 +351,8 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
 
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
 }
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {

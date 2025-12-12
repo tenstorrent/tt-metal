@@ -3,6 +3,33 @@ name: "(T3K) T3000 demo tests"
 on:
   workflow_dispatch:
     inputs:
+      model:
+        description: "Select model to test"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - falcon7b
+          - falcon40b
+          - llama3
+          - llama3_vision
+          - llama3_90b_vision
+          - llama3_70b
+          - resnet50
+          - sentence_bert
+          - sd35_large
+          - flux1-dev
+          - motif
+          - mistral
+          - mixtral
+          - whisper
+          - qwen3
+          - qwen25
+          - qwen25_vl
+          - gemma3
+          - wan22
+          - mochi
       extra-tag:
         required: true
         type: string
@@ -29,4 +56,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
       extra-tag: ${{ inputs.extra-tag || 'in-service' }}
