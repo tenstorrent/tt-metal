@@ -67,6 +67,7 @@ public:
         bool is_full() const { return size() == block_size_; }
         bool is_partial() const { return size() < block_size_; }
         SizeT start() const { return start_; }
+        SizeT remainder() const { return block_size_ - size(); }
 
         GlobalRange global() const { return GlobalRange{start_, end_}; }
         LocalRange local() const { return LocalRange{size()}; }

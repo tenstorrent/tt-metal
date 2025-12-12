@@ -15,8 +15,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
 #include <type_traits>
 #include <array>
 
@@ -74,6 +72,10 @@ inline void accumulate_compute_loop(
             }
             if constexpr (pop_input) {
                 cb_pop_front(cb, block.size());
+                if (block.remainder() > 0) {
+                    cb_wait_front(cb, block.remainder());
+                    cb_pop_front(cb, block.remainder());
+                }
             }
         }
     };
@@ -192,7 +194,6 @@ inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
-            // dprint_tensix_dest_reg<true>(detail::dst0);
             detail::scale_dest(detail::dst0, one_over_N);
         });
 }
