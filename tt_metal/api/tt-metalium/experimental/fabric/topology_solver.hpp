@@ -62,6 +62,16 @@ public:
      */
     const std::vector<NodeId>& get_neighbors(NodeId node) const;
 
+    /**
+     * @brief Print adjacency map for debugging
+     *
+     * Prints the graph structure showing each node and its neighbors.
+     * Useful for debugging mapping failures.
+     *
+     * @param graph_name Name to identify this graph in the output
+     */
+    void print_adjacency_map(const std::string& graph_name = "Graph") const;
+
 private:
     AdjacencyMap adj_map_;
     std::vector<NodeId> nodes_cache_;
@@ -255,6 +265,16 @@ struct MappingResult {
         size_t backtrack_count = 0;                ///< Number of backtracks performed
         std::chrono::milliseconds elapsed_time{};  ///< Time taken to solve
     } stats;
+
+    /**
+     * @brief Print mapping result for debugging
+     *
+     * Prints the mapping showing which target nodes map to which global nodes,
+     * along with warnings, statistics, and other diagnostic information.
+     *
+     * @param target_graph The target graph (for showing unmapped nodes)
+     */
+    void print(const AdjacencyGraph<TargetNode>& target_graph) const;
 };
 
 /**

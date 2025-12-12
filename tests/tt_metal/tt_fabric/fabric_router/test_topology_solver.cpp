@@ -1150,4 +1150,55 @@ TEST_F(TopologySolverTest, DFSSearchEngineRelaxedModeChannelPreference) {
     // over 11 (1 channel), though all are valid in relaxed mode
 }
 
+TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 (only 2 nodes, can't fit 3-node path)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state with partial mapping (node 1 -> 10, node 2 -> 11)
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(3, -1);
+    state.mapping[0] = 0;   // target node 1 -> global node 10
+    state.mapping[1] = 1;   // target node 2 -> global node 11
+    state.mapping[2] = -1;  // target node 3 not mapped
+    state.used.resize(2, false);
+    state.used[0] = true;
+    state.used[1] = true;
+
+    // Build result - should save partial mapping even though it's incomplete
+    MappingResult<TestTargetNode, TestGlobalNode> result =
+        MappingValidator<TestTargetNode, TestGlobalNode>::build_result(
+            state.mapping, graph_data, state, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should fail (incomplete mapping)
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.error_message.empty());
+
+    // But should still save the partial mapping that was found
+    EXPECT_EQ(result.target_to_global.size(), 2u) << "Should save 2 mapped nodes";
+    EXPECT_EQ(result.target_to_global.at(1), 10u) << "Target node 1 should map to global node 10";
+    EXPECT_EQ(result.target_to_global.at(2), 11u) << "Target node 2 should map to global node 11";
+    EXPECT_EQ(result.target_to_global.count(3), 0u) << "Target node 3 should not be mapped";
+
+    // Should have statistics
+    EXPECT_EQ(result.stats.dfs_calls, 0u);  // No DFS calls made in this test
+}
+
 }  // namespace tt::tt_fabric

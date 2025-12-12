@@ -12,9 +12,11 @@
 #include <algorithm>
 #include <climits>   // For INT_MAX
 #include <cstddef>   // For SIZE_MAX
+#include <sstream>
 #include <unordered_set>
 
 #include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric::detail {
 
@@ -105,6 +107,75 @@ GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
         // Degree is the number of unique neighbors (not counting multi-edges or self-connections)
         global_deg[i] = global_adj_idx[i].size();
     }
+}
+
+template <typename TargetNode, typename GlobalNode>
+void GraphIndexData<TargetNode, GlobalNode>::print_node_degrees() const {
+    std::stringstream ss;
+    ss << "\n=== Node Degrees ===" << std::endl;
+    ss << "Target graph (" << n_target << " nodes):" << std::endl;
+    for (size_t i = 0; i < n_target; ++i) {
+        ss << "  Node " << target_nodes[i] << ": degree " << target_deg[i] << std::endl;
+    }
+    ss << "Global graph (" << n_global << " nodes):" << std::endl;
+    for (size_t i = 0; i < n_global; ++i) {
+        ss << "  Node " << global_nodes[i] << ": degree " << global_deg[i] << std::endl;
+    }
+    ss << "====================" << std::endl;
+    log_info(tt::LogFabric, "{}", ss.str());
+}
+
+template <typename TargetNode, typename GlobalNode>
+void GraphIndexData<TargetNode, GlobalNode>::print_adjacency_maps() const {
+    std::stringstream ss;
+    ss << "\n=== Target Graph Adjacency Map ===" << std::endl;
+    ss << "Total nodes: " << n_target << std::endl;
+    for (size_t i = 0; i < n_target; ++i) {
+        ss << "  Node " << target_nodes[i] << " (degree " << target_deg[i] << "): ";
+        if (target_adj_idx[i].empty()) {
+            ss << "no neighbors";
+        } else {
+            bool first = true;
+            for (size_t neighbor_idx : target_adj_idx[i]) {
+                if (!first) {
+                    ss << ", ";
+                }
+                first = false;
+                ss << target_nodes[neighbor_idx];
+                // Show connection count if multi-edge
+                auto it = target_conn_count[i].find(neighbor_idx);
+                if (it != target_conn_count[i].end() && it->second > 1) {
+                    ss << "(" << it->second << " channels)";
+                }
+            }
+        }
+        ss << std::endl;
+    }
+    ss << "\n=== Global Graph Adjacency Map ===" << std::endl;
+    ss << "Total nodes: " << n_global << std::endl;
+    for (size_t i = 0; i < n_global; ++i) {
+        ss << "  Node " << global_nodes[i] << " (degree " << global_deg[i] << "): ";
+        if (global_adj_idx[i].empty()) {
+            ss << "no neighbors";
+        } else {
+            bool first = true;
+            for (size_t neighbor_idx : global_adj_idx[i]) {
+                if (!first) {
+                    ss << ", ";
+                }
+                first = false;
+                ss << global_nodes[neighbor_idx];
+                // Show connection count if multi-edge
+                auto it = global_conn_count[i].find(neighbor_idx);
+                if (it != global_conn_count[i].end() && it->second > 1) {
+                    ss << "(" << it->second << " channels)";
+                }
+            }
+        }
+        ss << std::endl;
+    }
+    ss << "===================================" << std::endl;
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -684,6 +755,38 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     SearchState& state,
     ConnectionValidationMode validation_mode) {
+    // Log node degrees and degree histograms at the start of mapping
+    // Build degree histograms for more descriptive logging
+    auto build_degree_histogram = [](const std::vector<size_t>& degrees) -> std::string {
+        std::map<size_t, size_t> hist;
+        for (auto d : degrees) {
+            hist[d]++;
+        }
+        std::string s = "{";
+        bool first = true;
+        for (const auto& [degree, count] : hist) {
+            if (!first) {
+                s += ", ";
+            }
+            first = false;
+            s += std::to_string(degree) + ":" + std::to_string(count);
+        }
+        s += "}";
+        return s;
+    };
+
+    std::string target_deg_hist = build_degree_histogram(graph_data.target_deg);
+    std::string global_deg_hist = build_degree_histogram(graph_data.global_deg);
+
+    log_info(
+        tt::LogFabric,
+        "Topology mapping search starting: target_graph_nodes={}, global_graph_nodes={}, "
+        "target_degree_histogram={}, global_degree_histogram={}",
+        graph_data.n_target,
+        graph_data.n_global,
+        target_deg_hist,
+        global_deg_hist);
+
     // Validate initial state
     if (assigned_count > graph_data.n_target) {
         std::string error_msg = fmt::format(
@@ -766,6 +869,382 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     }
 
     return found;
+}
+
+// ============================================================================
+// MappingValidator Implementation
+// ============================================================================
+
+template <typename TargetNode, typename GlobalNode>
+void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
+    const std::vector<int>& mapping,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    ConnectionValidationMode validation_mode,
+    std::vector<std::string>* warnings) {
+    // Only validate in STRICT or RELAXED mode
+    if (validation_mode == ConnectionValidationMode::NONE) {
+        return;
+    }
+
+    // Check all edges in the mapping
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        if (mapping[i] == -1) {
+            continue;  // Not mapped
+        }
+
+        size_t global_idx = static_cast<size_t>(mapping[i]);
+        const TargetNode& target_node = graph_data.target_nodes[i];
+        const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+        // Check all neighbors of this target node
+        for (size_t neighbor : graph_data.target_adj_idx[i]) {
+            if (mapping[neighbor] == -1) {
+                continue;  // Neighbor not mapped
+            }
+
+            size_t neighbor_global_idx = static_cast<size_t>(mapping[neighbor]);
+            const TargetNode& neighbor_target = graph_data.target_nodes[neighbor];
+            const GlobalNode& neighbor_global = graph_data.global_nodes[neighbor_global_idx];
+
+            // Get required channel count
+            size_t required = graph_data.target_conn_count[i].at(neighbor);
+
+            // Get actual channel count
+            auto it = graph_data.global_conn_count[global_idx].find(neighbor_global_idx);
+            if (it == graph_data.global_conn_count[global_idx].end()) {
+                // Edge doesn't exist - this should have been caught earlier, but handle gracefully
+                if (validation_mode == ConnectionValidationMode::STRICT) {
+                    std::string error_msg = fmt::format(
+                        "Strict mode validation failed: target graph edge from node {} to {} exists, "
+                        "but physical edge from {} to {} does not exist in global graph. "
+                        "This indicates a mapping inconsistency.",
+                        target_node,
+                        neighbor_target,
+                        global_node,
+                        neighbor_global);
+                    log_error(tt::LogFabric, "{}", error_msg);
+                    warnings->push_back(error_msg);
+                }
+                continue;
+            }
+
+            size_t actual = it->second;
+
+            // Check if sufficient
+            if (actual < required) {
+                if (validation_mode == ConnectionValidationMode::STRICT) {
+                    std::string error_msg = fmt::format(
+                        "Strict mode validation failed: target graph edge from node {} to {} requires {} channels, "
+                        "but physical edge from {} to {} only has {} channels. "
+                        "Strict mode requires sufficient channel capacity for all edges.",
+                        target_node,
+                        neighbor_target,
+                        required,
+                        global_node,
+                        neighbor_global,
+                        actual);
+                    log_error(tt::LogFabric, "{}", error_msg);
+                    warnings->push_back(error_msg);
+                } else if (validation_mode == ConnectionValidationMode::RELAXED) {
+                    std::string warning_msg = fmt::format(
+                        "Relaxed mode: target graph edge from node {} to {} requires {} channels, "
+                        "but physical edge from {} to {} only has {} channels. "
+                        "Mapping will proceed but may have insufficient bandwidth.",
+                        target_node,
+                        neighbor_target,
+                        required,
+                        global_node,
+                        neighbor_global,
+                        actual);
+                    log_info(tt::LogFabric, "{}", warning_msg);
+                    warnings->push_back(warning_msg);
+                }
+            }
+        }
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
+    const std::vector<int>& mapping,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    ConnectionValidationMode validation_mode,
+    std::vector<std::string>* warnings) {
+    // First, validate that all target nodes are mapped
+    std::vector<size_t> unmapped_targets;
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        if (mapping[i] == -1) {
+            unmapped_targets.push_back(i);
+        }
+    }
+
+    if (!unmapped_targets.empty()) {
+        std::string unmapped_list;
+        for (size_t idx : unmapped_targets) {
+            if (!unmapped_list.empty()) {
+                unmapped_list += ", ";
+            }
+            unmapped_list += fmt::format("{}", graph_data.target_nodes[idx]);
+        }
+        std::string error_msg = fmt::format(
+            "Mapping validation failed: {} target node(s) are not mapped to any global node: {}",
+            unmapped_targets.size(),
+            unmapped_list);
+        log_error(tt::LogFabric, "{}", error_msg);
+        if (warnings != nullptr) {
+            warnings->push_back(error_msg);
+        }
+        return false;
+    }
+
+    // Validate that all edges exist in the global graph
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        size_t global_idx = static_cast<size_t>(mapping[i]);
+        const TargetNode& target_node = graph_data.target_nodes[i];
+        const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+        // Check all neighbors
+        for (size_t neighbor : graph_data.target_adj_idx[i]) {
+            size_t neighbor_global_idx = static_cast<size_t>(mapping[neighbor]);
+            const TargetNode& neighbor_target = graph_data.target_nodes[neighbor];
+            const GlobalNode& neighbor_global = graph_data.global_nodes[neighbor_global_idx];
+
+            // Check if edge exists in global graph
+            bool edge_exists = std::binary_search(
+                graph_data.global_adj_idx[global_idx].begin(),
+                graph_data.global_adj_idx[global_idx].end(),
+                neighbor_global_idx);
+
+            if (!edge_exists) {
+                std::string error_msg = fmt::format(
+                    "Mapping validation failed: target graph has edge from node {} to {}, "
+                    "but global graph does not have corresponding edge from {} to {}. "
+                    "This indicates the mapping violates graph isomorphism requirements.",
+                    target_node,
+                    neighbor_target,
+                    global_node,
+                    neighbor_global);
+                log_error(tt::LogFabric, "{}", error_msg);
+                if (warnings != nullptr) {
+                    warnings->push_back(error_msg);
+                }
+                return false;
+            }
+        }
+    }
+
+    // Validate connection counts (collects warnings/errors)
+    if (warnings != nullptr) {
+        validate_connection_counts(mapping, graph_data, validation_mode, warnings);
+    }
+
+    // In STRICT mode, fail if any warnings were added (they're actually errors)
+    if (validation_mode == ConnectionValidationMode::STRICT && warnings != nullptr && !warnings->empty()) {
+        log_error(
+            tt::LogFabric,
+            "Mapping validation failed in strict mode: {} validation error(s) found",
+            warnings->size());
+        return false;
+    }
+
+    if (validation_mode == ConnectionValidationMode::RELAXED && warnings != nullptr && !warnings->empty()) {
+        log_info(
+            tt::LogFabric,
+            "Mapping validation completed in relaxed mode: {} warning(s) about channel count mismatches",
+            warnings->size());
+    }
+
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingValidator<TargetNode, GlobalNode>::print_mapping(
+    const std::vector<int>& mapping,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+    std::stringstream ss;
+    ss << "\n=== Current Mapping ===" << std::endl;
+    size_t mapped_count = 0;
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        if (mapping[i] != -1) {
+            size_t global_idx = static_cast<size_t>(mapping[i]);
+            ss << "  Target node " << graph_data.target_nodes[i] << " -> Global node "
+               << graph_data.global_nodes[global_idx] << std::endl;
+            mapped_count++;
+        } else {
+            ss << "  Target node " << graph_data.target_nodes[i] << " -> UNMAPPED" << std::endl;
+        }
+    }
+    ss << "Total mapped: " << mapped_count << " of " << mapping.size() << " target nodes" << std::endl;
+    ss << "========================" << std::endl;
+    log_info(tt::LogFabric, "{}", ss.str());
+}
+
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::build_result(
+    const std::vector<int>& mapping,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode validation_mode) {
+    MappingResult<TargetNode, GlobalNode> result;
+
+    // Always build bidirectional mappings, even if validation fails
+    // This allows users to see the closest/best mapping found for debugging
+    size_t mapped_count = 0;
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        if (mapping[i] != -1) {
+            size_t global_idx = static_cast<size_t>(mapping[i]);
+            const TargetNode& target_node = graph_data.target_nodes[i];
+            const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+            result.target_to_global[target_node] = global_node;
+            result.global_to_target[global_node] = target_node;
+            mapped_count++;
+        }
+    }
+
+    // Validate mapping and collect detailed error messages
+    std::vector<std::string> validation_warnings;
+    bool valid = validate_mapping(mapping, graph_data, validation_mode, &validation_warnings);
+
+    if (!valid) {
+        result.success = false;
+        if (!validation_warnings.empty()) {
+            // Use first validation error as main error message
+            result.error_message = validation_warnings[0];
+            log_error(
+                tt::LogFabric,
+                "Mapping validation failed: {} validation error(s) detected. First error: {}. "
+                "Saving partial mapping: {} of {} target nodes mapped",
+                validation_warnings.size(),
+                validation_warnings[0],
+                mapped_count,
+                graph_data.n_target);
+            // Add remaining as warnings
+            for (size_t i = 1; i < validation_warnings.size(); ++i) {
+                result.warnings.push_back(validation_warnings[i]);
+                log_error(tt::LogFabric, "Additional validation error: {}", validation_warnings[i]);
+            }
+        } else if (!state.error_message.empty()) {
+            // Fall back to search state error message
+            result.error_message = state.error_message;
+            log_error(
+                tt::LogFabric,
+                "Mapping failed during search: {}. Saving partial mapping: {} of {} target nodes mapped",
+                state.error_message,
+                mapped_count,
+                graph_data.n_target);
+        } else {
+            result.error_message = fmt::format(
+                "Mapping validation failed: incomplete or invalid mapping. {} of {} target nodes mapped",
+                mapped_count,
+                graph_data.n_target);
+            log_error(tt::LogFabric, "{}", result.error_message);
+        }
+
+        // Still compute statistics and copy search stats even if validation failed
+        // This helps users understand what was found
+        // Compute constraint statistics
+        const auto& valid_mappings = constraints.get_valid_mappings();
+        const auto& preferred_mappings = constraints.get_preferred_mappings();
+
+        size_t required_satisfied = 0;
+        size_t preferred_satisfied = 0;
+        size_t preferred_total = 0;
+
+        for (const auto& [target_node, global_node] : result.target_to_global) {
+            // Check required constraints
+            auto valid_it = valid_mappings.find(target_node);
+            if (valid_it != valid_mappings.end() && !valid_it->second.empty()) {
+                // This target node has required constraints
+                if (valid_it->second.find(global_node) != valid_it->second.end()) {
+                    required_satisfied++;
+                }
+            }
+
+            // Check preferred constraints
+            auto preferred_it = preferred_mappings.find(target_node);
+            if (preferred_it != preferred_mappings.end() && !preferred_it->second.empty()) {
+                preferred_total += preferred_it->second.size();
+                if (preferred_it->second.find(global_node) != preferred_it->second.end()) {
+                    preferred_satisfied++;
+                }
+            }
+        }
+
+        result.constraint_stats.required_satisfied = required_satisfied;
+        result.constraint_stats.preferred_satisfied = preferred_satisfied;
+        result.constraint_stats.preferred_total = preferred_total;
+
+        result.stats.dfs_calls = state.dfs_calls;
+        result.stats.backtrack_count = state.backtrack_count;
+        result.warnings = std::move(validation_warnings);
+
+        return result;
+    }
+
+    // Compute constraint statistics
+    const auto& valid_mappings = constraints.get_valid_mappings();
+    const auto& preferred_mappings = constraints.get_preferred_mappings();
+
+    size_t required_satisfied = 0;
+    size_t preferred_satisfied = 0;
+    size_t preferred_total = 0;
+
+    for (const auto& [target_node, global_node] : result.target_to_global) {
+        // Check required constraints
+        auto valid_it = valid_mappings.find(target_node);
+        if (valid_it != valid_mappings.end() && !valid_it->second.empty()) {
+            // This target node has required constraints
+            if (valid_it->second.find(global_node) != valid_it->second.end()) {
+                required_satisfied++;
+            }
+        }
+
+        // Check preferred constraints
+        auto preferred_it = preferred_mappings.find(target_node);
+        if (preferred_it != preferred_mappings.end() && !preferred_it->second.empty()) {
+            preferred_total += preferred_it->second.size();
+            if (preferred_it->second.find(global_node) != preferred_it->second.end()) {
+                preferred_satisfied++;
+            }
+        }
+    }
+
+    result.constraint_stats.required_satisfied = required_satisfied;
+    result.constraint_stats.preferred_satisfied = preferred_satisfied;
+    result.constraint_stats.preferred_total = preferred_total;
+
+    // Copy warnings (from relaxed mode channel count mismatches)
+    result.warnings = std::move(validation_warnings);
+
+    // Copy statistics
+    result.stats.dfs_calls = state.dfs_calls;
+    result.stats.backtrack_count = state.backtrack_count;
+
+    // Log success with statistics
+    log_info(
+        tt::LogFabric,
+        "Mapping validation succeeded: {} target nodes mapped to {} global nodes. "
+        "DFS calls: {}, backtracks: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
+        graph_data.n_target,
+        graph_data.n_global,
+        state.dfs_calls,
+        state.backtrack_count,
+        result.constraint_stats.required_satisfied,
+        result.constraint_stats.preferred_satisfied,
+        result.constraint_stats.preferred_total);
+
+    if (!result.warnings.empty()) {
+        log_info(
+            tt::LogFabric,
+            "Mapping completed with {} warning(s) about channel count mismatches (relaxed mode)",
+            result.warnings.size());
+    }
+
+    // Success!
+    result.success = true;
+    return result;
 }
 
 }  // namespace tt::tt_fabric::detail

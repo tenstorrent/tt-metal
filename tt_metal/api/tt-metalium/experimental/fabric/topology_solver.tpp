@@ -10,6 +10,8 @@
 #define TOPOLOGY_SOLVER_TPP
 
 #include <sstream>
+
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric {
@@ -36,6 +38,33 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(NodeId node) co
     // Return empty vector if node not found
     static const std::vector<NodeId> empty_vec;
     return empty_vec;
+}
+
+template <typename NodeId>
+void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) const {
+    std::stringstream ss;
+    ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
+    ss << "Total nodes: " << nodes_cache_.size() << std::endl;
+
+    for (const auto& node : nodes_cache_) {
+        const auto& neighbors = get_neighbors(node);
+        ss << "  Node " << node << " (degree " << neighbors.size() << "): ";
+        if (neighbors.empty()) {
+            ss << "no neighbors";
+        } else {
+            bool first = true;
+            for (const auto& neighbor : neighbors) {
+                if (!first) {
+                    ss << ", ";
+                }
+                first = false;
+                ss << neighbor;
+            }
+        }
+        ss << std::endl;
+    }
+    ss << "========================================" << std::endl;
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 
 // MappingConstraints trait constraint template method implementations
@@ -244,6 +273,47 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     result.error_message = "Topology solver not yet implemented";
 
     return result;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingResult<TargetNode, GlobalNode>::print(const AdjacencyGraph<TargetNode>& target_graph) const {
+    std::stringstream ss;
+    ss << "\n=== Mapping Result ===" << std::endl;
+    ss << "Success: " << (success ? "true" : "false") << std::endl;
+    if (!error_message.empty()) {
+        ss << "Error: " << error_message << std::endl;
+    }
+
+    ss << "\nMappings:" << std::endl;
+    const auto& target_nodes = target_graph.get_nodes();
+    size_t mapped_count = 0;
+    for (const auto& target_node : target_nodes) {
+        auto it = target_to_global.find(target_node);
+        if (it != target_to_global.end()) {
+            ss << "  Target node " << target_node << " -> Global node " << it->second << std::endl;
+            mapped_count++;
+        } else {
+            ss << "  Target node " << target_node << " -> UNMAPPED" << std::endl;
+        }
+    }
+    ss << "Total mapped: " << mapped_count << " of " << target_nodes.size() << " target nodes" << std::endl;
+
+    if (!warnings.empty()) {
+        ss << "\nWarnings (" << warnings.size() << "):" << std::endl;
+        for (const auto& warning : warnings) {
+            ss << "  - " << warning << std::endl;
+        }
+    }
+
+    ss << "\nStatistics:" << std::endl;
+    ss << "  DFS calls: " << stats.dfs_calls << std::endl;
+    ss << "  Backtracks: " << stats.backtrack_count << std::endl;
+    ss << "  Required constraints satisfied: " << constraint_stats.required_satisfied << std::endl;
+    ss << "  Preferred constraints satisfied: " << constraint_stats.preferred_satisfied << "/"
+       << constraint_stats.preferred_total << std::endl;
+
+    ss << "======================" << std::endl;
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 
 }  // namespace tt::tt_fabric
