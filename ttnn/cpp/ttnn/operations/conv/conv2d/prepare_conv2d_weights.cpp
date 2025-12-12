@@ -1177,8 +1177,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                         })),
                 device);
         }
-        auto [output_height, output_width] =
-            calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
         auto conv2d_slice_attr = get_conv2d_slice_attr(
             batch_size,
             input_height,
@@ -1233,12 +1231,14 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
         if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_height = min_output_slice_size;
-            input_height =
-                ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
+            input_height = ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) +
+                           kernel_size[0] - padding_n4[0];
+            padding_n4[1] = 0;  // No padding on bottom for sliced height
         } else {
             output_width = min_output_slice_size;
-            input_width =
-                ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+            input_width = ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) +
+                          kernel_size[1] - padding_n4[2];
+            padding_n4[3] = 0;  // No padding on right for sliced width
         }
     }
 
