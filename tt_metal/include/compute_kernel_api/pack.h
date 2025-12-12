@@ -118,6 +118,7 @@ ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 // clang-format on
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
+    set_g_pack(new_cb_id);
 }
 
 // clang-format off
@@ -142,6 +143,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 // clang-format on
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
+    set_g_pack(new_cb_id);
 }
 
 // clang-format off

@@ -110,12 +110,10 @@ template <bool to_from_int8 = false>
 ALWI void reconfigure_single_operand(uint32_t cb, bool is_srcA = true) {
     if (is_srcA) {
         reconfig_data_format_srca<to_from_int8>(g_state_tracker.srca_cb, cb);
-        g_state_tracker.srca_cb = cb;
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCA);
         return;
     } else {
         reconfig_data_format_srcb<to_from_int8>(g_state_tracker.srcb_cb, cb);
-        g_state_tracker.srcb_cb = cb;
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCB);
     }
 }
@@ -127,8 +125,6 @@ ALWI void reconfigure_dual_operand(uint32_t cb_a, uint32_t cb_b) {
 
     if (srcAChanged && srcBChanged) {
         reconfig_data_format<to_from_int8>(g_state_tracker.srca_cb, cb_a, g_state_tracker.srcb_cb, cb_b);
-        g_state_tracker.srca_cb = cb_a;
-        g_state_tracker.srcb_cb = cb_b;
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB);
         return;
     }
@@ -143,7 +139,6 @@ ALWI void reconfigure_dual_operand(uint32_t cb_a, uint32_t cb_b) {
 ALWI void reconfigure_pack_operand(uint32_t cb_out) {
     if (g_state_tracker.pack_cb != cb_out) {
         pack_reconfig_data_format(g_state_tracker.pack_cb, cb_out);
-        g_state_tracker.pack_cb = cb_out;
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_PACK);
     }
 }
@@ -153,9 +148,6 @@ ALWI void reconfig_all_operands(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     if (g_state_tracker.srca_cb != cb_a && g_state_tracker.srcb_cb != cb_b && g_state_tracker.pack_cb != cb_out) {
         reconfig_data_format<to_from_int8>(g_state_tracker.srca_cb, cb_a, g_state_tracker.srcb_cb, cb_b);
         pack_reconfig_data_format(g_state_tracker.pack_cb, cb_out);
-        g_state_tracker.srca_cb = cb_a;
-        g_state_tracker.srcb_cb = cb_b;
-        g_state_tracker.pack_cb = cb_out;
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK);
         return;
     }
