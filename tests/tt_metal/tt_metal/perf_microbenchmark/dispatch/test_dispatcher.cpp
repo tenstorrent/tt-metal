@@ -646,8 +646,8 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     }
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t dram_base = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
 
@@ -692,14 +692,14 @@ TEST_P(DispatchPagedWriteTestFixture, PagedWrite) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t dram_base = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base, nullptr, true, dram_data_size_words, cfg_);
 
     const auto buf_type = is_dram ? BufferType::DRAM : BufferType::L1;
-    const uint32_t page_size_alignment_bytes = device_->allocator()->get_alignment(buf_type);
-    const uint32_t num_banks = device_->allocator()->get_num_banks(buf_type);
+    const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(buf_type);
+    const uint32_t num_banks = device_->allocator_impl()->get_num_banks(buf_type);
     const tt::CoreType core_type = is_dram ? tt::CoreType::DRAM : tt::CoreType::WORKER;
 
     // Generate random page size
@@ -748,8 +748,8 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t dram_base = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
 
@@ -800,8 +800,8 @@ TEST_P(DispatchPackedWriteLargeTestFixture, WriteLargePackedMulticast) {
     const CoreRange worker_range = {first_worker, last_worker};
 
     // Get memory base addresses
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t dram_base = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
 
     // Setup DeviceData for validation
     DeviceData device_data(device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
