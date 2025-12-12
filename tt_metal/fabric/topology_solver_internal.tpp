@@ -360,15 +360,11 @@ int SearchHeuristic::compute_candidate_cost(
     }
 
     // Runtime optimization (add to cost = higher cost = worse)
+    // Note: global_deg >= target_deg is guaranteed by check_hard_constraints
     size_t target_deg = graph_data.target_deg[target_idx];
     size_t global_deg = graph_data.global_deg[global_idx];
-    size_t degree_gap = (global_deg >= target_deg) ? (global_deg - target_deg) : SIZE_MAX;
-    if (degree_gap != SIZE_MAX) {
-        cost += static_cast<int>(degree_gap * RUNTIME_WEIGHT);
-    } else {
-        // Shouldn't happen if check_hard_constraints was called, but handle gracefully
-        cost += static_cast<int>(SIZE_MAX);
-    }
+    size_t degree_gap = global_deg - target_deg;
+    cost += static_cast<int>(degree_gap * RUNTIME_WEIGHT);
 
     return cost;
 }
@@ -643,7 +639,6 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     size_t pos,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    SearchState& state,
     ConnectionValidationMode validation_mode) {
     // Base case: all target nodes assigned
     if (pos >= graph_data.n_target) {
@@ -651,30 +646,30 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     }
 
     // Periodic progress logging (similar to topology_mapper_utils.cpp)
-    state.dfs_calls++;
-    if ((state.dfs_calls & ((1u << 18) - 1)) == 0) {
+    state_.dfs_calls++;
+    if ((state_.dfs_calls & ((1u << 18) - 1)) == 0) {
         size_t assigned = 0;
-        for (auto v : state.mapping) {
+        for (auto v : state_.mapping) {
             assigned += (v != -1);
         }
         log_info(
             tt::LogFabric,
             "TopologySolver DFS progress: calls={}, assigned={}/{}, failed_states={}",
-            state.dfs_calls,
+            state_.dfs_calls,
             assigned,
             graph_data.n_target,
-            state.failed_states.size());
+            state_.failed_states.size());
     }
 
     // Check memoization cache
-    uint64_t state_hash = hash_state(state.mapping);
-    if (state.failed_states.find(state_hash) != state.failed_states.end()) {
+    uint64_t state_hash = hash_state(state_.mapping);
+    if (state_.failed_states.find(state_hash) != state_.failed_states.end()) {
         return false;
     }
 
     // Select next target node and generate ordered candidates
     auto selection = SearchHeuristic::select_and_generate_candidates(
-        graph_data, constraint_data, state.mapping, state.used, validation_mode);
+        graph_data, constraint_data, state_.mapping, state_.used, validation_mode);
 
     // Check if no unassigned nodes found (shouldn't happen if pos < n_target, but handle gracefully)
     if (selection.target_idx == SIZE_MAX || selection.candidates.empty()) {
@@ -684,7 +679,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             size_t remaining_targets = graph_data.n_target - pos;
             size_t remaining_global = graph_data.n_global;
             for (size_t i = 0; i < graph_data.n_global; ++i) {
-                if (state.used[i]) {
+                if (state_.used[i]) {
                     remaining_global--;
                 }
             }
@@ -695,8 +690,8 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
                 remaining_targets,
                 remaining_global);
             log_error(tt::LogFabric, "{}", error_msg);
-            if (state.error_message.empty()) {
-                state.error_message = error_msg;
+            if (state_.error_message.empty()) {
+                state_.error_message = error_msg;
             }
         } else {
             // No unassigned target nodes found (shouldn't happen)
@@ -704,11 +699,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
                 "Search error: no unassigned target nodes found, but {} nodes still need to be placed",
                 graph_data.n_target - pos);
             log_error(tt::LogFabric, "{}", error_msg);
-            if (state.error_message.empty()) {
-                state.error_message = error_msg;
+            if (state_.error_message.empty()) {
+                state_.error_message = error_msg;
             }
         }
-        state.failed_states.insert(state_hash);
+        state_.failed_states.insert(state_hash);
         return false;
     }
 
@@ -718,43 +713,47 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     for (size_t global_idx : selection.candidates) {
         // Check local consistency (edges to already-mapped neighbors)
         if (!ConsistencyChecker::check_local_consistency(
-                target_idx, global_idx, graph_data, state.mapping, validation_mode)) {
+                target_idx, global_idx, graph_data, state_.mapping, validation_mode)) {
             continue;  // Skip invalid candidate
         }
 
         // Check forward consistency (future neighbors have viable options)
         if (!ConsistencyChecker::check_forward_consistency(
-                target_idx, global_idx, graph_data, constraint_data, state.mapping, state.used, validation_mode)) {
+                target_idx, global_idx, graph_data, constraint_data, state_.mapping, state_.used, validation_mode)) {
             continue;  // Skip candidate that leaves no options
         }
 
         // Assign candidate
-        state.mapping[target_idx] = static_cast<int>(global_idx);
-        state.used[global_idx] = true;
+        state_.mapping[target_idx] = static_cast<int>(global_idx);
+        state_.used[global_idx] = true;
 
         // Recursive call
-        if (dfs_recursive(pos + 1, graph_data, constraint_data, state, validation_mode)) {
+        if (dfs_recursive(pos + 1, graph_data, constraint_data, validation_mode)) {
             return true;  // Success!
         }
 
         // Backtrack
-        state.mapping[target_idx] = -1;
-        state.used[global_idx] = false;
-        state.backtrack_count++;
+        state_.mapping[target_idx] = -1;
+        state_.used[global_idx] = false;
+        state_.backtrack_count++;
     }
 
     // All candidates failed - mark state as failed
-    state.failed_states.insert(state_hash);
+    state_.failed_states.insert(state_hash);
     return false;
 }
 
 template <typename TargetNode, typename GlobalNode>
 bool DFSSearchEngine<TargetNode, GlobalNode>::search(
-    size_t assigned_count,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    SearchState& state,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode validation_mode) {
+    // Reset internal state
+    state_ = SearchState();
+    state_.mapping.resize(graph_data.n_target, -1);
+    state_.used.resize(graph_data.n_global, false);
+
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging
     auto build_degree_histogram = [](const std::vector<size_t>& degrees) -> std::string {
@@ -787,17 +786,6 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
         target_deg_hist,
         global_deg_hist);
 
-    // Validate initial state
-    if (assigned_count > graph_data.n_target) {
-        std::string error_msg = fmt::format(
-            "Invalid search state: {} target nodes already assigned, but target graph only has {} nodes",
-            assigned_count,
-            graph_data.n_target);
-        log_error(tt::LogFabric, "{}", error_msg);
-        state.error_message = error_msg;
-        return false;
-    }
-
     // Check if global graph has enough nodes
     if (graph_data.n_global < graph_data.n_target) {
         std::string error_msg = fmt::format(
@@ -805,40 +793,62 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             graph_data.n_target,
             graph_data.n_global);
         log_error(tt::LogFabric, "{}", error_msg);
-        state.error_message = error_msg;
+        state_.error_message = error_msg;
         return false;
     }
 
-    // Initialize state if needed
-    if (state.mapping.size() != graph_data.n_target) {
-        state.mapping.resize(graph_data.n_target, -1);
-    }
-    if (state.used.size() != graph_data.n_global) {
-        state.used.resize(graph_data.n_global, false);
-    }
-
-    // Verify assigned_count matches actual assignments
-    size_t actual_assigned = 0;
+    // Pre-assign nodes from required constraints (pinnings)
+    size_t assigned_count = 0;
+    const auto& valid_mappings = constraints.get_valid_mappings();
     for (size_t i = 0; i < graph_data.n_target; ++i) {
-        if (state.mapping[i] != -1) {
-            actual_assigned++;
-        }
-    }
+        const auto& target_node = graph_data.target_nodes[i];
+        auto it = valid_mappings.find(target_node);
+        if (it != valid_mappings.end() && it->second.size() == 1) {
+            // This target node has exactly one required constraint (pinning)
+            const GlobalNode& required_global = *it->second.begin();
+            auto global_it = graph_data.global_to_idx.find(required_global);
+            if (global_it != graph_data.global_to_idx.end()) {
+                size_t global_idx = global_it->second;
 
-    if (actual_assigned != assigned_count) {
-        std::string error_msg = fmt::format(
-            "Invalid search state: expected {} target nodes assigned, but found {} in mapping",
-            assigned_count,
-            actual_assigned);
-        log_error(tt::LogFabric, "{}", error_msg);
-        state.error_message = error_msg;
-        return false;
+                // Validate that this pre-assignment is consistent with already-assigned neighbors
+                for (size_t neighbor : graph_data.target_adj_idx[i]) {
+                    if (state_.mapping[neighbor] != -1) {
+                        size_t neighbor_global_idx = static_cast<size_t>(state_.mapping[neighbor]);
+                        // Check if edge exists between global_idx and neighbor_global_idx
+                        bool edge_exists = std::binary_search(
+                            graph_data.global_adj_idx[global_idx].begin(),
+                            graph_data.global_adj_idx[global_idx].end(),
+                            neighbor_global_idx);
+                        if (!edge_exists) {
+                            std::string error_msg = fmt::format(
+                                "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                                "but target node {} (adjacent to {}) is already mapped to global node {}, "
+                                "and global nodes {} and {} are not adjacent. This violates graph isomorphism requirements.",
+                                target_node,
+                                required_global,
+                                graph_data.target_nodes[neighbor],
+                                target_node,
+                                graph_data.global_nodes[neighbor_global_idx],
+                                required_global,
+                                graph_data.global_nodes[neighbor_global_idx]);
+                            log_error(tt::LogFabric, "{}", error_msg);
+                            state_.error_message = error_msg;
+                            return false;
+                        }
+                    }
+                }
+
+                state_.mapping[i] = static_cast<int>(global_idx);
+                state_.used[global_idx] = true;
+                assigned_count++;
+            }
+        }
     }
 
     // Check if enough unused nodes remain in global graph
     size_t unused_count = 0;
     for (size_t i = 0; i < graph_data.n_global; ++i) {
-        if (!state.used[i]) {
+        if (!state_.used[i]) {
             unused_count++;
         }
     }
@@ -849,12 +859,12 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             remaining_targets,
             unused_count);
         log_error(tt::LogFabric, "{}", error_msg);
-        state.error_message = error_msg;
+        state_.error_message = error_msg;
         return false;
     }
 
     // Start DFS from current position
-    bool found = dfs_recursive(assigned_count, graph_data, constraint_data, state, validation_mode);
+    bool found = dfs_recursive(assigned_count, graph_data, constraint_data, validation_mode);
 
     if (!found && assigned_count == 0) {
         // Search failed from the beginning - provide summary
@@ -863,8 +873,8 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             graph_data.n_target,
             graph_data.n_global);
         log_error(tt::LogFabric, "{}", error_msg);
-        if (state.error_message.empty()) {
-            state.error_message = error_msg;
+        if (state_.error_message.empty()) {
+            state_.error_message = error_msg;
         }
     }
 

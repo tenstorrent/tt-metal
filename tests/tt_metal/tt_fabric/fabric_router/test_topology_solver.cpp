@@ -937,17 +937,13 @@ TEST_F(TopologySolverTest, DFSSearchEngineBasic) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(2, -1);
-    state.used.resize(3, false);
-
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
 
     // Should find a mapping (e.g., 1->10, 2->11)
     EXPECT_TRUE(found);
+    const auto& state = engine.get_state();
     EXPECT_GE(state.dfs_calls, 1u);
 
     // Verify mapping is valid
@@ -993,17 +989,13 @@ TEST_F(TopologySolverTest, DFSSearchEngineWithConstraints) {
     constraints.add_required_constraint(1, 10);
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(2, -1);
-    state.used.resize(3, false);
-
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
 
     // Should find a mapping
     EXPECT_TRUE(found);
+    const auto& state = engine.get_state();
 
     // Verify constraint is satisfied: node 1 (index 0) should map to global node 10 (index 0)
     EXPECT_EQ(state.mapping[0], 0);
@@ -1034,14 +1026,9 @@ TEST_F(TopologySolverTest, DFSSearchEngineNoSolution) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(3, -1);
-    state.used.resize(2, false);
-
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
 
     // Should not find a mapping (target graph too large)
     EXPECT_FALSE(found);
@@ -1071,16 +1058,12 @@ TEST_F(TopologySolverTest, DFSSearchEngineStrictMode) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(2, -1);
-    state.used.resize(3, false);
-
     // Run search in STRICT mode - should find mapping (1->10, 2->12) since 12 has 2 channels
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::STRICT);
+    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::STRICT);
 
     EXPECT_TRUE(found);
+    const auto& state = engine.get_state();
     // Verify mapping uses node with sufficient channels
     size_t global_idx1 = static_cast<size_t>(state.mapping[0]);
     size_t global_idx2 = static_cast<size_t>(state.mapping[1]);
@@ -1115,16 +1098,12 @@ TEST_F(TopologySolverTest, DFSSearchEngineRelaxedModeChannelPreference) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(2, -1);
-    state.used.resize(4, false);
-
     // Run search in RELAXED mode
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
 
     EXPECT_TRUE(found);
+    const auto& state = engine.get_state();
 
     // Verify mapping: node 1 should map to 10, node 2 should map to a neighbor of 10
     size_t global_idx1 = static_cast<size_t>(state.mapping[0]);  // target node 1 -> global node
@@ -1369,14 +1348,10 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
 
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
-
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    const auto& state = search_engine.get_state();
 
     // This should succeed - a 1D ring can be embedded in a 2D mesh
     // (the ring can follow a cycle path through the mesh)
@@ -1447,68 +1422,64 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
 TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
     using namespace tt::tt_fabric::detail;
 
-    // Create global graph: 2D mesh of 4x8 = 32 nodes
-    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+    // Test 1: 1D chain on 3x3 mesh (should succeed - no constraints)
+    {
+        auto global_graph = create_2d_mesh_graph<TestGlobalNode>(3, 3);
+        auto target_graph = create_1d_chain_graph<TestTargetNode>(9);
 
-    // Create target graph: 1D chain of 32 nodes
-    auto target_graph = create_1d_chain_graph<TestTargetNode>(32);
+        GraphIndexData graph_data(target_graph, global_graph);
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Build graph data and constraints
-    GraphIndexData graph_data(target_graph, global_graph);
-    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+        bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+        const auto& state = search_engine.get_state();
 
-    // Add conflicting pinnings that make mapping impossible
-    // Pin first node to top-left corner (node 0)
-    constraints.add_required_constraint(0, 0);
-    // Pin second node (which is adjacent to node 0 in target graph) to a node that's NOT adjacent to node 0
-    // Node 0's neighbors in 4x8 mesh are: 1 (right), 8 (down)
-    // Let's pin target node 1 to global node 15 (which is row 1, col 7 - far from node 0 and not adjacent)
-    constraints.add_required_constraint(1, 15);
+        EXPECT_TRUE(found) << "1D chain of 9 nodes should map to 3x3 mesh (9 nodes)";
+        EXPECT_EQ(state.mapping.size(), 9u) << "All 9 nodes should be mapped";
+    }
 
-    // Verify that node 15 is not adjacent to node 0 in the global graph
-    const auto& neighbors_of_0 = global_graph.get_neighbors(0);
-    bool node_15_is_neighbor = std::find(neighbors_of_0.begin(), neighbors_of_0.end(), 15) != neighbors_of_0.end();
-    EXPECT_FALSE(node_15_is_neighbor) << "Node 15 should not be adjacent to node 0 in 4x8 mesh";
+    // Test 2: 1D ring on 3x3 mesh (should fail - ring requires cycle, 3x3 mesh may not support it)
+    {
+        auto global_graph = create_2d_mesh_graph<TestGlobalNode>(3, 3);
+        auto target_graph = create_1d_ring_graph<TestTargetNode>(9);
 
-    // Also verify that target nodes 0 and 1 are adjacent in the target graph
-    const auto& neighbors_of_target_0 = target_graph.get_neighbors(0);
-    bool target_1_is_neighbor =
-        std::find(neighbors_of_target_0.begin(), neighbors_of_target_0.end(), 1) != neighbors_of_target_0.end();
-    EXPECT_TRUE(target_1_is_neighbor) << "Target nodes 0 and 1 should be adjacent in 1D chain";
+        GraphIndexData graph_data(target_graph, global_graph);
+        MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+        ConstraintIndexData constraint_data(constraints, graph_data);
 
-    ConstraintIndexData constraint_data(constraints, graph_data);
+        DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+        bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+        const auto& state = search_engine.get_state();
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
+        if (found) {
+            // Unexpected success - print debug information
+            log_error(tt::LogFabric, "Negative test unexpectedly succeeded - printing debug information");
 
-    // Run DFS search
-    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+            // Print adjacency graphs
+            log_info(tt::LogFabric, "=== Target Graph Adjacency (1D Ring) ===");
+            target_graph.print_adjacency_map("Target Graph");
 
-    // This should fail - we've pinned two adjacent nodes in the target graph
-    // to non-adjacent nodes in the global graph
-    EXPECT_FALSE(found) << "Mapping should fail due to conflicting pinnings";
+            log_info(tt::LogFabric, "=== Global Graph Adjacency (3x3 Mesh) ===");
+            global_graph.print_adjacency_map("Global Graph");
 
-    if (!found) {
-        // Verify error message indicates the problem
-        EXPECT_FALSE(state.error_message.empty()) << "Should have error message";
-        log_info(
-            tt::LogFabric,
-            "Negative stress test completed as expected: DFS calls={}, backtracks={}, error={}",
-            state.dfs_calls,
-            state.backtrack_count,
-            state.error_message);
+            // Print mapping
+            log_info(tt::LogFabric, "=== Mapping Result ===");
+            MappingValidator<TestTargetNode, TestGlobalNode>::print_mapping(state.mapping, graph_data);
 
-        // The solver should have detected the conflict early or during search
-        // Partial mapping may or may not be saved depending on when the failure occurs
-        // The important thing is that it failed as expected
-        EXPECT_GE(state.dfs_calls, 0u) << "Should have attempted search";
-    } else {
-        // If it somehow succeeded, that's unexpected
-        log_error(tt::LogFabric, "Negative test unexpectedly succeeded - this indicates a bug");
-        FAIL() << "Mapping should have failed due to conflicting pinnings";
+            FAIL() << "1D ring of 9 nodes should not map to 3x3 mesh, but it succeeded. Check logs above for details.";
+        }
+
+        EXPECT_FALSE(found) << "1D ring of 9 nodes should fail to map to 3x3 mesh";
+
+        if (!found) {
+            log_info(
+                tt::LogFabric,
+                "Negative stress test completed as expected: DFS calls={}, backtracks={}, error={}",
+                state.dfs_calls,
+                state.backtrack_count,
+                state.error_message.empty() ? "(no error message)" : state.error_message);
+        }
     }
 }
 
@@ -1536,14 +1507,10 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedTargetGraph) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
-
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    const auto& state = search_engine.get_state();
 
     // This should succeed - two disconnected chains can map to one connected chain
     EXPECT_TRUE(found) << "Disconnected target graph should map to connected global graph";
@@ -1613,14 +1580,10 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedGlobalGraph) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
-
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    const auto& state = search_engine.get_state();
 
     // This should fail - a connected chain cannot map to disconnected components
     // because the chain requires a path between all nodes
@@ -1659,14 +1622,10 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Success) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
-
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    const auto& state = search_engine.get_state();
 
     // This should succeed - disconnected target can map to disconnected global
     EXPECT_TRUE(found) << "Disconnected target graph should map to disconnected global graph with matching structure";
@@ -1715,14 +1674,10 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
     ConstraintIndexData constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
-
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    const auto& state = search_engine.get_state();
 
     // This should fail - target has 6 nodes but global only has 5
     EXPECT_FALSE(found) << "Target graph with more nodes than global should fail";
@@ -1736,6 +1691,277 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
             state.backtrack_count,
             state.error_message);
     }
+}
+
+// Tests for public API: solve_topology_mapping
+TEST_F(TopologySolverTest, SolveTopologyMapping_BasicSuccess) {
+    // Create simple target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Basic mapping should succeed";
+    EXPECT_TRUE(result.error_message.empty()) << "Should have no error message on success";
+
+    // Verify mappings
+    EXPECT_EQ(result.target_to_global.size(), 2u) << "Should map both target nodes";
+    EXPECT_EQ(result.global_to_target.size(), 2u) << "Should have bidirectional mappings";
+
+    // Verify all target nodes are mapped
+    EXPECT_NE(result.target_to_global.find(1), result.target_to_global.end());
+    EXPECT_NE(result.target_to_global.find(2), result.target_to_global.end());
+
+    // Verify mapped nodes are connected in global graph
+    TestGlobalNode global1 = result.target_to_global.at(1);
+    TestGlobalNode global2 = result.target_to_global.at(2);
+    const auto& neighbors1 = global_graph.get_neighbors(global1);
+    bool connected = std::find(neighbors1.begin(), neighbors1.end(), global2) != neighbors1.end();
+    EXPECT_TRUE(connected) << "Mapped nodes should be connected in global graph";
+
+    // Verify statistics
+    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_WithRequiredConstraints) {
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add required constraint: target node 1 must map to global node 10
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with required constraint should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify constraint statistics
+    EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy 1 required constraint";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_WithPreferredConstraints) {
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add preferred constraint: prefer target node 1 -> global node 10
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_preferred_constraint(1, 10);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with preferred constraint should succeed";
+
+    // Preferred constraint may or may not be satisfied (it's just a preference)
+    // But we should have statistics about it
+    EXPECT_GE(result.constraint_stats.preferred_total, 1u) << "Should have preferred constraints";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_StrictMode) {
+    // Create target graph: 1 -> 2 (requires 2 channels)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2};  // 2 connections
+    target_adj_map[2] = {1, 1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 (1 channel) and 10 -> 12 (2 channels)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 12, 12};  // 1 to 11, 2 to 12
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {10, 10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve in STRICT mode - should find mapping using node with sufficient channels
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::STRICT);
+
+    // Should succeed (node 12 has 2 channels)
+    EXPECT_TRUE(result.success) << "Strict mode should succeed when sufficient channels exist";
+
+    // Verify one of the mapped nodes is 12 (which has 2 channels)
+    TestGlobalNode global1 = result.target_to_global.at(1);
+    TestGlobalNode global2 = result.target_to_global.at(2);
+    EXPECT_TRUE(global1 == 12 || global2 == 12) << "Should use node with sufficient channels";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_RelaxedModeWithWarnings) {
+    // Create target graph: 1 -> 2 (requires 2 channels)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2};  // 2 connections
+    target_adj_map[2] = {1, 1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 (only 1 channel, insufficient)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve in RELAXED mode - should succeed but with warnings
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed (relaxed mode allows channel mismatches)
+    EXPECT_TRUE(result.success) << "Relaxed mode should succeed even with insufficient channels";
+
+    // Should have warnings about channel count mismatches
+    EXPECT_FALSE(result.warnings.empty()) << "Should have warnings about channel count mismatches";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_FailureCase) {
+    // Create target graph: 1 -> 2 -> 3 (3 nodes)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 (only 2 nodes, can't fit 3-node path)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Solve - should fail
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should fail
+    EXPECT_FALSE(result.success) << "Should fail when target graph is too large";
+    EXPECT_FALSE(result.error_message.empty()) << "Should have error message on failure";
+
+    // Partial mapping should still be available
+    EXPECT_LE(result.target_to_global.size(), 3u) << "May have partial mapping";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_ConflictingConstraints) {
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add conflicting required constraints: node 1 -> 10, node 2 -> 12
+    // But 10 and 12 are not adjacent, so this should fail
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    constraints.add_required_constraint(2, 12);  // 12 is not adjacent to 10
+
+    // Solve - should fail due to conflicting constraints
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should fail
+    EXPECT_FALSE(result.success) << "Should fail with conflicting constraints";
+    EXPECT_FALSE(result.error_message.empty()) << "Should have error message";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_ResultStructure) {
+    // Create simple target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add both required and preferred constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    constraints.add_preferred_constraint(2, 11);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Verify result structure
+    EXPECT_TRUE(result.success);
+    EXPECT_TRUE(result.error_message.empty());
+
+    // Verify bidirectional mappings are consistent
+    for (const auto& [target, global] : result.target_to_global) {
+        EXPECT_EQ(result.global_to_target.at(global), target) << "Bidirectional mappings should be consistent";
+    }
+
+    // Verify statistics are populated
+    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have DFS calls";
+    EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+    EXPECT_EQ(result.constraint_stats.required_satisfied, 1u) << "Should satisfy required constraint";
+    EXPECT_GE(result.constraint_stats.preferred_satisfied, 0u) << "Should track preferred constraints";
 }
 
 }  // namespace tt::tt_fabric
