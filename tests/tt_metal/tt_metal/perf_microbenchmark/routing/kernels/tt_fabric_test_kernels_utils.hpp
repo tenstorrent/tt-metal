@@ -1051,7 +1051,17 @@ struct SenderKernelTrafficConfig {
                     connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
         }
-
+        DPRINT << "Sending header" << ENDL();
+        DPRINT << "Header rb0: " << (uint32_t)packet_header->route_buffer[0] << ENDL();
+        DPRINT << "Header rb1: " << (uint32_t)packet_header->route_buffer[1] << ENDL();
+        DPRINT << "Header rb2: " << (uint32_t)packet_header->route_buffer[2] << ENDL();
+        DPRINT << "Header rb3: " << (uint32_t)packet_header->route_buffer[3] << ENDL();
+        DPRINT << "Dest Start Chip ID: " << (uint32_t)packet_header->dst_start_chip_id << ENDL();
+        DPRINT << "Dest Start Mesh ID: " << (uint32_t)packet_header->dst_start_mesh_id << ENDL();
+        // DPRINT << "Header rb: " << packet_header->route_buffer[4] << ENDL;
+        // DPRINT << "Header rb: " << packet_header->route_buffer[5] << ENDL;
+        // DPRINT << "Header rb: " << packet_header->route_buffer[6] << ENDL;
+        // DPRINT << "Header rb: " << packet_header->route_buffer[7] << ENDL;
         // Send header
         connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
             connection_ptr_, connection_idx_, (uint32_t)packet_header);

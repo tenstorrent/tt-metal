@@ -503,7 +503,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::Os});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
     }

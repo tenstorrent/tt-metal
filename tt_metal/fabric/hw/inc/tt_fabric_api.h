@@ -198,10 +198,27 @@ bool fabric_set_unicast_route(
     }
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
     auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    DPRINT << "FSR: my_mesh=" << (uint32_t)routing_table->my_mesh_id << ENDL();
+    DPRINT << "FSR: my_chip=" << (uint32_t)routing_table->my_device_id << ENDL();
+    DPRINT << "FSR: dst_mesh=" << (uint32_t)dst_mesh_id << ENDL();
+    DPRINT << "FSR: dst_chip=" << (uint32_t)dst_dev_id << ENDL();
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
         auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
+        DPRINT << "FSR: exit_table[0]=" << (uint32_t)exit_node_table[0] << ENDL();
+        DPRINT << "FSR: exit_table[1]=" << (uint32_t)exit_node_table[1] << ENDL();
+        DPRINT << "FSR: exit_table[2]=" << (uint32_t)exit_node_table[2] << ENDL();
+        DPRINT << "FSR: exit_table[3]=" << (uint32_t)exit_node_table[3] << ENDL();
+        DPRINT << "FSR: inter_dir[0]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(0)
+               << ENDL();
+        DPRINT << "FSR: inter_dir[1]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(1)
+               << ENDL();
+        DPRINT << "FSR: inter_dir[2]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(2)
+               << ENDL();
+        DPRINT << "FSR: inter_dir[3]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(3)
+               << ENDL();
         dst_dev_id = exit_node_table[dst_mesh_id];
-        dst_mesh_id = routing_table->my_mesh_id;
+        DPRINT << "FSR: exit_chip=" << (uint32_t)dst_dev_id << ENDL();
+        // dst_mesh_id = routing_table->my_mesh_id;
     }
     bool ok = false;
     if constexpr (called_from_router) {
@@ -224,19 +241,24 @@ bool fabric_set_unicast_route(
             }
         };
         eth_chan_directions next_direction = get_next_hop_router_direction(dst_mesh_id, dst_dev_id);
+        DPRINT << "FSR: next_dir=" << (uint32_t)next_direction << ENDL();
         if (next_direction < eth_chan_directions::COUNT) {
             // when arrive at another mesh, but dst chip is not itself. -> go to next chip -> prepend FORWARD_<DIR> ->
             // add route
+            DPRINT << "FSR: Not exit chip, routing to it" << ENDL();
             ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
         } else {
+            DPRINT << "FSR: I am the exit chip" << ENDL();
             if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
                 // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done
+                DPRINT << "FSR: At dest mesh, drain local" << ENDL();
                 set_forward(my_direction);
             } else {
                 // when arrive at non-destination mesh, but dst chip is itself (exit node). -> go to next mesh ->
                 // prepend FORWARD_<DIR> -> done
                 next_direction =
                     get_next_hop_router_direction(packet_header->dst_start_mesh_id, packet_header->dst_start_chip_id);
+                DPRINT << "FSR: Exit to mesh dir=" << (uint32_t)next_direction << ENDL();
                 set_forward(next_direction);
             }
             packet_header->route_buffer[1] = LowLatencyMeshRoutingFields::NOOP;

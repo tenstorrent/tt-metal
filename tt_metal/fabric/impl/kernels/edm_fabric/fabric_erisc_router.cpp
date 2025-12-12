@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "debug/dprint.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
@@ -1623,6 +1624,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
+                uint32_t* pkt_header_ptr = reinterpret_cast<uint32_t*>(packet_header);
+                DPRINT << "Header rb0: " << (uint32_t)packet_header->route_buffer[0] << ENDL();
+                DPRINT << "Header rb1: " << (uint32_t)packet_header->route_buffer[1] << ENDL();
+                DPRINT << "Dest Start Chip ID: " << (uint32_t)packet_header->dst_start_chip_id << ENDL();
+                DPRINT << "Dest Start Mesh ID: " << (uint32_t)packet_header->dst_start_mesh_id << ENDL();
                 receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,

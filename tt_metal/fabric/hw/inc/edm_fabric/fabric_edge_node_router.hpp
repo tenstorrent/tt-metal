@@ -12,6 +12,10 @@ FORCE_INLINE uint32_t recompute_path(
     PACKET_HEADER_TYPE* packet_header,
     ROUTING_FIELDS_TYPE& cached_routing_fields,
     const tt::tt_fabric::routing_l1_info_t& routing_table) {
+    DPRINT << "Before recompute: Header rb0: " << (uint32_t)packet_header->route_buffer[0] << ENDL();
+    DPRINT << "Before recompute: Header rb1: " << (uint32_t)packet_header->route_buffer[1] << ENDL();
+    DPRINT << "Before recompute: Header rb2: " << (uint32_t)packet_header->route_buffer[2] << ENDL();
+    DPRINT << "Before recompute: Header rb3: " << (uint32_t)packet_header->route_buffer[3] << ENDL();
     if (packet_header->mcast_params_64 != 0 && packet_header->dst_start_mesh_id == routing_table.my_mesh_id) {
         fabric_set_mcast_route(packet_header);
     } else {
@@ -20,6 +24,11 @@ FORCE_INLINE uint32_t recompute_path(
     }
     cached_routing_fields.hop_index = 0;
     packet_header->routing_fields.hop_index = 0;
+
+    DPRINT << "After recompute: Header rb0: " << (uint32_t)packet_header->route_buffer[0] << ENDL();
+    DPRINT << "After recompute: Header rb1: " << (uint32_t)packet_header->route_buffer[1] << ENDL();
+    DPRINT << "After recompute: Header rb2: " << (uint32_t)packet_header->route_buffer[2] << ENDL();
+    DPRINT << "After recompute: Header rb3: " << (uint32_t)packet_header->route_buffer[3] << ENDL();
     return (uint32_t)packet_header->route_buffer[0];
 }
 
@@ -30,7 +39,6 @@ FORCE_INLINE uint32_t get_cmd_with_mesh_boundary_adjustment(
     uint32_t hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
     if constexpr (is_intermesh_router_on_edge || is_intramesh_router_on_edge) {
         if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-            // Arrive at another mesh
             hop_cmd = recompute_path(packet_header, cached_routing_fields, routing_table);
         } else {
             if constexpr (is_intramesh_router_on_edge) {

@@ -163,6 +163,20 @@ Tests:
             destination:
               device: [3, 1]
 
+  - name: "InterMeshTest"
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      size: 2048
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [3, 0]
+
   - name: "InterMeshFourCorners"
     sync: true
     enable_flow_control: true
