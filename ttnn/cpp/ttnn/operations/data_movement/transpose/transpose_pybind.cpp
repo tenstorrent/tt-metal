@@ -29,7 +29,7 @@ void bind_transpose(py::module& module) {
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`dim1`: First dim of transpose.
                 * :attr:`dim2`: Second dim of transpose.
-                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be `0.0`.
+                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, no padding is performed and values in the padded region may be uninitialized.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
