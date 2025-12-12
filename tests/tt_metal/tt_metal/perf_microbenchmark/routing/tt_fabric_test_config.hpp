@@ -32,8 +32,7 @@
 #include <tt-metalium/hal.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 // Helper template for static_assert in visitor - must be defined before use
 template <class>
@@ -1678,5 +1677,4 @@ private:
     }
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

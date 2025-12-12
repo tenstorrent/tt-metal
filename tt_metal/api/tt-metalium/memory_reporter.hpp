@@ -15,11 +15,9 @@
 
 #include <tt-metalium/allocator.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class BufferType;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

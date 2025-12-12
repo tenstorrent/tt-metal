@@ -9,9 +9,7 @@
 
 namespace ttnn {
 
-namespace operations {
-
-namespace embedding {
+namespace operations::embedding {
 
 struct EmbeddingOperation {
     static ttnn::Tensor invoke(
@@ -25,8 +23,7 @@ struct EmbeddingOperation {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-}  // namespace embedding
-}  // namespace operations
+}  // namespace operations::embedding
 
 constexpr auto embedding =
     ttnn::register_operation<"ttnn::embedding", ttnn::operations::embedding::EmbeddingOperation>();

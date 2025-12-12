@@ -182,16 +182,9 @@ void MAIN {
                                             tt::CBIndex::c_1,
                                             in0_index,
                                             in1_index,
-                                            dst_index,
-                                            false /* transpose */);
+                                            dst_index);
                                     } else {
-                                        matmul_tiles(
-                                            in0_cb,
-                                            tt::CBIndex::c_1,
-                                            in0_index,
-                                            in1_index,
-                                            dst_index,
-                                            false /* transpose */);
+                                        matmul_tiles(in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index);
                                     }
                                     in1_index_inner_dim_offset += in1_per_core_w;
                                 }

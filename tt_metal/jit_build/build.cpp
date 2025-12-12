@@ -361,9 +361,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
         // Lop off the right side from the last "."
-        string stub = src.substr(0, src.find_last_of("."));
+        string stub = src.substr(0, src.find_last_of('.'));
         // Lop off the leading path
-        stub = stub.substr(stub.find_last_of("/") + 1, stub.length());
+        stub = stub.substr(stub.find_last_of('/') + 1, stub.length());
         this->objs_.push_back(stub + ".o");
     }
 

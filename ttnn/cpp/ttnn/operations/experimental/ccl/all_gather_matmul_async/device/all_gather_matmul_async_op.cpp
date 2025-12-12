@@ -14,8 +14,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
-namespace ccl {
-namespace all_gather_matmul_async_detail {
+
+namespace ccl::all_gather_matmul_async_detail {
 
 AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const ttnn::AllGatherAsync& all_gather_struct_input,
@@ -26,8 +26,7 @@ AllGatherMatmulAsync create_all_gather_matmul_async_struct(
         all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, devices};
 }
 
-}  // namespace all_gather_matmul_async_detail
-}  // namespace ccl
+}  // namespace ccl::all_gather_matmul_async_detail
 
 void AllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
@@ -213,9 +212,7 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> all_gather_matmul_async(
     const ttnn::Tensor& input_tensor,
@@ -316,8 +313,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         optional_output_tensors);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

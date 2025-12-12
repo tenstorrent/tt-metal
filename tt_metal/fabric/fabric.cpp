@@ -29,11 +29,9 @@
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 

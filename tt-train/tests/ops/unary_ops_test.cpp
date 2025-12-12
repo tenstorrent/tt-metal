@@ -5,8 +5,16 @@
 #include "ops/unary_ops.hpp"
 
 #include <gtest/gtest.h>
+#include <sys/random.h>
 
+#include <algorithm>
 #include <core/ttnn_all_includes.hpp>
+#include <cstdint>
+#include <limits>
+#include <random>
+#include <ranges>
+#include <span>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -15,6 +23,46 @@
 #include "ops/losses.hpp"
 
 namespace ttml::ops::tests {
+
+namespace {
+
+void load_random_data_from_os(std::span<float> data) {
+    constexpr auto max_uint32 = std::numeric_limits<std::uint32_t>::max();
+
+    // Get writable bytes from the float span
+    auto float_bytes = std::as_writable_bytes(data);
+
+    // Use getrandom to fill with random bytes from OS
+    std::size_t total_read = 0;
+
+    while (total_read < float_bytes.size()) {
+        const auto remaining_bytes = float_bytes.subspan(total_read);
+        // getrandom expects void* and size_t - std::byte* can be safely cast to void*
+        const auto bytes_read = getrandom(static_cast<void*>(remaining_bytes.data()), remaining_bytes.size(), 0);
+
+        if (bytes_read < 0) {
+            // Fallback to std::random_device if getrandom fails
+            std::random_device rd;
+            std::uniform_int_distribution<std::uint8_t> dist;
+            std::ranges::generate(remaining_bytes, [&]() { return static_cast<std::byte>(dist(rd)); });
+            break;
+        }
+        total_read += static_cast<std::size_t>(bytes_read);
+    }
+
+    // Convert random bytes to floats in range [-1.0, 1.0]
+    // Use std::as_bytes to safely reinterpret as uint32_t values
+    const auto uint32_bytes = std::as_bytes(data);
+    const auto uint32_span = std::span{reinterpret_cast<const std::uint32_t*>(uint32_bytes.data()), data.size()};
+
+    std::ranges::transform(uint32_span, data.begin(), [](const std::uint32_t random_uint32) {
+        // Convert uint32 to float in [0, 1) range, then scale to [-1.0, 1.0]
+        const auto normalized = static_cast<float>(random_uint32) / static_cast<float>(max_uint32);
+        return normalized * 2.0F - 1.0F;
+    });
+}
+
+}  // namespace
 
 class UnaryOpsTest : public ::testing::Test {
 protected:
@@ -77,164 +125,41 @@ TEST_F(UnaryOpsTest, Silu) {
     auto C = 1;
     auto H = 20;
     auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
     xt::xarray<float> a = xt::empty<float>({N, C, H, W});
-    ttml::core::parallel_generate(
-        std::span{a.data(), a.size()}, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
-    xt::xarray<float> expected_silu = {
-        {{{-0.10980F, 0.38199F, 0.64114F, -0.21957F, 0.28487F},
-          {0.35594F, 0.10836F, 0.10620F, -0.23011F, -0.05124F},
-          {-0.23012F, -0.24803F, -0.25842F, -0.03909F, 0.49457F},
-          {-0.13889F, 0.11130F, -0.23475F, 0.25075F, 0.17348F},
-          {-0.26570F, -0.25878F, 0.67579F, 0.27049F, 0.43906F},
-          {0.61943F, -0.20712F, -0.26883F, -0.22022F, 0.71665F},
-          {-0.21958F, 0.13122F, -0.15792F, 0.12407F, 0.02537F},
-          {-0.26789F, -0.06343F, -0.26528F, -0.16581F, 0.02539F},
-          {0.12431F, -0.09014F, -0.23589F, -0.26083F, -0.16526F},
-          {0.68279F, -0.11588F, -0.19747F, -0.04200F, -0.25057F},
-          {0.36437F, 0.13234F, -0.21275F, -0.10379F, 0.01444F},
-          {0.70012F, 0.10093F, -0.03213F, -0.26088F, 0.48418F},
-          {0.11907F, 0.21247F, -0.22469F, -0.04705F, -0.25686F},
-          {-0.26692F, 0.63786F, 0.62592F, 0.66803F, 0.06729F},
-          {0.40060F, -0.10151F, -0.15769F, -0.26648F, -0.24866F},
-          {-0.19839F, 0.21780F, -0.19337F, -0.05627F, 0.21648F},
-          {-0.24154F, 0.12205F, -0.00480F, 0.44028F, -0.26324F},
-          {-0.22358F, 0.56809F, -0.09712F, -0.18414F, -0.22006F},
-          {0.18871F, 0.31919F, -0.15325F, -0.06925F, 0.02047F},
-          {-0.20911F, 0.04889F, 0.07228F, -0.21899F, -0.26381F}}},
-        {{{0.67520F, 0.45507F, 0.34898F, -0.04772F, 0.62111F},
-          {-0.09390F, 0.54309F, 0.59840F, 0.10745F, 0.27805F},
-          {0.58999F, -0.14367F, -0.25112F, 0.07540F, -0.21434F},
-          {0.02127F, -0.26112F, 0.65996F, -0.14447F, 0.45875F},
-          {-0.09898F, 0.30727F, -0.17726F, 0.04127F, 0.43307F},
-          {0.09426F, -0.12287F, 0.66734F, -0.17183F, 0.11845F},
-          {0.04452F, -0.17465F, -0.23541F, -0.16279F, 0.39084F},
-          {-0.22669F, -0.25463F, -0.26653F, 0.70683F, -0.07074F},
-          {0.34458F, -0.09411F, -0.21316F, -0.16446F, -0.26812F},
-          {-0.26678F, 0.41180F, -0.21311F, 0.24905F, 0.25535F},
-          {0.28055F, 0.37209F, 0.34310F, 0.11715F, -0.25475F},
-          {0.59777F, -0.12164F, 0.17373F, -0.24343F, 0.57790F},
-          {0.48944F, 0.46779F, 0.13842F, -0.04800F, -0.14078F},
-          {-0.24928F, -0.25720F, -0.11259F, -0.15371F, 0.19708F},
-          {-0.14456F, 0.19320F, 0.28142F, 0.09961F, 0.15636F},
-          {-0.17537F, 0.53008F, 0.06499F, -0.02701F, -0.10343F},
-          {-0.24230F, 0.67907F, 0.25804F, 0.46594F, 0.32729F},
-          {0.27010F, 0.06503F, -0.19589F, 0.34264F, -0.18558F},
-          {-0.00617F, -0.26208F, 0.02325F, 0.25440F, -0.06722F},
-          {-0.24491F, -0.26487F, -0.05699F, -0.24578F, -0.21186F}}},
-        {{{-0.26378F, 0.54470F, 0.15490F, -0.02402F, -0.15157F},
-          {0.06727F, 0.00864F, 0.23326F, 0.56505F, -0.23595F},
-          {-0.18914F, 0.11528F, -0.08161F, 0.04143F, 0.31947F},
-          {-0.21127F, -0.19940F, 0.62708F, -0.25404F, 0.10861F},
-          {-0.16668F, 0.23225F, -0.22821F, 0.51862F, 0.60375F},
-          {0.13974F, 0.40016F, -0.16317F, 0.15110F, -0.24647F},
-          {0.50343F, -0.04158F, 0.39315F, -0.20431F, -0.21829F},
-          {-0.07654F, 0.53920F, 0.52339F, 0.04089F, -0.14511F},
-          {0.39909F, -0.24153F, 0.54526F, -0.12319F, -0.14923F},
-          {0.56377F, -0.24515F, -0.17682F, -0.19982F, 0.16935F},
-          {-0.06759F, -0.26887F, 0.41587F, -0.12585F, 0.48549F},
-          {-0.15759F, -0.26791F, -0.22692F, 0.01086F, 0.03525F},
-          {-0.07578F, -0.01494F, -0.20260F, 0.22902F, -0.24221F},
-          {-0.17834F, -0.13625F, -0.19180F, 0.62718F, -0.22554F},
-          {-0.14586F, -0.20416F, 0.01914F, 0.06147F, 0.24368F},
-          {-0.08694F, -0.11789F, -0.25690F, 0.67920F, -0.18672F},
-          {0.66226F, -0.19039F, -0.18784F, 0.23435F, -0.00274F},
-          {0.25666F, -0.15999F, -0.23294F, -0.16957F, 0.72687F},
-          {-0.26276F, -0.17979F, 0.12152F, 0.68801F, 0.00269F},
-          {-0.08107F, -0.25984F, -0.26348F, -0.17314F, -0.13112F}}},
-        {{{0.56626F, 0.15229F, -0.19410F, 0.21301F, -0.23405F},  {0.03189F, -0.01044F, -0.04949F, 0.70456F, 0.05569F},
-          {-0.19285F, 0.10126F, 0.20148F, -0.25308F, 0.32854F},  {-0.11345F, -0.19507F, -0.19279F, 0.27941F, 0.39232F},
-          {-0.11484F, -0.02882F, 0.14971F, 0.70047F, 0.15125F},  {-0.09097F, 0.03705F, 0.41335F, -0.25065F, 0.38480F},
-          {0.44370F, -0.23201F, -0.14744F, 0.00827F, -0.21831F}, {0.23367F, -0.26201F, 0.48155F, 0.09913F, -0.14405F},
-          {0.20877F, -0.20347F, -0.26637F, 0.25508F, 0.01224F},  {0.40235F, -0.20051F, -0.12861F, 0.16610F, -0.24907F},
-          {-0.22319F, 0.62293F, 0.22696F, -0.09197F, -0.10049F}, {0.01807F, 0.61620F, 0.44761F, -0.23656F, 0.20624F},
-          {-0.13388F, 0.28954F, -0.24414F, -0.20860F, 0.59494F}, {0.04316F, 0.51333F, 0.23363F, -0.18458F, -0.19952F},
-          {0.18536F, -0.22296F, 0.41461F, 0.69817F, 0.05825F},   {0.01691F, 0.03053F, -0.18303F, -0.19295F, 0.72412F},
-          {-0.24990F, 0.66764F, 0.54719F, 0.06169F, 0.55270F},   {0.52230F, 0.15071F, -0.21740F, -0.13528F, -0.17301F},
-          {-0.12822F, 0.23997F, 0.27616F, 0.46224F, 0.54701F},   {0.47818F, 0.52986F, -0.08640F, 0.35622F, 0.53103F}}}};
+    load_random_data_from_os(std::span{a.data(), a.size()});
 
-    auto a_tensor = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
-    auto computed_silu = silu(a_tensor);
-    auto computed_silu_xtensor = core::to_xtensor(computed_silu->get_value());
-    EXPECT_TRUE(xt::allclose(computed_silu_xtensor, expected_silu, 8e-3F, 4e-2F));
+    // Create two input tensors - one for kernel implementation, one for composite
+    auto a_kernel = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
+    auto a_composite = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
 
-    xt::xarray<float> expected_silu_grad_ = {
-        {{{-0.00021F, 0.00149F, 0.00287F, -0.00022F, 0.00103F},
-          {0.00136F, 0.00032F, 0.00032F, -0.00021F, -0.00011F},
-          {-0.00021F, -0.00017F, -0.00014F, -0.00009F, 0.00207F},
-          {-0.00023F, 0.00033F, -0.00020F, 0.00088F, 0.00056F},
-          {-0.00011F, -0.00014F, 0.00307F, 0.00097F, 0.00178F},
-          {0.00275F, -0.00024F, -0.00010F, -0.00022F, 0.00331F},
-          {-0.00022F, 0.00040F, -0.00024F, 0.00038F, 0.00007F},
-          {-0.00010F, -0.00014F, -0.00011F, -0.00025F, 0.00007F},
-          {0.00038F, -0.00018F, -0.00020F, -0.00013F, -0.00025F},
-          {0.00311F, -0.00021F, -0.00024F, -0.00010F, -0.00017F},
-          {0.00140F, 0.00041F, -0.00023F, -0.00020F, 0.00004F},
-          {0.00321F, 0.00030F, -0.00007F, -0.00013F, 0.00201F},
-          {0.00036F, 0.00072F, -0.00022F, -0.00011F, -0.00015F},
-          {-0.00011F, 0.00285F, 0.00279F, 0.00303F, 0.00019F},
-          {0.00158F, -0.00020F, -0.00024F, -0.00011F, -0.00017F},
-          {-0.00024F, 0.00074F, -0.00024F, -0.00012F, 0.00074F},
-          {-0.00019F, 0.00037F, -0.00001F, 0.00178F, -0.00012F},
-          {-0.00022F, 0.00247F, -0.00019F, -0.00025F, -0.00022F},
-          {0.00062F, 0.00119F, -0.00024F, -0.00015F, 0.00005F},
-          {-0.00023F, 0.00013F, 0.00021F, -0.00022F, -0.00012F}}},
-        {{{0.00307F, 0.00186F, 0.00133F, -0.00011F, 0.00276F},
-          {-0.00019F, 0.00233F, 0.00263F, 0.00032F, 0.00100F},
-          {0.00259F, -0.00024F, -0.00016F, 0.00021F, -0.00023F},
-          {0.00006F, -0.00013F, 0.00298F, -0.00024F, 0.00188F},
-          {-0.00019F, 0.00113F, -0.00025F, 0.00011F, 0.00175F},
-          {0.00028F, -0.00022F, 0.00302F, -0.00025F, 0.00036F},
-          {0.00012F, -0.00025F, -0.00020F, -0.00025F, 0.00153F},
-          {-0.00021F, -0.00015F, -0.00011F, 0.00325F, -0.00015F},
-          {0.00131F, -0.00019F, -0.00023F, -0.00025F, -0.00010F},
-          {-0.00011F, 0.00164F, -0.00023F, 0.00087F, 0.00090F},
-          {0.00101F, 0.00144F, 0.00130F, 0.00035F, -0.00015F},
-          {0.00263F, -0.00022F, 0.00056F, -0.00018F, 0.00252F},
-          {0.00204F, 0.00193F, 0.00043F, -0.00011F, -0.00024F},
-          {-0.00017F, -0.00015F, -0.00021F, -0.00024F, 0.00066F},
-          {-0.00024F, 0.00064F, 0.00102F, 0.00029F, 0.00050F},
-          {-0.00025F, 0.00226F, 0.00018F, -0.00006F, -0.00020F},
-          {-0.00019F, 0.00309F, 0.00091F, 0.00192F, 0.00123F},
-          {0.00097F, 0.00018F, -0.00024F, 0.00130F, -0.00025F},
-          {-0.00002F, -0.00013F, 0.00006F, 0.00090F, -0.00014F},
-          {-0.00018F, -0.00012F, -0.00013F, -0.00018F, -0.00023F}}},
-        {{{-0.00012F, 0.00234F, 0.00049F, -0.00006F, -0.00024F},
-          {0.00019F, 0.00002F, 0.00081F, 0.00245F, -0.00020F},
-          {-0.00025F, 0.00035F, -0.00017F, 0.00011F, 0.00119F},
-          {-0.00023F, -0.00024F, 0.00279F, -0.00016F, 0.00032F},
-          {-0.00025F, 0.00080F, -0.00021F, 0.00220F, 0.00266F},
-          {0.00044F, 0.00158F, -0.00025F, 0.00048F, -0.00018F},
-          {0.00211F, -0.00009F, 0.00155F, -0.00024F, -0.00022F},
-          {-0.00016F, 0.00231F, 0.00222F, 0.00011F, -0.00024F},
-          {0.00157F, -0.00019F, 0.00234F, -0.00022F, -0.00024F},
-          {0.00244F, -0.00018F, -0.00025F, -0.00024F, 0.00055F},
-          {-0.00014F, -0.00010F, 0.00166F, -0.00022F, 0.00202F},
-          {-0.00024F, -0.00010F, -0.00021F, 0.00003F, 0.00009F},
-          {-0.00016F, -0.00004F, -0.00024F, 0.00079F, -0.00019F},
-          {-0.00025F, -0.00023F, -0.00024F, 0.00279F, -0.00022F},
-          {-0.00024F, -0.00024F, 0.00005F, 0.00017F, 0.00085F},
-          {-0.00018F, -0.00022F, -0.00015F, 0.00309F, -0.00025F},
-          {0.00299F, -0.00024F, -0.00025F, 0.00081F, -0.00001F},
-          {0.00091F, -0.00024F, -0.00020F, -0.00025F, 0.00337F},
-          {-0.00013F, -0.00025F, 0.00037F, 0.00314F, 0.00001F},
-          {-0.00017F, -0.00014F, -0.00012F, -0.00025F, -0.00023F}}},
-        {{{0.00245F, 0.00048F, -0.00024F, 0.00072F, -0.00020F},  {0.00008F, -0.00003F, -0.00011F, 0.00324F, 0.00015F},
-          {-0.00024F, 0.00030F, 0.00067F, -0.00016F, 0.00123F},  {-0.00021F, -0.00024F, -0.00024F, 0.00101F, 0.00154F},
-          {-0.00021F, -0.00007F, 0.00047F, 0.00321F, 0.00048F},  {-0.00018F, 0.00010F, 0.00165F, -0.00017F, 0.00150F},
-          {0.00180F, -0.00021F, -0.00024F, 0.00002F, -0.00022F}, {0.00081F, -0.00013F, 0.00200F, 0.00029F, -0.00024F},
-          {0.00070F, -0.00024F, -0.00011F, 0.00090F, 0.00003F},  {0.00159F, -0.00024F, -0.00023F, 0.00053F, -0.00017F},
-          {-0.00022F, 0.00277F, 0.00078F, -0.00018F, -0.00019F}, {0.00005F, 0.00273F, 0.00182F, -0.00020F, 0.00069F},
-          {-0.00023F, 0.00105F, -0.00018F, -0.00023F, 0.00261F}, {0.00012F, 0.00217F, 0.00081F, -0.00025F, -0.00024F},
-          {0.00061F, -0.00022F, 0.00165F, 0.00320F, 0.00016F},   {0.00004F, 0.00008F, -0.00025F, -0.00024F, 0.00335F},
-          {-0.00017F, 0.00302F, 0.00235F, 0.00017F, 0.00238F},   {0.00222F, 0.00048F, -0.00023F, -0.00023F, -0.00025F},
-          {-0.00023F, 0.00083F, 0.00099F, 0.00190F, 0.00235F},   {0.00198F, 0.00226F, -0.00017F, 0.00136F, 0.00226F}}}};
-    xt::xarray<float> expected_silu_grad = expected_silu_grad_.reshape({N, C, H, W});
+    // Forward pass - both use same forward implementation (ttnn::silu)
+    // but will use different backward implementations
+    auto result_kernel = silu(a_kernel);                                   // Default: uses metal kernel backward
+    auto result_composite = silu(a_composite, /*use_composite_bw=*/true);  // Uses composite backward
 
-    auto target = autograd::create_tensor(core::zeros_like(computed_silu->get_value()));
-    auto result = mse_loss(computed_silu, target);
-    result->backward();
-    auto computed_silu_grad = core::to_xtensor(computed_silu->get_grad());
-    EXPECT_TRUE(xt::allclose(computed_silu_grad, expected_silu_grad, 8e-3F, 4e-2F));
+    // Compare forward results - should be identical since forward is the same
+    auto kernel_xtensor = core::to_xtensor(result_kernel->get_value());
+    auto composite_xtensor = core::to_xtensor(result_composite->get_value());
+    EXPECT_TRUE(xt::allclose(kernel_xtensor, composite_xtensor, 8e-3F, 4e-2F));
+
+    // Backward pass - create zero targets for MSE loss
+    auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
+    auto target_composite = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
+
+    // Compute MSE loss: mean((output - 0)^2) = mean(output^2)
+    auto loss_kernel = mse_loss(result_kernel, target_kernel);
+    auto loss_composite = mse_loss(result_composite, target_composite);
+
+    // Execute backward pass - this triggers different backward implementations
+    loss_kernel->backward();     // Uses metal::silu_bw()
+    loss_composite->backward();  // Uses ttnn::silu_bw()
+
+    // Compare backward gradients - both implementations should produce same gradients
+    auto grad_kernel = core::to_xtensor(a_kernel->get_grad());
+    auto grad_composite = core::to_xtensor(a_composite->get_grad());
+    EXPECT_TRUE(xt::allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F));
 }
 
 }  // namespace ttml::ops::tests

@@ -354,7 +354,10 @@ jobs:
         timeout-minutes: 5
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            ./build/test/tt_metal/test_single_dm_l1_write
+            # ToDo: Re-enable this test once tt-sim supports NOC
+            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim-private/issues/24
+            # ./build/test/tt_metal/test_single_dm_l1_write
+            :
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"

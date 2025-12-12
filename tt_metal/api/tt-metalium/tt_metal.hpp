@@ -36,7 +36,7 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 std::map<ChipId, IDevice*> CreateDevices(
-    // TODO: delete this in favour of DevicePool
+    // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -45,7 +45,7 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& l1_bank_remap = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
-    bool use_max_eth_core_count_on_all_devices = false,
+    [[deprecated]] bool ignored = false,  // This argument was not used
     bool initialize_fabric_and_dispatch_fw = true);
 
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
