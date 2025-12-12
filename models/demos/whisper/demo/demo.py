@@ -29,6 +29,7 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_L1_SMALL_SIZE,
+    WHISPER_TRACE_REGION_SIZE,
     convert_to_ttnn,
     create_custom_mesh_preprocessor,
     encoder,
@@ -141,9 +142,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
     signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
     the callable returns the full decoded output.
-
-    This function now uses the WhisperGenerator class which maintains persistent traces across
-    multiple generation calls, eliminating trace capture overhead after the first generation.
 
     Args:
         mesh_device: The target device
@@ -716,7 +714,9 @@ def test_demo_for_audio_classification_dataset(
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 100000000}], indirect=True
+    "device_params",
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": WHISPER_TRACE_REGION_SIZE}],
+    indirect=True,
 )
 def test_demo_for_conditional_generation(
     input_path,
@@ -800,7 +800,9 @@ def test_demo_for_conditional_generation(
     ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
 )
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 100000000}], indirect=True
+    "device_params",
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": WHISPER_TRACE_REGION_SIZE}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device",
@@ -883,7 +885,9 @@ def test_demo_for_conditional_generation_dataset(
     ("openai/whisper-large-v3",),
 )
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 100000000}], indirect=True
+    "device_params",
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": WHISPER_TRACE_REGION_SIZE}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",

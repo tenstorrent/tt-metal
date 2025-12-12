@@ -611,7 +611,6 @@ def test_traced_decoder_executor(
     # Trace management variables
     trace_id_decoder = None
     trace_input_decoder = None
-    trace_output_decoder = None
     trace_compiled = False
     cross_attn_cache_valid = False
 
@@ -651,8 +650,8 @@ def test_traced_decoder_executor(
                 output_tensor=trace_input_decoder,
             )
             # Execute trace
-            ttnn.execute_trace(mesh_device, trace_id_decoder, cq_id=0, blocking=False)
-            traced_output = trace_output_decoder
+            ttnn.execute_trace(mesh_device, trace_id_decoder, cq_id=0, blocking=True)
+            # traced_output = trace_output_decoder
         else:
             # Non-traced execution (first iteration populates cross-attention cache)
             traced_output = ttnn_model.decoder(
@@ -700,15 +699,11 @@ def test_traced_decoder_executor(
                 logger.info("Decoder trace compile run complete")
 
                 # Allocate L1 input for trace capture
-                l1_input = ttnn.to_memory_config(decoder_hidden_states, l1_memory_config)
+                trace_input_decoder = ttnn.to_memory_config(decoder_hidden_states, l1_memory_config)
 
                 # Capture trace
                 trace_id_decoder = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                trace_output_decoder = traced_decoder_fn(l1_input)
-
-                # Deallocate and reallocate L1 input inside trace
-                ttnn.deallocate(l1_input, force=True)
-                trace_input_decoder = ttnn.allocate_tensor_on_device(l1_input.spec, mesh_device)
+                traced_output = traced_decoder_fn(trace_input_decoder)
 
                 ttnn.end_trace_capture(mesh_device, trace_id_decoder, cq_id=0)
                 ttnn.synchronize_device(mesh_device)

@@ -89,6 +89,7 @@ class WhisperGenerator:
         weights_mesh_mapper,
         kv_cache=None,
         cross_attn_cache=None,
+        max_batch_size=1,
     ):
         """
         Initialize the WhisperGenerator.
@@ -129,8 +130,8 @@ class WhisperGenerator:
         self.trace_compiled = False
 
         # Pre-allocated encoder_hidden_states tensor
+        # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
         encoder_seq_len = 1500
-        max_batch_size = 1
         self.encoder_hidden_states = ttnn.allocate_tensor_on_device(
             ttnn.Shape([max_batch_size, encoder_seq_len, config.d_model]),
             ttnn.bfloat16,
@@ -161,7 +162,7 @@ class WhisperGenerator:
         """
         pos_host = torch.full((batch_size,), value, dtype=torch.int32)
         pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32, mesh_mapper=self.input_mesh_mapper)
-        ttnn.copy_host_to_device_tensor(pos_tensor_host.cpu(), self.current_decode_pos)
+        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos)
 
     def _release_decoder_trace(self):
         """Release the decoder trace resources (for cleanup)."""
@@ -215,15 +216,11 @@ class WhisperGenerator:
         logger.info("Decoder trace compile run complete")
 
         # Allocate L1 input for trace capture
-        l1_input = ttnn.to_memory_config(sample_decoder_hidden_states, l1_memory_config)
+        self.trace_input_decoder = ttnn.to_memory_config(sample_decoder_hidden_states, l1_memory_config)
 
         # Capture trace
         self.trace_id_decoder = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        self.trace_output_decoder = traced_decoder_fn(l1_input)
-
-        # Deallocate and reallocate L1 input inside trace
-        ttnn.deallocate(l1_input, force=True)
-        self.trace_input_decoder = ttnn.allocate_tensor_on_device(l1_input.spec, self.mesh_device)
+        self.trace_output_decoder = traced_decoder_fn(self.trace_input_decoder)
 
         ttnn.end_trace_capture(self.mesh_device, self.trace_id_decoder, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
@@ -252,7 +249,7 @@ class WhisperGenerator:
         )
 
         # Execute trace
-        ttnn.execute_trace(self.mesh_device, self.trace_id_decoder, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decoder, cq_id=0, blocking=True)
 
         return self.trace_output_decoder
 
@@ -602,20 +599,27 @@ class WhisperGenerator:
                     input_mesh_mapper=self.input_mesh_mapper,
                 )
 
-                decoder_output = ttnn_optimized_functional_whisper.decoder(
-                    self.config,
-                    decoder_hidden_states,
-                    decoder_attention_mask=decoder_attention_mask,
-                    encoder_hidden_states=self.encoder_hidden_states,
-                    kv_cache=self.kv_cache,
-                    cross_attn_cache=self.cross_attn_cache,
-                    cross_attn_cache_valid=self.cross_attn_cache_valid,
-                    current_decode_pos=self.current_decode_pos,
-                    parameters=self.parameters.decoder,
-                )
-                # After first prefill iteration, cross_attn_cache is populated
-                if prefill_pos == 0:
-                    self.cross_attn_cache_valid = True
+                if use_trace and self.kv_cache and self.trace_compiled and prefill_pos > 0:
+                    decoder_output = self._execute_decoder_trace(decoder_hidden_states)
+                else:
+                    decoder_output = ttnn_optimized_functional_whisper.decoder(
+                        self.config,
+                        decoder_hidden_states,
+                        decoder_attention_mask=decoder_attention_mask,
+                        encoder_hidden_states=self.encoder_hidden_states,
+                        kv_cache=self.kv_cache,
+                        cross_attn_cache=self.cross_attn_cache,
+                        cross_attn_cache_valid=self.cross_attn_cache_valid,
+                        current_decode_pos=self.current_decode_pos,
+                        parameters=self.parameters.decoder,
+                    )
+
+                    # After first prefill iteration, cross_attn_cache is populated
+                    if prefill_pos == 0:
+                        self.cross_attn_cache_valid = True
+                        # Capture trace for reuse in subsequent prefill and decode iterations
+                        if use_trace and self.kv_cache and not self.trace_compiled:
+                            self._capture_decoder_trace(decoder_hidden_states)
 
                 # On last prefill iteration, sample the first transcription token
                 if prefill_pos == prefix_len - 1:
