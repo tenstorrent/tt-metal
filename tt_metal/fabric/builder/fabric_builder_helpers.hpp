@@ -70,6 +70,12 @@ inline uint32_t get_downstream_edm_sender_channel(
     //         EAST  → channel 1
     //         WEST  → channel 2
     //         NORTH → channel 3
+    //
+    //   • Downstream = Z:
+    //         EAST  → channel 1
+    //         WEST  → channel 2
+    //         NORTH → channel 3
+    //         SOUTH → channel 4
 
     size_t downstream_compact_index_for_upstream;
     if (downstream_direction == eth_chan_directions::EAST) {
@@ -90,19 +96,15 @@ inline uint32_t get_downstream_edm_sender_channel(
 // The index is 0-2 for mesh directions (N/E/S/W excluding own direction), 3 for Z direction.
 inline size_t get_receiver_channel_compact_index(
     const eth_chan_directions receiver_direction, const eth_chan_directions downstream_direction) {
-    // TODO: Add Z direction support when eth_chan_directions::Z is added to fabric_common.h
-    // Z direction will get compact index 3 (after the 3 mesh directions)
-    // For now, Z is not yet defined in eth_chan_directions enum
-    // if (downstream_direction == eth_chan_directions::Z) {
-    //     return 3;
-    // }
-
     // Mesh directions (N/E/S/W) get compact indices 0-2
     size_t compact_index;
     if (receiver_direction == 0) {
         compact_index = downstream_direction - 1;
     } else {
         compact_index = (downstream_direction < receiver_direction) ? downstream_direction : (downstream_direction - 1);
+    }
+    if (downstream_direction == eth_chan_directions::Z) {
+        TT_FATAL(compact_index == 3, "Z direction should get compact index 3. It didn't, there is a bug");
     }
     return compact_index;
 }
