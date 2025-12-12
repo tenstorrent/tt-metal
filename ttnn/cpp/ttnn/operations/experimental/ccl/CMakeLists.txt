@@ -27,6 +27,7 @@ file(
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
+    deepseek_minimal_broadcast/device/kernels/*
 )
 
 target_sources(
@@ -81,8 +82,8 @@ target_sources(
         all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp
         all_gather_matmul_async/all_gather_matmul_async.cpp
-        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
-        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_device_operation.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_program_factory.cpp
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
@@ -107,6 +108,9 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
+        deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
