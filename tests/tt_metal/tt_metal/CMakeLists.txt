@@ -38,6 +38,7 @@ set(TT_METAL_TESTS_SRCS
     test_compile_program.cpp
     test_clean_init.cpp
     test_single_dm_l1_write.cpp
+    test_mock_device.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
@@ -51,6 +52,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
             ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/common
     )
     set_target_properties(
         ${TEST}
