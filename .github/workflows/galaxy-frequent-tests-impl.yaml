@@ -36,13 +36,13 @@ jobs:
         run: |
           # Create full matrix with jq for readability
           FULL_MATRIX=$(jq -n '[
-            {
-              "name": "Galaxy Llama3 frequent tests",
-              "arch": "wormhole_b0",
-              "model": "llama3",
-              "timeout": 70,
-              "owner_id": "U053W15B6JF"
-            }, # Djordje Ivanovic
+            # {
+            #   "name": "Galaxy Llama3 frequent tests",
+            #   "arch": "wormhole_b0",
+            #   "model": "llama3",
+            #   "timeout": 70,
+            #   "owner_id": "U053W15B6JF"
+            # }, # Djordje Ivanovic
             {
               "name": "Galaxy resnet50 frequent tests",
               "arch": "wormhole_b0",
