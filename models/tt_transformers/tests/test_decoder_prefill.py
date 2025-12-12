@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -68,7 +69,10 @@ def test_decoder_inference(
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    if "gemma-3" in model_name_env:
+        model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    else:
+        model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
