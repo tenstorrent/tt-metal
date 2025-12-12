@@ -482,6 +482,11 @@ const distributed::multihost::DistributedContext& MetalContext::full_world_distr
 }
 
 const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+    distributed::multihost::DistributedContext::get_current_world();
+    // Get all compute mesh IDs (excludes switches) from control plane mesh graph
+    metal_context.get_control_plane().get_mesh_graph();
+
+    return *distributed_context_;
     // Lazy initilazation of compute only distributed context
     if (!compute_only_distributed_context_) {
         compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
