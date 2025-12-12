@@ -16,6 +16,7 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
+    state_configure<Operation::UNARY>(icb, ocb);
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
@@ -27,8 +28,6 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
-    set_g_srca(icb);
-    set_g_pack(ocb);
 }
 
 // clang-format off
@@ -39,6 +38,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
  */
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
+    state_configure<Operation::UNARY>(icb);
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
@@ -118,6 +119,14 @@ void MAIN {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     untilize_init(cb_in2);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+
+    unary_op_init_common(cb_in0, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+    unary_op_init_common(cb_in1, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+
+    unary_op_init_common_no_pack(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }
 }  // namespace NAMESPACE
