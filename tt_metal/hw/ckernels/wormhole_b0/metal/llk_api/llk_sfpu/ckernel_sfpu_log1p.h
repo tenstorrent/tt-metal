@@ -22,11 +22,16 @@ namespace sfpu {
  */
 template <bool FAST_APPROX, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
-    // Read programmable constants
-
-    sfpi::vFloat in = val + sfpi::vConst1;
-    sfpi::vFloat result =
-        calculate_log_body<FAST_APPROX, /*HAS_BASE_SCALING*/ false, /*is_fp32_dest_acc_en*/ true>(in, 0);
+    sfpi::vFloat abs_x = sfpi::abs(val);
+    sfpi::vFloat result;
+    v_if(abs_x < 0.0078125) {  // use 2^(-7) as threshold value
+        result = val;          // log(1+x) ~ x for x < 0.01
+    }
+    v_else {
+        sfpi::vFloat in = val + sfpi::vConst1;
+        result = calculate_log_body<FAST_APPROX, /*HAS_BASE_SCALING*/ false, /*is_fp32_dest_acc_en*/ true>(in, 0);
+    }
+    v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
@@ -72,27 +77,21 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
 
         constexpr float THRESHOLD = 0.3f;
         v_if(abs_val < THRESHOLD) {
-            // For |x| < 0.3, use 13-term Taylor series to avoid catastrophic cancellation
-            // ln(1+x) = x - x²/2 + x³/3 - x⁴/4 + ... + x¹³/13
-            // Using PolynomialEvaluator with coefficients in ascending order:
-            // ln(1+x) = 0 + x*(1 + x*(-1/2 + x*(1/3 + x*(-1/4 + ...))))
+            // For |x| < 0.3, use 10-term polynomial series to avoid catastrophic cancellation
+            // Coefficients were computed using Sollya with the following command:
+            // > fpminimax(log(x+1), [|1,2,3,4,5,6,7,8,9|], [|single...|], [-0.3; -2^(-20)] + [2^(-20); 0.3], relative);
             result = PolynomialEvaluator::eval(
                 val,
-                sfpi::vConst0,  // c0 = 0
-                sfpi::vConst1,  // c1 = 1
-                -0.5f,          // c2 = -1/2
-                1.0f / 3.0f,    // c3 = 1/3
-                -0.25f,         // c4 = -1/4
-                0.2f,           // c5 = 1/5
-                -1.0f / 6.0f,   // c6 = -1/6
-                1.0f / 7.0f,    // c7 = 1/7
-                -0.125f,        // c8 = -1/8
-                1.0f / 9.0f,    // c9 = 1/9
-                -0.1f,          // c10 = -1/10
-                1.0f / 11.0f,   // c11 = 1/11
-                -1.0f / 12.0f,  // c12 = -1/12
-                1.0f / 13.0f    // c13 = 1/13
-            );
+                sfpi::vConst0,
+                sfpi::vConst1,
+                -0.4999997317790985107421875f,
+                0.333332836627960205078125f,
+                -0.250040113925933837890625f,
+                0.20005328953266143798828125f,
+                -0.1650786101818084716796875f,
+                0.14109231531620025634765625f,
+                -0.14774705469608306884765625f,
+                0.133655369281768798828125);
         }
         v_else {
             // The following is the same approximation as calculate_log_f32_body from ckernel_sfpu_log.h.
