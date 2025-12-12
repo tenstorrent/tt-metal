@@ -989,7 +989,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->firmware_context_switch_interval,
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction_),
-        control_plane.is_cross_host_eth_link(local_physical_chip_id, this->my_eth_channel),
+        this->isInterMesh,  // Whether this router connects different meshes (determines VC crossover)
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
@@ -1494,37 +1494,49 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
 //   downstream == static? => instantiate static_sender_channel_adapter
 //   downstream == elastic? => instantiate elastic_sender_channel_adapter
 void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
-    FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id) {
+    FabricDatamoverBuilderBase* downstream_builder,
+    uint32_t upstream_vc_idx,
+    uint32_t downstream_vc_idx,
+    uint32_t channel_id) {
     TT_FATAL(
-        vc_idx < builder_config::MAX_NUM_VCS,
-        "VC index {} exceeds maximum supported VCs ({}). Got vc_idx: {}",
-        vc_idx,
-        builder_config::MAX_NUM_VCS,
-        vc_idx);
+        upstream_vc_idx < builder_config::MAX_NUM_VCS,
+        "Upstream VC index {} exceeds maximum supported VCs ({})",
+        upstream_vc_idx,
+        builder_config::MAX_NUM_VCS);
+    TT_FATAL(
+        downstream_vc_idx < builder_config::MAX_NUM_VCS,
+        "Downstream VC index {} exceeds maximum supported VCs ({})",
+        downstream_vc_idx,
+        builder_config::MAX_NUM_VCS);
 
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
-    // VC1 is only supported for 2D routing, when VC1 receiver channels are configured, and for intra-mesh routers
-    if (vc_idx == 1) {
-        TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing. Got vc_idx: {}", vc_idx);
+    // VC1 is only supported for 2D routing
+    if (upstream_vc_idx == 1 || downstream_vc_idx == 1) {
+        TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
+    }
+
+    // Validate upstream VC1 usage (only intra-mesh routers have VC1 receiver)
+    if (upstream_vc_idx == 1) {
         TT_FATAL(
             !isInterMesh,
-            "VC1 connections are only made for intra-mesh routers (not inter-mesh routers). Got isInterMesh: {}",
+            "Upstream VC1 connections require intra-mesh router (inter-mesh has no VC1 receiver). Got isInterMesh: {}",
             isInterMesh);
         TT_FATAL(
             config.num_used_receiver_channels_per_vc[1] > 0,
-            "VC1 receiver channels not configured. VC1 is only needed for multi-mesh 2D topologies.");
+            "VC1 receiver channels not configured on upstream router.");
     }
+
     const auto ds_noc_x = downstream_builder->get_noc_x();
     const auto ds_noc_y = downstream_builder->get_noc_y();
     eth_chan_directions ds_dir = downstream_builder->get_direction();
 
-    // channel_id is VC-relative on the downstream builder, so we need to pass VC information
+    // channel_id is VC-relative on the downstream builder, so we need to pass downstream VC
     // For ERISC builders, use the VC-aware overload; for others, use base class interface (defaults to VC0)
     SenderWorkerAdapterSpec adapter_spec;
     if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-        adapter_spec = downstream_erisc_builder->build_connection_to_fabric_channel(vc_idx, channel_id);
+        adapter_spec = downstream_erisc_builder->build_connection_to_fabric_channel(downstream_vc_idx, channel_id);
     } else {
         // For non-ERISC builders (e.g., TENSIX), use base class interface (treats as VC0-relative)
         adapter_spec = downstream_builder->build_connection_to_fabric_channel(channel_id);
@@ -1541,7 +1553,9 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
-    adapter_ptr->add_downstream_connection(adapter_spec, vc_idx, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+    // Use upstream_vc_idx for adapter storage (this router's receiver VC)
+    adapter_ptr->add_downstream_connection(
+        adapter_spec, upstream_vc_idx, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }

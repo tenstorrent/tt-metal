@@ -2655,7 +2655,10 @@ void kernel_main() {
                                                                                // read dest.
 
 #if defined(FABRIC_2D)
-                        get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
+                        // Inter-mesh routers cross over to intra-mesh VC1, so use VC1 stream IDs
+                        // Intra-mesh routers connect to VC0 normally
+                        is_intermesh_router ? get_vc1_downstream_sender_channel_free_slots_stream_id(compact_index)
+                                            : get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
 #else
                         // Issue #33360 TODO: Create a new array for explicitly holding downstream receiver stream IDs
                         // so we can remove this hack.

@@ -562,8 +562,15 @@ private:
     bool enable_first_level_ack = false;
 
     // Shared helper for setting up VC connections
+    // upstream_vc_idx: VC of this router's receiver channel
+    // downstream_vc_idx: VC of downstream router's sender channel
+    // For normal connections: upstream_vc_idx == downstream_vc_idx
+    // For crossover (inter-mesh to intra-mesh): upstream_vc_idx=0, downstream_vc_idx=1
     void setup_downstream_vc_connection(
-        FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id);
+        FabricDatamoverBuilderBase* downstream_builder,
+        uint32_t upstream_vc_idx,
+        uint32_t downstream_vc_idx,
+        uint32_t channel_id);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder);
