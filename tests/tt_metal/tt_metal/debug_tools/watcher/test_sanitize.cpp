@@ -395,7 +395,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr,
+                l1_overflow_addr + sizeof(std::uint32_t),
                 sizeof(std::uint32_t));
         } break;
         default:
