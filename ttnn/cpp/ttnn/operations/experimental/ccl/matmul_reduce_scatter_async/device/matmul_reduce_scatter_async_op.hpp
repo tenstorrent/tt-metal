@@ -84,7 +84,7 @@ MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
 tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_core_with_workers(
     /* General Params */
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_tensor,
+    Tensor& intermediate_tensor,
     Tensor& reduce_scatter_output_tensor,
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
@@ -116,8 +116,7 @@ namespace ccl {
 std::vector<Tensor> matmul_reduce_scatter_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
-    Tensor& persistent_intermediate_buffer,
-    Tensor& persistent_output_buffer,
+    const std::optional<std::vector<Tensor>>& persistent_output_buffers,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord reduce_scatter_core_grid_offset,

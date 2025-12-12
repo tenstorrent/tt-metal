@@ -28,7 +28,7 @@ using Tensors = std::vector<Tensor>;
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_core_with_workers(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_tensor,
+    Tensor& intermediate_tensor,
     Tensor& reduce_scatter_output_tensor,
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
@@ -67,7 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
         ttnn::reduce_scatter_minimal_async_helper(
             program,
             matmul_output_tensor,
-            persistent_intermediate_tensor,
+            intermediate_tensor,
             target_device_coord,
             forward_coord,
             backward_coord,

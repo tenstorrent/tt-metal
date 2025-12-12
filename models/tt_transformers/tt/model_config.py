@@ -650,7 +650,7 @@ class ModelArgs:
             {f"{key}_MEMCFG": DRAM_MEMCFG if "WEIGHTS" in key else L1_MEMCFG for key in self.OP_KEYS}
         )
         self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
-        self.model_config["USE_MINIMAL_MATMUL_PREFILL"] = True
+        self.model_config["USE_MINIMAL_MATMUL_PREFILL"] = False
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 

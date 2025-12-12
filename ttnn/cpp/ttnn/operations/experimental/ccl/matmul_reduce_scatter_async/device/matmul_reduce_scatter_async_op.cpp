@@ -79,8 +79,15 @@ std::vector<Tensor> MatmulReduceScatterAsync::create_output_tensors(
         this->matmul_struct.create_output_tensors({input_tensors[0], input_tensors[1]})[0];
 
     // Reduce Scatter output tensor
-    auto& intermediate_tensor = optional_output_tensors.at(0).value();
-    auto& reduce_scatter_output_tensor = optional_output_tensors.at(1).value();
+    auto rs_tensor_specs = this->reduce_scatter_minimal_async_struct.compute_output_specs({matmul_output_tensor});
+    ttnn::Tensor intermediate_tensor = optional_output_tensors.at(0).has_value()
+                                           ? optional_output_tensors.at(0).value()
+                                           : create_device_tensor(rs_tensor_specs[0], matmul_output_tensor.device());
+
+    ttnn::Tensor reduce_scatter_output_tensor =
+        optional_output_tensors.at(1).has_value()
+            ? optional_output_tensors.at(1).value()
+            : create_device_tensor(rs_tensor_specs[1], matmul_output_tensor.device());
 
     return {matmul_output_tensor, intermediate_tensor, reduce_scatter_output_tensor};
 }
@@ -190,8 +197,7 @@ namespace ccl {
 std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::Tensor& persistent_intermediate_buffer,
-    ttnn::Tensor& persistent_output_buffer,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord reduce_scatter_core_grid_offset,
@@ -245,11 +251,12 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt});
 
-    // Not using persistent buffers not currently supported by the RSMM API
-    bool using_persistent_buffers = true;
+    bool using_persistent_buffers = persistent_output_buffers.has_value();
 
-    std::vector<std::optional<Tensor>> optional_output_tensors = {
-        persistent_intermediate_buffer, persistent_output_buffer};
+    std::vector<std::optional<Tensor>> optional_output_tensors =
+        using_persistent_buffers
+            ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
+            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt};
 
     // Create the matmul output tensor used as input (activation) to the reduce scatter
     ttnn::Tensor matmul_out_tensor =

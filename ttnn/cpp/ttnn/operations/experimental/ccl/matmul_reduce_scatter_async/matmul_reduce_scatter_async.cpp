@@ -11,8 +11,7 @@ namespace operations::experimental::ccl {
 std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::Tensor& persistent_intermediate_buffer,
-    ttnn::Tensor& persistent_output_buffer,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord reduce_scatter_core_grid_offset,
@@ -35,8 +34,7 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     return ttnn::operations::experimental::ccl::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
-        persistent_intermediate_buffer,
-        persistent_output_buffer,
+        persistent_output_buffers,
         dim,
         multi_device_global_semaphore,
         reduce_scatter_core_grid_offset,

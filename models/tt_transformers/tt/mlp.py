@@ -257,7 +257,7 @@ class MLP(LightweightModule):
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
-        if True:
+        if False:
             if self.model_config.get("USE_MINIMAL_MATMUL_PREFILL") and mode != "decode":
                 w2_out = ttnn.experimental.minimal_matmul(
                     w2_in,
@@ -334,8 +334,8 @@ class MLP(LightweightModule):
             w2_out, w2_out_reduced = ttnn.experimental.matmul_reduce_scatter_async(
                 w2_in,
                 self.w2,
-                persistent_intermediate_buffer=persistent_intermediate_buffer,
-                persistent_output_buffer=persistent_output_buffer,
+                persistent_output_buffers=None,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
                 dim=0 if (TG and self.dim < 8192) else 3,
                 reduce_scatter_core_grid_offset=(0, 6),
