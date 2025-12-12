@@ -18,10 +18,8 @@ Summarize the changes made and its impact.
 
 #### Model tests
 
-CI tests related to models to be run - Choose "models-mandatory", "models-extended" presets, or select applicable tests manually.
-
-- Run "models-mandatory"
-- Run "models-extended"
+If your changes cover model-related code, you should run tests corresponding to affected models and platforms (Single card, T3K, Galaxy). "Choose your pipeline" workflows facilite running multiple kinds of tests in a single run. Each offers `models-mandatory` and `models-extended` presets. 
+The former includes a minimal set of tests, to be run always. The latter extends that with additional ones - use your best judgement in deciding which is the most appropriate for your PR.
 
 - [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml) 
   - [ ] `models-mandatory` preset (runs: 
@@ -30,8 +28,7 @@ CI tests related to models to be run - Choose "models-mandatory", "models-extend
       [(internal) C++ unit tests](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/cpp-post-commit.yaml))
   - [ ] `models-extended` preset (runs: 
       the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml)
-      and [Model perf tests](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml)
-    )
+      and [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml) tests)
   - [ ] other selection - specify runs
 - [ ] [(T3K) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-t3k.yaml)
   - [ ] `models-mandatory` preset (runs: 
@@ -39,7 +36,7 @@ CI tests related to models to be run - Choose "models-mandatory", "models-extend
   - [ ] `models-extended` preset
       (runs: 
       the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-demo-tests.yaml) and 
-      [Model perf tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-model-perf-tests.yaml))
+      [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-model-perf-tests.yaml) tests) 
   - [ ] other selection - specify runs
 - [ ] [(Galaxy) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-galaxy.yaml)
   - [ ] `models-mandatory` preset (runs: 
@@ -47,5 +44,5 @@ CI tests related to models to be run - Choose "models-mandatory", "models-extend
   - [ ] `models-extended` preset 
       (runs: 
       the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-demo-tests.yaml) and 
-      [Model perf tests](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-model-perf-tests.yaml))
+      [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-model-perf-tests.yaml) tests) 
   - [ ] other selection - specify runs
