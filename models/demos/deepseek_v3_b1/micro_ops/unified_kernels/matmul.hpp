@@ -75,8 +75,9 @@ struct Matmul {
             // ================================================================
             // NCRISC (Reader) - ReaderConfigDescriptor compiles as NCRISC
             // ================================================================
-            // Both in0 and in1 are backed by sharded tensors - just signal they're ready
-
+            // Push weights (in1_cb) - backed by sharded tensor
+            cb_reserve_back(CTArgs::in1_cb, CTArgs::num_tiles_k);
+            cb_push_back(CTArgs::in1_cb, CTArgs::num_tiles_k);
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Writer) - WriterConfigDescriptor compiles as BRISC

@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 
 
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [False])
+@pytest.mark.parametrize("use_fp32", [True])
 def test_pre_sdpa(device, epsilon, use_fp32):
     """Test TTNN pre-SDPA fused operation (RMSNorm)"""
 
@@ -138,9 +138,9 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     logger.info(f"Mean absolute difference: {mean_diff}")
 
     # passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
-    torch.set_printoptions(threshold=1000000)
-    print(torch_expected)
-    print(output_torch)
+    # torch.set_printoptions(threshold=1000000)
+    # print(torch_expected)
+    # print(output_torch)
 
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
 

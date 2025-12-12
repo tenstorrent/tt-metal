@@ -3,26 +3,24 @@
 
 #pragma once
 
-#include <type_traits>
-
 // ============================================================================
 // Core type detection - constexpr bools for use with constexpr if
 // ============================================================================
-#if defined(COMPILE_FOR_BRISC)
-inline constexpr bool is_brisc = true;
-inline constexpr bool is_ncrisc = false;
-inline constexpr bool is_trisc = false;
-#include "dataflow_api.h"
-#elif defined(COMPILE_FOR_NCRISC)
-inline constexpr bool is_brisc = false;
+#if defined(COMPILE_FOR_NCRISC)
 inline constexpr bool is_ncrisc = true;
-inline constexpr bool is_trisc = false;
-#include "dataflow_api.h"
-#elif defined(COMPILE_FOR_TRISC)
 inline constexpr bool is_brisc = false;
+inline constexpr bool is_trisc = false;
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#elif defined(COMPILE_FOR_BRISC)
 inline constexpr bool is_ncrisc = false;
+inline constexpr bool is_brisc = true;
+inline constexpr bool is_trisc = false;
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#elif defined(COMPILE_FOR_TRISC)
+inline constexpr bool is_ncrisc = false;
+inline constexpr bool is_brisc = false;
 inline constexpr bool is_trisc = true;
-#include "compute_kernel_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #endif
 
 // ============================================================================
