@@ -789,12 +789,12 @@ def test_div_int32_optional_output(device):
         (2021531526, 2147483647, 9, 123),
     ],
 )
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round_mode, device):
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, rounding_mode, device):
     # Skip some cases for rounding_mode==None that aren't supported due to:
     # https://github.com/tenstorrent/tt-metal/issues/33334
-    if round_mode is None and low_a == -2147483648:
-        pytest.skip("a == -2147483648 is not supported for round_mode=None")
+    if rounding_mode is None and low_a == -2147483648:
+        pytest.skip("a == -2147483648 is not supported for rounding_mode=None")
 
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -825,20 +825,20 @@ def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(
-        torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
+        torch_input_tensor_a, torch_input_tensor_b, rounding_mode=rounding_mode, device=device
     )
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if round_mode is not None:
+    if rounding_mode is not None:
         assert_equal(torch_output_tensor, output_tensor)
     else:
         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
 
 
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_div_edge_cases(round_mode, device):
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
+def test_div_edge_cases(rounding_mode, device):
     pairs = [
         (16777215, 1),
         (16777216, 2),
@@ -881,14 +881,14 @@ def test_div_edge_cases(round_mode, device):
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(
-        torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
+        torch_input_tensor_a, torch_input_tensor_b, rounding_mode=rounding_mode, device=device
     )
 
     # round modes are not supported in binary ng, so we use legacy implementation for testing
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode, use_legacy=True)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode, use_legacy=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if round_mode is not None:
+    if rounding_mode is not None:
         assert torch.max(torch.abs(torch_output_tensor - output_tensor)) <= 1
     else:
         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)

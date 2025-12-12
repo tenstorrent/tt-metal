@@ -771,7 +771,7 @@ void bind_binary_bw_div(
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            round_mode (str, optional): Round mode for the operation (when input tensors are not ComplexTensor type). Can be  None, "trunc", "floor". Defaults to `None`.
+            rounding_mode (str, optional): Round mode for the operation (when input tensors are not ComplexTensor type). Can be  None, "trunc", "floor". Defaults to `None`.
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor`. Defaults to `None`.
@@ -816,16 +816,16 @@ void bind_binary_bw_div(
                const Tensor& grad_tensor,
                const Tensor& input_tensor_a,
                const float scalar,
-               const std::optional<std::string>& round_mode,
+               const std::optional<std::string>& rounding_mode,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(grad_tensor, input_tensor_a, scalar, round_mode, memory_config, input_grad);
+                return self(grad_tensor, input_tensor_a, scalar, rounding_mode, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("scalar"),
             py::kw_only(),
-            py::arg("round_mode") = std::nullopt,
+            py::arg("rounding_mode") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("input_grad") = std::nullopt,
         },
@@ -836,7 +836,7 @@ void bind_binary_bw_div(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& other_tensor,
-               const std::optional<std::string>& round_mode,
+               const std::optional<std::string>& rounding_mode,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
@@ -845,7 +845,7 @@ void bind_binary_bw_div(
                     grad_tensor,
                     input_tensor,
                     other_tensor,
-                    round_mode,
+                    rounding_mode,
                     are_required_outputs,
                     memory_config,
                     input_grad,
@@ -855,7 +855,7 @@ void bind_binary_bw_div(
             py::arg("input_tensor"),
             py::arg("other_tensor"),
             py::kw_only(),
-            py::arg("round_mode") = std::nullopt,
+            py::arg("rounding_mode") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("memory_config") = std::nullopt,
             py::arg("input_grad") = std::nullopt,
@@ -977,7 +977,7 @@ void bind_binary_backward_assign(
             input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor`. Defaults to `None`.
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `other_tensor`. Defaults to `None`.
 
-            round_mode (str, optional): Round mode for the operation. Defaults to `None`.
+            rounding_mode (str, optional): Round mode for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1073,7 +1073,7 @@ void py_module(py::module& module) {
     bind_binary_bw_div(
         module,
         ttnn::div_bw,
-        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`rounding_mode`,  with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_binary_backward_overload(

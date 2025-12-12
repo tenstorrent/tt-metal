@@ -1214,7 +1214,7 @@ void bind_div(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             fast_and_approximate_mode (bool, optional): `true` if input_tensor_b is non-zero for fast approximation, else `false` for accurate division (Only if the input tensor is not ComplexTensor). Defaults to `false`.
-            round_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
+            rounding_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
@@ -1255,7 +1255,7 @@ void bind_div(
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                bool fast_and_approximate_mode,
-               const std::optional<std::string>& round_mode,
+               const std::optional<std::string>& rounding_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -1268,7 +1268,7 @@ void bind_div(
                     input_tensor_a,
                     input_tensor_b,
                     fast_and_approximate_mode,
-                    round_mode,
+                    rounding_mode,
                     dtype,
                     memory_config,
                     output_tensor,
@@ -1282,7 +1282,7 @@ void bind_div(
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("fast_and_approximate_mode") = false,
-            py::arg("round_mode") = std::nullopt,
+            py::arg("rounding_mode") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
@@ -1298,7 +1298,7 @@ void bind_div(
                const Tensor& input_tensor_a,
                float value,
                bool fast_and_approximate_mode,
-               const std::optional<std::string>& round_mode,
+               const std::optional<std::string>& rounding_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -1311,7 +1311,7 @@ void bind_div(
                     input_tensor_a,
                     value,
                     fast_and_approximate_mode,
-                    round_mode,
+                    rounding_mode,
                     dtype,
                     memory_config,
                     output_tensor,
@@ -1325,7 +1325,7 @@ void bind_div(
             py::arg("value"),
             py::kw_only(),
             py::arg("fast_and_approximate_mode") = false,
-            py::arg("round_mode") = std::nullopt,
+            py::arg("rounding_mode") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
@@ -2520,7 +2520,7 @@ void py_module(py::module& module) {
         )doc",
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
-        With INT32 inputs, round_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
+        With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
         When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).
         )doc");
