@@ -102,7 +102,7 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     auto* dst_buffer = cache_tensor.buffer();
     auto* page_table_buffer = page_table_tensor.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, Wt, (uint32_t)operation_attributes.noop};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, Wt};
     TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -116,9 +116,8 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
         page_table_stick_size_B,
         // New compile-time args for batch_idx_tensor
         (uint32_t)use_batch_idx_tensor,
-        cb_batch_idx_id,                     // Meaningful only if use_batch_idx_tensor is true
-        batch_idx_stick_size_B,              // Meaningful only if use_batch_idx_tensor is true
-        (uint32_t)operation_attributes.noop  // When true, kernel early exits
+        cb_batch_idx_id,        // Meaningful only if use_batch_idx_tensor is true
+        batch_idx_stick_size_B  // Meaningful only if use_batch_idx_tensor is true
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
@@ -159,8 +158,9 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
             core,
             {
                 src_buffer->address(),
-                num_blocks_written * Wt,  // start_tile_id
-                num_blocks_per_core,      // num_rows
+                num_blocks_written * Wt,              // start_tile_id
+                num_blocks_per_core,                  // num_rows
+                (uint32_t)operation_attributes.noop,  // noop flag
             });
 
         uint32_t writer_batch_arg =
@@ -173,9 +173,10 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
             {
                 dst_buffer->address(),
                 page_table_buffer->address(),
-                num_blocks_written,   // start_row_num
-                num_blocks_per_core,  // num_rows
-                writer_batch_arg,     // batch_idx_tensor_addr or batch_idx_fallback
+                num_blocks_written,                   // start_row_num
+                num_blocks_per_core,                  // num_rows
+                writer_batch_arg,                     // batch_idx_tensor_addr or batch_idx_fallback
+                (uint32_t)operation_attributes.noop,  // noop flag
             });
         num_blocks_written += num_blocks_per_core;
     }
@@ -235,6 +236,7 @@ void PagedFillCacheProgramFactory::override_runtime_arguments(
         reader_args[0] = src_addr;
         reader_args[1] = num_blocks_written * shared_vars.Wt;  // start_tile_id
         reader_args[2] = num_blocks_per_core;                  // num_rows
+        reader_args[3] = (uint32_t)operation_attributes.noop;  // noop flag
 
         auto& writer_args = writer_args_by_core.at(core.x).at(core.y);
         writer_args[0] = dst_addr;
@@ -242,6 +244,7 @@ void PagedFillCacheProgramFactory::override_runtime_arguments(
         writer_args[2] = num_blocks_written;        // start_row_num
         writer_args[3] = num_blocks_per_core;       // num_rows
         writer_args[4] = current_kernel_batch_arg;  // batch_idx_tensor_addr or batch_idx_fallback
+        writer_args[5] = (uint32_t)operation_attributes.noop;  // noop flag
 
         num_blocks_written += num_blocks_per_core;
     }
@@ -263,11 +266,13 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
 
     if (mesh_coords_opt.has_value()) {
         log_debug(tt::LogOp, "mesh_coords provided with {} coordinates", mesh_coords_opt.value().size());
+
         // Validate that all mesh_coords are present in tensor_coords BEFORE creating programs
         // This prevents creating an empty workload which could cause hangs
         const auto& mesh_coords_set = mesh_coords_opt.value();
         const auto tensor_coords_vector = tensor_coords.coords();
         std::set<ttnn::MeshCoordinate> tensor_coords_set(tensor_coords_vector.begin(), tensor_coords_vector.end());
+
         for (const auto& mesh_coord : mesh_coords_set) {
             if (tensor_coords_set.find(mesh_coord) == tensor_coords_set.end()) {
                 TT_FATAL(
@@ -299,7 +304,6 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
             shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }
-        log_info(tt::LogAlways, "Mesh_coords {}", mesh_coord);
 
         // Create dummy programs for excluded coordinates
         const auto tensor_coords_vector = tensor_coords.coords();
@@ -366,6 +370,11 @@ void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    log_info(
+        tt::LogAlways,
+        "[paged_fill_cache] OVERRIDE_RUNTIME_ARGS_START: Overriding runtime arguments for {} programs",
+        cached_workload.workload.get_programs().size());
+
     PagedFillCacheProgramFactory program_factory;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
