@@ -324,6 +324,10 @@ int main(int argc, char **argv) {
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
+    if (training_config.estimate_memory_usage) {
+        ttml::utils::MemoryUsageTracker::start_capture();
+    }
+
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
@@ -668,9 +672,6 @@ int main(int argc, char **argv) {
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
-            if (!is_everything_compiled && training_config.estimate_memory_usage) {
-                ttml::utils::MemoryUsageTracker::start_capture();
-            }
 
             // TODO(rfurko): add mask sending, once mask becomes non-constant
             pipeline_transfer_targets_if_needed(multihost_config, target);
