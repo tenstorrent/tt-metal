@@ -56,15 +56,10 @@ void LayerNormPostAllGather::validate(
         "Stats and input dim2 must match, got stats: {} vs input: {}",
         stats.padded_shape()[2],
         a.padded_shape()[2]);
-    // TODO: How to check if number of tile columns is correct? Would have to know # of devices and is_rmsnorm
 
     if (gamma.has_value()) {
         const auto& gamma_tensor = gamma.value();
 
-        TT_FATAL(
-            gamma_tensor.layout() == Layout::ROW_MAJOR,
-            "Gamma tensor must have ROW_MAJOR layout (only packed RM supported), got: {}",
-            gamma_tensor.layout());
         if (gamma_tensor.layout() == Layout::TILE) {
             TT_FATAL(
                 a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
@@ -106,15 +101,6 @@ void LayerNormPostAllGather::validate(
 
         if (beta.has_value()) {
             const auto& beta_tensor = beta.value();
-            TT_FATAL(
-                gamma_tensor.layout() == beta_tensor.layout(),
-                "Gamma and beta must have the same layout, got gamma: {} vs beta: {}",
-                gamma_tensor.layout(),
-                beta_tensor.layout());
-            TT_FATAL(
-                beta_tensor.layout() == Layout::ROW_MAJOR,
-                "Beta tensor must have ROW_MAJOR layout, got: {}",
-                beta_tensor.layout());
             if (beta_tensor.layout() == Layout::TILE) {
                 TT_FATAL(
                     a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
@@ -173,17 +159,42 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
-
-    return layernorm_post_allgather_multi_core(
-        a,
-        stats,
-        gamma,
-        beta,
-        output_tensor,
-        this->norm_type,
-        this->eps,
-        this->compute_kernel_config,
-        this->use_2d_core_grid,
+    return std::visit(
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                if (program_config.use_welford == true) {
+                    TT_FATAL(
+                        this->norm_type != ttnn::operations::normalization::LayerNormDistributedType::RMSNORM,
+                        "Welford is not compatible with RMSNORM ");
+                    return layernorm_post_allgather_welford_multi_core(
+                        a,
+                        stats,
+                        gamma,
+                        beta,
+                        output_tensor,
+                        this->norm_type,
+                        this->eps,
+                        this->compute_kernel_config,
+                        this->use_2d_core_grid,
+                        program_config);
+                } else {
+                    return layernorm_post_allgather_multi_core(
+                        a,
+                        stats,
+                        gamma,
+                        beta,
+                        output_tensor,
+                        this->norm_type,
+                        this->eps,
+                        this->compute_kernel_config,
+                        this->use_2d_core_grid,
+                        program_config);
+                }
+            } else {
+                TT_THROW("Unsupported program config");
+            }
+        },
         this->program_config);
 }
 }  // namespace ttnn::operations::normalization
