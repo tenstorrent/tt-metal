@@ -359,41 +359,34 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingResult<TargetNode, GlobalNode>::print(const AdjacencyGraph<TargetNode>& target_graph) const {
+void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result) {
     std::stringstream ss;
     ss << "\n=== Mapping Result ===" << std::endl;
-    ss << "Success: " << (success ? "true" : "false") << std::endl;
-    if (!error_message.empty()) {
-        ss << "Error: " << error_message << std::endl;
+    ss << "Success: " << (result.success ? "true" : "false") << std::endl;
+    if (!result.error_message.empty()) {
+        ss << "Error: " << result.error_message << std::endl;
     }
 
     ss << "\nMappings:" << std::endl;
-    const auto& target_nodes = target_graph.get_nodes();
-    size_t mapped_count = 0;
-    for (const auto& target_node : target_nodes) {
-        auto it = target_to_global.find(target_node);
-        if (it != target_to_global.end()) {
-            ss << "  Target node " << target_node << " -> Global node " << it->second << std::endl;
-            mapped_count++;
-        } else {
-            ss << "  Target node " << target_node << " -> UNMAPPED" << std::endl;
-        }
+    for (const auto& [target_node, global_node] : result.target_to_global) {
+        ss << "  Target node " << target_node << " -> Global node " << global_node << std::endl;
     }
-    ss << "Total mapped: " << mapped_count << " of " << target_nodes.size() << " target nodes" << std::endl;
+    ss << "Total mapped: " << result.target_to_global.size() << " target nodes" << std::endl;
 
-    if (!warnings.empty()) {
-        ss << "\nWarnings (" << warnings.size() << "):" << std::endl;
-        for (const auto& warning : warnings) {
+    if (!result.warnings.empty()) {
+        ss << "\nWarnings (" << result.warnings.size() << "):" << std::endl;
+        for (const auto& warning : result.warnings) {
             ss << "  - " << warning << std::endl;
         }
     }
 
     ss << "\nStatistics:" << std::endl;
-    ss << "  DFS calls: " << stats.dfs_calls << std::endl;
-    ss << "  Backtracks: " << stats.backtrack_count << std::endl;
-    ss << "  Required constraints satisfied: " << constraint_stats.required_satisfied << std::endl;
-    ss << "  Preferred constraints satisfied: " << constraint_stats.preferred_satisfied << "/"
-       << constraint_stats.preferred_total << std::endl;
+    ss << "  DFS calls: " << result.stats.dfs_calls << std::endl;
+    ss << "  Backtracks: " << result.stats.backtrack_count << std::endl;
+    ss << "  Elapsed time: " << result.stats.elapsed_time.count() << " ms" << std::endl;
+    ss << "  Required constraints satisfied: " << result.constraint_stats.required_satisfied << std::endl;
+    ss << "  Preferred constraints satisfied: " << result.constraint_stats.preferred_satisfied << "/"
+       << result.constraint_stats.preferred_total << std::endl;
 
     ss << "======================" << std::endl;
     log_info(tt::LogFabric, "{}", ss.str());
