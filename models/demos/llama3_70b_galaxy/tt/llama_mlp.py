@@ -72,7 +72,7 @@ class TtLlamaMLP(LightweightModule):
         ]  # args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type if not self.args.is_qwen else ttnn.bfloat16,
+            dtype=type if not self.args.is_qwen else ttnn.bfloat8_b,
             # dtype=type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
@@ -172,6 +172,15 @@ class TtLlamaMLP(LightweightModule):
             comp_out = ttnn.to_torch(w1_out, mesh_composer=mesh_composer).sum(0)
             comp_out = torch.permute(comp_out, (1, 0, 2))
             passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
+            # save x and self.w1
+            mesh_composer2d = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=[8, 4])
+            torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer2d)
+            torch_w1 = ttnn.to_torch(self.w1, mesh_composer=mesh_composer2d)
+            if self.layer_num == 2:
+                torch.save(torch_x, "models/demos/llama3_70b_galaxy/tests/w1_in.pt")
+                torch.save(torch_w1, "models/demos/llama3_70b_galaxy/tests/w1_weight.pt")
+                torch.save(ref_after_w1, "models/demos/llama3_70b_galaxy/tests/ref_after_w1.pt")
+                torch.save(comp_out, "models/demos/llama3_70b_galaxy/tests/comp_out.pt")
             print(f"W1 out PCC: {pcc_message}")
             print(comp_allclose(ref_after_w1, comp_out))
             print()
@@ -184,8 +193,6 @@ class TtLlamaMLP(LightweightModule):
             use_noc1_only=False,
         )
         ttnn.deallocate(w1_out)
-
-        breakpoint()
 
         # # debug pcc
         # if self.reference_model is not None:
