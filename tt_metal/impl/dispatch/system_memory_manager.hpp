@@ -78,7 +78,7 @@ public:
 
     void send_completion_queue_read_ptr(uint8_t cq_id) const;
 
-    void* get_completion_queue_ptr(const uint8_t cq_id) const;
+    void* get_completion_queue_ptr(uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(uint8_t cq_id);
 
