@@ -16,7 +16,7 @@
 
 namespace tt::tt_metal::distributed {
 
-class MeshShape : public ShapeBase {
+class MeshShape : public ttsl::ShapeBase {
 public:
     using ShapeBase::operator[];
 

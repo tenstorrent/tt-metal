@@ -9,6 +9,8 @@
 
 namespace tt::tt_metal {
 
+using ShapeBase = ttsl::ShapeBase;
+
 class Alignment final : protected ShapeBase {
 public:
     using ShapeBase::ShapeBase;

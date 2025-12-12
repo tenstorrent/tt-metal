@@ -124,7 +124,7 @@ auto dispatch_conversion(
 template <typename NumpyType, typename MetalType>
 tt::tt_metal::Tensor create_tensor_from_span(
     std::span<const NumpyType> numpy_data_span,
-    const tt::tt_metal::ShapeBase::Container& shape_container,
+    const ttsl::ShapeBase::Container& shape_container,
     tt::tt_metal::DataType tensor_data_type,
     tt::tt_metal::Layout target_layout,
     const ttnn::distributed::TensorToMesh* mapper) {
@@ -363,7 +363,7 @@ tt::tt_metal::Tensor make_metal_tensor(
             sizeof(NumpyType) * 8,
             numpy_data_type.bits);
 
-        tt::tt_metal::ShapeBase::Container shape_container(rank);
+        ttsl::ShapeBase::Container shape_container(rank);
         for (size_t dimension = 0; dimension < rank; ++dimension) {
             const auto dimension_size = numpy_data.shape(dimension);
             NB_COND_THROW(
@@ -497,7 +497,7 @@ tt::tt_metal::Tensor make_metal_tensor(
         static_assert(std::is_same_v<NumpyType, std::remove_cvref_t<NumpyType>>);
         // Note: precision already validated above (bfloat16 is the only supported custom dtype)
 
-        tt::tt_metal::ShapeBase::Container shape_container(rank);
+        ttsl::ShapeBase::Container shape_container(rank);
         for (size_t dimension = 0; dimension < rank; ++dimension) {
             // Always use shape from Python (nanobind doesn't populate shape reliably)
             const auto dimension_size = shape_from_python[dimension];

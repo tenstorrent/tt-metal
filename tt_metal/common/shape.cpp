@@ -94,5 +94,5 @@ nlohmann::json ttsl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::
 }
 
 tt::tt_metal::Shape ttsl::json::from_json_t<tt::tt_metal::Shape>::operator()(const nlohmann::json& json_object) const {
-    return tt::tt_metal::Shape(ttsl::json::from_json<tt::tt_metal::ShapeBase::Container>(json_object));
+    return tt::tt_metal::Shape(ttsl::json::from_json<ttsl::ShapeBase::Container>(json_object));
 }

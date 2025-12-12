@@ -11,6 +11,8 @@
 
 namespace tt::tt_metal {
 
+using ShapeBase = ttsl::ShapeBase;
+
 TEST(TensorShapeBaseTests, General4D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50});
     EXPECT_EQ(vec.view().size(), vec.view().size());

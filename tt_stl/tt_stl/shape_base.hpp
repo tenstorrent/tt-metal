@@ -12,7 +12,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
-namespace tt::tt_metal {
+namespace ttsl {
 
 // Inline implementation of operator[] index normalization to enable compiler optimization.
 // This allows the compiler to optimize hot loops that repeatedly index shapes, eliminating
@@ -40,7 +40,7 @@ inline int32_t normalized_index(int32_t index, size_t original_size, size_t cont
 // Container wrapper that allows negative indexing
 class ShapeBase {
 public:
-    using Container = tt::stl::SmallVector<uint32_t>;
+    using Container = ttsl::SmallVector<uint32_t>;
 
     ShapeBase() { init(); };
     explicit ShapeBase(const Container& shape) : value_(shape) { init(); }
@@ -50,7 +50,7 @@ public:
     explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) {
         init();
     }
-    explicit ShapeBase(tt::stl::Span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
+    explicit ShapeBase(ttsl::Span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
 
     template <std::size_t N>
     bool operator==(const std::array<uint32_t, N>& other) const {
@@ -84,7 +84,7 @@ public:
 
     Container::const_iterator cend() const { return this->value_.cend(); }
 
-    tt::stl::Span<const uint32_t> view() const { return tt::stl::Span<const uint32_t>{cbegin(), cend()}; }
+    ttsl::Span<const uint32_t> view() const { return ttsl::Span<const uint32_t>{cbegin(), cend()}; }
 
     bool empty() const { return original_size_ == 0; }
 
@@ -107,4 +107,4 @@ private:
     size_t original_size_ = 0;
 };
 
-}  // namespace tt::tt_metal
+}  // namespace ttsl

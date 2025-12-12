@@ -15,7 +15,7 @@
 
 namespace tt::tt_metal {
 
-class Shape final : protected ShapeBase {
+class Shape final : protected ttsl::ShapeBase {
 public:
     using ShapeBase::ShapeBase;
     using ShapeBase::operator[];
