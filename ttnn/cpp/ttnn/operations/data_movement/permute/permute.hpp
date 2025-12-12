@@ -15,12 +15,12 @@ struct ExecutePermute {
         const ttnn::Tensor& input_tensor,
         const SmallVector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<float>& pad_value = std::nullopt);
+        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const SmallVector<int64_t>& dims,
-        const std::optional<float>& pad_value = std::nullopt);
+        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
 };
 
 }  // namespace operations::data_movement

@@ -24,7 +24,7 @@ void bind_permute(py::module& module) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            pad_value (float, optional): padding value for when tiles are broken in a transpose. If set to None, no padding is performed and values may be uninitialized. If a value is provided, padding is performed with that value.
+            pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -40,7 +40,9 @@ void bind_permute(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int64_t>& dims,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<float>& pad_value) { return self(input_tensor, dims, memory_config, pad_value); },
+               const std::optional<float>& pad_value) {
+                return self(input_tensor, dims, memory_config, pad_value.value_or(0.0f));
+            },
             py::arg("input_tensor").noconvert(),
             py::arg("dims"),
             py::kw_only(),
