@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "impl/dispatch/command_queue.hpp"
-#include "impl/profiler/tt_metal_profiler.hpp"
+#include "impl/profiler/tt_metal_profiler_internal.hpp"
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
