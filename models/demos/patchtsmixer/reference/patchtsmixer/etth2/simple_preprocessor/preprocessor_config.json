@@ -1,0 +1,111 @@
+{
+  "categorical_columns": [],
+  "categorical_encoder": null,
+  "conditional_columns": [],
+  "context_length": 512,
+  "control_columns": [],
+  "encode_categorical": true,
+  "feature_extractor_type": "TimeSeriesPreprocessor",
+  "freq": "0 days 01:00:00",
+  "frequency_mapping": {
+    "10min": 4,
+    "15min": 5,
+    "2min": 2,
+    "30min": 6,
+    "5min": 3,
+    "D": 8,
+    "H": 7,
+    "W": 9,
+    "d": 8,
+    "h": 7,
+    "min": 1,
+    "oov": 0
+  },
+  "id_columns": [],
+  "input_columns": [
+    "HUFL",
+    "HULL",
+    "MUFL",
+    "MULL",
+    "LUFL",
+    "LULL",
+    "OT"
+  ],
+  "observable_columns": [],
+  "other_columns_to_scale": null,
+  "output_columns": [
+    "HUFL",
+    "HULL",
+    "MUFL",
+    "MULL",
+    "LUFL",
+    "LULL",
+    "OT"
+  ],
+  "prediction_length": null,
+  "processor_class": "TimeSeriesPreprocessor",
+  "scale_categorical_columns": true,
+  "scaler_args": {},
+  "scaler_dict": {},
+  "scaler_type": "standard",
+  "scaling": true,
+  "scaling_id_columns": [],
+  "scaling_id_columns_types": [],
+  "static_categorical_columns": [],
+  "target_columns": [
+    "HUFL",
+    "HULL",
+    "MUFL",
+    "MULL",
+    "LUFL",
+    "LULL",
+    "OT"
+  ],
+  "target_scaler_dict": {
+    "0": {
+      "copy": true,
+      "feature_names_in_": [
+        "HUFL",
+        "HULL",
+        "MUFL",
+        "MULL",
+        "LUFL",
+        "LULL",
+        "OT"
+      ],
+      "mean_": [
+        41.53683496078959,
+        12.273452896210882,
+        46.60977329964991,
+        10.526153112865156,
+        1.1869920139097505,
+        -2.373217913729173,
+        26.872023494265697
+      ],
+      "n_features_in_": 7,
+      "n_samples_seen_": 8640,
+      "scale_": [
+        10.448841072588488,
+        4.587112566531959,
+        16.858190332598408,
+        3.018605566682919,
+        4.641011217319063,
+        8.460910779279644,
+        11.584718923414682
+      ],
+      "var_": [
+        109.17827976021215,
+        21.04160169803542,
+        284.19858129011436,
+        9.111979567209104,
+        21.538985119281367,
+        71.58701121493046,
+        134.20571253452223
+      ],
+      "with_mean": true,
+      "with_std": true
+    }
+  },
+  "time_series_task": "forecasting",
+  "timestamp_column": "date"
+}
