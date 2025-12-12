@@ -29,8 +29,14 @@ void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_miss(
         attributes.summed_experts_per_group);
 
     TT_FATAL(attributes.n_groups == 8, "n_groups must be 8 at the moment. Got {}", attributes.n_groups);
+    TT_FATAL(attributes.topk_groups == 4, "topk_groups must be 4 at the moment. Got {}", attributes.topk_groups);
 
     TT_FATAL(scores.logical_shape()[-1] == 256, "Experts must be 256. Got {}", scores.logical_shape()[-1]);
+
+    TT_FATAL(
+        attributes.n_activated_experts == 8,
+        "n_activated_experts must be 8 at the moment. Got {}",
+        attributes.n_activated_experts);
 }
 
 void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_hit(

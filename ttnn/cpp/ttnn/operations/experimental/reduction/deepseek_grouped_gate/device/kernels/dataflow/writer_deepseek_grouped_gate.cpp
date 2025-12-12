@@ -4,16 +4,28 @@
 
 #include <cstdint>
 
+// Tile geometry constants for bf16 32x32 tiles with 16x16 faces
+namespace tile_constants {
+constexpr uint32_t rows_per_face = 16;
+constexpr uint32_t columns_per_face = 16;
+constexpr uint32_t rows_per_tile = 32;
+constexpr uint32_t columns_per_tile = 32;
+constexpr uint32_t elements_per_face = rows_per_face * columns_per_face;     // 256
+constexpr uint32_t elements_per_tile = rows_per_tile * columns_per_tile;     // 1024
+constexpr uint32_t bytes_per_element = 2;                                    // bf16
+constexpr uint32_t face_line_bytes = columns_per_face * bytes_per_element;   // 32
+constexpr uint32_t face_size_bytes = elements_per_face * bytes_per_element;  // 512
+constexpr uint32_t tile_size_bytes = elements_per_tile * bytes_per_element;  // 2048
+}  // namespace tile_constants
+
+using namespace tile_constants;
+
 FORCE_INLINE void generate_index_tile(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
-    constexpr uint32_t face_line = 16;
-    constexpr uint32_t face_line_bytes = 32;
-    constexpr uint32_t face_size_bytes = 512;
-
     // Create the top two faces by writing 1 face line, then using noc to write the rest of the face
     cb_reserve_back(cb_expert_index_template, 1);
     for (uint32_t width_face = 0; width_face < 2; width_face++) {
-        uint32_t current_index = start_expert_index + width_face * face_line;
+        uint32_t current_index = start_expert_index + width_face * columns_per_face;
         uint32_t index_write_face_offset = index_write_addr + width_face * face_size_bytes;
 
         uint64_t base_index_noc_addr = get_noc_addr(index_write_face_offset);
@@ -21,13 +33,13 @@ FORCE_INLINE void generate_index_tile(
         // write first 16 uint16_t values as 8 uint32_t writes
         volatile tt_l1_ptr uint32_t* index_cb_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_write_face_offset);
-        for (uint32_t i = 0; i < face_line / 2; i++) {
+        for (uint32_t i = 0; i < columns_per_face / 2; i++) {
             index_cb_ptr[i] = (current_index + 1) << 16 | current_index;
             current_index += 2;
         }
         // then use noc to write the rest of the face
         uint32_t dm_engine_index_write_offset = index_write_face_offset + face_line_bytes;
-        for (uint32_t i = 1; i < face_line; i++) {
+        for (uint32_t i = 1; i < rows_per_face; i++) {
             noc_async_read(base_index_noc_addr, dm_engine_index_write_offset, face_line_bytes);
             dm_engine_index_write_offset += face_line_bytes;
         }
@@ -44,10 +56,8 @@ FORCE_INLINE void generate_index_tile(
 
 FORCE_INLINE void generate_index_tiles(
     const uint32_t cb_expert_index_template, uint32_t width_tiles, uint32_t page_size) {
-    uint32_t write_addr = get_write_ptr(cb_expert_index_template);
-    constexpr uint32_t face_size = 16;
     for (uint32_t i = 0; i < width_tiles; i++) {
-        generate_index_tile(cb_expert_index_template, get_write_ptr(cb_expert_index_template), 32 * i);
+        generate_index_tile(cb_expert_index_template, get_write_ptr(cb_expert_index_template), columns_per_tile * i);
     }
 }
 
@@ -56,12 +66,6 @@ FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t cb_group_index_template, uint32_t width_tiles, uint32_t n_groups) {
     cb_reserve_back(cb_group_index_template, 1);  // max of 32 groups
     uint32_t base_write_addr = get_write_ptr(cb_group_index_template);
-    constexpr uint32_t face_line = 16;
-    constexpr uint32_t face_line_bytes = 32;
-    constexpr uint32_t num_tile_elements = 1024;
-    constexpr uint32_t num_tile_elements_div_2 = num_tile_elements / 2;
-    constexpr uint32_t face_size_bytes = 512;
-    constexpr uint32_t tile_size_bytes = 2048;
     // G x W x T slice of the tile is written
     // G x T subset of the tile is written, where G is the n_groups and T is the tokens
     // handle first face line
@@ -70,10 +74,10 @@ FORCE_INLINE void generate_group_indices_tiles(
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
     for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
         // 16 uint16_t values is 8 uint32_t writes
-        for (uint32_t i = 0; i < face_line / 2; i++) {
+        for (uint32_t i = 0; i < columns_per_face / 2; i++) {
             write_ptr[i] = (group_index) << 16 | group_index;
         }
-        if (group_index > 15) {
+        if (group_index > rows_per_face - 1) {
             // skip to face 3
             constexpr uint32_t skip_elements = face_size_bytes / sizeof(uint32_t);
             write_ptr += skip_elements;
@@ -113,21 +117,20 @@ FORCE_INLINE void generate_reduce_scalar(
     const uint32_t cb_reduce_ones_scalar, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
     // 32x32 tile where first row of each face should be {1.0bf16, 1.0bf16, ..., 1.0bf16} up until n_activated_experts
     cb_reserve_back(cb_reduce_ones_scalar, 1);
-    constexpr uint32_t face_size_bytes = 512;
-    constexpr uint32_t face_line_bytes = 32;
+
     uint32_t write_addr = get_write_ptr(cb_reduce_ones_scalar);
     tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
     // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
     uint16_t scalar = packed_scalar >> 16;
     for (uint32_t i = 0; i < n_activated_experts; i++) {
         write_ptr[i] = scalar;
-        if (i > 15) {
-            write_ptr[i + 241] = scalar;
+        if (i > rows_per_face - 1) {
+            write_ptr[i + elements_per_face - columns_per_face + 1] = scalar;
         }
     }
-    for (uint32_t i = n_activated_experts; i < 32; i++) {
+    for (uint32_t i = n_activated_experts; i < rows_per_tile; i++) {
         write_ptr[i] = 0;
-        if (i == 16) {
+        if (i == rows_per_face) {
             noc_async_read(get_noc_addr(MEM_ZEROS_BASE), write_addr + face_size_bytes, face_line_bytes);
         }
     }
@@ -150,10 +153,6 @@ FORCE_INLINE void generate_summed_experts_tiles(
     uint32_t tokens_per_tile) {
     // copy 0,...,summed_experts_per_group-1 rows from cb_sorted_group_scores to 0,...,summed_experts_per_group-1 tile
     // in cb_top_experts_per_group for each width_tile
-    constexpr uint32_t face_line_bytes = 32;
-    constexpr uint32_t tile_size_bytes = 2048;
-    constexpr uint32_t face_size_bytes = 512;
-
     // for each group, copy the top experts_per_group rows to cb_top_experts_per_group
     // summed_experts_per_group has experts_per_group tiles, each tile is 32x32 bf16 values, divided into 16x16 faces
     // in our case, for now, width_tiles = n_groups
@@ -175,7 +174,7 @@ FORCE_INLINE void generate_summed_experts_tiles(
                     group_sorted_tile_ptr + i * face_line_bytes,
                     get_write_ptr(cb_top_experts_per_group) + i * tile_size_bytes + width_tile * face_line_bytes,
                     face_line_bytes);
-                if (tokens_per_tile > 16) {
+                if (tokens_per_tile > rows_per_face) {
                     // Source: Face 1 row i (tokens 16-31 after transpose)
                     // Dest: Face 1 of tile i, row = width_tile (layout is [groups, tokens])
                     noc_async_read(
@@ -193,14 +192,14 @@ FORCE_INLINE void generate_summed_experts_tiles(
                 // Source: Face 2 row (15-i) for tokens 0-15
                 // Dest: Face 0 of tile i, row = width_tile
                 noc_async_read(
-                    group_sorted_tile_ptr + (15 - i) * face_line_bytes,
+                    group_sorted_tile_ptr + (rows_per_face - 1 - i) * face_line_bytes,
                     get_write_ptr(cb_top_experts_per_group) + i * tile_size_bytes + width_tile * face_line_bytes,
                     face_line_bytes);
-                if (tokens_per_tile > 16) {
+                if (tokens_per_tile > rows_per_face) {
                     // Source: Face 3 row (15-i) for tokens 16-31
                     // Dest: Face 1 of tile i, row = width_tile (layout is [groups, tokens])
                     noc_async_read(
-                        group_sorted_tile_ptr + face_size_bytes + (15 - i) * face_line_bytes,
+                        group_sorted_tile_ptr + face_size_bytes + (rows_per_face - 1 - i) * face_line_bytes,
                         get_write_ptr(cb_top_experts_per_group) + face_size_bytes + i * tile_size_bytes +
                             width_tile * face_line_bytes,
                         face_line_bytes);
@@ -223,10 +222,6 @@ template <
     uint32_t topk_groups,
     uint32_t num_group_tiles>
 FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
-    constexpr uint32_t tile_size_bytes = 2048;
-    constexpr uint32_t face_size_bytes = 512;
-    constexpr uint32_t face_line_bytes = 32;
-
     cb_wait_front(cb_biased_scores, width_tiles);
     cb_wait_front(cb_expert_index_template, width_tiles);
     cb_wait_front(cb_sorted_group_order, num_group_tiles);
@@ -252,50 +247,70 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
         uint32_t k_indices_offset_0_15;
         uint32_t k_indices_offset_16_31;
 
-        if (k < 16) {
-            k_indices_offset_0_15 = k * 16;
-            k_indices_offset_16_31 = 256 + k * 16;
+        if (k < rows_per_face) {
+            k_indices_offset_0_15 = k * rows_per_face;
+            k_indices_offset_16_31 = elements_per_face + k * rows_per_face;
         } else {
-            k_indices_offset_0_15 = 512 + (k - 16) * 16;
-            k_indices_offset_16_31 = 768 + (k - 16) * 16;
+            k_indices_offset_0_15 = 2 * elements_per_face + (k - rows_per_face) * rows_per_face;
+            k_indices_offset_16_31 = 3 * elements_per_face + (k - rows_per_face) * rows_per_face;
         }
 
         // Part 1: t < 16
-        uint32_t limit_part1 = (tokens_per_tile < 16) ? tokens_per_tile : 16;
+        uint32_t last_row = (tokens_per_tile < rows_per_face) ? tokens_per_tile : rows_per_face;
 
 #pragma GCC unroll 16
-        for (uint32_t t = 0; t < limit_part1; t++) {
+        for (uint32_t t = 0; t < last_row; t++) {
             uint16_t winning_group_idx = sorted_indices_ptr[k_indices_offset_0_15 + t];
             uint64_t src_tile_offset = winning_group_idx * tile_size_bytes;
 
-            uint32_t ro_p1 = t * face_line_bytes;
-            uint32_t ro_p2 = face_size_bytes + ro_p1;
+            uint32_t row_faceline1 = t * face_line_bytes;
+            uint32_t row_faceline2 = face_size_bytes + row_faceline1;
 
-            noc_async_read(scores_base_noc_addr + src_tile_offset + ro_p1, scores_dest_addr + ro_p1, face_line_bytes);
-            noc_async_read(indices_base_noc_addr + src_tile_offset + ro_p1, indices_dest_addr + ro_p1, face_line_bytes);
-            noc_async_read(scores_base_noc_addr + src_tile_offset + ro_p2, scores_dest_addr + ro_p2, face_line_bytes);
-            noc_async_read(indices_base_noc_addr + src_tile_offset + ro_p2, indices_dest_addr + ro_p2, face_line_bytes);
+            noc_async_read(
+                scores_base_noc_addr + src_tile_offset + row_faceline1,
+                scores_dest_addr + row_faceline1,
+                face_line_bytes);
+            noc_async_read(
+                indices_base_noc_addr + src_tile_offset + row_faceline1,
+                indices_dest_addr + row_faceline1,
+                face_line_bytes);
+            noc_async_read(
+                scores_base_noc_addr + src_tile_offset + row_faceline2,
+                scores_dest_addr + row_faceline2,
+                face_line_bytes);
+            noc_async_read(
+                indices_base_noc_addr + src_tile_offset + row_faceline2,
+                indices_dest_addr + row_faceline2,
+                face_line_bytes);
         }
 
         // Part 2: t >= 16
-        if (tokens_per_tile > 16) {
+        if (tokens_per_tile > rows_per_face) {
 #pragma GCC unroll 16
-            for (uint32_t t = 16; t < tokens_per_tile; t++) {
-                uint16_t winning_group_idx = sorted_indices_ptr[k_indices_offset_16_31 + (t - 16)];
+            for (uint32_t t = rows_per_face; t < tokens_per_tile; t++) {
+                uint16_t winning_group_idx = sorted_indices_ptr[k_indices_offset_16_31 + (t - rows_per_face)];
                 uint64_t src_tile_offset = winning_group_idx * tile_size_bytes;
 
-                uint32_t t_off = (t - 16) * face_line_bytes;
-                uint32_t ro_p1 = 2 * face_size_bytes + t_off;
-                uint32_t ro_p2 = 3 * face_size_bytes + t_off;
+                uint32_t t_off = (t - rows_per_face) * face_line_bytes;
+                uint32_t row_faceline1 = 2 * face_size_bytes + t_off;
+                uint32_t row_faceline2 = 3 * face_size_bytes + t_off;
 
                 noc_async_read(
-                    scores_base_noc_addr + src_tile_offset + ro_p1, scores_dest_addr + ro_p1, face_line_bytes);
+                    scores_base_noc_addr + src_tile_offset + row_faceline1,
+                    scores_dest_addr + row_faceline1,
+                    face_line_bytes);
                 noc_async_read(
-                    indices_base_noc_addr + src_tile_offset + ro_p1, indices_dest_addr + ro_p1, face_line_bytes);
+                    indices_base_noc_addr + src_tile_offset + row_faceline1,
+                    indices_dest_addr + row_faceline1,
+                    face_line_bytes);
                 noc_async_read(
-                    scores_base_noc_addr + src_tile_offset + ro_p2, scores_dest_addr + ro_p2, face_line_bytes);
+                    scores_base_noc_addr + src_tile_offset + row_faceline2,
+                    scores_dest_addr + row_faceline2,
+                    face_line_bytes);
                 noc_async_read(
-                    indices_base_noc_addr + src_tile_offset + ro_p2, indices_dest_addr + ro_p2, face_line_bytes);
+                    indices_base_noc_addr + src_tile_offset + row_faceline2,
+                    indices_dest_addr + row_faceline2,
+                    face_line_bytes);
             }
         }
     }
@@ -325,11 +340,6 @@ template <
     uint32_t n_activated_experts,
     uint32_t n_activated_expert_tiles>
 FORCE_INLINE void gather(uint32_t tokens_per_tile) {
-    constexpr uint32_t tile_size_bytes = 2048;
-    constexpr uint32_t face_size_bytes = 512;
-    constexpr uint32_t face_line_bytes = 32;
-    constexpr uint32_t elements_per_face_row = 16;
-
     cb_wait_front(cb_sigmoid_scores, width_tiles);
     cb_wait_front(cb_out_indices, 1);
 
@@ -346,39 +356,38 @@ FORCE_INLINE void gather(uint32_t tokens_per_tile) {
 
     for (uint32_t token = 0; token < tokens_per_tile; token++) {
         // Token's row position within tile faces
-        uint32_t token_face_row = token % 16;
+        uint32_t token_face_row = token % rows_per_face;
         // Face base: 0 for rows 0-15, 2 for rows 16-31 (faces 0/1 vs 2/3)
-        uint32_t token_face_base = (token < 16) ? 0 : 2;
+        uint32_t token_face_base = (token < rows_per_face) ? 0 : 2;
 
         for (uint32_t expert = 0; expert < n_activated_experts; expert++) {
             // Calculate index position in indices tile
             // indices tile layout: row=token, col=expert
             uint32_t idx_col = expert;
-            uint32_t idx_face_col = idx_col % 16;
-            uint32_t idx_face = token_face_base + (idx_col < 16 ? 0 : 1);
+            uint32_t idx_face_col = idx_col % columns_per_face;
+            uint32_t idx_face = token_face_base + (idx_col < columns_per_face ? 0 : 1);
             // Each face is 256 uint16 elements (16x16), laid out row-major within face
-            uint32_t idx_offset =
-                idx_face * (face_size_bytes / 2) + token_face_row * elements_per_face_row + idx_face_col;
+            uint32_t idx_offset = idx_face * (face_size_bytes / 2) + token_face_row * columns_per_face + idx_face_col;
 
             // Read the expert index
             uint16_t expert_idx = indices_ptr[idx_offset];
 
             // Calculate sigmoid position: tile = expert_idx / 32, col = expert_idx % 32
-            uint32_t sigmoid_tile = expert_idx / 32;
-            uint32_t sigmoid_col = expert_idx % 32;
-            uint32_t sigmoid_face_col = sigmoid_col % 16;
-            uint32_t sigmoid_face = token_face_base + (sigmoid_col < 16 ? 0 : 1);
+            uint32_t sigmoid_tile = expert_idx / columns_per_tile;
+            uint32_t sigmoid_col = expert_idx % columns_per_tile;
+            uint32_t sigmoid_face_col = sigmoid_col % columns_per_face;
+            uint32_t sigmoid_face = token_face_base + (sigmoid_col < columns_per_face ? 0 : 1);
             // Offset into sigmoid buffer (multiple tiles)
             uint32_t sigmoid_offset = sigmoid_tile * (tile_size_bytes / 2) + sigmoid_face * (face_size_bytes / 2) +
-                                      token_face_row * elements_per_face_row + sigmoid_face_col;
+                                      token_face_row * columns_per_face + sigmoid_face_col;
 
             uint16_t sigmoid_val = sigmoid_ptr[sigmoid_offset];
 
             // Write to gathered CB at position [token, expert]
-            uint32_t gathered_face_col = idx_col % 16;
-            uint32_t gathered_face = token_face_base + (idx_col < 16 ? 0 : 1);
+            uint32_t gathered_face_col = idx_col % columns_per_face;
+            uint32_t gathered_face = token_face_base + (idx_col < columns_per_face ? 0 : 1);
             uint32_t gathered_offset =
-                gathered_face * (face_size_bytes / 2) + token_face_row * elements_per_face_row + gathered_face_col;
+                gathered_face * (face_size_bytes / 2) + token_face_row * columns_per_face + gathered_face_col;
 
             gathered_ptr[gathered_offset] = sigmoid_val;
         }

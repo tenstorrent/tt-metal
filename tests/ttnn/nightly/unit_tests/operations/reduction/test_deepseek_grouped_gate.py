@@ -195,11 +195,11 @@ def assert_in_valid_outcomes(
         # have experts in the final top-k selection
         group_selection_valid = any(ttnn_group_set.issubset(combo) for combo in valid_group_combos)
         if not group_selection_valid:
-            logger.info(f"Row {row}: TTNN group selection not subset of any valid combination")
-            logger.info(f"  TTNN groups: {sorted(ttnn_group_set)}")
-            logger.info(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
-            logger.info(f"  Group scores: {row_group_scores.tolist()}")
-            logger.info(f"  TTNN indices: {ttnn_indices_2d[row].tolist()}")
+            logger.debug(f"Row {row}: TTNN group selection not subset of any valid combination")
+            logger.debug(f"  TTNN groups: {sorted(ttnn_group_set)}")
+            logger.debug(f"  Valid group combos: {[sorted(c) for c in valid_group_combos]}")
+            logger.debug(f"  Group scores: {row_group_scores.tolist()}")
+            logger.debug(f"  TTNN indices: {ttnn_indices_2d[row].tolist()}")
             raise AssertionError(f"Row {row}: Invalid group selection")
 
         # Find which valid combo(s) contain TTNN's groups
@@ -214,10 +214,10 @@ def assert_in_valid_outcomes(
 
         # Check if TTNN's expert selection is valid
         if ttnn_expert_set not in all_valid_expert_sets:
-            logger.info(f"Row {row}: TTNN expert selection not in valid sets")
-            logger.info(f"  TTNN experts: {sorted(ttnn_expert_set)}")
-            logger.info(f"  Matching group combos: {[sorted(c) for c in matching_combos]}")
-            logger.info(f"  Sample valid expert sets: {[sorted(s) for s in all_valid_expert_sets[:5]]}...")
+            logger.debug(f"Row {row}: TTNN expert selection not in valid sets")
+            logger.debug(f"  TTNN experts: {sorted(ttnn_expert_set)}")
+            logger.debug(f"  Matching group combos: {[sorted(c) for c in matching_combos]}")
+            logger.debug(f"  Sample valid expert sets: {[sorted(s) for s in all_valid_expert_sets[:5]]}...")
             raise AssertionError(f"Row {row}: Invalid expert selection for the chosen groups")
 
         # Compute expected weights for TTNN's selection
@@ -235,10 +235,10 @@ def assert_in_valid_outcomes(
             ttnn_weights_sorted.float(), expected_weights_sorted.float(), rtol=weight_rtol, atol=weight_atol
         ):
             max_diff = (ttnn_weights_sorted.float() - expected_weights_sorted.float()).abs().max()
-            logger.info(f"Row {row}: Weights don't match expected for selected experts")
-            logger.info(f"  TTNN weights:     {ttnn_weights_sorted}")
-            logger.info(f"  Expected weights: {expected_weights_sorted}")
-            logger.info(f"  Max diff: {max_diff}")
+            logger.debug(f"Row {row}: Weights don't match expected for selected experts")
+            logger.debug(f"  TTNN weights:     {ttnn_weights_sorted}")
+            logger.debug(f"  Expected weights: {expected_weights_sorted}")
+            logger.debug(f"  Max diff: {max_diff}")
             raise AssertionError(f"Row {row}: Weight mismatch (max_diff={max_diff})")
 
         # Track statistics
@@ -253,7 +253,7 @@ def assert_in_valid_outcomes(
         else:
             stats["exact_match"] += 1
 
-    logger.info(
+    logger.debug(
         f"✓ All {num_rows} rows passed exhaustive validation: "
         f"{stats['exact_match']} exact, {stats['group_tie']} group ties, "
         f"{stats['expert_tie']} expert ties, {stats['both_tie']} both"
@@ -419,7 +419,7 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
     # Random route_scale between 0.1 and 1.1
     route_scale = torch.rand(1).item() + 0.1
 
-    logger.info(
+    logger.debug(
         f"Testing: num_batches={num_batches}, batch_size={batch_size}, seq_len={seq_len}, route_scale={route_scale:.4f}"
     )
 
@@ -447,11 +447,11 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
 
-    logger.info(f"torch_top_k_experts_indices: {torch_top_k_experts_indices[-1, -1, -1, :]}")
-    logger.info(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices[-1, -1, -1, :]}")
+    logger.debug(f"torch_top_k_experts_indices: {torch_top_k_experts_indices[-1, -1, -1, :]}")
+    logger.debug(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices[-1, -1, -1, :]}")
 
-    logger.info(f"torch_scores: {torch_scores[-1, -1, -1, :]}")
-    logger.info(f"ttnn_scores: {ttnn_scores[-1, -1, -1, :]}")
+    logger.debug(f"torch_scores: {torch_scores[-1, -1, -1, :]}")
+    logger.debug(f"ttnn_scores: {ttnn_scores[-1, -1, -1, :]}")
 
     # Exhaustive validation: verify TTNN result is one of the valid outcomes
     # considering all possible tie-breaking decisions at group and expert levels
