@@ -13,17 +13,17 @@ class IDevice;
 
 namespace detail {
 
+// clang-format off
 /**
  * Initialize device profiling data buffers
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice*        |                           |
- * True     |
+ * | Argument | Description                                    | Type     | Valid Range | Required |
+ * |----------|------------------------------------------------|----------|-------------|----------|
+ * | device   | The device holding the program being profiled. | IDevice* |             | True     |
  * */
+// clang-format on
 void InitDeviceProfiler(IDevice* device);
 
 // clang-format off
@@ -46,15 +46,17 @@ void ReadDeviceProfilerResults(
     ProfilerReadState = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+// clang-format off
 /**
  * Sync TT devices with host
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | Argument | Description                     | Type               | Valid Range | Required |
+ * |----------|---------------------------------|--------------------|-------------|----------|
+ * | state    | The state to use for sync       | ProfilerSyncState  |             | Yes      |
  * */
+// clang-format on
 void ProfilerSync(ProfilerSyncState state);
 
 }  // namespace detail
