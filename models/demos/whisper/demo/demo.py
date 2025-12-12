@@ -768,7 +768,7 @@ def test_demo_for_conditional_generation(
     ):
         metrics_dictionary = {
             2: {"prefill_time_to_token": 0.19, "decode_t/s/u": 130.0},
-            8: {"prefill_time_to_token": 0.22, "decode_t/s/u": 85.0},
+            8: {"prefill_time_to_token": 0.22, "decode_t/s/u": 105.0},
             32: {"prefill_time_to_token": 0.28, "decode_t/s/u": 80.0},
         }
         if is_blackhole():
