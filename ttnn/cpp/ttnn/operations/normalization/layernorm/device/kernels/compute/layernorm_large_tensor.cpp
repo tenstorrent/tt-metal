@@ -16,7 +16,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "layernorm_utils.h"
+#include "layernorm_compute_utils.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
