@@ -346,6 +346,11 @@ def run_conv(
                 pcc = 0.97
         elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
             pcc = 0.996
+        elif activation is not None and activation.op_type == ttnn.UnaryOpType.SIGMOID:
+            # Scale down PCC for sigmoid.
+            # The sigmoid function relies on the exp approximation, which can introduce small discrepancies in output values.
+            # This necessitates a slightly lower PCC threshold, similar to the adjustment for tanh.
+            pcc = 0.995
         else:
             pcc = 0.997
 
