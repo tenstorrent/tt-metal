@@ -37,7 +37,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
 
     // Single-core factory must not assume a (0,0)-based contiguous grid. Pick the first available compute core.
     const CoreCoord core = compute_cores.ranges().front().start_coord;
-    log_info(tt::LogOp, "Used compute core: {}", core);
+    log_debug(tt::LogOp, "Used compute core: {}", core);
     const CoreRangeSet all_cores(std::vector{CoreRange(core, core)});
 
     // Single-core work split: everything runs on the chosen `core`.
