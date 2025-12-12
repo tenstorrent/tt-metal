@@ -500,8 +500,12 @@ class TtSDXLPipeline(LightweightModule):
         # Generate random latents
         latents_list = []
         for index in range(self.batch_size):
+            # Create generator from seed if provided for reproducibility
+            # Using torch.Generator() ensures consistent results with original implementation
+            generator = None
             if start_latent_seed is not None:
-                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                generator = torch.Generator()
+                generator.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
             latents = self.torch_pipeline.prepare_latents(
                 1,
                 num_channels_latents,
@@ -509,7 +513,7 @@ class TtSDXLPipeline(LightweightModule):
                 width,
                 all_prompt_embeds_torch.dtype,
                 self.cpu_device,
-                None,
+                generator,
                 None,
             )
             B, C, H, W = latents.shape  # 1, 4, 128, 128
