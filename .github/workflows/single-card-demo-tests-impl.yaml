@@ -227,7 +227,7 @@ jobs:
         env:
           # When ops recording is enabled, wrap pytest with Tracy profiler
           # Tracy flags: -r (report), -p (device profiler), --dump-device-data-mid-run (prevent buffer overflow)
-          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run --op-support-count=10000 -m pytest' || 'pytest' }}
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run --op-support-count=30000 -m pytest' || 'pytest' }}
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
