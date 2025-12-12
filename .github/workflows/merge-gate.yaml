@@ -113,6 +113,23 @@ jobs:
       version: 22.04
       skip-tt-train: false
 
+  build-asan:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true'
+        }}
+    needs: find-changes
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ASan
+      version: 22.04
+      skip-tt-train: false
+      publish-artifact: false
+
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
@@ -129,6 +146,7 @@ jobs:
       version: 24.04
       skip-tt-train: false
       publish-artifact: false
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
 
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
