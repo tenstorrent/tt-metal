@@ -14,7 +14,6 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0, neares
 from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
-    cap_seq_lens_to_max_prefill_chunk_size,
     get_out_subblock_w,
     num_to_core_range_set,
 )
@@ -875,7 +874,7 @@ class ModelArgs(TTModelArgs):
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = self.max_prefill_chunk_size
+        DEFAULT_VALUE = 8192
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "gemma-3-4b": 4096
@@ -884,7 +883,7 @@ class ModelArgs(TTModelArgs):
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
 
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_seq_len
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
@@ -910,7 +909,7 @@ class ModelArgs(TTModelArgs):
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
             # EXAMPLE: "gemma-3-4b": {
-            #     "N150": [128, 1024, 2048],
+            #     "N150": [128, 256, 512, 1024, 2048],
             # }
         }
 
@@ -920,12 +919,12 @@ class ModelArgs(TTModelArgs):
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+            return result
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+            return result
 
         # No supported sequence lengths found, return empty list
         return []
