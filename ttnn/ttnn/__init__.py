@@ -295,6 +295,7 @@ from ttnn.decorators import (
     register_post_operation_hook,
     register_pre_operation_hook,
     register_python_operation,
+    sub_device,
 )
 
 

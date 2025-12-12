@@ -136,8 +136,12 @@ def command_queue(cq_id: int):
 
 
 @contextmanager
-def sub_device(device: ttnn.MeshDevice, sub_device_id: int):
+def sub_device(device: ttnn.MeshDevice, sub_device_id: ttnn.SubDeviceId):
     """Context manager to set a sub device for all TTNN operations within this context."""
+    # Pybind expects a SubDeviceId object, but most Python call-sites naturally pass an int.
+    if isinstance(sub_device_id, int):
+        sub_device_id = ttnn.SubDeviceId(sub_device_id)
+
     guard = device.set_current_sub_device(sub_device_id)
     try:
         yield
@@ -377,19 +381,16 @@ class FastOperation:
         return hash(self.python_fully_qualified_name)
 
     def __call__(self, *function_args, **function_kwargs):
-        cq_id = None
-        if "queue_id" in function_kwargs:
-            cq_id = function_kwargs.pop("queue_id")
-        elif "cq_id" in function_kwargs:
-            cq_id = function_kwargs.pop("cq_id")
+        from contextlib import nullcontext
 
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
-        else:
-            with command_queue(cq_id):
-                result = self.function(*function_args, **function_kwargs)
+        cq_id = function_kwargs.pop("queue_id", None) or function_kwargs.pop("cq_id", None)
+        sub_device_id = function_kwargs.pop("sub_device_id", None)
 
-        return result
+        cq_ctx = command_queue(cq_id) if cq_id is not None else nullcontext()
+        sd_ctx = sub_device(ttnn.GetDefaultDevice(), sub_device_id) if sub_device_id is not None else nullcontext()
+
+        with cq_ctx, sd_ctx:
+            return self.function(*function_args, **function_kwargs)
 
     def __post_init__(self):
         if self.function.__doc__ is None:
