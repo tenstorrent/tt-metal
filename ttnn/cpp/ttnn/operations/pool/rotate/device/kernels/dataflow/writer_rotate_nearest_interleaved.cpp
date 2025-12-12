@@ -4,8 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-// Include for tensor accessor and common utilities
-#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 
 void kernel_main() {
     // Runtime arguments
