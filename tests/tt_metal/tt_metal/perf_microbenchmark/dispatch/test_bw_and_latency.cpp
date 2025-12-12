@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
                             }
                         } else {
                             uint32_t* pcie_addr = ((uint32_t*)pcie_base) + offset;
-                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)&blank[0], page_size_g);
+                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)blank.data(), page_size_g);
                         }
                         page++;
                     }
