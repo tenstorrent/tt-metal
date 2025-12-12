@@ -482,6 +482,13 @@ const distributed::multihost::DistributedContext& MetalContext::full_world_distr
 }
 
 const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+    log_critical(tt::LogMetal, "Getting global distributed context");
+    // Get all compute mesh IDs (excludes switches) from control plane mesh graph
+    this->get_control_plane().get_mesh_graph();
+
+    log_critical(tt::LogMetal, "Getting compute only distributed context");
+
+    return *distributed_context_;
     // Lazy initilazation of compute only distributed context
     if (!compute_only_distributed_context_) {
         compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
@@ -616,6 +623,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
+        log_critical(tt::LogMetal, "Initializing control plane");
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
