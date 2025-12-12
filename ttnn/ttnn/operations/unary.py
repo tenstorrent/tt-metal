@@ -101,7 +101,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
             "softsign": torch.nn.functional.softsign,
-            "swish": torch.nn.functional.hardswish,
+            "swish": torch.nn.functional.silu,
             "tril": torch.tril,
             "triu": torch.triu,
         }
