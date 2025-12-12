@@ -17,7 +17,7 @@
 
 namespace tt::tt_metal {
 
-LightMetalCaptureContext::LightMetalCaptureContext() : is_tracing_(false) {}
+LightMetalCaptureContext::LightMetalCaptureContext() = default;
 
 // Singleton instance accessor
 LightMetalCaptureContext& LightMetalCaptureContext::get() {
