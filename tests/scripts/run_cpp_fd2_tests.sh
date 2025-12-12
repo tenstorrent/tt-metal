@@ -13,16 +13,20 @@ run_test_with_watcher() {
     TT_METAL_WATCHER=1 TT_METAL_WATCHER_NOINLINE=1 $1
     echo
 };
-#############################################
-# TEST_PREFETCHER TESTS                     #
-#############################################
-echo "Running test_prefetcher with fast dispatch mode..";
+# Unset the variable for these tests
+(
+    unset TT_METAL_SLOW_DISPATCH_MODE
+    #############################################
+    # TEST_PREFETCHER TESTS                     #
+    #############################################
+    echo "Running test_prefetcher with fast dispatch mode..";
 
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher"
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher"
 
-#############################################
-# TEST_DISPATCHER TESTS                     #
-#############################################
-echo "Running test_dispatcher with fast dispatch mode..";
+    #############################################
+    # TEST_DISPATCHER TESTS                     #
+    #############################################
+    echo "Running test_dispatcher with fast dispatch mode..";
 
-run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher"
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher"
+)

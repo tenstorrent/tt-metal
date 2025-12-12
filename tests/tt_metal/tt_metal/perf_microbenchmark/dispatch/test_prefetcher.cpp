@@ -146,8 +146,8 @@ protected:
 
     void SetUp() override {
         BaseTestFixture::SetUp();
-        dram_base_ = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        num_banks_ = device_->allocator()->get_num_banks(BufferType::DRAM);
+        dram_base_ = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+        num_banks_ = device_->allocator_impl()->get_num_banks(BufferType::DRAM);
         l1_alignment_ = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
         packed_write_max_unicast_sub_cmds_ =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
@@ -369,7 +369,7 @@ protected:
             uint32_t page_idx = sub_cmd.start_page;
             for (uint32_t i = 0; i < length_words; i += page_size_words) {
                 uint32_t dram_bank_id = page_idx % num_banks_;
-                auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+                auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
                 CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
                 uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_banks_));
 
@@ -433,7 +433,7 @@ public:
             uint32_t page_idx = ringbuffer_cmd.start_page;
             for (uint32_t i = 0; i < length_words; i += page_size_words) {
                 uint32_t dram_bank_id = page_idx % num_banks_;
-                auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+                auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
                 CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
                 uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_banks_));
 
@@ -852,7 +852,7 @@ protected:
             uint32_t bank_offset = validation_base_addr_words + page_size_words * (page_idx / num_banks_);
 
             // Get the logical core for this bank
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
             uint32_t words_to_read = page_size_words;
             if (page_idx == last_page - 1) {
@@ -1139,7 +1139,7 @@ public:
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_id / info_.num_banks_));
 
             // Get the logical core for this bank
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
             // Update DeviceData for paged read
@@ -1259,7 +1259,7 @@ TEST_P(BasePrefetcherTestFixture, TestTerminate) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
@@ -1330,7 +1330,7 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
     const CoreCoord last_worker = first_worker;
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
     // Compute NOC encoding once
     const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
@@ -1367,7 +1367,7 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
             uint32_t bank_offset = page_size_words * (page_id / num_banks_);
 
             // Get the logical core for this bank
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
             // Update DeviceData for paged read
@@ -1405,7 +1405,7 @@ TEST_P(PrefecherHostTextFixture, HostTest) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
     // Write data into L1 for prefetcher to read it later
     MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
@@ -1476,7 +1476,7 @@ TEST_P(PrefetcherPackedReadTestFixture, PackedReadTest) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
     // Compute NOC encoding once
@@ -1547,7 +1547,7 @@ TEST_P(PrefetcherRingbufferReadTestFixture, RingbufferReadTest) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
     // Compute NOC encoding once
@@ -1621,7 +1621,7 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
     const CoreCoord last_worker = first_worker;  // {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
     // Compute NOC encoding once
     const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
@@ -1629,7 +1629,7 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
-    const uint32_t page_size_alignment_bytes = device_->allocator()->get_alignment(BufferType::DRAM);
+    const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
@@ -1653,7 +1653,7 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
             const uint32_t bank_id = page_id % num_banks_;
 
             // Get the logical core for this bank
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
             // Generate payload with page id
@@ -1698,7 +1698,7 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
             uint32_t bank_offset = dram_data_size_words + page_size_words * (page_id / num_banks_);
 
             // Get the logical core for this bank
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
             // Update DeviceData for paged read
@@ -1727,7 +1727,7 @@ TEST_P(RandomTestFixture, RandomTest) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
@@ -1809,7 +1809,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = mmio_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
     // Compute NOC encoding: Destination (Worker on Remote Device) -> Use device_ (Chip 1)
@@ -1817,7 +1817,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     const uint32_t noc_xy = remote_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
 
     // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
-    auto mmio_dram_base = mmio_device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    auto mmio_dram_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
     DeviceData device_data(
         mmio_device_, worker_range, l1_base, mmio_dram_base, nullptr, false, dram_data_size_words, cfg_);
 
@@ -1863,7 +1863,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
 
         // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
         const uint32_t dram_bank_id = 0;
-        auto dram_channel = mmio_device_->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+        auto dram_channel = mmio_device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
         CoreCoord dram_logical_core = mmio_device_->logical_core_from_dram_channel(dram_channel);
         CoreCoord dram_physical_core = MetalContext::instance()
                                            .get_cluster()
@@ -1872,7 +1872,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         cmd.relay_linear_h.noc_xy_addr =
             mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dram_physical_core);
 
-        [[maybe_unused]] auto offset = mmio_device_->allocator()->get_bank_offset(BufferType::DRAM, dram_bank_id);
+        [[maybe_unused]] auto offset = mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, dram_bank_id);
         // Read from DRAM result data address where data is stored
         // DeviceData uses the logical coordinates as keys
         cmd.relay_linear_h.addr = mmio_dram_base + offset;
@@ -1912,7 +1912,7 @@ TEST_P(PrefetcherSmokeTestFixture, SmokeTest) {
     const CoreCoord last_worker = first_worker;
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
     DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
@@ -2058,7 +2058,7 @@ TEST_P(PrefetcherSmokeTestFixture, HostSmokeTest) {
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
-    const uint32_t l1_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
     // Get completion queue buffer pointer
     void* completion_queue_buffer = mgr_->get_completion_queue_ptr(fdcq_->id());
