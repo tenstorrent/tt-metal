@@ -10,6 +10,7 @@ import torch.nn as nn
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multicore_common
+from ttnn.operations.pool import golden_upsample
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -49,8 +50,18 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
         pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
 
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = torch_upsample(input)
+
+    torch_input_formatted = input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, num_channels)
+    torch_result = golden_upsample(
+        input_tensor=torch_input_formatted,
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=num_channels,
+        scale_factor=scale_factor,
+        mode="nearest",
+    )
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels).permute(0, 3, 1, 2)
 
     scale_factor = (scale_h, scale_w)
 
@@ -103,8 +114,20 @@ def test_bilinear_interleaved_memory(
     tt_input = torch_input.permute(0, 2, 3, 1)
     input_tensor = ttnn.from_torch(tt_input, device=device)
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
-    torch_result = torch_upsample(torch_input)
+    # Use golden function
+    from ttnn.operations.pool import golden_upsample
+
+    torch_input_formatted = torch_input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, num_channels)
+    torch_result = golden_upsample(
+        input_tensor=torch_input_formatted,
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=num_channels,
+        scale_factor=scale_factor,
+        mode=mode,
+    )
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels).permute(0, 3, 1, 2)
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=math_fidelity,
