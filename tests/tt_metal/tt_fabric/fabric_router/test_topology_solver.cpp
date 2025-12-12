@@ -1207,7 +1207,7 @@ AdjacencyGraph<NodeId> create_2d_mesh_graph(size_t rows, size_t cols) {
     using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
     AdjacencyMap adj_map;
 
-    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return row * cols + col; };
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return (row * cols) + col; };
 
     for (size_t row = 0; row < rows; ++row) {
         for (size_t col = 0; col < cols; ++col) {
