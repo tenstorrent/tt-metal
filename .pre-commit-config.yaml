@@ -64,6 +64,14 @@ repos:
       pass_filenames: false
 - repo: local
   hooks:
+    - id: block-ttnn-pybind-changes
+      name: Prevent edits to frozen pybind11 sources under ttnn
+      entry: python3 scripts/block_ttnn_pybind_changes.py
+      language: system
+      pass_filenames: true
+      files: ^ttnn/
+- repo: local
+  hooks:
     - id: convert-notebooks-to-py
       name: Convert .ipynb to .py for ttnn basic examples
       entry: python3 scripts/convert_notebooks_to_python.py
