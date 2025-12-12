@@ -401,7 +401,6 @@ void DeepseekGroupedGateDeviceOperation::ProgramFactory::override_runtime_argume
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // Placeholder for runtime argument override logic
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
