@@ -501,18 +501,6 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
-CoreRangeSet Device::get_compute_cores(std::optional<SubDeviceId> sub_device_id) const {
-    auto requested_sub_device_id = current_sub_device_id_.value_or(sub_device_id.value_or(SubDeviceId(0)));
-    const auto& sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    const auto& sub_device = sub_device_manager->sub_device(requested_sub_device_id);
-    return sub_device.cores(HalProgrammableCoreType::TENSIX);
-}
-
-ttsl::ScopeGuard Device::set_current_sub_device(SubDeviceId sub_device_id) {
-    current_sub_device_id_ = sub_device_id;
-    return ttsl::make_guard([this]() { current_sub_device_id_ = std::nullopt; });
-}
-
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same

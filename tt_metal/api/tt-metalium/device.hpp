@@ -126,9 +126,6 @@ public:
 
     virtual CoreCoord compute_with_storage_grid_size() const = 0;
 
-    virtual CoreRangeSet get_compute_cores(std::optional<SubDeviceId> sub_device_id = std::nullopt) const = 0;
-    virtual ttsl::ScopeGuard set_current_sub_device(SubDeviceId sub_device_id) = 0;
-
     // Returns a logical CoreRangeSet of the worker cores in the specified sub device that was previously loaded.
     virtual CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
     // Returns the number of worker cores in the specified sub device that was previously loaded.

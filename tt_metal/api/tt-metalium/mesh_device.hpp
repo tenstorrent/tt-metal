@@ -124,6 +124,8 @@ private:
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    std::optional<SubDeviceId> current_sub_device_id_ = std::nullopt;
+
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
@@ -198,8 +200,8 @@ public:
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
 
-    CoreRangeSet get_compute_cores(std::optional<SubDeviceId> sub_device_id = std::nullopt) const override;
-    ttsl::ScopeGuard set_current_sub_device(SubDeviceId sub_device_id) override;
+    CoreRangeSet get_compute_cores(std::optional<SubDeviceId> sub_device_id = std::nullopt) const;
+    ttsl::ScopeGuard set_current_sub_device(SubDeviceId sub_device_id);
 
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;

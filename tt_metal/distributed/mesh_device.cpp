@@ -550,13 +550,15 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
 }
 
 CoreRangeSet MeshDevice::get_compute_cores(std::optional<SubDeviceId> sub_device_id) const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [sub_device_id](const auto* device) { return device->get_compute_cores(sub_device_id); });
+    auto requested_sub_device_id = current_sub_device_id_.value_or(sub_device_id.value_or(SubDeviceId(0)));
+    const auto& sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    const auto& sub_device = sub_device_manager->sub_device(requested_sub_device_id);
+    return sub_device.cores(HalProgrammableCoreType::TENSIX);
 }
 
 ttsl::ScopeGuard MeshDevice::set_current_sub_device(SubDeviceId sub_device_id) {
-    auto* device = get_devices().front();
-    return device->set_current_sub_device(sub_device_id);
+    current_sub_device_id_ = sub_device_id;
+    return ttsl::make_guard([this]() { current_sub_device_id_ = std::nullopt; });
 }
 
 tt::ARCH MeshDevice::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }

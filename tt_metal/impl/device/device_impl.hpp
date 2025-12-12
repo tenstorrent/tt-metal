@@ -93,9 +93,6 @@ public:
 
     CoreCoord compute_with_storage_grid_size() const override;
 
-    CoreRangeSet get_compute_cores(std::optional<SubDeviceId> sub_device_id = std::nullopt) const override;
-    ttsl::ScopeGuard set_current_sub_device(SubDeviceId sub_device_id) override;
-
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
 
@@ -241,8 +238,6 @@ private:
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
     std::shared_ptr<Buffer> dram_debug_buffer_;
-
-    std::optional<SubDeviceId> current_sub_device_id_ = std::nullopt;
 
     program_cache::detail::ProgramCache program_cache_;
 
