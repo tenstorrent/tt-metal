@@ -299,14 +299,27 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
             // ELTWADD with zeros will be used as a workaround
             outerloop      = 1;
             innerloop      = num_faces * (total_rows >> 3);
-            broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
+            broadcast_type = p_elwise::SRCB_BCAST_ALL;
+            if (dst_format == (uint)DataFormat::UInt16)
+            {
+                broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
+            }
         }
 
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
-            tmp.program();
+            if (dst_format == (uint)DataFormat::UInt16)
+            {
+                ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
+                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
+                tmp.program();
+            }
+            else
+            {
+                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
+                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
+                tmp.program();
+            }
         }
         else if constexpr (bcast_type == BroadcastType::COL)
         {
