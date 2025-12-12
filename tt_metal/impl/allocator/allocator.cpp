@@ -21,9 +21,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)), view_(std::make_unique<Allocator>(this)) {}
@@ -504,6 +502,4 @@ void Allocator::override_state(const AllocatorState& state) { impl->override_sta
 
 size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

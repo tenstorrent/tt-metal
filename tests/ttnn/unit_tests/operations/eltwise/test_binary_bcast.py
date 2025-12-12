@@ -3722,7 +3722,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=out_sharded_config,
+            memory_config=dst_config,
         )
 
         out_pt = torch.add(a_pt, b_pt)

@@ -15,11 +15,7 @@
 #include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/matmul/device/tmp/matmul_1d_type.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 // shared variables between override and program
 
@@ -304,6 +300,13 @@ Tensor matmul(
     const struct Matmul& parameters = Matmul{},
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+std::vector<Tensor> matmul_batched_weights(
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const struct Matmul& parameters = Matmul{},
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 Tensor sparse_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -311,11 +314,7 @@ Tensor sparse_matmul(
     const struct SparseMatmul& parameters = SparseMatmul{},
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul
 
 namespace bmm_op_utils {
 

@@ -40,11 +40,9 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 
@@ -149,18 +147,19 @@ void configure_risc_settings(
 
 // for fabric with tensix extension, for linear/mesh/ring/torus topology, only one sender channel is used, and all
 // other sender channels are marked as skipped.
+// In Neighbor Exchange topology, only messages from local workers are serviced, and thus all other channels are
+// skipped.
 void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::vector<FabricRiscConfig>& risc_configs,
-    Topology /*topology*/) {  // DELETEME (non-vc0 code) Issue #33360
-    switch (fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::MUX: break;
-        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", static_cast<int>(fabric_tensix_config));
-    }
+    Topology topology) {
+    TT_FATAL(
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX || topology == Topology::NeighborExchange,
+        "ERROR: Sender channels should only be disabled when Tensixes are used in Mux mode or Neighbor Exchange "
+        "Topology is used");
 
     // Determine which channel corresponds to the current direction
     uint32_t target_channel = get_worker_connected_sender_channel();
-
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
         for (auto& risc_config : risc_configs) {
@@ -376,8 +375,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
-    // Update sender channel servicing based on fabric tensix configuration
-    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
+    // Only 1 sender channel in each router is used when Tensixes are used in Mux Mode, or the NeighborExchange topology
+    // is used.
+    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX ||
+        topology == Topology::NeighborExchange) {
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, topology);
     }
 
@@ -401,8 +402,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     // Get per-VC channel counts based on routing type
-    auto sender_channels_per_vc = builder_config::get_sender_channel_count_per_vc(is_2D_routing);
-    auto receiver_channels_per_vc = builder_config::get_receiver_channel_count_per_vc(is_2D_routing);
+    auto sender_channels_per_vc = builder_config::get_sender_channel_count_per_vc(topology);
+    auto receiver_channels_per_vc = builder_config::get_receiver_channel_count_per_vc(topology);
 
     // Distribute channels between VC0 and VC1 based on mesh count
     if (needs_vc1) {
@@ -890,6 +891,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
+
     auto dispatch_core_type =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
     uint32_t my_eth_channel_ = [&]() -> uint32_t {

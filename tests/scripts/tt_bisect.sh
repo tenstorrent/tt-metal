@@ -10,7 +10,7 @@ Usage:
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout in minutes (default 30)
-  -p             : enable Tracy profiling
+  -p             : enable Tracy profiling (disabled by default)
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
   -a             : enable artifact download optimization (requires gh CLI)
@@ -72,6 +72,8 @@ echo "ARCH_NAME: ${ARCH_NAME:-}"
 echo "pwd: $(pwd)"
 if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
+else
+  echo "Tracy profiling disabled for builds."
 fi
 
 if [ "$artifact_mode" = true ]; then
@@ -236,7 +238,7 @@ while [[ "$found" == "false" ]]; do
   else
     [ "$artifact_mode" = true ] && echo "WARNING: Artifact download failed, falling back to local build"
     build_args="--build-all --enable-ccache"
-    [ "$tracy_enabled" -eq 1 ] && build_args="$build_args --enable-profiler"
+    [ "$tracy_enabled" -eq 0 ] && build_args="$build_args --disable-profiler"
     ./build_metal.sh $build_args || build_rc=$?
   fi
 

@@ -127,13 +127,12 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
+
             cb_wait_front(cb_index_id, 1);
-            volatile uint32_t* index_addr_ptr;
-            cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-            uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
-            cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
-            cb_release_tile(cb_index_id);
+            cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
+            cb_pop_front(cb_index_id, 1);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
@@ -214,7 +213,6 @@ void MAIN {
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
-
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
          ******************************************************************************/
@@ -477,7 +475,7 @@ void MAIN {
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     // */
-                    correction_block<scale_fp32, (int)VectorMode::C>(
+                    correction_block<scale_fp32, vector_mode>(
                         cb_m_in,        // cb worker max
                         cb_prev_sum_2,  // cb worker sum
                         cb_cur_max,

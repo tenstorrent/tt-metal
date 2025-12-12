@@ -12,8 +12,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 template <typename Fixture>
 void validate_and_setup_control_plane_config(Fixture* fixture) {
@@ -308,9 +307,8 @@ public:
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    mesh_graph.get_mesh_ids().size() &&
-               cluster.get_board_type(0) == BoardType::UBB;
+               cluster.is_ubb_galaxy();
     }
 };
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

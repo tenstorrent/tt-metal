@@ -61,8 +61,8 @@ using namespace tt::test_utils::df;
 
 // Taken from ccl_common... some dependency annoyance to deal with so just copying it here for now... resolve before
 // merging
-namespace ttnn {
-namespace ccl {
+
+namespace ttnn::ccl {
 void set_edm_runtime_args(
     tt_metal::Program& program,
     tt_metal::KernelHandle edm_kernel_handle,
@@ -79,8 +79,7 @@ void set_edm_runtime_args(
     log_info(tt::LogOp, "{}", ss.str());
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl
 
 class N300TestDevice {
 public:

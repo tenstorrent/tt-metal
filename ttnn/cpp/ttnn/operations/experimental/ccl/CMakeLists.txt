@@ -52,8 +52,8 @@ target_sources(
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
-        all_reduce_async/device/all_reduce_async_op.cpp
-        all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
+        all_reduce_async/device/all_reduce_async_device_operation.cpp
+        all_reduce_async/device/all_reduce_async_program_factory.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -78,11 +78,11 @@ target_sources(
         all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp
         all_reduce_async/all_reduce_async.cpp
         all_gather_concat_heads_fused/all_gather_concat.cpp
-        all_gather_concat_heads_fused/device/all_gather_concat_op.cpp
-        all_gather_concat_heads_fused/device/all_gather_concat_program.cpp
+        all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
+        all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp
         all_gather_matmul_async/all_gather_matmul_async.cpp
-        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
-        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_device_operation.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_program_factory.cpp
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
