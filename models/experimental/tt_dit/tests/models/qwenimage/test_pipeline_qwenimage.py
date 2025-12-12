@@ -28,30 +28,30 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param(
-            (1, 8),  # mesh_device
-            (1, 0),  # cfg
-            (1, 0),  # sp
-            (8, 1),  # tp
-            (8, 1),  # encoder_tp
-            (8, 1),  # vae_tp
-            ttnn.Topology.Linear,
-            1,  # num_links
-            "1x8tp1",
-            id="1x8tp1",
-        ),
         # pytest.param(
-        #     (2, 4),  # mesh_device
-        #     (2, 0),  # cfg
+        #     (1, 8),  # mesh_device
+        #     (1, 0),  # cfg
         #     (1, 0),  # sp
-        #     (4, 1),  # tp
-        #     (4, 1),  # encoder_tp
-        #     (4, 1),  # vae_tp
+        #     (8, 1),  # tp
+        #     (8, 1),  # encoder_tp
+        #     (8, 1),  # vae_tp
         #     ttnn.Topology.Linear,
         #     1,  # num_links
-        #     "2x4cfg0sp0tp1",
-        #     id="2x4cfg0sp0tp1",
+        #     "1x8tp1",
+        #     id="1x8tp1",
         # ),
+        pytest.param(
+            (2, 4),  # mesh_device
+            (2, 0),  # cfg
+            (1, 0),  # sp
+            (4, 1),  # tp
+            (4, 1),  # encoder_tp
+            (4, 1),  # vae_tp
+            ttnn.Topology.Linear,
+            1,  # num_links
+            "2x4cfg0sp0tp1",
+            id="2x4cfg0sp0tp1",
+        ),
         # pytest.param(
         #     (2, 4),  # mesh_device
         #     (2, 1),  # cfg
@@ -184,3 +184,4 @@ def test_qwenimage_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+

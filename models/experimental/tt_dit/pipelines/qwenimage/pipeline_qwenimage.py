@@ -131,8 +131,6 @@ class QwenImagePipeline:
 
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
 
-        logger.info("creating TT-NN transformer...")
-
         head_dim = torch_transformer.config.attention_head_dim
         num_heads = torch_transformer.config.num_attention_heads
         self._num_channels_latents = 16  # TODO: correct?
@@ -148,38 +146,55 @@ class QwenImagePipeline:
         else:
             padding_config = None
 
-        self.transformers = []
-        for i, submesh_device in enumerate(self._submesh_devices):
-            tt_transformer = QwenImageTransformer(
-                patch_size=torch_transformer.config.patch_size,
-                in_channels=torch_transformer.config.in_channels,
-                num_layers=torch_transformer.config.num_layers,
-                attention_head_dim=head_dim,
-                num_attention_heads=num_heads,
-                joint_attention_dim=torch_transformer.config.joint_attention_dim,
-                out_channels=torch_transformer.config.out_channels,
-                device=submesh_device,
-                ccl_manager=self._ccl_managers[i],
-                parallel_config=parallel_config,
-                padding_config=padding_config,
-            )
-
-            if not cache.initialize_from_cache(
-                tt_model=tt_transformer,
-                torch_state_dict=torch_transformer.state_dict(),
-                model_name="qwen-image",
-                subfolder="transformer",
-                parallel_config=self._parallel_config,
-                mesh_shape=tuple(submesh_device.shape),
-                dtype="bf16",
-            ):
-                logger.info("Loading transformer weights from PyTorch state dict")
-                tt_transformer.load_torch_state_dict(torch_transformer.state_dict())
-
-            self.transformers.append(tt_transformer)
-            ttnn.synchronize_device(submesh_device)
-
+        # Store transformer config and state dict for lazy loading
+        self._transformer_config = {
+            "patch_size": torch_transformer.config.patch_size,
+            "in_channels": torch_transformer.config.in_channels,
+            "num_layers": torch_transformer.config.num_layers,
+            "attention_head_dim": head_dim,
+            "num_attention_heads": num_heads,
+            "joint_attention_dim": torch_transformer.config.joint_attention_dim,
+            "out_channels": torch_transformer.config.out_channels,
+        }
+        self._transformer_state_dict = torch_transformer.state_dict()
+        self._padding_config = padding_config
         self._pos_embed = torch_transformer.pos_embed
+        self._use_torch_text_encoder = use_torch_text_encoder
+        self._transformers_loaded = False
+
+        # For device encoder: load encoder first (before transformers) to avoid OOM
+        # The encoder will be deallocated after encoding to make room for transformers
+        if not use_torch_text_encoder:
+            with self.encoder_reshape(self.encoder_device):
+                logger.info("creating TT-NN text encoder (loading before transformers for memory efficiency)...")
+                self._text_encoder = Qwen25VlTokenizerEncoderPair(
+                    text_encoder_checkpoint_name,
+                    device=self._submesh_devices[self.encoder_submesh_idx],
+                    ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
+                    parallel_config=self._encoder_parallel_config,
+                    use_torch=use_torch_text_encoder,
+                )
+                if self.encoder_device is not None:
+                    ttnn.synchronize_device(self.encoder_device)
+
+            # For device encoder, defer transformer loading until after encoding
+            self.transformers = []
+        else:
+            # For torch encoder, load transformers now (no memory conflict)
+            self._load_transformers()
+
+            with self.encoder_reshape(self.encoder_device):
+                logger.info("creating TT-NN text encoder...")
+                self._text_encoder = Qwen25VlTokenizerEncoderPair(
+                    text_encoder_checkpoint_name,
+                    device=self._submesh_devices[self.encoder_submesh_idx],
+                    ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
+                    parallel_config=self._encoder_parallel_config,
+                    use_torch=use_torch_text_encoder,
+                )
+
+        # Delete the torch model to free up CPU memory
+        del torch_transformer
 
         self._latents_scaling = 1.0 / torch.tensor(self._torch_vae.config.latents_std)
         self._latents_shift = torch.tensor(self._torch_vae.config.latents_mean)
@@ -187,18 +202,6 @@ class QwenImagePipeline:
         self._image_processor = VaeImageProcessor(vae_scale_factor=2 * self._vae_scale_factor)
 
         with self.encoder_reshape(self.encoder_device):
-            logger.info("creating TT-NN text encoder...")
-            self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                text_encoder_checkpoint_name,
-                device=self._submesh_devices[self.encoder_submesh_idx],
-                ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
-                parallel_config=self._encoder_parallel_config,
-                use_torch=use_torch_text_encoder,
-            )
-
-            if self.encoder_device is not None:
-                ttnn.synchronize_device(self.encoder_device)
-
             if not use_torch_vae_decoder:
                 logger.info("creating TT-NN VAE decoder...")
                 self._vae_decoder = QwenImageVaeDecoder(
@@ -219,6 +222,57 @@ class QwenImagePipeline:
                 ttnn.synchronize_device(self.encoder_device)
 
         self._traces = None
+
+    def _load_transformers(self) -> None:
+        """Load transformer weights to device. Called lazily for device encoder path."""
+        if self._transformers_loaded:
+            return
+
+        logger.info("creating TT-NN transformer...")
+        self.transformers = []
+        for i, submesh_device in enumerate(self._submesh_devices):
+            tt_transformer = QwenImageTransformer(
+                patch_size=self._transformer_config["patch_size"],
+                in_channels=self._transformer_config["in_channels"],
+                num_layers=self._transformer_config["num_layers"],
+                attention_head_dim=self._transformer_config["attention_head_dim"],
+                num_attention_heads=self._transformer_config["num_attention_heads"],
+                joint_attention_dim=self._transformer_config["joint_attention_dim"],
+                out_channels=self._transformer_config["out_channels"],
+                device=submesh_device,
+                ccl_manager=self._ccl_managers[i],
+                parallel_config=self._parallel_config,
+                padding_config=self._padding_config,
+            )
+
+            if not cache.initialize_from_cache(
+                tt_model=tt_transformer,
+                torch_state_dict=self._transformer_state_dict,
+                model_name="qwen-image",
+                subfolder="transformer",
+                parallel_config=self._parallel_config,
+                mesh_shape=tuple(submesh_device.shape),
+                dtype="bf16",
+            ):
+                logger.info("Loading transformer weights from PyTorch state dict")
+                tt_transformer.load_torch_state_dict(self._transformer_state_dict)
+
+            self.transformers.append(tt_transformer)
+            ttnn.synchronize_device(submesh_device)
+
+        self._transformers_loaded = True
+
+    def _deallocate_transformers(self) -> None:
+        """Deallocate transformer weights from device to free memory."""
+        if not self._transformers_loaded:
+            return
+
+        logger.info("deallocating transformer weights to free memory...")
+        for transformer in self.transformers:
+            transformer.deallocate_weights()
+        for submesh_device in self._submesh_devices:
+            ttnn.synchronize_device(submesh_device)
+        self._transformers_loaded = False
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
@@ -336,6 +390,10 @@ class QwenImagePipeline:
             cfg_enabled = cfg_scale > 1
             logger.info("encoding prompts...")
 
+            # For device encoder: reload encoder if it was deallocated from previous iteration
+            if not self._use_torch_text_encoder:
+                self._text_encoder.reload_encoder_weights()
+
             with timer.time_section("total_encoding") if timer else nullcontext():
                 with self.encoder_reshape(self.encoder_device):
                     prompt_embeds, prompt_mask = self._encode_prompts(
@@ -345,6 +403,11 @@ class QwenImagePipeline:
                         cfg_enabled=cfg_enabled,
                     )
             _, prompt_sequence_length, _ = prompt_embeds.shape
+
+            # For device encoder: deallocate encoder weights and load transformers
+            if not self._use_torch_text_encoder and not self._transformers_loaded:
+                self._text_encoder.deallocate_encoder_weights()
+                self._load_transformers()
 
             logger.info("preparing timesteps...")
             timesteps, sigmas = _schedule(
@@ -518,6 +581,10 @@ class QwenImagePipeline:
                     with torch.no_grad():
                         decoded_output = self._torch_vae.decode(torch_latents).sample[:, :, 0]
                 else:
+                    # Deallocate transformer weights to free memory for VAE decoder
+                    if not self._use_torch_text_encoder:
+                        self._deallocate_transformers()
+
                     with self.encoder_reshape(self.encoder_device):
                         tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
                         tt_decoded_output = self._vae_decoder(tt_latents)

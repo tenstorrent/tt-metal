@@ -35,6 +35,10 @@ class Qwen25VlTokenizerEncoderPair:
         self._device = device
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
+        self._checkpoint = checkpoint
+        self._encoder_subfolder = encoder_subfolder
+        self._use_torch = use_torch
+        self._encoder_loaded = True
 
         if tokenizer_subfolder is not None:
             self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint, subfolder=tokenizer_subfolder)
@@ -72,9 +76,19 @@ class Qwen25VlTokenizerEncoderPair:
 
         torch_text_model = torch_model.model.language_model
 
+        # Get the state dict before deleting the torch model
+        torch_state_dict = torch_text_model.state_dict()
+
+        # Delete the torch model to free up memory before loading weights to device
+        del torch_model
+        del torch_text_model
+
+        # Store state dict for potential reloading
+        self._encoder_state_dict = torch_state_dict
+
         if not cache.initialize_from_cache(
             tt_model=model,
-            torch_state_dict=torch_text_model.state_dict(),
+            torch_state_dict=torch_state_dict,
             model_name=checkpoint,
             subfolder=subfolder if subfolder is not None else "",
             parallel_config=self._parallel_config,
@@ -82,9 +96,38 @@ class Qwen25VlTokenizerEncoderPair:
             dtype="bf16",
         ):
             logger.info("loading encoder from torch state...")
-            model.load_torch_state_dict(torch_text_model.state_dict())
+            model.load_torch_state_dict(torch_state_dict)
 
         return model
+
+    def reload_encoder_weights(self) -> None:
+        """Reload encoder weights to device after deallocation."""
+        if self._use_torch or self._encoder_loaded:
+            return
+
+        logger.info("reloading encoder weights to device...")
+        if not cache.initialize_from_cache(
+            tt_model=self._encoder,
+            torch_state_dict=self._encoder_state_dict,
+            model_name=self._checkpoint,
+            subfolder=self._encoder_subfolder if self._encoder_subfolder is not None else "",
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self._device.shape),
+            dtype="bf16",
+        ):
+            self._encoder.load_torch_state_dict(self._encoder_state_dict)
+
+        self._encoder_loaded = True
+        ttnn.synchronize_device(self._device)
+
+    def deallocate_encoder_weights(self) -> None:
+        """Deallocate encoder weights from device."""
+        if self._use_torch or not self._encoder_loaded:
+            return
+
+        self._encoder.deallocate_weights()
+        self._encoder_loaded = False
+        ttnn.synchronize_device(self._device)
 
     def encode(
         self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int
