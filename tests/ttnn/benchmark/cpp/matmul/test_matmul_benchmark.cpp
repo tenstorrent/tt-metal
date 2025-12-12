@@ -107,39 +107,40 @@ tt::tt_metal::Shape2D get_subblock_sizes(
 }
 
 struct MatmulTestConfig {
-    const ttnn::DataType dtype = ttnn::DataType::BFLOAT16;
-    const MathFidelity fidelity = MathFidelity::HiFi2;
-    const bool enable_tracing = false;
-    const int num_warmup_iterations = 1;
-    const int num_measurement_iterations = 1;
-    const bool enable_program_cache = true;
+    ttnn::DataType dtype = ttnn::DataType::BFLOAT16;
+    MathFidelity fidelity = MathFidelity::HiFi2;
+    bool enable_tracing = false;
+    int num_warmup_iterations = 1;
+    int num_measurement_iterations = 1;
+    bool enable_program_cache = true;
 };
 
 struct MatmulShape {
-    const int m = 512;
-    const int k = 512;
-    const int n = 512;
+    int m = 512;
+    int k = 512;
+    int n = 512;
 
-    const bool in0_sharded = true;
-    const bool out_sharded = true;
+    bool in0_sharded = true;
+    bool out_sharded = true;
 
-    const int in0_block_w_div = 1;
-    const int num_out_blocks_h = 1;
-    const int num_out_blocks_w = 1;
+    int in0_block_w_div = 1;
+    int num_out_blocks_h = 1;
+    int num_out_blocks_w = 1;
 
-    const tt::tt_metal::Shape2D grid_size = {8, 8};
-    const tt::tt_metal::Shape2D tile_shape = {32, 32};
+    tt::tt_metal::Shape2D grid_size = {8, 8};
+    tt::tt_metal::Shape2D tile_shape = {32, 32};
 };
 
 namespace {
 
-void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_config, const MatmulShape& matmul_shape) {
+void RunMatmulBenchmark(
+    benchmark::State& state,
+    const MatmulTestConfig& test_config,
+    const MatmulShape& matmul_shape,
+    const std::shared_ptr<ttnn::device::MeshDevice>& device,
+    const int device_id = 0) {
     const int num_warmup_iterations = test_config.num_warmup_iterations;
     const int num_measurement_iterations = test_config.num_measurement_iterations;
-
-    // Open device
-    auto device_id = 0;
-    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
 
     ttnn::DataType dtype = test_config.dtype;
     MathFidelity math_fidelity = test_config.fidelity;
@@ -178,6 +179,11 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
     }
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    if (tt_metal_home == nullptr) {
+        state.SkipWithError("TT_METAL_HOME environment variable is not set");
+        return;
+    }
+
     std::string artifacts_dir = std::string(tt_metal_home) + "/generated";
     std::string file_name =
         artifacts_dir + "/matmul_2d_host_perf_report_" + dtype_to_string(dtype) + fidelity_to_string(math_fidelity);
@@ -189,6 +195,10 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
     }
 
     std::ofstream file(file_name, std::ios::app);
+    if (!file.is_open()) {
+        state.SkipWithError("Failed to open file: " + file_name);
+        return;
+    }
     if (file.tellp() == 0) {
         file << "m,k,n,use_trace,grid_size,in0_sharded,out_sharded,in0_storage_type,in1_storage_type,out_storage_type,"
                 "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs "
@@ -394,9 +404,6 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
     // Deallocate input tensors
     input_tensor_0.deallocate();
     input_tensor_1.deallocate();
-
-    // Close device
-    device->close();
 }
 namespace BFloat16_Tests {
 const auto configs = std::vector<MatmulTestConfig>{
@@ -534,9 +541,16 @@ void BM_Matmul_BFLOAT16(benchmark::State& state) {
     const MatmulTestConfig& test_config = configs[config_index];
     const MatmulShape& matmul_shape = shapes[shape_index];
 
+    // Open device
+    const auto device_id = 0;
+    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
+
     for (auto _ : state) {
-        RunMatmulBenchmark(state, test_config, matmul_shape);
+        RunMatmulBenchmark(state, test_config, matmul_shape, device, device_id);
     }
+
+    // Close device
+    device->close();
 }
 }  // namespace BFloat16_Tests
 
@@ -544,8 +558,8 @@ namespace BFloat8_B_Tests {
 const auto configs = std::vector<MatmulTestConfig>{
     {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/false},
     {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/true},
-    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi4, /*enable_tracing=*/false},
-    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi4, /*enable_tracing=*/true}};
+    {ttnn::DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/true}};
 const auto shapes = std::vector<MatmulShape>{
     {/*m=*/512,
      /*k=*/512,
@@ -668,9 +682,16 @@ void BM_Matmul_BFLOAT8_B(benchmark::State& state) {
     const MatmulTestConfig& test_config = configs[config_index];
     const MatmulShape& matmul_shape = shapes[shape_index];
 
+    // Open device
+    const auto device_id = 0;
+    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
+
     for (auto _ : state) {
-        RunMatmulBenchmark(state, test_config, matmul_shape);
+        RunMatmulBenchmark(state, test_config, matmul_shape, device, device_id);
     }
+
+    // Close device
+    device->close();
 }
 }  // namespace BFloat8_B_Tests
 
@@ -808,9 +829,15 @@ void BM_Matmul_BFLOAT4_B(benchmark::State& state) {
     const MatmulTestConfig& test_config = configs[config_index];
     const MatmulShape& matmul_shape = shapes[shape_index];
 
+    // Open device
+    const auto device_id = 0;
+    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
+
     for (auto _ : state) {
-        RunMatmulBenchmark(state, test_config, matmul_shape);
+        RunMatmulBenchmark(state, test_config, matmul_shape, device, device_id);
     }
+    // Close device
+    device->close();
 }
 }  // namespace BFloat4_B_Tests
 
