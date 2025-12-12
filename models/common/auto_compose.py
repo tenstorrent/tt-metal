@@ -40,6 +40,7 @@ def to_torch_auto_compose(tensor: ttnn.Tensor, device: Optional[ttnn.MeshDevice]
             # C++ compositor requires concat dims to be unique. Some topologies legitimately
             # need sequential concatenation along the same tensor dim (e.g. 2D sharding on W for both mesh axes).
             if "dims must be unique" not in str(e):
+                # todo)) skipping this seems to be incorrect! investigate: https://github.com/tenstorrent/tt-metal/issues/34287
                 raise
     return _manual_to_torch_compose(tensor, device=device)
 

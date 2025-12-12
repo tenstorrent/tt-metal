@@ -32,12 +32,18 @@ pytestmark = [
             (1, 2),  # 1D mesh, 2 devices
             (1, 8),  # 1D mesh, 8 devices
             (2, 4),  # 2D mesh, 8 devices
+            (1, 32),  # 1D mesh, 32 devices
+            (4, 8),  # 2D mesh, 32 devices
+            (8, 4),  # 2D mesh, 32 devices
         ],
         ids=[
             "1x1",
             "1x2",
             "1x8",
             "2x4",
+            "1x32",
+            "4x8",
+            "8x4",
         ],
         indirect=True,
     ),
