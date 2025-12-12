@@ -10,7 +10,7 @@ import numpy as np
 import ml_dtypes
 
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
 from .gpt_mlp import GPTMLP
 from .multi_head_attention import MultiHeadAttention
@@ -37,6 +37,7 @@ class GPTBlock(AbstractModuleBase):
         super().__init__()
 
         self.embedding_dim = embedding_dim
+        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
 
         # Layer norms
         # Layer norm requires gamma and beta parameters (use ml_dtypes.bfloat16)
@@ -75,6 +76,9 @@ class GPTBlock(AbstractModuleBase):
         # Attention and MLP
         self.attention = MultiHeadAttention(embedding_dim, num_heads, dropout)
         self.mlp = GPTMLP(embedding_dim, dropout)
+
+    # train() and eval() are inherited from AbstractModuleBase
+    # They automatically propagate RunMode to all registered submodules
 
     def forward(
         self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None

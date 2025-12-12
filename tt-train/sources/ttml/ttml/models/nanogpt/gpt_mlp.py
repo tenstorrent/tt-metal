@@ -8,7 +8,7 @@ import numpy as np
 import ml_dtypes
 
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
 
 class GPTMLP(AbstractModuleBase):
@@ -25,6 +25,7 @@ class GPTMLP(AbstractModuleBase):
 
         self.embedding_dim = embedding_dim
         self.dropout_prob = dropout
+        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
 
         # First linear: embedding_dim -> embedding_dim * 4
         # Linear weights must be in TILE layout
@@ -38,6 +39,8 @@ class GPTMLP(AbstractModuleBase):
         fc2_np = np.random.normal(0.0, 0.02, size=fc2_shape).astype(ml_dtypes.bfloat16)
         fc2_tensor = ttml.autograd.Tensor.from_numpy(fc2_np, layout=ttml.Layout.TILE)
         self.fc2 = Parameter(fc2_tensor)
+
+    # train() and eval() are inherited from AbstractModuleBase
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of MLP.
@@ -55,8 +58,8 @@ class GPTMLP(AbstractModuleBase):
         # Second linear
         x = ttml.ops.linear.linear_op(x, self.fc2.tensor, None)
 
-        # Dropout
-        if self.dropout_prob > 0.0:
+        # Dropout (only in training mode, using RunMode from AbstractModuleBase)
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             x = ttml.ops.dropout.dropout(x, self.dropout_prob)
 
         return x

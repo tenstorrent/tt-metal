@@ -26,6 +26,9 @@ from .._recursive_import import _recursive_import_from_ttml
 if hasattr(_ttml, "modules"):
     _recursive_import_from_ttml(_ttml.modules, sys.modules[__name__])
 
+# Re-export RunMode from _ttml.modules for explicit access
+from .._ttml.modules import RunMode
+
 __all__ = [
     "AbstractModuleBase",
     "Parameter",
@@ -34,4 +37,5 @@ __all__ = [
     "DuplicateNameError",
     "NameNotFoundError",
     "UninitializedModuleError",
+    "RunMode",
 ]

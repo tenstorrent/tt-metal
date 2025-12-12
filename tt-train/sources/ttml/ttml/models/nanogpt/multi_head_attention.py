@@ -11,7 +11,7 @@ import numpy as np
 import ml_dtypes  # Used for bfloat16 type in fallback initialization
 
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
 
 class MultiHeadAttention(AbstractModuleBase):
@@ -42,48 +42,29 @@ class MultiHeadAttention(AbstractModuleBase):
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
         self.dropout_prob = dropout
+        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Note: scaling by 1/sqrt(head_dim) is handled inside scaled_dot_product_attention
 
-        # Try to use C++ LinearLayer if available (via recursive import)
-        # Otherwise, use Parameter with linear_op
-        try:
-            # Check if C++ LinearLayer is available
-            if hasattr(ttml.modules, "LinearLayer"):
-                LinearLayer = ttml.modules.LinearLayer
-                # Use C++ LinearLayer for better performance
-                self.qkv_layer = LinearLayer(
-                    embedding_dim, embedding_dim * 3, has_bias=False
-                )
-                self.out_layer = LinearLayer(
-                    embedding_dim, embedding_dim, has_bias=False
-                )
-                self._use_cpp_layers = True
-            else:
-                self._use_cpp_layers = False
-                raise AttributeError("C++ LinearLayer not available")
-        except (AttributeError, TypeError):
-            # Fallback to Python implementation with Parameter
-            self._use_cpp_layers = False
-            # QKV projection: embedding_dim -> embedding_dim * 3
-            # Linear weights must be in TILE layout
-            qkv_shape = (1, 1, embedding_dim * 3, embedding_dim)
-            qkv_np = np.random.normal(0.0, 0.02, size=qkv_shape).astype(
-                ml_dtypes.bfloat16
-            )
-            qkv_tensor = ttml.autograd.Tensor.from_numpy(
-                qkv_np, layout=ttml.Layout.TILE
-            )
-            self.qkv = Parameter(qkv_tensor)
+        # Use Python Parameters for checkpoint compatibility
+        # Note: C++ LinearLayer could be used for better performance but doesn't
+        # integrate with Python checkpoint save/load. Using Python Parameters ensures
+        # all weights are properly serialized.
+        self._use_cpp_layers = False
 
-            # Output projection: embedding_dim -> embedding_dim
-            out_shape = (1, 1, embedding_dim, embedding_dim)
-            out_np = np.random.normal(0.0, 0.02, size=out_shape).astype(
-                ml_dtypes.bfloat16
-            )
-            out_tensor = ttml.autograd.Tensor.from_numpy(
-                out_np, layout=ttml.Layout.TILE
-            )
-            self.out_proj = Parameter(out_tensor)
+        # QKV projection: embedding_dim -> embedding_dim * 3
+        # Linear weights must be in TILE layout
+        qkv_shape = (1, 1, embedding_dim * 3, embedding_dim)
+        qkv_np = np.random.normal(0.0, 0.02, size=qkv_shape).astype(ml_dtypes.bfloat16)
+        qkv_tensor = ttml.autograd.Tensor.from_numpy(qkv_np, layout=ttml.Layout.TILE)
+        self.qkv = Parameter(qkv_tensor)
+
+        # Output projection: embedding_dim -> embedding_dim
+        out_shape = (1, 1, embedding_dim, embedding_dim)
+        out_np = np.random.normal(0.0, 0.02, size=out_shape).astype(ml_dtypes.bfloat16)
+        out_tensor = ttml.autograd.Tensor.from_numpy(out_np, layout=ttml.Layout.TILE)
+        self.out_proj = Parameter(out_tensor)
+
+    # train() and eval() are inherited from AbstractModuleBase
 
     def forward(
         self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
@@ -128,8 +109,8 @@ class MultiHeadAttention(AbstractModuleBase):
         else:
             out = ttml.ops.linear.linear_op(attention_out, self.out_proj.tensor, None)
 
-        # Apply dropout if needed
-        if self.dropout_prob > 0.0:
+        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
         return out

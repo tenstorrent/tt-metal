@@ -15,7 +15,7 @@ import numpy as np
 import ml_dtypes
 
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
 from .embedding import Embedding
 from .gpt_block import GPTBlock
@@ -30,7 +30,9 @@ class NanoGPTConfig:
     n_embd: int = 768  # Embedding dimension
     n_layer: int = 12  # Number of transformer blocks
     n_head: int = 12  # Number of attention heads
-    dropout: float = 0.0  # Dropout probability
+    dropout: float = (
+        0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
+    )
     bias: bool = True  # Use bias in linear layers and layer norm
 
 
@@ -46,6 +48,8 @@ class NanoGPT(AbstractModuleBase):
         super().__init__()
 
         self.config = config
+        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
+        # Use get_run_mode() to check, train()/eval() to set
 
         # Token and position embeddings
         self.wte = Embedding(config.vocab_size, config.n_embd)
@@ -83,14 +87,17 @@ class NanoGPT(AbstractModuleBase):
         # We'll use the same weight as wte for weight tying
         self.lm_head_weight = self.wte.weight
 
+    # train() and eval() are inherited from AbstractModuleBase
+    # They automatically propagate RunMode to all registered submodules
+
     def forward(
-        self, idx: ttml.autograd.Tensor, targets: Optional[ttml.autograd.Tensor] = None
+        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
     ) -> ttml.autograd.Tensor:
         """Forward pass of NanoGPT.
 
         Args:
             idx: Token indices, shape [batch_size, 1, 1, seq_len]
-            targets: Optional target tokens for loss computation (not used in forward)
+            mask: Optional causal attention mask, shape [1, 1, seq_len, seq_len]
 
         Returns:
             Logits tensor, shape [batch_size, 1, 1, seq_len, vocab_size]
@@ -111,13 +118,13 @@ class NanoGPT(AbstractModuleBase):
         # Add embeddings
         x = ttml.ops.binary.add(tok_emb, pos_emb)
 
-        # Apply dropout if needed
-        if self.config.dropout > 0.0:
+        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
+        if self.get_run_mode() == RunMode.TRAIN and self.config.dropout > 0.0:
             x = ttml.ops.dropout.dropout(x, self.config.dropout)
 
-        # Pass through transformer blocks
+        # Pass through transformer blocks with mask
         for block in self.blocks:
-            x = block(x, mask=None)
+            x = block(x, mask=mask)
 
         # Final layer norm (use composite to avoid custom kernel include path issues)
         x = ttml.ops.layernorm.composite_layernorm(
@@ -138,10 +145,10 @@ class NanoGPT(AbstractModuleBase):
         return logits
 
     def __call__(
-        self, idx: ttml.autograd.Tensor, targets: Optional[ttml.autograd.Tensor] = None
+        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
     ) -> ttml.autograd.Tensor:
         """Call the forward method."""
-        return self.forward(idx, targets)
+        return self.forward(idx, mask)
 
 
 def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
