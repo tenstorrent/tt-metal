@@ -153,9 +153,6 @@ struct MeshDeviceOperationAdapter {
         auto compute_cores = mesh_device->get_compute_cores();
         auto sub_device_manager_id = mesh_device->get_active_sub_device_manager_id();
 
-        log_info(tt::LogOp, "Compute cores: {}", compute_cores);
-        log_info(tt::LogOp, "Sub device manager id: {}", sub_device_manager_id);
-
         ttsl::hash::hash_combine(hash, compute_cores);
         ttsl::hash::hash_combine(hash, sub_device_manager_id);
         return hash;
