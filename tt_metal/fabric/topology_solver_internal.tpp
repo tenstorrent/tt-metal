@@ -881,11 +881,6 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     ConnectionValidationMode validation_mode,
     std::vector<std::string>* warnings) {
-    // Only validate in STRICT or RELAXED mode
-    if (validation_mode == ConnectionValidationMode::NONE) {
-        return;
-    }
-
     // Check all edges in the mapping
     for (size_t i = 0; i < mapping.size(); ++i) {
         if (mapping[i] == -1) {

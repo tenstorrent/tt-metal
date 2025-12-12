@@ -382,7 +382,6 @@ struct MappingValidator {
      * Checks that all edges exist and validates connection counts according to validation_mode.
      * In STRICT mode: fails if channel counts insufficient.
      * In RELAXED mode: collects warnings for insufficient channel counts but doesn't fail.
-     * In NONE mode: skips channel count validation.
      *
      * @param mapping Complete mapping (mapping[i] = global_idx)
      * @param graph_data Indexed graph data

@@ -230,9 +230,8 @@ private:
  * @brief Mode for connection count validation
  */
 enum class ConnectionValidationMode {
-    STRICT,   ///< Strict mode: require exact channel counts, fail if not met
-    RELAXED,  ///< Relaxed mode: prefer correct channel counts, but allow mismatches with warnings
-    NONE      ///< No validation: only check edge existence, ignore channel counts
+    STRICT,  ///< Strict mode: require exact channel counts, fail if not met
+    RELAXED  ///< Relaxed mode: prefer correct channel counts, but allow mismatches with warnings (default)
 };
 
 template <typename TargetNode, typename GlobalNode>

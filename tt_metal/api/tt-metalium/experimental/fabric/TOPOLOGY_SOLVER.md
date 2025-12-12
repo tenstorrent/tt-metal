@@ -7,7 +7,7 @@ The topology solver implements a **constraint satisfaction problem (CSP)** solve
 **Key Features**:
 - Generic template-based design (works with any node types)
 - Stateless API (thread-safe, reentrant)
-- Three connection validation modes (STRICT, RELAXED, NONE)
+- Two connection validation modes (STRICT, RELAXED)
 - Fast path optimization for path graphs (O(n) instead of exponential)
 - Comprehensive constraint system (required/preferred, trait-based, explicit pairs)
 
@@ -96,15 +96,13 @@ Enum controlling how connection counts (multi-edge channel counts) are validated
 ```cpp
 enum class ConnectionValidationMode {
     STRICT,   ///< Require exact channel counts, fail if not met
-    RELAXED,  ///< Prefer correct channel counts, allow mismatches with warnings (default)
-    NONE      ///< Only check edge existence, ignore channel counts
+    RELAXED   ///< Prefer correct channel counts, allow mismatches with warnings (default)
 };
 ```
 
 **Mode Behavior**:
 - **STRICT**: Fails if any edge doesn't have sufficient channels
-- **RELAXED**: Allows insufficient channels but adds warnings to `result.warnings`
-- **NONE**: Completely ignores channel counts, only validates edge existence
+- **RELAXED**: Allows insufficient channels but adds warnings to `result.warnings` (default)
 
 #### MappingResult
 
@@ -195,11 +193,6 @@ auto result = solve_topology_mapping(
 if (result.success && !result.warnings.empty()) {
     // Check warnings for channel count mismatches
 }
-
-// None mode - ignores channel counts
-auto result = solve_topology_mapping(
-    target_graph, global_graph, constraints,
-    ConnectionValidationMode::NONE);
 ```
 
 ### Helper Functions
