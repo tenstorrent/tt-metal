@@ -264,7 +264,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,  # Full prompt lengths, including the cached ones
         empty_slots=None,
-        enable_trace=False,
+        enable_trace=True,
         model_id_warmup=None,
         start_pos: list[int] = None,  # Cached prefixes lengths
         **kwargs,
