@@ -10,9 +10,11 @@
 #define TOPOLOGY_SOLVER_TPP
 
 #include <sstream>
+#include <chrono>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include "tt_metal/fabric/topology_solver_internal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -260,17 +262,31 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode) {
-    (void)target_graph;
-    (void)global_graph;
-    (void)constraints;
-    (void)connection_validation_mode;
+    using namespace tt::tt_fabric::detail;
 
-    MappingResult<TargetNode, GlobalNode> result;
+    auto start_time = std::chrono::steady_clock::now();
 
-    // TODO: Implement topology mapping algorithm
-    // This is a placeholder that returns failure for now
-    result.success = false;
-    result.error_message = "Topology solver not yet implemented";
+    // Build indexed graph representation
+    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
+
+    // Build indexed constraint representation
+    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
+
+    // Run DFS search (state is now internal to the engine)
+    DFSSearchEngine<TargetNode, GlobalNode> search_engine;
+    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode);
+
+    // Calculate elapsed time
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+    // Get state from engine and build result using validator
+    const auto& state = search_engine.get_state();
+    auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
+        state.mapping, graph_data, state, constraints, connection_validation_mode);
+
+    // Set elapsed time
+    result.stats.elapsed_time = elapsed_ms;
 
     return result;
 }
