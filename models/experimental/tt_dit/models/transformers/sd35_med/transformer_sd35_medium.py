@@ -262,7 +262,9 @@ class AdaLayerNormContinuousOutput(Module):
         self.linear.load_torch_state_dict(substate(state_dict, "linear"))
 
 
-# ============ Main Transformer Model ============
+# =============================================================================
+# Main Transformer Model
+# =============================================================================
 
 
 class SD3Transformer2DModel(Module):

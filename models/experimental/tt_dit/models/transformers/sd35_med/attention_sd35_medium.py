@@ -25,7 +25,7 @@ class SD35MediumSelfAttention:
         eps=1e-6,
         mesh_device=None,
         added_proj_dim=None,
-        context_pre_only=False,  # If True, skip to_add_out (for final block)
+        context_pre_only=False,
     ):
         self.dim = dim
         self.num_heads = num_heads

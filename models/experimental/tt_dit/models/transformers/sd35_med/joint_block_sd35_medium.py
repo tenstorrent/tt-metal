@@ -1,18 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Separate JointTransformerBlock implementations for testing
-AdaLayerNorm implementations inlined for easier debugging
-"""
-
 import ttnn
 from models.experimental.tt_dit.layers.module import Module
 from models.experimental.tt_dit.layers.linear import Linear
 from models.experimental.tt_dit.layers.normalization import LayerNorm
 from models.experimental.tt_dit.models.transformers.sd35_med.attention_sd35_medium import SD35MediumSelfAttention
 from models.experimental.tt_dit.utils.substate import substate
-
 
 # =============================================================================
 # Inlined AdaLayerNorm Implementations
@@ -202,7 +196,7 @@ class SD35AdaLayerNormZeroX(Module):
         Returns:
             normalized_x: Normalized input [1, B, seq_len, hidden_size]
             scale: Modulation params [1, B, 9, hidden_size]
-                   Order: shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp, shift_msa2, scale_msa2, gate_msa2
+            Order: shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp, shift_msa2, scale_msa2, gate_msa2
         """
         # Apply layer norm to input
         normalized_x = self.norm(x)
