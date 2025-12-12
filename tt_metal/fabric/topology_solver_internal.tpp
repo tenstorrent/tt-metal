@@ -625,7 +625,7 @@ bool ConsistencyChecker::check_forward_consistency(
     size_t global_idx,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    std::vector<int>& mapping,
+    const std::vector<int>& mapping,
     const std::vector<bool>& used,
     ConnectionValidationMode validation_mode) {
     // For each unassigned neighbor of target_idx, check if there's at least one viable candidate
@@ -649,17 +649,14 @@ bool ConsistencyChecker::check_forward_consistency(
             }
 
             // Check local consistency for neighbor -> candidate_global
-            // Modify mapping in-place, check, then restore to avoid O(n) copy per candidate
-            int old_mapping_value = mapping[neighbor];
-            mapping[neighbor] = static_cast<int>(candidate_global);
+            // Create temporary mapping to check (mapping parameter is const)
+            std::vector<int> temp_mapping = mapping;
+            temp_mapping[neighbor] = static_cast<int>(candidate_global);
 
-            if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, mapping, validation_mode)) {
-                mapping[neighbor] = old_mapping_value;  // Restore before returning
+            if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
                 has_viable_candidate = true;
                 break;  // Found at least one viable candidate
             }
-
-            mapping[neighbor] = old_mapping_value;  // Restore before trying next candidate
         }
 
         if (!has_viable_candidate) {
