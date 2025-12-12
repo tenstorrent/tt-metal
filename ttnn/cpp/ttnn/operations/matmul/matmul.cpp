@@ -15,6 +15,7 @@
 
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/tmp/sparse_matmul_device_operation.hpp"
 
 namespace ttnn {
 
@@ -446,23 +447,24 @@ Tensor SparseMatmulOperation::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord =
         core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
-    return sparse_matmul(
-        input_tensor_a,
-        input_tensor_b,
-        sparsity,
-        SparseMatmul{
-            nnz,
-            is_input_a_sparse,
-            is_input_b_sparse,
-            program_config,
-            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
-            dtype,
-            compute_kernel_config,
-            user_core_coord,
-            output_tile,
-            global_cb,
-            sub_device_id},
-        optional_output_tensor);
+
+    return ttnn::prim::sparse_matmul(
+               input_tensor_a,
+               input_tensor_b,
+               sparsity,
+               optional_output_tensor,
+               nnz,
+               is_input_a_sparse,
+               is_input_b_sparse,
+               memory_config,
+               dtype,
+               program_config,
+               compute_kernel_config,
+               user_core_coord,
+               output_tile,
+               global_cb,
+               sub_device_id)
+        .at(0);
 }
 
 }  // namespace matmul
