@@ -10,6 +10,7 @@ import ttnn
 
 logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
+from models.common.utils import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -116,6 +117,9 @@ class TTSampling(LightweightModule):
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
+        # Log-probs tensor to store the log-probs for the batch
+        self.tt_log_probs = None
+        self.log_probs_calculator = LogProbsCalculator(self.mesh_device)
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -179,7 +183,7 @@ class TTSampling(LightweightModule):
             )
             return tt_logits
 
-    def reset_params(self, k, p, temp):
+    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
             torch.tensor(k),
@@ -203,6 +207,8 @@ class TTSampling(LightweightModule):
         ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
         ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
         ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+
+        self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
 
     def forward(
         self,
@@ -347,7 +353,11 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
-        return tt_out_tok
+        # Return dummy log-probs tensor with same shape as regular log-probs would be
+        # to satisfy the return type and for later post-processing
+        self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+
+        return tt_out_tok, self.tt_log_probs
 
 
 def clamp(value, min_value, max_value):

@@ -13,11 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 // shared variables between override and program
 
@@ -378,11 +374,7 @@ Tensor sparse_matmul(
     const struct SparseMatmul& parameters = SparseMatmul{},
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul
 
 namespace bmm_op_utils {
 

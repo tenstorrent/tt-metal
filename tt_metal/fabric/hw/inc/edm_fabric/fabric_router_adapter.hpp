@@ -17,6 +17,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
 #include "debug/assert.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include <cstdint>
 #include <array>
@@ -167,8 +168,9 @@ public:
             noc_sem_addr, packed_val, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         return get_ptr_val(worker_credits_stream_id) != 0;
     }
 

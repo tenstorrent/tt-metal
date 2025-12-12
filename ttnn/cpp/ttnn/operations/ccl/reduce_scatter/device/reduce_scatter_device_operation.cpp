@@ -95,6 +95,7 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.cluster_axis,
         operation_attributes.memory_config,
         subdevice_core_range_set,
+        operation_attributes.topology,
         input_tensor);
 }
 

@@ -1,0 +1,22 @@
+name: 'Trigger Auto-Triage for Regressions'
+description: 'Triggers auto-triage workflow for each regressed job'
+inputs:
+  regressed_workflows:
+    description: 'JSON array of regressed workflows with failing jobs'
+    required: true
+  github_token:
+    description: 'GitHub token for triggering workflows'
+    required: true
+  slack_ts:
+    description: 'Slack message timestamp for threading replies'
+    required: false
+  slack_channel_id:
+    description: 'Slack channel ID for sending notifications'
+    required: false
+  slack_bot_token:
+    description: 'Slack bot token for sending messages'
+    required: false
+
+runs:
+  using: 'node20'
+  main: 'index.js'
