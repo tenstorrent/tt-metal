@@ -78,11 +78,10 @@ tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
 
-    // Exclude batch_idx_fallback from hash since it's a runtime-only parameter (used only in runtime args)
+    // Exclude batch_idx_fallback and noop from hash since they're runtime-only parameters (used only in runtime args)
     // Include mesh_coords since it affects program factory selection
-    // Include noop since it affects kernel compilation (early exit logic)
     return operation::hash_operation<PagedFillCacheDeviceOperation>(
-        args.mesh_coords, args.noop, tensor_args, program_factory.index());
+        args.mesh_coords, tensor_args, program_factory.index());
 }
 
 std::tuple<PagedFillCacheDeviceOperation::operation_attributes_t, PagedFillCacheDeviceOperation::tensor_args_t>

@@ -958,9 +958,6 @@ class MLA1D(AbstractModule):
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
 
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
-        # ttnn.synchronize_device(cfg["mesh_device"])
-
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
@@ -1030,8 +1027,6 @@ class MLA1D(AbstractModule):
             batch_idx=local_batch_idx,
             mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/33589
-        ttnn.synchronize_device(cfg["mesh_device"])
 
         # FlashMLA
         attn_out = ttnn.transformer.flash_mla_prefill(

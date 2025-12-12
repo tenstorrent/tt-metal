@@ -43,11 +43,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
     constexpr uint32_t batch_idx_stick_size =
         get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
-    constexpr bool noop = get_compile_time_arg_val(11) == 1;
-
-    if constexpr (noop) {
-        return;  // Early exit, no work done
-    }
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t page_table_addr = get_arg_val<uint32_t>(1);
@@ -55,8 +50,13 @@ void kernel_main() {
     uint32_t num_rows = get_arg_val<uint32_t>(3);
     // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
     uint32_t batch_arg = get_arg_val<uint32_t>(4);
+    uint32_t noop = get_arg_val<uint32_t>(5);
 
-    constexpr auto s0_args = TensorAccessorArgs<12>();
+    if (noop == 1) {
+        return;  // Early exit, no work done
+    }
+
+    constexpr auto s0_args = TensorAccessorArgs<11>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
