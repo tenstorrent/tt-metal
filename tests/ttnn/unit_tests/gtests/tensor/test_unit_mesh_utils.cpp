@@ -7,14 +7,18 @@
 #include <memory>
 #include <vector>
 
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::experimental::unit_mesh {
@@ -26,6 +30,14 @@ using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshShape;
 
 using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4Fixture;
+
+class UnitMeshUtils2x4FabricTest : public ::tt::tt_metal::MeshDeviceFixtureBase {
+protected:
+    UnitMeshUtils2x4FabricTest() :
+        ::tt::tt_metal::MeshDeviceFixtureBase(::tt::tt_metal::MeshDeviceFixtureBase::Config{
+            .mesh_shape = ::tt::tt_metal::distributed::MeshShape{2, 4},
+            .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
+};
 
 TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
@@ -230,6 +242,68 @@ TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
     EXPECT_THAT(
         ([&]() { disaggregate(tensor); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("Number of submeshes (0) must match mesh size")));
+}
+
+TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
+    FrameMark;  // Mark the start of a frame for Tracy
+
+    auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
+    ASSERT_THAT(unit_meshes, SizeIs(mesh_device_->shape().mesh_size()));
+
+    std::vector<Tensor> unit_tensors;
+    unit_tensors.reserve(unit_meshes.size());
+    {
+        ZoneScopedN("CreateUnitTensors");
+        for (const auto& unit_mesh : unit_meshes) {
+            unit_tensors.push_back(create_device_tensor(
+                tt::tt_metal::TensorSpec(
+                    ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+                    tt::tt_metal::TensorLayout(
+                        tt::tt_metal::DataType::BFLOAT16,
+                        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                        tt::tt_metal::MemoryConfig())),
+                unit_mesh.get()));
+        }
+    }
+
+    // Run a trivial op on each unit tensor
+    {
+        ZoneScopedN("RunAbsOps");
+        for (const auto& unit_tensor : unit_tensors) {
+            ttnn::abs(unit_tensor);
+        }
+    }
+
+    Tensor aggregated_tensor;
+    {
+        ZoneScopedN("Aggregate");
+        aggregated_tensor = aggregate(unit_tensors);
+    }
+
+    // Quiesce the parent mesh before all gather
+    {
+        ZoneScopedN("QuiesceDevices");
+        mesh_device_->quiesce_devices();
+    }
+
+    Tensor all_gathered_tensor;
+    {
+        ZoneScopedN("AllGather");
+        all_gathered_tensor = ttnn::all_gather(aggregated_tensor, /*dim=*/0);
+    }
+
+    // Quiesce parent mesh after all gather to ensure command queues are finished
+    {
+        ZoneScopedN("QuiesceDevicesAfterAllGather");
+        mesh_device_->quiesce_devices();
+    }
+
+    {
+        ZoneScopedN("Disaggregate");
+        auto disaggregated_tensors = disaggregate(all_gathered_tensor);
+    }
+
+    FrameMark;  // Mark the end of a frame
 }
 
 }  // namespace
