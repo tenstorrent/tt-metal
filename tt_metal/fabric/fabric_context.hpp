@@ -20,6 +20,7 @@ namespace tt::tt_fabric {
 // Forward declaration
 class FabricBuilderContext;
 
+
 /**
  * FabricContext
  *
@@ -56,6 +57,12 @@ public:
     // TODO: Implement when switch mesh support lands
     bool is_switch_mesh(MeshId mesh_id) const;
 
+    // ============ Z Router Queries ============
+    // Check if a device has a Z router
+    // Stub for Phase 3: returns false (will be implemented in Phase 5)
+    // TODO(Phase 5): Implement proper Z router detection
+    bool has_z_router_on_device(ChipId device_id) const;
+
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
     // Queried from MetalContext at init time
@@ -75,7 +82,6 @@ public:
 
     // ============ Static Utilities ============
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
-    static bool is_2D_topology(tt::tt_fabric::Topology topology);
 
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
