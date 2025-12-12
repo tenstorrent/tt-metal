@@ -5,8 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import torch
-import ttnn
 from transformers import DPTModel
+
+import ttnn
 
 
 def test_smoke_untraced():
@@ -15,6 +16,7 @@ def test_smoke_untraced():
     device = ttnn.open_device(device_id=0)
     try:
         from models.experimental.dpt_large.tt_traced_pipeline import TracedDPTFull
+
         pipe = TracedDPTFull(state, device, batch_size=1, image_size=384)
         x = torch.randn(1, 3, 384, 384)
         out = pipe.forward_untraced(x)

@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
 Verify PCC accuracy of optimized encoder.
 
 Target: PCC > 0.99
@@ -20,7 +26,7 @@ def compute_pcc(a, b):
     a_centered = a_flat - a_mean
     b_centered = b_flat - b_mean
     numerator = (a_centered * b_centered).sum()
-    denominator = (a_centered.norm() * b_centered.norm())
+    denominator = a_centered.norm() * b_centered.norm()
     return (numerator / (denominator + 1e-8)).item()
 
 
@@ -37,7 +43,7 @@ def pad_to_tile_multiple(tensor, multiple=32):
 def unpad_from_tile_multiple(tensor_tt, original_len, device):
     """Remove padding from TT tensor and convert to torch."""
     tensor_host = tensor_tt.cpu()
-    if hasattr(tensor_host, 'layout') and tensor_host.layout == ttnn.TILE_LAYOUT:
+    if hasattr(tensor_host, "layout") and tensor_host.layout == ttnn.TILE_LAYOUT:
         tensor_host = tensor_host.to(ttnn.ROW_MAJOR_LAYOUT)
     tensor_torch = tensor_host.to_torch()
     # Handle 4D shape from ttnn
@@ -69,11 +75,11 @@ def test_pcc():
     with torch.no_grad():
         emb_out = model.dpt.embeddings(pixel_values)
         # Handle different output formats
-        if hasattr(emb_out, 'last_hidden_state'):
+        if hasattr(emb_out, "last_hidden_state"):
             embeddings = emb_out.last_hidden_state
         elif isinstance(emb_out, (tuple, list)):
             embeddings = emb_out[0]
-        elif hasattr(emb_out, '__getitem__') and hasattr(emb_out, 'to_tuple'):
+        elif hasattr(emb_out, "__getitem__") and hasattr(emb_out, "to_tuple"):
             embeddings = emb_out.to_tuple()[0]
         else:
             embeddings = emb_out

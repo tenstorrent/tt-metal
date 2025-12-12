@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
 Optimized TTNN Encoder for DPT-Large.
 
 Key optimizations:
@@ -47,7 +53,9 @@ class OptimizedEncoderLayer:
         proj_w = state_dict[f"{base}.attention.output.dense.weight"].T.contiguous()
         proj_b = state_dict[f"{base}.attention.output.dense.bias"]
         self.proj_weight = ttnn.from_torch(proj_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.proj_bias = ttnn.from_torch(proj_b.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.proj_bias = ttnn.from_torch(
+            proj_b.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
         # FFN weights
         ff1_w = state_dict[f"{base}.intermediate.dense.weight"].T.contiguous()
@@ -142,10 +150,7 @@ class OptimizedEncoder:
 
     def __init__(self, state_dict, config, device, num_layers=24):
         self.device = device
-        self.layers = [
-            OptimizedEncoderLayer(state_dict, i, config, device)
-            for i in range(num_layers)
-        ]
+        self.layers = [OptimizedEncoderLayer(state_dict, i, config, device) for i in range(num_layers)]
         # DPT output layers (1-indexed in HuggingFace, but we use 0-indexed)
         self.output_layer_indices = [4, 10, 16, 22]  # layers 5, 11, 17, 23
 
@@ -181,7 +186,7 @@ def create_optimized_encoder(model_or_state_dict, device, num_layers=24):
     Returns:
         OptimizedEncoder instance
     """
-    if hasattr(model_or_state_dict, 'state_dict'):
+    if hasattr(model_or_state_dict, "state_dict"):
         state_dict = model_or_state_dict.state_dict()
     else:
         state_dict = model_or_state_dict

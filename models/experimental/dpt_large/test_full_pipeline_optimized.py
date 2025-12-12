@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
 Full DPT-Large pipeline benchmark with optimizations.
 
 Target: PCC > 0.99 AND 20 FPS (50ms)
@@ -44,7 +50,7 @@ def compute_pcc(a, b):
     a_centered = a_flat - a_mean
     b_centered = b_flat - b_mean
     numerator = (a_centered * b_centered).sum()
-    denominator = (a_centered.norm() * b_centered.norm())
+    denominator = a_centered.norm() * b_centered.norm()
     return (numerator / (denominator + 1e-8)).item()
 
 
@@ -115,21 +121,16 @@ def test_optimized_pipeline():
         t_enc = (time.perf_counter() - t_enc_start) * 1000
 
         total = t_emb + t_h2d + t_enc
-        times.append({
-            'embedding': t_emb,
-            'h2d': t_h2d,
-            'encoder': t_enc,
-            'total': total
-        })
+        times.append({"embedding": t_emb, "h2d": t_h2d, "encoder": t_enc, "total": total})
 
         if i < 3:
             print(f"      Run {i}: emb={t_emb:.1f}ms, h2d={t_h2d:.1f}ms, enc={t_enc:.1f}ms, total={total:.1f}ms")
 
     # Calculate averages (skip first 5 warmup runs)
-    avg_emb = sum(t['embedding'] for t in times[5:]) / len(times[5:])
-    avg_h2d = sum(t['h2d'] for t in times[5:]) / len(times[5:])
-    avg_enc = sum(t['encoder'] for t in times[5:]) / len(times[5:])
-    avg_total = sum(t['total'] for t in times[5:]) / len(times[5:])
+    avg_emb = sum(t["embedding"] for t in times[5:]) / len(times[5:])
+    avg_h2d = sum(t["h2d"] for t in times[5:]) / len(times[5:])
+    avg_enc = sum(t["encoder"] for t in times[5:]) / len(times[5:])
+    avg_total = sum(t["total"] for t in times[5:]) / len(times[5:])
 
     # Head time estimate (from previous benchmarks)
     head_time = 13.5
@@ -173,7 +174,9 @@ def test_optimized_pipeline():
     print(f"\nFull Pipeline:")
     print(f"  Baseline:    {baseline_total:.1f}ms = {1000/baseline_total:.1f} FPS")
     print(f"  Optimized:   {full_estimate:.1f}ms = {1000/full_estimate:.1f} FPS")
-    print(f"  Improvement: {baseline_total - full_estimate:.1f}ms ({(baseline_total - full_estimate)/baseline_total*100:.0f}%)")
+    print(
+        f"  Improvement: {baseline_total - full_estimate:.1f}ms ({(baseline_total - full_estimate)/baseline_total*100:.0f}%)"
+    )
 
     ttnn.close_device(device)
 
