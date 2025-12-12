@@ -11,6 +11,7 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include "core_coord.hpp"
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -91,6 +92,9 @@ public:
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
+
+    CoreRangeSet get_compute_cores(std::optional<SubDeviceId> sub_device_id = std::nullopt) const override;
+    ttsl::ScopeGuard set_current_sub_device(SubDeviceId sub_device_id) override;
 
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -237,6 +241,8 @@ private:
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
     std::shared_ptr<Buffer> dram_debug_buffer_;
+
+    std::optional<SubDeviceId> current_sub_device_id_ = std::nullopt;
 
     program_cache::detail::ProgramCache program_cache_;
 

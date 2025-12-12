@@ -197,6 +197,10 @@ public:
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
+
+    CoreRangeSet get_compute_cores(std::optional<SubDeviceId> sub_device_id = std::nullopt) const override;
+    ttsl::ScopeGuard set_current_sub_device(SubDeviceId sub_device_id) override;
+
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
