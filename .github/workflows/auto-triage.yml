@@ -37,7 +37,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@ebanerjee/fixing-main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
@@ -48,4 +48,4 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
-          SLACK_CHANNEL_ID: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
