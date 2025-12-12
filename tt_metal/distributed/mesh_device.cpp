@@ -868,7 +868,10 @@ CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDevi
     return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
 }
 uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()
+        ->sub_device(sub_device_id)
+        .impl()
+        ->num_cores(core_type);
 }
 
 // Bank and memory management methods

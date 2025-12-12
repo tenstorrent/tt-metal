@@ -82,12 +82,6 @@ SubDevice& SubDevice::operator=(SubDevice&& other) noexcept = default;
 
 SubDevice::~SubDevice() = default;
 
-bool SubDevice::has_core_type(HalProgrammableCoreType core_type) const { return pimpl_->has_core_type(core_type); }
-
-uint32_t SubDevice::num_cores(HalProgrammableCoreType core_type) const { return pimpl_->num_cores(core_type); }
-
-const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& SubDevice::cores() const { return pimpl_->cores(); }
-
 const CoreRangeSet& SubDevice::cores(HalProgrammableCoreType core_type) const { return pimpl_->cores(core_type); }
 
 SubDeviceImpl* SubDevice::impl() { return pimpl_.get(); }

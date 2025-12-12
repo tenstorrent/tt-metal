@@ -33,9 +33,6 @@ public:
     ~SubDevice();
 
     // Query methods
-    bool has_core_type(HalProgrammableCoreType core_type) const;
-    uint32_t num_cores(HalProgrammableCoreType core_type) const;
-    const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores() const;
     const CoreRangeSet& cores(HalProgrammableCoreType core_type) const;
 
     SubDeviceImpl* impl();
