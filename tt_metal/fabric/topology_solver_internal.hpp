@@ -5,8 +5,10 @@
 #pragma once
 
 #include <map>
+#include <unordered_set>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
@@ -133,7 +135,7 @@ public:
      * @brief Check if candidate satisfies all hard constraints
      *
      * @return true if candidate should be included, false if should be filtered out
-     * 
+     *
      * Public so ConsistencyChecker can use it for forward consistency checking.
      */
     template <typename TargetNode, typename GlobalNode>
@@ -274,8 +276,70 @@ struct ConsistencyChecker {
 template <typename TargetNode, typename GlobalNode>
 struct PathGraphDetector;
 
+/**
+ * @brief DFS search engine for topology mapping
+ *
+ * Implements backtracking search with memoization and consistency checking.
+ * Uses SearchHeuristic for node selection and candidate generation.
+ */
 template <typename TargetNode, typename GlobalNode>
-class DFSSearchEngine;
+class DFSSearchEngine {
+public:
+    /**
+     * @brief Search state tracking mapping progress and statistics
+     */
+    struct SearchState {
+        std::vector<int> mapping;                    // mapping[target_idx] = global_idx or -1
+        std::vector<bool> used;                      // used[global_idx] = true if assigned
+        std::unordered_set<uint64_t> failed_states;  // Memoization cache of failed states
+        size_t dfs_calls = 0;                        // Number of DFS calls made
+        size_t backtrack_count = 0;                  // Number of backtracks performed
+        std::string error_message;                   // Error message if search fails
+    };
+
+    /**
+     * @brief Start DFS search from current state
+     *
+     * @param assigned_count Number of already-assigned target nodes
+     * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data
+     * @param state Search state (modified in place)
+     * @param validation_mode Connection validation mode
+     * @return true if mapping found, false otherwise
+     */
+    bool search(
+        size_t assigned_count,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        SearchState& state,
+        ConnectionValidationMode validation_mode);
+
+private:
+    /**
+     * @brief Hash state for memoization (FNV-1a hash)
+     *
+     * @param mapping Current partial mapping
+     * @return Hash value for the state
+     */
+    uint64_t hash_state(const std::vector<int>& mapping) const;
+
+    /**
+     * @brief Recursive DFS search
+     *
+     * @param pos Current position (number of assigned nodes)
+     * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data
+     * @param state Search state (modified in place)
+     * @param validation_mode Connection validation mode
+     * @return true if mapping found, false otherwise
+     */
+    bool dfs_recursive(
+        size_t pos,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        SearchState& state,
+        ConnectionValidationMode validation_mode);
+};
 
 template <typename TargetNode, typename GlobalNode>
 struct MappingValidator;
