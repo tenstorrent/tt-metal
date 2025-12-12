@@ -6,7 +6,7 @@ from torch import nn
 
 
 import ttnn
-from models.utility_functions import torch_to_tt_tensor_tile
+from models.common.utility_functions import torch_to_tt_tensor_rm
 from models.common.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
@@ -14,8 +14,8 @@ from models.experimental.deit.tt.deit_config import DeiTConfig
 class TtDeiTPooler(nn.Module):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address=""):
         super().__init__()
-        dense_weight = torch_to_tt_tensor_tile(state_dict[f"{base_address}.dense.weight"], device)
-        dense_bias = torch_to_tt_tensor_tile(state_dict[f"{base_address}.dense.bias"], device)
+        dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], device)
+        dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], device)
         self.dense = TtLinear(config.hidden_size, config.hidden_size, dense_weight, dense_bias)
 
         self.activation = ttnn.tanh()

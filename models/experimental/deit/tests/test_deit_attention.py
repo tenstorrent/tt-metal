@@ -6,11 +6,11 @@ import torch
 from loguru import logger
 from transformers import DeiTModel
 
-from models.utility_functions import (
+from models.common.utility_functions import (
+    torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
     comp_pcc,
     comp_allclose_and_pcc,
-    torch_to_tt_tensor_tile,
 )
 
 
@@ -39,7 +39,7 @@ def test_deit_attention_inference(device, pcc=0.99):
     # setup tt model
     tt_attention = TtDeiTAttention(DeiTConfig(), device, state_dict, base_address)
 
-    tt_input = torch_to_tt_tensor_tile(hidden_state, device)
+    tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
     tt_out = tt_attention(tt_input, head_mask, output_attentions)[0]
     tt_output = tt_to_torch_tensor(tt_out).squeeze(0)
 
