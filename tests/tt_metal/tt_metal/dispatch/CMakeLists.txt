@@ -33,7 +33,7 @@ target_sources(
     unit_tests_dispatch_basic
     PRIVATE
         dispatch_buffer/test_sub_device.cpp
-        dispatch_buffer/test_write_pages_to_sharded_buffer.cpp
+        dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
         dispatch_program/test_dispatch.cpp
         dispatch_program/test_global_circular_buffers.cpp
         dispatch_trace/test_sub_device.cpp
