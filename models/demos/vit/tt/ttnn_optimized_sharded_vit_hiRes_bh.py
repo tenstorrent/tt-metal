@@ -299,27 +299,7 @@ def vit_attention(
         program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
     query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
-    """
-    #reshard to (batch_size*num_heads) cores
-    block_sharded_config_SPLIT_HEADS_SHARDED = ttnn.create_sharded_memory_config(
-        query_key_value.padded_shape,
-        core_grid=config.core_grid_SPLIT_HEADS_SHARDED,
-        strategy=ttnn.ShardStrategy.BLOCK,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    query_key_value = ttnn.reshard(query_key_value, block_sharded_config_SPLIT_HEADS_SHARDED)
 
-    (
-        query,
-        key,
-        value,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads(
-        query_key_value,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        num_heads=num_heads,
-        transpose_key=False,
-    )
-    """
     query, key, value = ttnn.experimental.nlp_create_qkv_heads(
         query_key_value,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
