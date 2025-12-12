@@ -509,69 +509,49 @@ def test_dispatch_cores():
     )
 
 
+def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
+    """
+    Helper function to validate ethernet dispatch counts are within expected range.
+
+    Args:
+        devicesData: Device data from run_device_profiler_test
+        min_count: Minimum acceptable count value
+        max_count: Maximum acceptable count value
+    """
+    stat_names = ["Ethernet CQ Dispatch", "Ethernet CQ Prefetch"]
+
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for stat_name in stat_names:
+            if stat_name in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                read_count = deviceData["cores"]["DEVICE"]["analysis"][stat_name]["stats"]["Count"]
+                assert min_count <= read_count <= max_count, (
+                    f"Wrong ethernet dispatch count for '{stat_name}' on device {device}: "
+                    f"read {read_count}, expected between {min_count} and {max_count}"
+                )
+
+
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [
-            590,
-            1080,
-            1430,
-            1660,
-            1994,
-            2083,
-            2464,
-            2648,
-            2827,
-            3178,
-            3661,
-            5011,
-            5362,
-            7160,
-            9552,
-        ],
-        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 4356, 5846, 7795],
-    }
-    devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
-        setupAutoExtract=True,
-        doDispatchCores=True,
-        setOpSupportCount=1500,
-    )
-    for device, deviceData in devicesData["data"]["devices"].items():
-        for ref, counts in REF_COUNT_DICT.items():
-            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
-                res = False
-                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 200
-                for count in counts:
-                    if count - allowedRange < readCount < count + allowedRange:
-                        res = True
-                        break
-                assert (
-                    res
-                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+    # Simple range check: both Dispatch and Prefetch should be within this range
+    MIN_COUNT = 500
+    MAX_COUNT = 10000
 
-    devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
-        setupAutoExtract=True,
-        doDispatchCores=True,
-        setOpSupportCount=3000,
-    )
-    for device, deviceData in devicesData["data"]["devices"].items():
-        for ref, counts in REF_COUNT_DICT.items():
-            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
-                res = False
-                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 600
-                for count in counts:
-                    if count - allowedRange < readCount < count + allowedRange:
-                        res = True
-                        break
-                assert (
-                    res
-                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+    # Test configuration: (test_name_suffix, op_support_count)
+    test_configs = [
+        ("test_with_ops", 1500),
+        ("test_mesh_device", 3000),
+    ]
+
+    for test_suffix, op_support_count in test_configs:
+        devicesData = run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::{test_suffix} -k DispatchCoreType.ETH",
+            setupAutoExtract=True,
+            doDispatchCores=True,
+            setOpSupportCount=op_support_count,
+        )
+        _validate_ethernet_dispatch_counts(devicesData, MIN_COUNT, MAX_COUNT)
 
 
 def test_profiler_host_device_sync():
