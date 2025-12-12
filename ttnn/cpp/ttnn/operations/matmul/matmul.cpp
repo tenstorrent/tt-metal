@@ -220,7 +220,7 @@ ttnn::Tensor bound_matmul(
 
     bool post_process_bias = get_post_process_bias(
         bias,
-        chosen_program_config,
+        parameters.program_config,
         parameters.user_core_coord,
         parameters.output_mem_config,
         input_tensor_a_adjusted,
