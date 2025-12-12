@@ -270,12 +270,6 @@ class Generator:
         **kwargs,
     ):
         self.mode = "prefill"
-        print(
-            f"prefill_forward_text called with tokens:\n{tokens} shape: {tokens.shape}\n\
-page_table:\n{page_table}, shape: {page_table.shape}\n\
-prompt_lens: {prompt_lens}\n\
-start_pos: {start_pos}\n"
-        )
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -345,15 +339,6 @@ start_pos: {start_pos}\n"
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            print("prefill_forward_text debug:")
-            print(f"prefill_ids shape: {prefill_ids.shape}")
-            print(f"page_table_user shape: {page_table_user.shape}")
-            print(f"last_token_idx: {last_token_idx}")
-            print(f"num_cached_tokens: {num_cached_tokens}")
-            print(f"start_pos: {start_pos}")
-            print(f"seq_len: {seq_len}")
-            print(f"prefill_seq_len: {prefill_seq_len}")
-
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
@@ -400,16 +385,6 @@ start_pos: {start_pos}\n"
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx - num_cached_tokens) % 32))
 
-        # KV cache shape: (model, layer, k/v, block, heads, block_size, head_dim)
-        print(f"K cache page 275:\n{kv_cache[0][1][0][275][0]}")
-        print(f"K cache page 214:\n{kv_cache[0][1][0][214][0]}")
-        print(f"K cache page 3:\n{kv_cache[0][1][0][3][0]}")
-        print(f"K cache page 1340:\n{kv_cache[0][1][0][1340][0]}")
-
-        print(f"V cache page 275:\n{kv_cache[0][1][1][275][0]}")
-        print(f"V cache page 214:\n{kv_cache[0][1][1][214][0]}")
-        print(f"V cache page 3:\n{kv_cache[0][1][1][3][0]}")
-        print(f"V cache page 1340:\n{kv_cache[0][1][1][1340][0]}")
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
@@ -499,9 +474,6 @@ start_pos: {start_pos}\n"
                     kv_cache=kv_cache,
                     **kwargs,
                 )
-                ttnn.set_printoptions(profile="full")
-                print(f"prefill_forward_single_user_text chunk tt_logits: {tt_logits.cpu()[0, 0, :, :4]}")
-                ttnn.set_printoptions(profile="short")
 
                 if chunk_start == last_chunk_start:
                     return tt_logits
@@ -529,9 +501,6 @@ start_pos: {start_pos}\n"
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
-            ttnn.set_printoptions(profile="full")
-            print(f"prefill_forward_single_user_text nochunk tt_logits: {tt_logits.cpu()[0, 0, :, :4]}")
-            ttnn.set_printoptions(profile="short")
             return tt_logits
 
     # Note: This function is called by vLLM

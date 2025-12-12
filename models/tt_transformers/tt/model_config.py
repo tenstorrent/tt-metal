@@ -721,13 +721,12 @@ class ModelArgs:
             )
 
             # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=None: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                # q_chunk_size=256 if seqlen >= 2048 else 64,
-                # k_chunk_size=256 if seqlen >= 2048 else 64,
-                q_chunk_size=64,
-                k_chunk_size=64,
+                # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
+                q_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx % 256 == 0) else 64,
+                k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores

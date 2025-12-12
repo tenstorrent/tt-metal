@@ -115,8 +115,7 @@ void kernel_main() {
             chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
             read_offset = read_offset_phase_2;
         }
-        // uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
-        uint32_t valid_Skt_bound = valid_Skt;
+        uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
