@@ -41,8 +41,7 @@
  * - Dispatcher: Kernel that parses commands and issues writes/signals to Worker cores.
  */
 
-namespace tt::tt_dispatch_tests {
-namespace dispatcher_tests {
+namespace tt::tt_dispatch_tests::dispatcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS_LINEAR_WRITE = 3;
 constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
@@ -887,5 +886,4 @@ INSTANTIATE_TEST_SUITE_P(
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
     });
 
-}  // namespace dispatcher_tests
-}  // namespace tt::tt_dispatch_tests
+}  // namespace tt::tt_dispatch_tests::dispatcher_tests
