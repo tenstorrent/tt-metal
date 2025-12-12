@@ -136,6 +136,16 @@ def command_queue(cq_id: int):
 
 
 @contextmanager
+def sub_device(device: ttnn.MeshDevice, sub_device_id: int):
+    """Context manager to set a sub device for all TTNN operations within this context."""
+    guard = device.set_current_sub_device(sub_device_id)
+    try:
+        yield
+    finally:
+        guard.release()
+
+
+@contextmanager
 def register_post_operation_hook(hook):
     """
 
