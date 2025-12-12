@@ -92,15 +92,17 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None, only
     }
 
     if not only_compare_op_ids:
-        for column in latency_columns:
-            if column not in python_df_compare.columns or column not in cpp_df_compare.columns:
-                continue
-            cpp_zero_mask = cpp_df_compare[column] == 0
-            diff_mask = cpp_zero_mask & (python_df_compare[column] != cpp_df_compare[column])
-            ignored_count = int(diff_mask.sum())
-            if ignored_count > 0:
-                python_df_compare.loc[diff_mask, column] = cpp_df_compare.loc[diff_mask, column]
-                ignored_zero_latency_counts[column] = ignored_count
+        # Only do latency comparison if dataframes have the same shape (same indices)
+        if python_df_compare.shape == cpp_df_compare.shape:
+            for column in latency_columns:
+                if column not in python_df_compare.columns or column not in cpp_df_compare.columns:
+                    continue
+                cpp_zero_mask = cpp_df_compare[column] == 0
+                diff_mask = cpp_zero_mask & (python_df_compare[column] != cpp_df_compare[column])
+                ignored_count = int(diff_mask.sum())
+                if ignored_count > 0:
+                    python_df_compare.loc[diff_mask, column] = cpp_df_compare.loc[diff_mask, column]
+                    ignored_zero_latency_counts[column] = ignored_count
 
     if python_df_compare.equals(cpp_df_compare):
         if ignored_zero_latency_counts:
