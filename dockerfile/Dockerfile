@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-20-dev \
     clang-tidy-17 \
     clang-tidy-20 \
+    clang-rt-20 \
     curl \
     dialog \
     file \
