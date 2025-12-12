@@ -137,7 +137,28 @@ def command_queue(cq_id: int):
 
 @contextmanager
 def sub_device(device: ttnn.MeshDevice, sub_device_id: ttnn.SubDeviceId):
-    """Context manager to set a sub device for all TTNN operations within this context."""
+    """
+    Context manager to set a default sub device for all TTNN operations within this context.
+
+    Operations within this context will use the specified sub_device_id on the given device unless
+    they explicitly provide their own sub_device_id parameter, which takes precedence.
+
+    Args:
+        device (ttnn.MeshDevice): The device on which to set the sub device context.
+        sub_device_id (ttnn.SubDeviceId or int): The sub device ID to use for operations in this context.
+
+    Returns:
+        None
+
+    Example:
+        with ttnn.sub_device(device, 0):
+            result = ttnn.some_operation(tensor)  # Will use sub_device_id 0
+            result2 = ttnn.other_operation(tensor, sub_device_id=1)  # Will use sub_device_id 1 (overrides context)
+
+    Note:
+        If an operation within the context explicitly provides its own sub_device_id parameter,
+        that value will override the context's sub_device_id for that operation.
+    """
     # Pybind expects a SubDeviceId object, but most Python call-sites naturally pass an int.
     if isinstance(sub_device_id, int):
         sub_device_id = ttnn.SubDeviceId(sub_device_id)
