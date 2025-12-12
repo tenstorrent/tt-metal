@@ -45,7 +45,7 @@ on:
         default: false
     outputs:
       evaluation-image-url:
-        description: ""
+        description: "Docker image URL(s) for the evaluation image"
         value: ${{ jobs.build-evaluation-image.outputs.evaluation-image-url }}
   workflow_dispatch:
     inputs:
