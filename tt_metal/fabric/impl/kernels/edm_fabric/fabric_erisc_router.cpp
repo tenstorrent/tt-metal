@@ -401,18 +401,20 @@ constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SE
     return turn_statuses;
 }
 
-// Map downstream direction to compact array index [0-2], excluding my_direction
+// Map downstream direction to compact array index [0-2], exclsuding my_direction
 // This function assumes 2D fabric where routers don't forward to themselves
 // Examples:
-// - EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
-// - WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
-// - NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
-// - SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+// - EAST router  (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
+// - WEST router  (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
+// - NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1,  SOUTH(3)→2, Z(4)->3
+// - SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, Z(4)->3
+// - Z router     (my_direction=4): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, SOUTH(3)→3
 constexpr size_t direction_to_compact_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
-    {0, 0, 1, 2},  // EAST router -> WEST, NORTH, SOUTH
-    {0, 0, 1, 2},  // WEST router -> EAST, NORTH, SOUTH
-    {0, 1, 0, 2},  // NORTH router -> EAST, WEST, SOUTH
-    {0, 1, 2, 0},  // SOUTH router -> EAST, WEST, NORTH
+    {0, 0, 1, 2, 3},  // EAST router -> WEST, NORTH, SOUTH, Z
+    {0, 0, 1, 2, 3},  // WEST router -> EAST, NORTH, SOUTH, Z
+    {0, 1, 0, 2, 3},  // NORTH router -> EAST, WEST, SOUTH, Z
+    {0, 1, 2, 0, 3},  // SOUTH router -> EAST, WEST, NORTH, Z
+    {0, 1, 2, 3, 0},  // Z router -> EAST, WEST, NORTH, SOUTH
 };
 
 template <eth_chan_directions downstream_direction>
@@ -615,7 +617,12 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     using eth_chan_directions::WEST;
 
     switch (hop_cmd) {
-        case LowLatencyMeshRoutingFields::NOOP: break;
+        case LowLatencyMeshRoutingFields::NOOP:
+            if constexpr (z_router_enabled) {
+                ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, Z>(
+                    downstream_edm_interfaces_vc0, local_relay_interface);
+            }
+            break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
@@ -795,7 +802,17 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     using eth_chan_directions::WEST;
 
     switch (hop_cmd) {
-        case LowLatencyMeshRoutingFields::NOOP: break;
+        case LowLatencyMeshRoutingFields::NOOP:
+            if constexpr (z_router_enabled) {
+                constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                    packet_start,
+                    payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interfaces_vc0[edm_index],
+                    transaction_id);
+            }
+            break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == EAST) {
                 forward_to_local_destination<rx_channel_id>(

@@ -30,6 +30,7 @@
 #include "tt_metal/fabric/builder/fabric_router_recipe.hpp"
 #include "tt_metal/fabric/builder/channel_to_pool_mapping.hpp"
 #include "tt_metal/fabric/builder/multi_pool_channel_allocator.hpp"
+#include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
@@ -890,7 +891,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2D_routing = is_2D_topology(topology);
 
     auto sender_channel_to_check = get_worker_connected_sender_channel();
 
@@ -950,8 +950,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const auto [is_intermesh_router_on_edge, is_intramesh_router_on_edge] =
         compute_edge_facing_flags(control_plane, this->local_fabric_node_id, this->my_eth_channel);
 
-    // Get the VC0 downstream EDM count based on 2D routing
-    uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
+    uint32_t num_vc0_downstream_edms = this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0);
+
+    // unsure which one we should prefer at the moment
+    // bool z_routers_enabled = fabric_context.get_builder_context().get_intermesh_vc_config().router_type ==
+    // IntermeshRouterType::Z_INTERMESH;
+    bool z_routers_enabled = fabric_context.has_z_router_on_device(local_physical_chip_id);
 
     const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
@@ -969,7 +973,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->channel_buffer_size,
         this->has_tensix_extension,
         this->enable_first_level_ack,
-        enable_risc_cpu_data_cache};
+        enable_risc_cpu_data_cache,
+        z_routers_enabled};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.sender_channels_worker_conn_info_base_address[0],

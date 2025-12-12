@@ -71,6 +71,9 @@ public:
     // Add connection to local tensix (relay in UDM mode)
     virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, CoreCoord) = 0;
 
+    // Get the number of downstream EDMs connected for a specific VC
+    virtual uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const = 0;
+
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
@@ -111,6 +114,11 @@ public:
     void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const override;
 
     uint32_t get_downstream_edms_connected() const;
+
+    // Get the number of downstream EDMs connected for a specific VC
+    uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc.at(vc_idx).size();
+    }
 
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {

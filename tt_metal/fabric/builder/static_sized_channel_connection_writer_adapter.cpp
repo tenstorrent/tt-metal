@@ -32,10 +32,11 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     if (is_2D_routing) {
         // Calculate compact index based on downstream_direction relative to my_direction
         // The compact index excludes the router's own direction
-        // For EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
-        // For WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
-        // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
-        // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+        // For EAST router  (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
+        // For WEST router  (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
+        // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1,  SOUTH(3)→2, Z(4)->3
+        // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, Z(4)->3
+        // For Z router     (my_direction=4): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, SOUTH(3)→3
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
         this->downstream_edms_connected |= (1 << compact_index);
 
