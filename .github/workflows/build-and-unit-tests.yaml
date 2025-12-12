@@ -108,6 +108,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          auto-triage: ${{ !inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
