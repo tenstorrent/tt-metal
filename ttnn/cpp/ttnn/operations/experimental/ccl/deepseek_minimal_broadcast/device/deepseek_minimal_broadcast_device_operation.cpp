@@ -78,7 +78,7 @@ spec_return_value_t DeepseekMinimalBroadcastDeviceOperation::compute_output_spec
     const auto& shape = input_tensor.logical_shape();
     return TensorSpec(
         shape,
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
 }
 
@@ -120,7 +120,7 @@ std::tuple<operation_attributes_t, tensor_args_t> DeepseekMinimalBroadcastDevice
     const MeshCoordinate& sender_coord,
     uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::ccl::Topology topology,
+    tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const auto& tensor_topology = input_tensor.tensor_topology();
@@ -140,9 +140,9 @@ std::tuple<operation_attributes_t, tensor_args_t> DeepseekMinimalBroadcastDevice
         num_devices,
         tensor_topology_shape);
 
-    ttnn::ccl::Topology ccl_topology = topology;
+    tt::tt_fabric::Topology ccl_topology = topology;
     TT_FATAL(
-        ccl_topology == ttnn::ccl::Topology::Linear,
+        ccl_topology == tt::tt_fabric::Topology::Linear,
         "Currently only Linear topology is supported in deepseek minimal broadcast op, but got {}",
         ccl_topology);
     return {

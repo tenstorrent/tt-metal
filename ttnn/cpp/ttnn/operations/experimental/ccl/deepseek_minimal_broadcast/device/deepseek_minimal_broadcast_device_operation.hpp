@@ -42,7 +42,7 @@ struct DeepseekMinimalBroadcastDeviceOperation {
         const MeshCoordinate& sender_coord,
         uint32_t num_links,
         const std::optional<MemoryConfig>& memory_config,
-        ttnn::ccl::Topology topology,
+        tt::tt_fabric::Topology topology,
         std::optional<uint32_t> cluster_axis,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 };

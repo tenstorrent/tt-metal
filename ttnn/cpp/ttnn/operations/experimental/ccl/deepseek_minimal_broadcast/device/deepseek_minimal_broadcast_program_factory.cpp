@@ -21,6 +21,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
@@ -87,10 +88,10 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     auto cluster_axis = operation_attributes.cluster_axis;
 
     std::optional<MeshCoordinate> forward_coord =
-        get_physical_neighbor_from_physical_coord(input_tensor, self_coord, 1, topology, cluster_axis);
+        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, self_coord, 1, topology, cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord =
-        get_physical_neighbor_from_physical_coord(input_tensor, self_coord, -1, topology, cluster_axis);
+        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, self_coord, -1, topology, cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     auto* mesh_device = input_tensor.device();

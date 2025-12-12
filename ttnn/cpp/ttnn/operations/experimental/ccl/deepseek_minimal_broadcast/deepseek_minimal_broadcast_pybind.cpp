@@ -31,7 +31,7 @@ void bind_deepseek_minimal_broadcast(pybind11::module& module, const ccl_operati
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const uint32_t num_links,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
+               const tt::tt_fabric::Topology topology) -> ttnn::Tensor {
                 return self(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
             },
             py::arg("input_tensor"),
@@ -41,7 +41,7 @@ void bind_deepseek_minimal_broadcast(pybind11::module& module, const ccl_operati
             py::arg("subdevice_id") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_links") = 1,
-            py::arg("topology") = ttnn::ccl::Topology::Linear});
+            py::arg("topology") = tt::tt_fabric::Topology::Linear});
 }
 
 }  // namespace

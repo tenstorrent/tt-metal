@@ -15,7 +15,7 @@ struct operation_attributes_t {
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
-    ttnn::ccl::Topology topology{};
+    tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 };
