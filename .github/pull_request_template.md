@@ -16,18 +16,13 @@ Summarize the changes made and its impact.
 - [ ] New/Existing tests provide coverage for changes
 
 
-```
-models-mandatory: depending on the platform:
-- T3K: unit tests
-- Galaxy: quick tests
-
-models-extended: runs all respective tests from the above models-mandatory preset AND:
-- T3K: demo, perf-models tests
-- Galaxy: demo, perf-models tests
-```
-
 #### Model tests
-CI tests related to models pass (choose "models-mandatory", "models-extended" presets, or select applicable tests manually):
+
+CI tests related to models to be run - Choose "models-mandatory", "models-extended" presets, or select applicable tests manually.
+
+- Run "models-mandatory"
+- Run "models-extended"
+
 - [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml) 
   - [ ] `models-mandatory` preset (runs: 
       [Device perf regressions](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml), 
