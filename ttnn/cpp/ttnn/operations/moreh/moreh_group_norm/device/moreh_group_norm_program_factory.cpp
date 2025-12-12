@@ -69,7 +69,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
 
     const auto num_channels = c;
     const auto num_rows = n * num_groups;
-    TT_ASSERT(
+    TT_FATAL(
         num_channels % num_groups == 0,
         "Group norm requires num_channels ({}) to be divisible by num_groups ({})",
         num_channels,
