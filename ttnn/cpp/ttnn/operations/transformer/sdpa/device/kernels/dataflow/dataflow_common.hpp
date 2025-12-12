@@ -112,10 +112,10 @@ void read_chunk_with_padding(
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
-            if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
+            // if (++barrier_count == barrier_threshold) {
+            //     noc_async_read_barrier();
+            //     barrier_count = 0;
+            // }
         }
         start_tile_id += skip_src_cols;  // Skip src cols if needed
     }

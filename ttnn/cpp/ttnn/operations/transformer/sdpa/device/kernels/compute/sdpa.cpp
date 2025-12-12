@@ -246,6 +246,7 @@ void MAIN {
                 std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
                 std::swap(alias_prev_max, alias_cur_max);
             }
+            cb_pop_front(cb_q_in, q_chunk_tiles);
             /**
              * Performs final row-reduction on the partial sum.
              */
@@ -304,7 +305,6 @@ void MAIN {
             pack_reconfig_data_format(cb_out);
             mul_block_bcast_cols<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
-            cb_pop_front(cb_q_in, q_chunk_tiles);
             // free up cb_prev_max after K chunks
             cb_pop_front(alias_prev_max, Sq_chunk_t);
         }
