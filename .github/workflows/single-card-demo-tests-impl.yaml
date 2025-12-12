@@ -230,27 +230,13 @@ jobs:
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
-      - name: Rename Tracy output files with model name
+      - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
-        shell: bash
-        run: |
-          MODEL_NAME="${{ matrix.test-group.name }}"
-          RUNNER_LABEL="${{ matrix.test-group.runner-label }}"
-          PROFILER_DIR="/work/generated/profiler"
-          REPORTS_DIR="${PROFILER_DIR}/reports"
-
-          # Clean up large intermediate files
-          find "$PROFILER_DIR" -name "profile_log_device.csv" -type f -delete 2>/dev/null || true
-          find "$PROFILER_DIR" -name "tracy_profile_log_host.tracy" -type f -delete 2>/dev/null || true
-
-          if [[ -d "$REPORTS_DIR" ]]; then
-            for csv in $(find "$REPORTS_DIR" -name "ops_perf_results_*.csv" -type f); do
-              dir=$(dirname "$csv")
-              new_name="${dir}/ops_perf_results_${MODEL_NAME}_${RUNNER_LABEL}.csv"
-              mv "$csv" "$new_name"
-              echo "Renamed: $csv -> $new_name"
-            done
-          fi
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: /work/generated/profiler
+          model-name: ${{ matrix.test-group.name }}
+          card: ${{ matrix.test-group.runner-label }}
       - name: Upload Tracy profiler reports (operations recording)
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
