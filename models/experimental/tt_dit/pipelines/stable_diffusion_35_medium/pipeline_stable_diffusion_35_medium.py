@@ -795,62 +795,88 @@ class StableDiffusion3MediumPipeline:
             )
             return noise_pred
 
-        # CFG logic
+        # Collect noise predictions from all submesh devices
+        noise_pred_list = []
+        for submesh_id, submesh_device in enumerate(self.submesh_devices):
+            noise_pred = inner(
+                latents[submesh_id],
+                prompt_embeds[submesh_id],
+                pooled_prompt_embeds[submesh_id],
+                timestep[submesh_id],
+                submesh_id,
+            )
+            noise_pred_list.append(noise_pred)
+
+        # Apply CFG logic after collecting all predictions
         if do_classifier_free_guidance:
-            # Run unconditional and conditional passes
-            noise_pred_uncond = inner(latents[0], prompt_embeds[0], pooled_prompt_embeds[0], timestep[0], 0)
-            noise_pred_text = inner(latents[1], prompt_embeds[1], pooled_prompt_embeds[1], timestep[1], 1)
+            if not self.dit_parallel_config.cfg_parallel.factor > 1:
+                # Single device case - direct operations work
+                split_pos = noise_pred_list[0].shape[0] // 2
+                uncond = noise_pred_list[0][0:split_pos]
+                cond = noise_pred_list[0][split_pos:]
+                noise_pred_list[0] = uncond + guidance_scale * (cond - uncond)
+            else:
+                # Multi-device case - move to CPU first
+                uncond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[0])[0].cpu(blocking=True)).to(
+                    torch.float32
+                )
+                cond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[1])[0].cpu(blocking=True)).to(
+                    torch.float32
+                )
 
-            # Perform guidance
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-            input_latents = latents[0]
-        else:
-            # Single pass for no guidance
-            noise_pred = inner(latents[0], prompt_embeds[0], pooled_prompt_embeds[0], timestep[0], 0)
-            input_latents = latents[0]
+                torch_noise_pred = uncond + guidance_scale * (cond - uncond)
 
-        # Flow matching scheduler step: x_{t+1} = x_t + dt * velocity
-        # noise_pred is the velocity prediction in patched format
-        # Need to unpatchify it to match spatial latent format
+                # Convert back to TTNN and redistribute to devices
+                shard_latents_dims = [None, None]
+                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 2
+                noise_pred_list[0] = ttnn.from_torch(
+                    torch_noise_pred,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    device=self.submesh_devices[0],
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.submesh_devices[0],
+                        tuple(self.submesh_devices[0].shape),
+                        dims=shard_latents_dims,
+                    ),
+                )
+                noise_pred_list[1] = ttnn.from_torch(
+                    torch_noise_pred,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    device=self.submesh_devices[1],
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.submesh_devices[1],
+                        tuple(self.submesh_devices[1].shape),
+                        dims=shard_latents_dims,
+                    ),
+                )
 
-        # Convert noise_pred from TTNN to torch for unpatchify
-        noise_pred_torch = ttnn.to_torch(ttnn.from_device(noise_pred))
+        # Apply flow matching step to each submesh
+        for submesh_id, submesh_device in enumerate(self.submesh_devices):
+            # Convert noise_pred from TTNN to torch for unpatchify
+            noise_pred_torch = ttnn.to_torch(ttnn.from_device(noise_pred_list[submesh_id]))
 
-        # Debug logging
-        logger.debug(f"noise_pred_torch shape: {noise_pred_torch.shape}")
-        logger.debug(
-            f"noise_pred_torch stats - min: {noise_pred_torch.min():.4f}, max: {noise_pred_torch.max():.4f}, mean: {noise_pred_torch.mean():.4f}"
-        )
+            # Unpatchify velocity prediction to spatial format
+            latent_h = latents[submesh_id].shape[1]  # Height in NHWC
+            latent_w = latents[submesh_id].shape[2]  # Width in NHWC
 
-        # Unpatchify velocity prediction to spatial format
-        # Get latent dimensions from input
-        latent_h = input_latents.shape[1]  # Height in NHWC
-        latent_w = input_latents.shape[2]  # Width in NHWC
-        logger.debug(f"input_latents shape: {input_latents.shape}, latent_h: {latent_h}, latent_w: {latent_w}")
+            velocity_spatial = self.transformers[0].unpatchify(noise_pred_torch, latent_h, latent_w)
 
-        velocity_spatial = self.transformers[0].unpatchify(noise_pred_torch, latent_h, latent_w)
-        logger.debug(f"velocity_spatial shape: {velocity_spatial.shape}")
+            # Convert back to TTNN on same device as input
+            velocity_ttnn = ttnn.from_torch(
+                velocity_spatial.permute(0, 2, 3, 1),  # NCHW -> NHWC
+                dtype=ttnn.bfloat16,
+                device=submesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        # Convert back to TTNN on same device as input
-        velocity_ttnn = ttnn.from_torch(
-            velocity_spatial.permute(0, 2, 3, 1),  # NCHW -> NHWC
-            dtype=ttnn.bfloat16,
-            device=self.submesh_devices[0],
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            # Apply flow matching step: latents = latents + dt * velocity
+            updated_latents = latents[submesh_id] + sigma_difference[submesh_id] * velocity_ttnn
+            latents[submesh_id] = updated_latents
 
-        # Apply flow matching step: latents = latents + dt * velocity
-        # sigma_difference is dt (sigma[i+1] - sigma[i])
-        updated_latents = input_latents + sigma_difference[0] * velocity_ttnn
-
-        # Debug: check updated latents stats
-        updated_torch = ttnn.to_torch(ttnn.from_device(updated_latents))
-        logger.debug(
-            f"updated_latents stats - min: {updated_torch.min():.4f}, max: {updated_torch.max():.4f}, mean: {updated_torch.mean():.4f}"
-        )
-
-        return [updated_latents]
+        return latents
 
     def _encode_prompts(
         self,

@@ -267,7 +267,7 @@ def test_sd35_medium_pipeline_functional(
         num_images_per_prompt=1,
         width=512,
         height=512,
-        guidance_scale=4.5,  # CFG enabled with guidance scale 4.5
+        guidance_scale=7,  # CFG enabled with guidance scale 4.5
         max_t5_sequence_length=256,
         prompt_sequence_length=333,
         spatial_sequence_length=1024,
@@ -276,14 +276,15 @@ def test_sd35_medium_pipeline_functional(
     # Test with a simple prompt
     # Use 28+ steps for better quality (10 steps causes accumulated numerical error)
     # prompt = "A girl with long hair and blue eyes"
-    prompt = "a cat with a hat and pink nose"
+    prompt = "A capybara wearing a suit holding a sign that reads hello world"
+    # prompt = "a cat with a hat and pink nose"
     # prompt = "A red circle on a white background, digital art, clean lines"
     seed = 123
-    num_steps = 28
+    num_steps = 20
 
     images = tt_pipe.run_single_prompt(
         prompt=prompt,
-        negative_prompt="",
+        negative_prompt="blurry, low quality, low contrast",
         num_inference_steps=num_steps,
         seed=seed,
     )
@@ -293,7 +294,7 @@ def test_sd35_medium_pipeline_functional(
     assert images[0].size == (512, 512), f"Image size should be 512x512, got {images[0].size}"
 
     # Save TT test image for visual inspection
-    images[0].save("test_sd35_medium_tt_output.png")
+    images[0].save("test_sd35_medium_tt_output1.png")
     logger.info("TT image saved to test_sd35_medium_tt_output.png")
 
     # Skip Diffusers reference generation (too slow on CPU without GPU)
