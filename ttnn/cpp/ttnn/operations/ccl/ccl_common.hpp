@@ -77,12 +77,17 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 // Returns a vector of devices that the given tensor is stored on.
+[[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]]
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
 // Returns a vector of devices that `tensor_shards` are stored on.
 // Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
 // to run a CCL over the unit-meshes.
+[[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]]
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
+
+// Returns a vector of devices that the given tensor is stored on.
+std::vector<tt::tt_fabric::FabricNodeId> get_active_fabric_node_ids(const Tensor& tensor);
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,

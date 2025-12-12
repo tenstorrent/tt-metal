@@ -23,7 +23,7 @@
 namespace ttnn {
 
 struct SliceReshardAsync {
-    std::vector<IDevice*> devices;
+    std::vector<IDevice*> devices; // not used, could be removed?
     const uint32_t dim;
     const uint32_t output_dim_offset;
     const uint32_t output_dim_shape;

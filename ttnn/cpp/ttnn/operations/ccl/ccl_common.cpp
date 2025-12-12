@@ -321,9 +321,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         } else {
             new_col = line_index % ring_size;
         }
-        auto* device = mesh_view.get_device(MeshCoordinate(new_row, new_col));
-        TT_FATAL(device != nullptr, "Device not found at coordinate {}", MeshCoordinate(new_row, new_col));
-        return device->id();
+        return mesh_device->get_fabric_node_id(MeshCoordinate(new_row, new_col)).chip_id;
     };
 
     bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
@@ -355,6 +353,15 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
         devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
     }
     return devices;
+}
+
+std::vector<tt::tt_fabric::FabricNodeId> get_active_fabric_node_ids(const Tensor& tensor) {
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    fabric_node_ids.reserve(tensor.device_storage().coords.size());
+    for (const auto& coord : tensor.device_storage().coords) {
+        fabric_node_ids.push_back(tensor.device()->get_fabric_node_id(coord));
+    }
+    return fabric_node_ids;
 }
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(

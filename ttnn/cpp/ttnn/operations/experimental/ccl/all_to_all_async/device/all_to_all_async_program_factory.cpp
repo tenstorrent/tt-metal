@@ -141,11 +141,12 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     log_debug(tt::LogOp, "DEBUG: create_at is called");
-    auto* mesh_device = tensor_args.input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
+    auto *mesh_device = tensor_args.input_tensor.device();
+    const auto& mesh_view = mesh_device->get_view();
+    const auto target_fabric_node_id = mesh_view.get_fabric_node_id(mesh_coordinate);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t ring_index = operation_attributes.ring_size;  // Initialize device index
 
     TT_FATAL(
@@ -153,40 +154,40 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         "DEBUG: topology: {}",
         operation_attributes.topology);
 
-    std::vector<IDevice*> devices_to_use = tensor_args.input_tensor.device()->get_view().get_ring_devices();
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = mesh_view.get_ring_fabric_node_ids();
 
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
+        if (fabric_node_ids.at(i) == target_fabric_node_id) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(operation_attributes.ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(operation_attributes.ring_size - 1);
             }
             if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
 
     TT_FATAL(ring_index < operation_attributes.ring_size, "DEBUG: ring_index: {}", ring_index);
     TT_FATAL(
-        forward_device.value()->id() != backward_device.value()->id(),
+        forward_fabric_node_id.value() != backward_fabric_node_id.value(),
         "DEBUG: forward and backward devices are the same: {}, {}",
-        forward_device.value()->id(),
-        backward_device.value()->id());
+        forward_fabric_node_id.value(),
+        backward_fabric_node_id.value());
     TT_FATAL(
-        forward_device.value()->id() != target_device->id(),
+        forward_fabric_node_id.value() != target_fabric_node_id,
         "DEBUG: forward device is the same as target device: {}, {}",
-        forward_device.value()->id(),
-        target_device->id());
+        forward_fabric_node_id.value(),
+        target_fabric_node_id);
     TT_FATAL(
-        backward_device.value()->id() != target_device->id(),
+        backward_fabric_node_id.value() != target_fabric_node_id,
         "DEBUG: backward device is the same as target device: {}, {}",
-        backward_device.value()->id(),
-        target_device->id());
+        backward_fabric_node_id.value(),
+        target_fabric_node_id);
 
     // Implementation moved from all_to_all_async_minimal
     const auto& semaphore = operation_attributes.semaphore;
@@ -484,23 +485,15 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         for ([[maybe_unused]] const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_fabric_node_id.has_value());
+        if (forward_fabric_node_id.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_fabric_node_id.has_value());
+        if (backward_fabric_node_id.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 

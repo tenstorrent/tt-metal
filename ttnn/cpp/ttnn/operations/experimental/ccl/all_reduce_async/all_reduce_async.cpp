@@ -164,7 +164,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim =
-        detail::finding_scatter_dim(input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
+        detail::finding_scatter_dim(input_tensor, ttnn::ccl::get_active_fabric_node_ids(input_tensor).size());
 
     auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();

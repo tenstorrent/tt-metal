@@ -65,7 +65,7 @@ struct LlamaAllGatherMatmulAsync {
     const operations::matmul::Matmul matmul_struct;
 
     /* Physical Devices this op runs on*/
-    std::vector<IDevice*> devices;
+    std::vector<IDevice*> devices; // not used, could be removed?
 
     /* General */
     void validate_with_output_tensors(
@@ -104,9 +104,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     Tensor& output_tensor,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,

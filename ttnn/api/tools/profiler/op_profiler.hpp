@@ -552,15 +552,16 @@ inline std::string op_meta_data_serialized_json(
     if (tt::tt_metal::op_profiler::is_op_profiler_env_var_set()) {                                                 \
         for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
             auto base_program_id = program.get_runtime_id();                                                       \
-            for (auto coord : range) {                                                                             \
+            auto local_coord_range = range.intersection(mesh_device->get_view().get_local_mesh_coord_range());     \
+            if (!local_coord_range.has_value()) {                                                                  \
+                continue;                                                                                          \
+            }                                                                                                      \
+            for (auto coord : local_coord_range.value()) {                                                         \
                 /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
                 /* regression tests well-formed data. */                                                           \
                 /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
-                if (!(mesh_device)->is_local(coord)) {                                                             \
-                    continue;                                                                                      \
-                }                                                                                                  \
                 ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
-                auto device_id = (mesh_device)->get_device(coord)->id();                                           \
+                auto device_id = (mesh_device)->get_fabric_node_id(coord).chip_id;                                 \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                     operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
