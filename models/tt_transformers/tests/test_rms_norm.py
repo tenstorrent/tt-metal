@@ -80,7 +80,13 @@ def test_rms_norm_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = model_args.reference_rms_norm()
+
+    base_model_name = os.getenv("HF_MODEL")
+    if "gemma-3" in base_model_name:
+        reference_model = model_args.reference_rms_norm_text()
+    else:
+        reference_model = model_args.reference_rms_norm()
+
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
