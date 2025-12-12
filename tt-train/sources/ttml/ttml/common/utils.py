@@ -97,8 +97,9 @@ def create_optimizer(model, yaml_config: dict):
 
 
 class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
+    def __init__(self, cfg, seq_len, window_size=10):
         self.cfg = cfg
+        self.seq_len = seq_len
         self.steps = []
         self.window_size = window_size
 
@@ -116,7 +117,7 @@ class PerformanceMeter:
             len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
         )
         samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
+        tokens_per_second = samples * self.seq_len / time_window
         return samples_per_second, tokens_per_second
 
 
