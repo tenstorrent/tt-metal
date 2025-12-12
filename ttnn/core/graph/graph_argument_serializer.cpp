@@ -4,7 +4,7 @@
 
 #include "ttnn/graph/graph_argument_serializer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/tmp/config/matmul_program_config.hpp"
 #include "ttnn/types.hpp"
 #include <boost/algorithm/string/replace.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -157,8 +157,7 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
-            oss << "[ unsupported type"
-                << " , ";
+            oss << "[ unsupported type" << " , ";
             auto demangled_name = graph_demangle(element.type().name());
             boost::algorithm::replace_all(demangled_name, "__1::", "");
             oss << demangled_name;

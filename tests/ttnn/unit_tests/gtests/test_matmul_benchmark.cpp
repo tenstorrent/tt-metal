@@ -35,7 +35,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 #include "ttnn/operations/trace.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -321,11 +321,24 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     if (use_trace) {
         auto tid = ttnn::operations::trace::begin_trace_capture(device_, QueueId(0));
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-            output_tensor = ttnn::operations::matmul::matmul(
-                input_tensor_0,
-                input_tensor_1,
-                /*bias=*/std::nullopt,
-                /*parameters=*/matmul_params);
+            output_tensor = ttnn::prim::matmul(
+                                input_tensor_0,
+                                input_tensor_1,
+                                /*bias=*/std::nullopt,
+                                /*output_tensor*/ std::nullopt,
+                                program_config,
+                                /*bcast_batch=*/std::nullopt,
+                                out_mem_config,
+                                dtype,
+                                compute_kernel_config,
+                                /*untilize_out=*/false,
+                                /*user_core_coord=*/std::nullopt,
+                                /*user_fused_activation=*/std::nullopt,
+                                /*user_run_batched=*/false,
+                                /*transpose_a=*/false,
+                                /*transpose_b=*/false,
+                                output_tile)
+                                .at(0);
             output_tensor.deallocate();
         }
         ttnn::operations::trace::end_trace_capture(device_, tid, QueueId(0));
@@ -346,11 +359,24 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             ZoneScopedN("Matmul iterations");
             for (int iter = 0; iter < num_measurement_iterations; ++iter) {
                 auto start_time = std::chrono::high_resolution_clock::now();
-                output_tensor = ttnn::operations::matmul::matmul(
-                    input_tensor_0,
-                    input_tensor_1,
-                    /*bias=*/std::nullopt,
-                    /*parameters=*/matmul_params);
+                output_tensor = ttnn::prim::matmul(
+                                    input_tensor_0,
+                                    input_tensor_1,
+                                    /*bias=*/std::nullopt,
+                                    /*output_tensor*/ std::nullopt,
+                                    program_config,
+                                    /*bcast_batch=*/std::nullopt,
+                                    out_mem_config,
+                                    dtype,
+                                    compute_kernel_config,
+                                    /*untilize_out=*/false,
+                                    /*user_core_coord=*/std::nullopt,
+                                    /*user_fused_activation=*/std::nullopt,
+                                    /*user_run_batched=*/false,
+                                    /*transpose_a=*/false,
+                                    /*transpose_b=*/false,
+                                    output_tile)
+                                    .at(0);
                 tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
