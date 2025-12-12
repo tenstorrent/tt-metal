@@ -19,8 +19,21 @@ enum class WaitAtEndPolicy { WAIT, NO_WAIT };
 
 /**
  * @brief Control whether to pop an input CB after
- * processing it in a function
+ * processing it in a function and how to pop it
  */
-enum class PopInputPolicy { POP, NO_POP };
+struct PopInputWithRemainderPolicy {
+    static constexpr bool pop = true;
+    static constexpr bool pop_remainder = true;
+};
+
+struct PopInputWithoutRemainderPolicy {
+    static constexpr bool pop = true;
+    static constexpr bool pop_remainder = false;
+};
+
+struct NoPopInputPolicy {
+    static constexpr bool pop = false;
+    static constexpr bool pop_remainder = false;
+};
 
 }  // namespace norm::kernel_util::compute::policies

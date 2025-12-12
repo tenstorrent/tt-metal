@@ -205,20 +205,23 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     ////////////////////////////////////////////////////////////////////////////
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    uint32_t in0_t = Wt;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
+    // Size the small-kernel CBs to be a multiple of the block size
+    uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
+    uint32_t in0_t =
+        Wt_next_block_up;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
     uint32_t out0_t = block_size * 2;
-    uint32_t im0_t = Wt;              // buffer for saving xmm
-    uint32_t im3_t = Wt;              // buffer for xmm^2
-    uint32_t in5_t = Wt;              // buffer for gamma
-    uint32_t in6_t = Wt;              // buffer for beta
+    uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
+    uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
+    uint32_t in5_t = Wt_next_block_up;  // buffer for gamma
+    uint32_t in6_t = Wt_next_block_up;  // buffer for beta
     uint32_t im6_t = block_size * 2;  // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
-        im6_t = Wt;
+        im6_t = Wt_next_block_up;
         // cout << "im6_t=Wt=" << Wt << endl;
         in0_t = 2 * block_size;
     }
-    uint32_t im5_t = block_size;      // for buffering to/from *gamma/+beta
+    uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
     uint32_t im1_t = 2;
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
