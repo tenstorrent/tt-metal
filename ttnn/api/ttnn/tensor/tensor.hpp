@@ -338,6 +338,8 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype);
 
 }  // namespace tt::tt_metal
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
+
 namespace ttnn {
 
 using Tensor = tt::tt_metal::Tensor;
