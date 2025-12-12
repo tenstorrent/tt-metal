@@ -399,8 +399,8 @@ struct InterleavedTensorWorkerSlice {
 
 template <class DERIVED_SLICER_T>
 class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
-    public:
-    ~RingReduceScatterBaseTensorSlicer() override = default;
+private:
+    friend DERIVED_SLICER_T;
     RingReduceScatterBaseTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -410,6 +410,9 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         uint32_t total_num_workers,
         uint32_t max_slice_size_in_bytes,
         uint32_t half_cb_n_pages);
+
+public:
+    ~RingReduceScatterBaseTensorSlicer() override = default;
 
     ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index, bool wrapped) {
         TT_ASSERT(global_worker_index < this->worker_slice_shapes.size(), "Invalid worker index {} in `worker_slice_shapes` of size {}", global_worker_index, worker_slice_shapes.size());
