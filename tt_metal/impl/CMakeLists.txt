@@ -36,7 +36,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler_internal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler_details.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp

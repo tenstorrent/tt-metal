@@ -45,7 +45,7 @@
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "impl/profiler/tt_metal_profiler_internal.hpp"
+#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include <program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"

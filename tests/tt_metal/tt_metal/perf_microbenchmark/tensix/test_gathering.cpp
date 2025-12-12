@@ -13,7 +13,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/profiler/tt_metal_profiler_internal.hpp"
+#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include <tt-metalium/distributed.hpp>
 
 namespace tt_metal = tt::tt_metal;

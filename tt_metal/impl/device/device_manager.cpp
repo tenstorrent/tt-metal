@@ -25,7 +25,7 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-#include "impl/profiler/tt_metal_profiler_internal.hpp"
+#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include "profiler/profiler_state.hpp"
 #include "profiler/profiler_state_manager.hpp"
 

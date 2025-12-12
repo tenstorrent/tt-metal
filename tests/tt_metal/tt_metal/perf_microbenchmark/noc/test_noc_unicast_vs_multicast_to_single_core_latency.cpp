@@ -17,7 +17,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "impl/profiler/tt_metal_profiler_internal.hpp"
+#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include "impl/context/metal_context.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>

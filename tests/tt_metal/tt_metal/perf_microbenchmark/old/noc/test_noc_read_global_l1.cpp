@@ -31,7 +31,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "impl/profiler/tt_metal_profiler_internal.hpp"
+#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
