@@ -11,6 +11,7 @@
 #include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
 #include <variant>
 
 namespace ttnn::operations::data_movement {
