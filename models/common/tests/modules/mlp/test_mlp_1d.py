@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 # ============================================================================
@@ -214,13 +215,141 @@ def test_mlp_1d_optimization_config():
     [
         (1, 1),  # single device
         (1, 2),  # 1D mesh, 2 devices
+        (1, 4),  # 1D mesh, 4 devices
         (1, 8),  # 1D mesh, 8 devices
     ],
-    ids=["1x1", "1x2", "1x8"],
+    ids=["1x1", "1x2", "1x4", "1x8"],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (512, 32))
 def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
+    """
+    Test MLP1D constructed via direct APIs (MLP1DConfig) matches HF reference MLP.
+
+    Uses HF_MODEL env (defaults to Llama 3.2 1B) and dummy weights.
+    """
+    import os
+    from functools import cached_property
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    from models.common.modules.lazy_weight import LazyWeight
+    from models.common.modules.mlp.mlp_1d import MLP1D, MeshContext, MLP1DConfig
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    dtype = ttnn.bfloat8_b
+    batch_size = 1
+    mode = "decode" if seq_len <= 32 else "prefill"
+
+    # HF model (default small) for reference
+    hf_model_name = os.getenv("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
+    config = AutoConfig.from_pretrained(hf_model_name)
+    config.num_hidden_layers = 1
+    hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    reference_mlp = hf_model.model.layers[0].mlp
+
+    dim = config.hidden_size
+    hidden_dim = config.intermediate_size
+    cluster_shape = list(ttnn_mesh_device.shape)
+
+    # HF stores weights as (out, in); convert to (in, out)
+    w1_torch = reference_mlp.gate_proj.weight.data.T.contiguous()  # (dim, hidden_dim)
+    w2_torch = reference_mlp.down_proj.weight.data.T.contiguous()  # (hidden_dim, dim)
+    w3_torch = reference_mlp.up_proj.weight.data.T.contiguous()  # (dim, hidden_dim)
+
+    tt_ccl = TT_CCL(ttnn_mesh_device)
+    mesh_ctx = MeshContext(mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+
+    class TestMLP1DConfig(MLP1DConfig):
+        @cached_property
+        def lazy_w1(self) -> LazyWeight:
+            return LazyWeight(
+                source=w1_torch,
+                dtype=dtype,
+                device=ttnn_mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.w1_w3_mem_config(),
+            )
+
+        @cached_property
+        def lazy_w2(self) -> LazyWeight:
+            return LazyWeight(
+                source=w2_torch,
+                dtype=dtype,
+                device=ttnn_mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-2),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.w2_mem_config(),
+            )
+
+        @cached_property
+        def lazy_w3(self) -> LazyWeight:
+            return LazyWeight(
+                source=w3_torch,
+                dtype=dtype,
+                device=ttnn_mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self.w1_w3_mem_config(),
+            )
+
+    mlp_config = TestMLP1DConfig(
+        dim=dim,
+        hidden_dim=hidden_dim,
+        mesh_ctx=mesh_ctx,
+        max_batch_size=batch_size,
+    )
+
+    tt_model = MLP1D(mlp_config)
+
+    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+
+    with torch.no_grad():
+        reference_output = reference_mlp(torch_input)
+
+    input_mem_config = (
+        mlp_config.decode_config.mlp_input_memcfg()
+        if mode == "decode"
+        else mlp_config.prefill_config.mlp_input_memcfg()
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=ttnn_mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=cluster_shape),
+        dtype=ttnn.bfloat8_b,
+        memory_config=input_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = tt_model.forward(tt_input, mode)
+
+    tt_output_torch = to_torch_auto_compose(tt_output)
+
+    pcc_required = 0.99
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"MLP1D (direct API) vs HF reference: {pcc_message}")
+
+    assert passing, f"MLP1D output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    logger.info(f"MLP1D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        (1, 1),  # single device
+        (1, 2),  # 1D mesh, 2 devices
+        (1, 4),  # 1D mesh, 4 devices
+        (1, 8),  # 1D mesh, 8 devices
+    ],
+    ids=["1x1", "1x2", "1x4", "1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", (512, 32))
+def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     """
     Test that MLP1D class matches the HuggingFace/Meta reference model.
     """
@@ -321,8 +450,8 @@ def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
 
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
-    [(1, 1), (1, 2), (1, 8)],
-    ids=["1x1", "1x2", "1x8"],
+    [(1, 1), (1, 2), (1, 4), (1, 8)],
+    ids=["1x1", "1x2", "1x4", "1x8"],
     indirect=True,
 )
 def test_mlp_1d_config_attributes(ttnn_mesh_device: ttnn.MeshDevice):

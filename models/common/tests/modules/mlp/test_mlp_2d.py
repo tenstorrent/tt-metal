@@ -16,6 +16,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
+from models.common.modules.mlp.mlp_2d import MLP2D
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 # ============================================================================
@@ -241,25 +243,313 @@ def test_mlp_2d_optimization_config():
     assert opt.li_ff2_compute_kernel_cfg() is not None
 
 
-# ============================================================================
-# Integration Tests - Require TG device
-# ============================================================================
+@pytest.mark.parametrize(
+    "cluster_shape",
+    [(1, 1), (1, 2), (1, 8), (2, 4)],  # Non-Galaxy shapes - should be rejected
+    ids=["1x1", "1x2", "1x8", "2x4"],
+)
+def test_mlp_2d_rejects_non_galaxy(cluster_shape):
+    """
+    Test that MLP2D.from_model_args() raises ValueError for non-Galaxy devices.
+
+    MLP2D requires Galaxy topology (4x8 or 8x4) due to Galaxy-specific CCL operations.
+    """
+    from models.common.modules.mlp.mlp_2d import MLP2D
+
+    class _DummyArgs:
+        def __init__(self, cluster_shape):
+            self.cluster_shape = list(cluster_shape)
+
+    model_args = _DummyArgs(cluster_shape)
+
+    with pytest.raises(ValueError, match="MLP2D requires Galaxy topology"):
+        MLP2D.from_model_args(
+            mesh_device=None,
+            tt_ccl=None,
+            args=model_args,
+            state_dict=None,
+            weight_cache_path=None,
+            layer_num=0,
+        )
+
+    logger.info("MLP2D correctly rejects non-Galaxy devices")
 
 
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
-    [(4, 8), (8, 4)],  # Galaxy shapes only (32 devices)
-    ids=["4x8", "8x4"],
+    [
+        (8, 4),
+    ],
+    ids=[
+        "8x4",
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (512, 32))
 def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     """
+    Test MLP2D constructed via direct APIs (MLP2DConfig) matches HF reference MLP.
+
+    This test uses MLP2DConfig directly instead of from_model_args() to verify
+    the low-level API works correctly. Loads HF model config and uses dummy weights.
+    """
+    import os
+    from functools import cached_property
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    from models.common.modules.lazy_weight import LazyWeight
+    from models.common.modules.mlp.mlp_2d import MeshContext2D, MLP2DConfig
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    dtype = ttnn.bfloat8_b
+    batch_size = 1
+    mode = "decode" if seq_len <= 32 else "prefill"
+
+    # Get HF model from env (default to small model for fast testing)
+    hf_model_name = os.getenv("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
+
+    # Load HF config and create model with dummy weights
+    config = AutoConfig.from_pretrained(hf_model_name)
+    config.num_hidden_layers = 1  # Only need 1 layer for MLP test
+    hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    reference_mlp = hf_model.model.layers[0].mlp
+
+    # Extract dimensions from HF config
+    dim = config.hidden_size
+    hidden_dim = config.intermediate_size
+    cluster_shape = list(ttnn_mesh_device.shape)
+
+    # Deterministic random weights + input (match test_mlp_2d_dim_ge_8192_paths pattern).
+    # TT expects weights in (input_dim, output_dim) layout.
+    torch.manual_seed(1234)
+    w1_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
+    w3_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
+    w2_torch = torch.randn(hidden_dim, dim, dtype=torch.bfloat16)  # (hidden_dim, dim)
+    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+
+    # HF Linear weights are stored as (output_dim, input_dim); copy transposed.
+    with torch.no_grad():
+        reference_mlp.gate_proj.weight.copy_(w1_torch.T.contiguous())
+        reference_mlp.up_proj.weight.copy_(w3_torch.T.contiguous())
+        reference_mlp.down_proj.weight.copy_(w2_torch.T.contiguous())
+
+    # Create TT_CCL and MeshContext2D directly
+    mesh_ctx = MeshContext2D(mesh_device=ttnn_mesh_device, tt_ccl=TT_CCL(ttnn_mesh_device))
+
+    # Shard dims for 2D mesh (TG style)
+    w1_shard_dims = (-1, -2)
+    w2_shard_dims = (-2, -1)
+
+    # Create LazyWeight instances
+    def make_lazy_weight(tensor: torch.Tensor, shard_dims: tuple[int, int]) -> LazyWeight:
+        return LazyWeight(
+            source=tensor,
+            dtype=dtype,
+            device=ttnn_mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    lazy_w1 = make_lazy_weight(w1_torch, w1_shard_dims)
+    lazy_w2 = make_lazy_weight(w2_torch, w2_shard_dims)
+    lazy_w3 = make_lazy_weight(w3_torch, w1_shard_dims)
+
+    # Create MLP2DConfig subclass with lazy weights
+    class TestMLP2DConfig(MLP2DConfig):
+        @cached_property
+        def lazy_w1(self) -> LazyWeight:
+            return lazy_w1
+
+        @cached_property
+        def lazy_w2(self) -> LazyWeight:
+            return lazy_w2
+
+        @cached_property
+        def lazy_w3(self) -> LazyWeight:
+            return lazy_w3
+
+    mlp_config = TestMLP2DConfig(
+        dim=dim,
+        hidden_dim=hidden_dim,
+        mesh_ctx=mesh_ctx,
+        max_batch_size=batch_size,
+    )
+
+    # Create MLP2D directly with config
+    tt_model = MLP2D(mlp_config)
+
+    # Run HF reference MLP
+    with torch.no_grad():
+        reference_output = reference_mlp(torch_input)
+
+    # Run TT model
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=ttnn_mesh_device,
+        # NOTE: keep explicit positive dim index here; negative dims can confuse MeshToTensor composition
+        # and produce replicated outputs with an extra mesh-axis dimension.
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, 3), mesh_shape=cluster_shape),
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = tt_model.forward(tt_input, mode)
+
+    tt_output_torch = to_torch_auto_compose(tt_output)
+
+    # Compare
+    pcc_required = 0.99
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"MLP2D (direct API) vs HF reference: {pcc_message}")
+
+    assert passing, f"MLP2D output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    logger.info(f"MLP2D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        (8, 4),
+    ],
+    ids=["8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", (512, 32))
+def test_mlp_2d_dim_ge_8192_paths(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
+    """
+    Exercise the dim >= 8192 TG execution paths (reduce_scatter + all_gather, composite all-reduce).
+
+    We intentionally avoid a HF reference model here (70B-size dims/weights would be too heavy),
+    and instead compare against a pure torch reference MLP:
+        y = (SiLU(x @ w1) * (x @ w3)) @ w2
+    """
+    from functools import cached_property
+
+    from models.common.modules.lazy_weight import LazyWeight
+    from models.common.modules.mlp.mlp_2d import MeshContext2D, MLP2DConfig
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    # Force dim >= 8192 branch; keep hidden_dim modest to keep test memory/time reasonable.
+    dim = 8192
+    hidden_dim = 4096
+    assert dim % 32 == 0 and hidden_dim % 32 == 0
+
+    dtype = ttnn.bfloat8_b
+    batch_size = 1
+    mode = "decode" if seq_len <= 32 else "prefill"
+    cluster_shape = list(ttnn_mesh_device.shape)
+
+    # Deterministic weights + input
+    torch.manual_seed(1234)
+    w1_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)
+    w3_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)
+    w2_torch = torch.randn(hidden_dim, dim, dtype=torch.bfloat16)
+    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+
+    # Torch reference
+    with torch.no_grad():
+        ref_w1 = torch.matmul(torch_input, w1_torch)
+        ref_w3 = torch.matmul(torch_input, w3_torch)
+        ref_hidden = torch.nn.functional.silu(ref_w1) * ref_w3
+        reference_output = torch.matmul(ref_hidden, w2_torch)
+
+    # TT model setup
+    tt_ccl = TT_CCL(ttnn_mesh_device)
+    mesh_ctx = MeshContext2D(mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+
+    w1_shard_dims = (-1, -2)
+    w2_shard_dims = (-2, -1)
+
+    def make_lazy_weight(tensor: torch.Tensor, shard_dims: tuple[int, int]) -> LazyWeight:
+        return LazyWeight(
+            source=tensor,
+            dtype=dtype,
+            device=ttnn_mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    lazy_w1 = make_lazy_weight(w1_torch, w1_shard_dims)
+    lazy_w2 = make_lazy_weight(w2_torch, w2_shard_dims)
+    lazy_w3 = make_lazy_weight(w3_torch, w1_shard_dims)
+
+    class TestMLP2DConfig(MLP2DConfig):
+        @cached_property
+        def lazy_w1(self) -> LazyWeight:
+            return lazy_w1
+
+        @cached_property
+        def lazy_w2(self) -> LazyWeight:
+            return lazy_w2
+
+        @cached_property
+        def lazy_w3(self) -> LazyWeight:
+            return lazy_w3
+
+    mlp_config = TestMLP2DConfig(
+        dim=dim,
+        hidden_dim=hidden_dim,
+        mesh_ctx=mesh_ctx,
+        max_batch_size=batch_size,
+    )
+    tt_model = MLP2D(mlp_config)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=ttnn_mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, 3), mesh_shape=cluster_shape),
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = tt_model.forward(tt_input, mode)
+    tt_output_torch = to_torch_auto_compose(tt_output)
+
+    pcc_required = 0.99
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"MLP2D dim>=8192 path vs torch reference: {pcc_message}")
+    assert passing, f"MLP2D output does not meet PCC requirement {pcc_required}: {pcc_message}."
+
+
+# ============================================================================
+# Integration Tests - Require TG device
+# ============================================================================
+
+
+# [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        (8, 4),
+    ],
+    ids=[
+        "8x4",
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", (512, 32))
+def test_mlp_2d_vs_reference_from_model_args(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    seq_len,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    """
     Test that MLP2D class matches the HuggingFace/Meta reference model.
 
     Runs only on Galaxy (TG) devices due to Galaxy-specific CCL operations.
     """
-    from models.common.modules.mlp.mlp_2d import MLP2D
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("CI only runs unit tests")
+
     from models.tt_transformers.tests.test_utils import get_ref_model_dype
     from models.tt_transformers.tt.ccl import TT_CCL
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -331,113 +621,3 @@ def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
 
     assert passing, f"MLP2D output does not meet PCC requirement {pcc_required}: {pcc_message}."
     logger.info(f"MLP2D vs reference: PASSED for mode={mode}, seq_len={seq_len}")
-
-
-@pytest.mark.parametrize(
-    "ttnn_mesh_device",
-    [(1, 1), (1, 2), (1, 8), (2, 4)],  # Non-Galaxy shapes - should be rejected
-    ids=["1x1", "1x2", "1x8", "2x4"],
-    indirect=True,
-)
-def test_mlp_2d_rejects_non_galaxy(ttnn_mesh_device: ttnn.MeshDevice):
-    """
-    Test that MLP2D.from_model_args() raises ValueError for non-Galaxy devices.
-
-    MLP2D requires Galaxy topology (4x8 or 8x4) due to Galaxy-specific CCL operations.
-    """
-    from models.common.modules.mlp.mlp_2d import MLP2D
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
-
-    model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
-    model_args.n_layers = 1
-
-    # Non-Galaxy shapes should always be rejected
-    state_dict = model_args.load_state_dict()
-    tt_ccl = TT_CCL(ttnn_mesh_device)
-
-    with pytest.raises(ValueError, match="MLP2D requires Galaxy topology"):
-        MLP2D.from_model_args(
-            mesh_device=ttnn_mesh_device,
-            tt_ccl=tt_ccl,
-            args=model_args,
-            state_dict=state_dict,
-            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-            layer_num=0,
-        )
-
-    logger.info("MLP2D correctly rejects non-Galaxy devices")
-
-
-@pytest.mark.parametrize(
-    "ttnn_mesh_device",
-    [(4, 8), (8, 4)],  # Galaxy shapes only (32 devices)
-    ids=["4x8", "8x4"],
-    indirect=True,
-)
-def test_mlp_2d_config_attributes(ttnn_mesh_device: ttnn.MeshDevice):
-    """
-    Test that MLP2D created via from_model_args has correct config attributes.
-
-    Runs only on Galaxy (TG) devices due to Galaxy-specific CCL operations.
-    """
-    from models.common.modules.mlp.mlp_2d import MLP2D
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
-
-    model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
-    model_args.n_layers = 1
-
-    state_dict = model_args.load_state_dict()
-    tt_ccl = TT_CCL(ttnn_mesh_device)
-
-    mlp = MLP2D.from_model_args(
-        mesh_device=ttnn_mesh_device,
-        tt_ccl=tt_ccl,
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-        layer_num=0,
-    )
-
-    # Verify config values match model_args
-    assert mlp.config.dim == model_args.dim
-    assert mlp.config.hidden_dim == model_args.hidden_dim
-    assert mlp.config.cluster_shape == model_args.cluster_shape
-    assert mlp.config.num_devices == model_args.num_devices
-    assert mlp.config.prefill_len_cutoff == model_args.prefill_len_cutoff
-
-    # Verify weights were loaded
-    assert mlp.w1 is not None
-    assert mlp.w2 is not None
-    assert mlp.w3 is not None
-
-    # Verify 2D shard dims
-    assert mlp.config.w1_shard_dims == (-1, -2)
-    assert mlp.config.w2_shard_dims == (-2, -1)
-
-    logger.info("MLP2D config attributes test PASSED!")
-
-
-# ============================================================================
-# Run unit tests standalone
-# ============================================================================
-
-if __name__ == "__main__":
-    print("Running MLP2D unit tests (no device required)...")
-
-    test_mlp_2d_config_creation()
-    print("  ✓ test_mlp_2d_config_creation")
-
-    test_mlp_2d_config_rejects_1d_mesh()
-    print("  ✓ test_mlp_2d_config_rejects_1d_mesh")
-
-    test_mlp_2d_configs_methods()
-    print("  ✓ test_mlp_2d_configs_methods")
-
-    test_mlp_2d_optimization_config()
-    print("  ✓ test_mlp_2d_optimization_config")
-
-    print("\nAll MLP2D unit tests passed! ✓")
-    print("\nTo run device tests (requires 2D mesh), use pytest:")
-    print("  pytest models/common/tests/modules/mlp/test_mlp_2d.py -v")

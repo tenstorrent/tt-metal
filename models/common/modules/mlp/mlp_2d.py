@@ -47,6 +47,8 @@ class MeshContext2D:
     mesh_device: ttnn.MeshDevice
     tt_ccl: "TT_CCL"
 
+    # NOTE: we have TTNN APIs and do we really need extra boilerplates here? --> we should distinguish between users of TTTv2 and maintainers of TTTv2 --> the API tightening is useful for only the maintainers --> the users do not care about!
+    # it is OK to group mesh_device and tt_ccl together in the config classes but we should not do that in the MLP2D class!
     # Overridable methods
     def num_devices(self) -> int:
         return self.mesh_device.get_num_devices()
@@ -58,21 +60,26 @@ class MeshContext2D:
         """Returns DRAM grid size CoreCoord from mesh_device."""
         return self.mesh_device.dram_grid_size()
 
+    # todo)) maybe this should be a TTNN API? Turn this into a helper function that has a tt-metal issue created for it to TTNN ops team
     def topology(self) -> Any:
         """CCL topology. Override for custom behavior."""
         if self.num_devices() == 8 and ttnn.cluster.get_cluster_type() in [
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
+            # NOTE: we always want to do ring if it is available
             return ttnn.Topology.Ring
         elif self.num_devices() > 1:
+            # NOTE: this should be a fallback when the ring is not available
             return ttnn.Topology.Linear
         return None
 
+    # todo)) maybe this should be a TTNN API? Turn this into a helper function that has a tt-metal issue created for it to TTNN ops team
     def num_reduce_scatter_links(self) -> int:
         """Number of reduce scatter links. Override for custom behavior."""
         return 1
 
+    # todo)) maybe this should be a TTNN API? Turn this into a helper function that has a tt-metal issue created for it to TTNN ops team
     def num_all_gather_links(self) -> int:
         """Number of all gather links. Override for custom behavior."""
         return 2
@@ -100,7 +107,9 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
     cols = next((i for i in range(max_cols, 0, -1) if col_tiles % i == 0), None)
     rows = next((i for i in range(max_rows, 0, -1) if row_tiles % i == 0), None)
     assert cols is not None and rows is not None
-    return rows, cols
+    # NOTE: TTNN matmul program configs expect (cores_x, cores_y).
+    # Here, `cols` corresponds to X and `rows` corresponds to Y.
+    return cols, rows
 
 
 def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
@@ -133,7 +142,9 @@ def _matmul_config(
     out_subblock_w = _get_out_subblock_w(per_core_n, out_subblock_h)
 
     if in0_block_w is None:
-        in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[1]))
+        # For 2D matmul, K is partitioned along the grid X dimension (cores_x).
+        # `grid_size` is (cores_x, cores_y).
+        in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[0]))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -215,40 +226,65 @@ class MLP2DPrefillConfigs:
     def __init__(self, cfg: MLP2DConfig):
         self.cfg = cfg
 
-    # todo)) remove seq_len if not needed
     def _mlp_grid(self, seq_len: int) -> tuple[int, int]:
         """Grid for prefill matmuls. Override to customize."""
-        prefill_rows = 8
-        return _find_prefill_grid(prefill_rows, self.cfg.dim // self.cfg.tile_size)
+        # Pick a grid that evenly divides both M (rows) and local N (cols) in tiles
+        # to avoid padding-sensitive matmul configs.
+        mesh_dim0, _mesh_dim1 = self.cfg.cluster_shape
+        m = min(seq_len, self.cfg.prefill_len_cutoff)
+        m_tiles = m // self.cfg.tile_size
+        n_local = self.cfg.hidden_dim // mesh_dim0
+        n_tiles = n_local // self.cfg.tile_size
+        return _find_prefill_grid(m_tiles, n_tiles)
 
-    # todo)) remove seq_len if not needed
     def _mlp2_grid(self, seq_len: int) -> tuple[int, int]:
         """Grid for w2 prefill matmul. Override to customize."""
-        prefill_rows = 8
-        return _find_prefill_grid(prefill_rows, self.cfg.hidden_dim // self.cfg.tile_size)
+        # Pick a grid that evenly divides both M (rows) and local N (cols) in tiles.
+        _mesh_dim0, mesh_dim1 = self.cfg.cluster_shape
+        m = min(seq_len, self.cfg.prefill_len_cutoff)
+        m_tiles = m // self.cfg.tile_size
+        n_local = self.cfg.dim // mesh_dim1
+        n_tiles = n_local // self.cfg.tile_size
+        return _find_prefill_grid(m_tiles, n_tiles)
 
     def w1_w3_prg_config(self, seq_len: int):
         """Program config for w1/w3 prefill matmuls. Override to customize."""
-        n_w1_w3 = self.cfg.hidden_dim // self.cfg.num_devices
-        dram_shard_grid_width = 8
+        # TG uses 2D weight sharding:
+        # - w1/w3 shard dims = (-1, -2) => N sharded across mesh_dim0 (cluster_shape[0]),
+        #                               K sharded across mesh_dim1 (cluster_shape[1])
+        # Therefore, per-device matmul shape is:
+        #   (M x K_local) @ (K_local x N_local)
+        # where:
+        #   K_local = dim / cluster_shape[1]
+        #   N_local = hidden_dim / cluster_shape[0]
+        mesh_dim0, mesh_dim1 = self.cfg.cluster_shape
+        k_local = self.cfg.dim // mesh_dim1
+        n_local = self.cfg.hidden_dim // mesh_dim0
         return _matmul_config(
             m=min(seq_len, self.cfg.prefill_len_cutoff),
-            k=self.cfg.dim,
-            n=n_w1_w3,
+            k=k_local,
+            n=n_local,
             grid_size=self._mlp_grid(seq_len),
-            per_core_n=math.ceil(n_w1_w3 / (self.cfg.tile_size * dram_shard_grid_width)),
         )
 
     def w2_prg_config(self, seq_len: int):
         """Program config for w2 prefill matmul. Override to customize."""
-        n_w2 = self.cfg.dim
-        dram_shard_grid_width = 8
+        # TG uses 2D weight sharding:
+        # - w2 shard dims = (-2, -1) => K sharded across mesh_dim0 (cluster_shape[0]),
+        #                              N sharded across mesh_dim1 (cluster_shape[1])
+        # Therefore, per-device matmul shape is:
+        #   (M x K_local) @ (K_local x N_local)
+        # where:
+        #   K_local = hidden_dim / cluster_shape[0]
+        #   N_local = dim / cluster_shape[1]
+        mesh_dim0, mesh_dim1 = self.cfg.cluster_shape
+        k_local = self.cfg.hidden_dim // mesh_dim0
+        n_local = self.cfg.dim // mesh_dim1
         return _matmul_config(
             m=min(seq_len, self.cfg.prefill_len_cutoff),
-            k=self.cfg.hidden_dim,
-            n=n_w2,
+            k=k_local,
+            n=n_local,
             grid_size=self._mlp2_grid(seq_len),
-            per_core_n=math.ceil(n_w2 / (self.cfg.tile_size * dram_shard_grid_width)),
         )
 
 
@@ -305,7 +341,6 @@ class MLP2DConfig:
     # Optional params
     max_batch_size: int = 32
     mlp_activation_type: Any = field(default_factory=lambda: ttnn.UnaryOpType.SILU)
-    unpadded_hidden_dim: Optional[int] = None
 
     def __post_init__(self):
         # MLP2D is designed for 2D mesh topologies (cluster_shape[0] > 1 and cluster_shape[1] > 1)
@@ -315,8 +350,6 @@ class MLP2DConfig:
             f"MLP2D requires 2D mesh (both cluster_shape dimensions > 1). "
             f"Got cluster_shape={self.cluster_shape}. For 1D meshes, use MLP1D instead."
         )
-        if self.unpadded_hidden_dim is None:
-            self.unpadded_hidden_dim = self.hidden_dim
 
     # Sub-configs - override these factory methods in subclasses
     @cached_property
@@ -490,8 +523,10 @@ class MLP2D(LightweightModule):
         valid_shapes = [(4, 8), (8, 4)]
         shape_tuple = tuple(args.cluster_shape)
         if shape_tuple not in valid_shapes:
+            # IMPORTANT: do this validation before touching mesh_device/tt_ccl/model_config
+            # so negative tests don't need to open a mesh device or initialize fabric.
             raise ValueError(
-                f"MLP2D requires Galaxy topology (4x8 or 8x4). Got cluster_shape={args.cluster_shape}. "
+                f"MLP2D requires Galaxy topology (8x4). Got cluster_shape={args.cluster_shape}. "
                 "For non-Galaxy devices, use MLP1D instead."
             )
 
@@ -513,15 +548,25 @@ class MLP2D(LightweightModule):
                         return model_config.get("FF1_3_TG_PROGCFG")
 
                     def ff2_prg_config(inner_self):
+                        # TT-Transformers TG FF2 config assumes a specific intermediate sharding that
+                        # doesn't match this MLP2D implementation for dim<8192. Let TTNN pick defaults.
+                        if inner_self.cfg.dim < 8192:
+                            return None
                         return model_config.get("FF2_TG_PROGCFG")
 
                     def ff1_out_reduce_scatter_memcfg(inner_self):
                         return model_config.get("FF1_OUT_REDUCE_SCATTER_MEMCFG")
 
                     def ff1_out_gathered_memcfg(inner_self):
-                        return model_config.get("FF1_OUT_GATHERED_MEMCFG")
+                        # TT-Transformers config uses shard height 32*4 here; MLP2D tensors are height 32.
+                        # Passing this into to_memory_config can TT_FATAL on shard-height mismatch.
+                        return None
 
                     def ff2_out_reduce_scatter_memcfg(inner_self):
+                        # Some TT-Transformers configs size this as shard_height=32*cluster_rows (e.g. 256 on 8x4),
+                        # but MLP2D decode tensors here are height=32. Use the attention-input sharding instead.
+                        if inner_self.cfg.dim < 8192:
+                            return model_config.get("SHARDED_ATTN_INPUT_MEMCFG")
                         return model_config.get("FF2_OUT_REDUCE_SCATTER_MEMCFG")
 
                     def sharded_attn_input_memcfg(inner_self):
@@ -655,7 +700,6 @@ class MLP2D(LightweightModule):
             mesh_ctx=mesh_ctx,
             max_batch_size=args.max_batch_size,
             mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
-            unpadded_hidden_dim=args.unpadded_hidden_dim,
         )
 
         return cls(config)
@@ -667,6 +711,7 @@ class MLP2D(LightweightModule):
         dim: int,
         sharded: bool,
         memory_config: Any,
+        reduce_scatter_memory_config: Any = None,
         use_composite: bool = False,
     ) -> ttnn.Tensor:
         """
@@ -689,6 +734,14 @@ class MLP2D(LightweightModule):
             input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
         if not use_composite:
+            # IMPORTANT:
+            # `all_gather_async` increases the gathered dimension by the number of devices on `cluster_axis`.
+            # If we request a sharded output memory_config here (or implicitly inherit the input sharding),
+            # we can end up with "num_shards > num_cores" during TensorSpec creation.
+            #
+            # So for the gather step, always materialize an INTERLEAVED tensor (DRAM),
+            # then do the local reduce, and finally (optionally) reshard to the requested memory_config.
+            gather_output_memcfg = ttnn.DRAM_MEMORY_CONFIG
             gathered_tensor = ttnn.experimental.all_gather_async(
                 input_tensor,
                 persistent_output_buffer=None,
@@ -697,7 +750,7 @@ class MLP2D(LightweightModule):
                 num_links=self.config.num_all_gather_links,
                 cluster_axis=cluster_axis,
                 topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+                memory_config=gather_output_memcfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
@@ -707,17 +760,44 @@ class MLP2D(LightweightModule):
             if sharded:
                 gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
 
-            reduced_tensor = ttnn.experimental.fast_reduce_nc(
-                gathered_tensor,
-                dims=[dim],
-                output=None,
-                compute_kernel_config=None,
-                memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # IMPORTANT: fast_reduce_nc is keepdim=true (it sets reduced dim size to 1).
+            # For all-reduce implemented via all-gather, we must reduce across the *device* axis,
+            # not across the logical tensor axis that was concatenated.
+            #
+            # - If we all-gather along dim=3 (W), the gathered tensor is [1,1,H,W*D].
+            #   We reshape it to [1,D,H,W] and reduce along dim=1 to get [1,1,H,W].
+            # - For dim!=3 (e.g. dim=0 when N==1), reducing along `dim` is OK because the original
+            #   dimension is size 1 and only the gather expanded it.
+            if dim == 3:
+                # Number of devices participating in this all-reduce along the selected mesh axis.
+                num_devices_axis = self.config.cluster_shape[cluster_axis]
+                h = input_tensor.shape[-2]
+                w = input_tensor.shape[-1]
+                gathered_tensor = ttnn.reshape(gathered_tensor, (1, num_devices_axis, h, w))
+                reduced_tensor = ttnn.experimental.fast_reduce_nc(
+                    gathered_tensor,
+                    dims=[1],
+                    output=None,
+                    compute_kernel_config=None,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
+                )
+                gathered_tensor.deallocate(True)
+                reduced_tensor = ttnn.reshape(reduced_tensor, (1, 1, h, w))
+            else:
+                reduced_tensor = ttnn.experimental.fast_reduce_nc(
+                    gathered_tensor,
+                    dims=[dim],
+                    output=None,
+                    compute_kernel_config=None,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
+                )
+                gathered_tensor.deallocate(True)
 
-            gathered_tensor.deallocate(True)
         else:
             input_mem_cfg = input_tensor.memory_config()
+            # In composite all-reduce (RS + AG), the RS output memcfg can be different from the final desired memcfg.
+            # If not provided, fall back to the input tensor's memory config (this guarantees shard height matches).
+            rs_mem_cfg = ttnn.DRAM_MEMORY_CONFIG if not sharded else (reduce_scatter_memory_config or input_mem_cfg)
 
             reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
                 input_tensor,
@@ -727,7 +807,7 @@ class MLP2D(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 num_links=self.config.num_reduce_scatter_links,
                 cluster_axis=cluster_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+                memory_config=rs_mem_cfg,
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.ccl_topology,
                 chunks_per_sync=10,
@@ -751,6 +831,9 @@ class MLP2D(LightweightModule):
             )
 
         reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
+        # Preserve requested sharding on the final output (when provided).
+        if sharded and memory_config is not None:
+            reduced_tensor = ttnn.to_memory_config(reduced_tensor, memory_config)
         return reduced_tensor
 
     def _reduce_scatter_axis1(self, tensor: ttnn.Tensor, memory_config: Any) -> ttnn.Tensor:
@@ -835,6 +918,9 @@ class MLP2D(LightweightModule):
                 dim=3,  # Not used for all_reduce when sharded
                 sharded=True,
                 memory_config=self.ff1_out_gathered_memcfg,
+                reduce_scatter_memory_config=self.ff1_out_reduce_scatter_memcfg,
+                # Use composite RS+AG here; it's robust/correct for summing partials from 2D K-fracturing.
+                use_composite=True,
             )
             w3_out = self._all_reduce_tg(
                 w3_out,
@@ -842,6 +928,8 @@ class MLP2D(LightweightModule):
                 dim=3,
                 sharded=True,
                 memory_config=self.ff1_out_gathered_memcfg,
+                reduce_scatter_memory_config=self.ff1_out_reduce_scatter_memcfg,
+                use_composite=True,
             )
             use_all_gather = False
 
@@ -878,10 +966,15 @@ class MLP2D(LightweightModule):
         w2_out_reduced = self._all_reduce_tg(
             w2_out,
             cluster_axis=0,
-            dim=0 if self.dim < 8192 else 3,
+            # Use dim=3 so the composite reduce_scatter/all_gather path can legally shard and gather.
+            dim=3,
             sharded=True,
             memory_config=self.ff2_out_reduce_scatter_memcfg,
-            use_composite=(self.dim >= 8192),
+            # Provide RS output memcfg explicitly (from `from_model_args` when applicable) so composite
+            # all-reduce doesn't have to guess/fall back to input_mem_cfg.
+            reduce_scatter_memory_config=self.ff2_out_reduce_scatter_memcfg,
+            # Always use composite here; it produces correct replication semantics on the reduced axis.
+            use_composite=True,
         )
 
         # --- STAGE 7: Reshape + Final memory config ---
@@ -889,7 +982,9 @@ class MLP2D(LightweightModule):
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
-        w2_out_reduced = ttnn.to_memory_config(w2_out_reduced, self.sharded_attn_input_memcfg)
+        # NOTE: For direct-API usage (e.g. unit tests) decode configs may leave this unset.
+        if self.sharded_attn_input_memcfg is not None:
+            w2_out_reduced = ttnn.to_memory_config(w2_out_reduced, self.sharded_attn_input_memcfg)
 
         return w2_out_reduced
 
@@ -972,7 +1067,8 @@ class MLP2D(LightweightModule):
             dim=3,  # Prefill always uses dim=3
             sharded=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            use_composite=(self.dim >= 8192),
+            # Use composite RS+AG for correctness; avoids dim==3 non-composite reshape/reduce pitfalls.
+            use_composite=True,
         )
 
         # --- STAGE 7: Reshape (no final memory config change for prefill) ---

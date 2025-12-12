@@ -27,8 +27,13 @@ def ttnn_mesh_device(request):
         except Exception as e:
             pytest.skip(f"{__file__}: mesh_shape is required: {e}")
 
-    # Pre-check: if no devices at all, skip without invoking C++ open
-    num_pcie = ttnn.get_num_pcie_devices()
+    # Pre-check: if no devices at all, skip without invoking C++ open.
+    # Some environments can throw here (e.g. transient driver/UMD issues); treat as "device unavailable".
+    try:
+        num_pcie = ttnn.get_num_pcie_devices()
+    except Exception as e:
+        pytest.skip(f"{__file__}: Unable to query TT devices on this system: {e}")
+
     if isinstance(num_pcie, int) and num_pcie == 0:
         pytest.skip(f"{__file__}: No TT devices detected on this system")
 
@@ -50,8 +55,11 @@ def ttnn_mesh_device(request):
         pass
     else:
         # provide default fabric config for multi-device if not specified by request
-        # todo)) ttnn.FabricConfig.FABRIC_1D_RING is the default for Galaxy 6U
-        fabric_config = ttnn.FabricConfig.FABRIC_1D if fabric_config is None else fabric_config
+        num_devices = req_shape[0] * req_shape[1]
+        if fabric_config is None and num_devices >= 8:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+        else:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D
         # set all other input arguments to default values by top-level conftest.py
         ttnn.set_fabric_config(
             fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, ttnn.FabricTensixConfig.DISABLED
@@ -82,8 +90,8 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
     _CANDIDATE_REQ_SHAPES = {
         (1, 1): ((1, 1),),
         (1, 2): ((1, 2), (1, 1)),
-        (1, 8): ((1, 8), (2, 4), (1, 2), (1, 1)),
-        (2, 4): ((2, 4), (1, 8), (1, 2), (1, 1)),
+        (2, 4): ((2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
+        (8, 4): ((8, 4), (2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
         # [INFO] add more system shapes here
     }
 

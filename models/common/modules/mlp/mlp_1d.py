@@ -20,7 +20,7 @@ Config classes use a mixin pattern: subclass and override methods to customize b
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Optional
@@ -240,6 +240,19 @@ class MLP1DDecodeConfigs:
         """Core grid for w2 matmul. Override to customize."""
         return _dram_shard_core_grid_k_n(self.cfg.hidden_dim // self.cfg.num_devices, self.cfg.dim)
 
+    def mlp_input_memcfg(self) -> ttnn.MemoryConfig:
+        mlp_core_grid = self._mlp_core_grid()
+        return ttnn.create_sharded_memory_config(
+            (
+                self.cfg.tile_padded_batch_rows,
+                self.cfg.dim // mlp_core_grid.num_cores,
+            ),  # Shard shape: [32, 128] -> 1 shard per core
+            mlp_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def w1_w3_prg_config(self):
         """Program config for w1/w3 decode matmuls. Override to customize."""
         return _dram_matmul_config(
@@ -306,6 +319,9 @@ class MLP1DPrefillConfigs:
         """Grid for w2 prefill matmul. Override to customize."""
         prefill_rows = 8
         return _find_prefill_grid(prefill_rows, self.cfg.hidden_dim // self.cfg.tile_size)
+
+    def mlp_input_memcfg(self) -> ttnn.MemoryConfig:
+        return ttnn.DRAM_MEMORY_CONFIG
 
     def w1_w3_prg_config(self, seq_len: int):
         """Program config for w1/w3 prefill matmuls. Override to customize."""
@@ -384,7 +400,7 @@ class MLP1DConfig:
 
     # Optional params
     max_batch_size: int = 32
-    mlp_activation_type: Any = field(default_factory=lambda: ttnn.UnaryOpType.SILU)
+    mlp_activation_type: ttnn.UnaryOpType = ttnn.UnaryOpType.SILU
 
     def __post_init__(self):
         # MLPNonTG uses 1D column-parallel sharding - 2D meshes not supported
@@ -406,7 +422,7 @@ class MLP1DConfig:
     def optimization_config(self) -> MLP1DOptimizationConfig:
         return MLP1DOptimizationConfig(self)
 
-    # Cached properties - shorthand for mesh_ctx access
+    # Shorthand for mesh_ctx access
     @cached_property
     def num_devices(self) -> int:
         return self.mesh_ctx.num_devices()
@@ -763,6 +779,7 @@ class MLP1D(LightweightModule):
           linear(w1) → linear(w3) → mul+silu → reshard → linear(w2) → all_reduce(sharded) → reshard
         """
         # --- STAGE 1: W1/W3 Linear (L1 sharded) ---
+        # Access all fingerprinting parameters
         w1_out = ttnn.linear(
             x,
             self.w1,
