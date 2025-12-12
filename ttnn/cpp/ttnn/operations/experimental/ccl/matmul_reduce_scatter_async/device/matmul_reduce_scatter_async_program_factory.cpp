@@ -171,8 +171,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
                 program,
                 {output_tensors.mm}, /* matmul output tensor */
                 {},
-                {tensor_args.persistent_intermediate, output_tensors.reduce_scatter} /* all gather output tensor */
-            );
+                {tensor_args.persistent_intermediate, output_tensors.reduce_scatter});
         }
     }
 }

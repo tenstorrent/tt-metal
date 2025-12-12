@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-/* All Gather Matmul fusion includes */
+/* Reduce Scatter Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -37,7 +37,7 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     // Matmul Reduce Scatter validate
     TT_FATAL(
         args.reduce_scatter_minimal_async_struct.dim == 3,
-        "MatmulReduceScatterAsync requires dim=3 for the AllGather operations.");
+        "MatmulReduceScatterAsync requires dim=3 for the ReduceScatter operations.");
 
     if (args.matmul_struct.program_config.has_value()) {
         std::visit(

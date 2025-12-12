@@ -14,13 +14,9 @@
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async {
 
 struct operation_attributes_t {
-    /* All Gather Params */
     ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct;
-    /* Matmul Params */
     operations::matmul::Matmul matmul_struct;
-    /* Fusion Params */
     CoreCoord reduce_scatter_core_grid_offset;
-    /* Physical Devices this op runs on*/
     std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
