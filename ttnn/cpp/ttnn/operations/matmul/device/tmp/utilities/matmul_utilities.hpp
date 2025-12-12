@@ -38,4 +38,11 @@ using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithP
 std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
     const std::optional<const Activation>& activation);
 
+tt::tt_metal::Tile get_output_tile(
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    const std::optional<const tt::tt_metal::Tile>& optional_output_tensor_tile);
+
 }  // namespace ttnn::operations::matmul::utilities
