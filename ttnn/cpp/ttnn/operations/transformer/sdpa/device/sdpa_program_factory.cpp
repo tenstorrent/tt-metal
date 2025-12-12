@@ -642,15 +642,54 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         uint32_t head = 0;
         uint32_t q_chunk_start = 0;
         uint32_t q_chunk_count = 0;
-        CoreCoord prev_physical = CoreCoord{0, 0};
-        CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
+        CoreCoord sender_physical = CoreCoord{0, 0};
+        CoreCoord receiver_bbox_start = CoreCoord{0, 0};
+        CoreCoord receiver_bbox_end = CoreCoord{0, 0};
+        uint32_t receiver_count = 0;
+    };
+
+    struct ChainRectangle {
+        bool initialized = false;
+        uint32_t min_x = 0;
+        uint32_t max_x = 0;
+        uint32_t min_y = 0;
+        uint32_t max_y = 0;
+        uint32_t count = 0;
     };
 
     std::vector<CoreWork> core_work(num_cores);
     std::vector<CoreChainInfo> core_chain_info(num_cores);
     const uint32_t total_heads = B * NQH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
+
+    auto try_extend_rectangle = [](ChainRectangle& rect, const CoreCoord& coord) -> bool {
+        uint32_t new_min_x = coord.x;
+        uint32_t new_max_x = coord.x;
+        uint32_t new_min_y = coord.y;
+        uint32_t new_max_y = coord.y;
+        uint32_t new_count = 1;
+        if (rect.initialized) {
+            new_min_x = std::min((size_t)rect.min_x, (size_t)coord.x);
+            new_max_x = std::max((size_t)rect.max_x, (size_t)coord.x);
+            new_min_y = std::min((size_t)rect.min_y, (size_t)coord.y);
+            new_max_y = std::max((size_t)rect.max_y, (size_t)coord.y);
+            new_count = rect.count + 1;
+        }
+
+        const uint32_t width = new_max_x - new_min_x + 1;
+        const uint32_t height = new_max_y - new_min_y + 1;
+        if ((width * height) != new_count) {
+            return false;
+        }
+
+        rect.initialized = true;
+        rect.min_x = new_min_x;
+        rect.max_x = new_max_x;
+        rect.min_y = new_min_y;
+        rect.max_y = new_max_y;
+        rect.count = new_count;
+        return true;
+    };
 
     const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
     const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
@@ -715,54 +754,84 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             continue;
         }
 
-        std::optional<std::size_t> chain_start_idx;
-        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const auto& work = core_work.at(seg.core_idx);
-            if (work.global_q_count == 0) {
+        std::size_t idx = 0;
+        while (idx < segments.size()) {
+            const auto& sender_segment = segments.at(idx);
+            auto& sender_work = core_work.at(sender_segment.core_idx);
+            if (sender_work.global_q_count == 0 || sender_work.head_work.size() != 1) {
+                ++idx;
                 continue;
             }
-            if (work.head_work.size() == 1) {
-                chain_start_idx = idx;
-                break;
-            }
-        }
 
-        if (!chain_start_idx.has_value()) {
-            continue;
-        }
-
-        const std::size_t start = chain_start_idx.value();
-        for (std::size_t idx = start; idx < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const uint32_t core_idx = seg.core_idx;
-            const auto& head_work = core_work.at(core_idx).head_work.at(seg.head_work_index);
-            auto& chain = core_chain_info.at(core_idx);
-
-            chain.participates = true;
-            chain.batch = head_work.batch;
-            chain.head = head_work.head;
-            chain.q_chunk_start = head_work.q_chunk_start;
-            chain.q_chunk_count = head_work.q_chunk_count;
-
-            if (idx == start) {
-                chain.is_injector = true;
-            }
-            if (idx == segments.size() - 1) {
-                chain.is_sink = true;
+            const auto& sender_head_work = sender_work.head_work.at(sender_segment.head_work_index);
+            if (sender_head_work.q_chunk_count == 0) {
+                ++idx;
+                continue;
             }
 
-            if (idx > start) {
-                const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
-                chain.prev_physical = core_work.at(prev_core_idx).physical_core;
+            std::vector<std::size_t> receiver_segment_indices;
+            ChainRectangle receiver_rectangle{};
+            std::size_t lookahead = idx + 1;
+
+            while (lookahead < segments.size()) {
+                const auto& candidate_segment = segments.at(lookahead);
+                auto& candidate_work = core_work.at(candidate_segment.core_idx);
+
+                if (candidate_work.global_q_count == 0 || candidate_work.head_work.size() != 1) {
+                    break;
+                }
+
+                const auto& candidate_head_work = candidate_work.head_work.at(candidate_segment.head_work_index);
+                if (candidate_head_work.q_chunk_count != sender_head_work.q_chunk_count) {
+                    break;
+                }
+
+                if (!try_extend_rectangle(receiver_rectangle, candidate_work.physical_core)) {
+                    break;
+                }
+
+                receiver_segment_indices.push_back(lookahead);
+                ++lookahead;
             }
-            if (idx + 1 < segments.size()) {
-                const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
-                chain.next_physical = core_work.at(next_core_idx).physical_core;
-                const auto& next_head_work =
-                    core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
-                chain.next_core_q_chunks = next_head_work.q_chunk_count;
+
+            if (receiver_segment_indices.empty()) {
+                ++idx;
+                continue;
             }
+
+            auto& sender_chain = core_chain_info.at(sender_segment.core_idx);
+            sender_chain.participates = true;
+            sender_chain.is_injector = true;
+            sender_chain.is_sink = false;
+            sender_chain.batch = sender_head_work.batch;
+            sender_chain.head = sender_head_work.head;
+            sender_chain.q_chunk_start = sender_head_work.q_chunk_start;
+            sender_chain.q_chunk_count = sender_head_work.q_chunk_count;
+            sender_chain.sender_physical = sender_work.physical_core;
+            sender_chain.receiver_bbox_start = {receiver_rectangle.min_x, receiver_rectangle.min_y};
+            sender_chain.receiver_bbox_end = {receiver_rectangle.max_x, receiver_rectangle.max_y};
+            sender_chain.receiver_count = receiver_rectangle.count;
+
+            for (const auto receiver_segment_index : receiver_segment_indices) {
+                const auto& receiver_segment = segments.at(receiver_segment_index);
+                auto& receiver_work = core_work.at(receiver_segment.core_idx);
+                const auto& receiver_head_work = receiver_work.head_work.at(receiver_segment.head_work_index);
+
+                auto& receiver_chain = core_chain_info.at(receiver_segment.core_idx);
+                receiver_chain.participates = true;
+                receiver_chain.is_injector = false;
+                receiver_chain.is_sink = true;
+                receiver_chain.batch = receiver_head_work.batch;
+                receiver_chain.head = receiver_head_work.head;
+                receiver_chain.q_chunk_start = receiver_head_work.q_chunk_start;
+                receiver_chain.q_chunk_count = receiver_head_work.q_chunk_count;
+                receiver_chain.sender_physical = sender_work.physical_core;
+                receiver_chain.receiver_bbox_start = {receiver_rectangle.min_x, receiver_rectangle.min_y};
+                receiver_chain.receiver_bbox_end = {receiver_rectangle.max_x, receiver_rectangle.max_y};
+                receiver_chain.receiver_count = receiver_rectangle.count;
+            }
+
+            idx = receiver_segment_indices.back() + 1;
         }
     }
 
@@ -792,20 +861,21 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             const auto& chain = core_chain_info.at(i);
             log_info(
                 tt::LogOp,
-                "  chain participation: batch={} head={} injector={} sink={} q_range=[{}:{}) prev=({}, {}) next=({}, "
-                "{}) "
-                "next_chunks={}",
+                "  chain participation: batch={} head={} sender={} receiver={} q_range=[{}:{}) sender_coord=({}, {}) "
+                "bbox=[({}, {})-({}, {})] receivers={}",
                 chain.batch,
                 chain.head,
                 chain.is_injector,
                 chain.is_sink,
                 chain.q_chunk_start,
                 chain.q_chunk_start + chain.q_chunk_count,
-                chain.prev_physical.x,
-                chain.prev_physical.y,
-                chain.next_physical.x,
-                chain.next_physical.y,
-                chain.next_core_q_chunks);
+                chain.sender_physical.x,
+                chain.sender_physical.y,
+                chain.receiver_bbox_start.x,
+                chain.receiver_bbox_start.y,
+                chain.receiver_bbox_end.x,
+                chain.receiver_bbox_end.y,
+                chain.receiver_count);
         }
     }
 
@@ -838,11 +908,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 chain.head,
                 chain.q_chunk_start,
                 chain.q_chunk_count,
-                static_cast<uint32_t>(chain.prev_physical.x),
-                static_cast<uint32_t>(chain.prev_physical.y),
-                static_cast<uint32_t>(chain.next_physical.x),
-                static_cast<uint32_t>(chain.next_physical.y),
-                chain.next_core_q_chunks,
+                static_cast<uint32_t>(chain.sender_physical.x),
+                static_cast<uint32_t>(chain.sender_physical.y),
+                static_cast<uint32_t>(chain.receiver_bbox_start.x),
+                static_cast<uint32_t>(chain.receiver_bbox_start.y),
+                static_cast<uint32_t>(chain.receiver_bbox_end.x),
+                static_cast<uint32_t>(chain.receiver_bbox_end.y),
+                chain.receiver_count,
             });
 
         SetRuntimeArgs(

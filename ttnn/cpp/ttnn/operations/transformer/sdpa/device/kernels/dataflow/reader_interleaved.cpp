@@ -66,11 +66,13 @@ void kernel_main() {
     const uint32_t chain_head = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_q_chunk_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t chain_q_chunk_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t prev_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t prev_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t next_physical_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t next_physical_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+    const uint32_t sender_physical_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t sender_physical_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t receiver_bbox_start_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t receiver_bbox_start_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t receiver_bbox_end_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t receiver_bbox_end_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t receiver_count = get_arg_val<uint32_t>(argidx++);
 
     // VALID sem used to write L1-L1 valid semaphore
     volatile tt_l1_ptr uint32_t* valid_semaphore_addr_ptr =
@@ -82,10 +84,25 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
-    const uint64_t sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
 
-    const uint64_t receiver_semaphore_noc_addr =
-        get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
+    const bool participates_in_chain = is_chain_participant == 1;
+    const bool is_chain_sender = participates_in_chain && (is_injector == 1);
+    const bool is_chain_receiver = participates_in_chain && (is_sink == 1);
+    const bool has_receivers = receiver_count > 0;
+
+    uint64_t sender_semaphore_noc_addr = 0;
+    uint64_t receiver_semaphore_mcast_addr = 0;
+    if (participates_in_chain && is_chain_receiver) {
+        sender_semaphore_noc_addr = get_noc_addr(sender_physical_x, sender_physical_y, sender_semaphore_addr);
+    }
+    if (is_chain_sender && has_receivers) {
+        receiver_semaphore_mcast_addr = get_noc_multicast_addr(
+            receiver_bbox_start_x,
+            receiver_bbox_start_y,
+            receiver_bbox_end_x,
+            receiver_bbox_end_y,
+            receiver_semaphore_addr);
+    }
 
     // When chunked, update the bounds of valid K sequence length based on Q chunk offset
 
@@ -149,6 +166,10 @@ void kernel_main() {
             const uint32_t q_chunk = global_q_chunk % q_num_chunks;
             const uint32_t q_iter = q_chunk - global_q_start % q_num_chunks;
 
+            const bool matching_chain_iteration = participates_in_chain && (nb == chain_batch) && (nq == chain_head);
+            const bool receiver_needs_data = matching_chain_iteration && is_chain_receiver;
+            const bool sender_should_multicast = matching_chain_iteration && is_chain_sender && has_receivers;
+
             const uint32_t mask_batch_offset = nb * Sqt * Skt;
             /*
             Read a chunk of Q. BALANCED_Q_PARALLEL evenly distributes Q chunks
@@ -191,7 +212,7 @@ void kernel_main() {
 
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
-                if (is_injector or !is_chain_participant or (nb != chain_batch or nq != chain_head)) {
+                if (!receiver_needs_data) {
                     DPRINT << "reading K chunk " << k_chunk << " for Q chunk " << q_chunk << ENDL();
                     if constexpr (is_chunked) {
                         // Use page table to read K chunk
@@ -223,62 +244,39 @@ void kernel_main() {
                             true  // transpose=true for K reads
                         );
                     }
-                } else if (is_chain_participant) {
+                } else {
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                    DPRINT << "waiting for k chunk from " << prev_physical_x << ", " << prev_physical_y << ENDL();
+                    DPRINT << "waiting for k chunk from " << sender_physical_x << ", " << sender_physical_y << ENDL();
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_k_in, k_chunk_tiles);
                 }
 
-                if (is_chain_participant && !is_sink && q_iter < next_core_q_chunks &&
-                    (nb == chain_batch and nq == chain_head)) {
-                    // TODO: and the receiver can process this Q iter!
-                    DPRINT << "waiting for sender semaphore to be valid" << ENDL();
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                if (sender_should_multicast) {
+                    DPRINT << "waiting for all receivers to be ready" << ENDL();
+                    noc_semaphore_wait(sender_semaphore_addr_ptr, receiver_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
 
-                    uint64_t unicast_data_addr = get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
-                    noc_async_write(cb_k_start_address, unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                    const uint64_t k_multicast_data_addr = get_noc_multicast_addr(
+                        receiver_bbox_start_x,
+                        receiver_bbox_start_y,
+                        receiver_bbox_end_x,
+                        receiver_bbox_end_y,
+                        cb_k_start_address);
+                    noc_async_write_multicast(
+                        cb_k_start_address, k_multicast_data_addr, k_chunk_tiles * k_tile_bytes, receiver_count);
+
+#if defined(ARCH_BLACKHOLE)
                     noc_async_writes_flushed();
+#endif
 
-                    DPRINT << "setting remote valid semaphore to " << receiver_semaphore_noc_addr << ENDL();
-                    noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
-                }
-
-                if constexpr (use_provided_mask) {
-                    // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                    // Q-range = [q_low, q_high)
-                    // K-range = [k_low, k_high)
-                    // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                    // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional
-                    // check Read mask chunk When a mask is provided, there will be no padding on q or kv.
-                    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-                    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                    barrier_count = 0;
-                    mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * Skt /*row_offset*/ +
-                                   k_chunk * Sk_chunk_t /*col_offset*/;
-                    for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
-                        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                            mask_tile_id += 1;
-                            mask_write_ptr += mask_tile_bytes;
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                        // Strid along columns to get to next row
-                        mask_tile_id -= Sk_chunk_t;
-                        mask_tile_id += Skt;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_mask_in, mask_chunk_tiles);
+                    DPRINT << "setting multicast valid semaphore" << ENDL();
+                    noc_semaphore_set_multicast(valid_semaphore_addr, receiver_semaphore_mcast_addr, receiver_count);
                 }
 
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
-                if (is_injector or !is_chain_participant or (nb != chain_batch or nq != chain_head)) {
+                if (!receiver_needs_data) {
                     if constexpr (is_chunked) {
                         // Use page table to read V chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
@@ -309,25 +307,33 @@ void kernel_main() {
                             false,
                             DHt - vDHt /* src_skip_cols */);
                     }
-                } else if (is_chain_participant) {
-                    // Receive forwarded V chunk from previous core
+                } else {
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                    DPRINT << "waiting for k chunk from " << sender_physical_x << ", " << sender_physical_y << ENDL();
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_v_in, v_chunk_tiles);
                 }
 
-                if (is_chain_participant && !is_sink && q_iter < next_core_q_chunks &&
-                    (nb == chain_batch and nq == chain_head)) {
-                    // Forward V chunk to next core
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                if (sender_should_multicast) {
+                    DPRINT << "waiting for all receivers to be ready" << ENDL();
+                    noc_semaphore_wait(sender_semaphore_addr_ptr, receiver_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
 
-                    uint64_t v_unicast_data_addr = get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
-                    noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                    const uint64_t v_multicast_data_addr = get_noc_multicast_addr(
+                        receiver_bbox_start_x,
+                        receiver_bbox_start_y,
+                        receiver_bbox_end_x,
+                        receiver_bbox_end_y,
+                        cb_v_start_address);
+                    noc_async_write_multicast(
+                        cb_v_start_address, v_multicast_data_addr, v_chunk_tiles * v_tile_bytes, receiver_count);
+#if defined(ARCH_BLACKHOLE)
                     noc_async_writes_flushed();
+#endif
 
-                    noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                    DPRINT << "setting multicast valid semaphore" << ENDL();
+                    noc_semaphore_set_multicast(valid_semaphore_addr, receiver_semaphore_mcast_addr, receiver_count);
                 }
             }
 
