@@ -21,25 +21,41 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 37000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 40000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
+        # 8-chip (T3K/LoudBox) configuration - uncomment when running on 8-chip systems
+        # Note: This config is NOT valid on 6U (32-chip) systems with fabric enabled
+        # pytest.param(
+        #     (1, 8),  # mesh_device
+        #     (1, 0),  # cfg
+        #     (1, 0),  # sp
+        #     (8, 1),  # tp
+        #     (8, 1),  # encoder_tp
+        #     (8, 1),  # vae_tp
+        #     ttnn.Topology.Linear,
+        #     1,  # num_links
+        #     "1x8tp1",
+        #     id="1x8tp1",
+        # ),
+        # 6U (32-chip Galaxy) configuration - matching Stable Diffusion
         pytest.param(
-            (1, 8),  # mesh_device
-            (1, 0),  # cfg
-            (1, 0),  # sp
-            (8, 1),  # tp
-            (8, 1),  # encoder_tp
-            (8, 1),  # vae_tp
+            (4, 8),  # mesh_device
+            (2, 1),  # cfg (CFG parallel on axis 1)
+            (4, 0),  # sp (sequence parallel on axis 0)
+            (4, 1),  # tp (tensor parallel on axis 1)
+            (4, 1),  # encoder_tp
+            (4, 1),  # vae_tp
             ttnn.Topology.Linear,
-            1,  # num_links
-            "1x8tp1",
-            id="1x8tp1",
+            4,  # num_links
+            "4x8cfg1sp0tp1",
+            id="4x8cfg1sp0tp1",
         ),
+        # 8-chip (T3K) configuration with CFG - uncomment when running on 8-chip systems
         # pytest.param(
         #     (2, 4),  # mesh_device
         #     (2, 0),  # cfg
@@ -58,15 +74,15 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        pytest.param(True, id="encoder_cpu"),
-        # pytest.param(False, id="encoder_device"),
+        #pytest.param(True, id="encoder_cpu"),
+        pytest.param(False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
     "traced",
     [
-        # pytest.param(True, id="traced"),
-        pytest.param(False, id="not_traced"),
+        pytest.param(True, id="traced"),
+        #pytest.param(False, id="not_traced"),
     ],
 )
 def test_qwenimage_pipeline(
