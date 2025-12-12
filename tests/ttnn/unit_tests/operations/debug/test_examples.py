@@ -67,25 +67,27 @@ def test_composite_example_sub_devices(device, height, width):
     sub_device_manager = device.create_sub_device_manager(sub_devices, 3200)
     device.load_sub_device_manager(sub_device_manager)
 
-    # Run on sub device 0
     logger.info("Running composite example on sub device 0")
     with ttnn.sub_device(device, 0):
         output_tensor_0 = ttnn.composite_example(input_tensor)
         output_tensor_0 = ttnn.to_torch(output_tensor_0)
         assert_equal(torch_output_tensor, output_tensor_0)
 
-    # Run on sub device 1
     logger.info("Running composite example on sub device 1")
     with ttnn.sub_device(device, 1):
         output_tensor_1 = ttnn.composite_example(input_tensor)
         output_tensor_1 = ttnn.to_torch(output_tensor_1)
         assert_equal(torch_output_tensor, output_tensor_1)
 
-    logger.info("Running composite example on sub device 0 (inline)")
-    ttnn.composite_example(input_tensor, sub_device_id=0)
+    logger.info("Running composite example on sub device 1 with an inline call on sub_device=0")
+    with ttnn.sub_device(device, 0):
+        output_tensor_0 = ttnn.composite_example(input_tensor)
+        output_tensor_0 = ttnn.to_torch(output_tensor_0)
+        assert_equal(torch_output_tensor, output_tensor_0)
 
-    logger.info("Running composite example on sub device 1 (inline)")
-    ttnn.composite_example(input_tensor, sub_device_id=1)
+        output_tensor_1 = ttnn.composite_example(input_tensor, sub_device_id=1)
+        output_tensor_1 = ttnn.to_torch(output_tensor_1)
+        assert_equal(torch_output_tensor, output_tensor_1)
 
 
 @pytest.mark.parametrize("height", [64])

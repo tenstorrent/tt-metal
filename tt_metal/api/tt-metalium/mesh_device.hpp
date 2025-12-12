@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
+#include <tt_stl/guard.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
