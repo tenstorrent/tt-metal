@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_1d_type.hpp"
 
 namespace ttnn {
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -85,9 +85,8 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(
-        tt::tt_metal::num_cores_to_corerangeset(
-            num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerangeset(
+        num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;

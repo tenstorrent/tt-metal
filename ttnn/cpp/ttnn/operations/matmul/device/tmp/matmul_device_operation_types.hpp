@@ -11,9 +11,6 @@
 
 namespace ttnn::operations::matmul {
 
-enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
-
-// from struct Matrix which is used but run
 struct operation_attributes_t {
     std::optional<MatmulProgramConfig> program_config;
     std::optional<bool> bcast_batch;
