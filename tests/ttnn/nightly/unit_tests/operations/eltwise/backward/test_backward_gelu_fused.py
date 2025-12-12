@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc
 
 INPUT_SHAPES = (
     (torch.Size([32])),

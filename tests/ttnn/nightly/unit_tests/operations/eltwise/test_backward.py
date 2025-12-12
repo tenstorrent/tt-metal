@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_val,
     compare_all_close,
 )

@@ -19,7 +19,7 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from tests.ttnn.unit_tests.operations.eltwise.backward.complex_ops.backward_complex_utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.complex_ops.backward_complex_utility_funcs import (
     Complex,
     convert_to_torch_tensor,
     random_complex_tensor,
