@@ -668,7 +668,6 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        print(f"Attention.forward_prefill called with chunk_start_idx: {chunk_start_idx}")
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -814,19 +813,6 @@ class Attention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        print("Calling SDPA with:")
-        ttnn.set_printoptions(profile="full")
-        print(
-            f"q_heads_1QSD_8b:\n{q_heads_1QSD_8b[:, 0, :80, :4]}"
-        )  # [1, 16, 2048, 128] = [1, Q heads, seq_len, head_dim]
-        # print(f"keys_BKSD:\n{keys_BKSD}") # [2048, 4, 64, 128] = [cache_block, K head, seq_in_block, head_dim]
-        print(f"keys_BKSD page 275:\n{keys_BKSD[275, 0, :, :4]}")
-        print(f"keys_BKSD page 214:\n{keys_BKSD[214, 0, :, :4]}")
-        # print(f"values_BKSD:\n{values_BKSD}") # [2048, 4, 64, 128]
-        print(f"values_BKSD page 275:\n{values_BKSD[275, 0, :, :4]}")
-        print(f"values_BKSD page 214:\n{values_BKSD[214, 0, :, :4]}")
-        print(f"page_table:\n{page_table}")
-
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
                 raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
@@ -837,7 +823,7 @@ class Attention(LightweightModule):
                 page_table_tensor=page_table,
                 chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
             )
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
@@ -850,8 +836,6 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
-        print(f"attn_output_84SD:\n{attn_output_84SD[:, 0, :80, :4]}")  # [1, 16, 2048, 128]
-        ttnn.set_printoptions(profile="short")  #
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
