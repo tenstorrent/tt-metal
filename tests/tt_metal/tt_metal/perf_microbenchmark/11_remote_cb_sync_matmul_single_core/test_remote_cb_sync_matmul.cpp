@@ -11,7 +11,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include "impl/device/sub_device_impl.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>

@@ -9,7 +9,7 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include "impl/device/sub_device_impl.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>

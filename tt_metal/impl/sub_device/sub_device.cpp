@@ -13,7 +13,7 @@
 
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/device/sub_device_impl.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 
 namespace tt::tt_metal {
 
