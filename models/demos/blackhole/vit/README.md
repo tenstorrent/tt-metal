@@ -45,7 +45,7 @@ pytest --disable-warnings models/demos/blackhole/vit/demo/demo_vit_performant_im
 
 ## Details
 - Entry point for the model is `vit` in `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
-- Batch Size: 8
+- Batch Size: 10
 - Sequence size: 224
 - Dataset Used: `ImageNet-21k dataset`.
 - The Imagenet-21K inference accuracy is `80%`
