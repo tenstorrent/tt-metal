@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def _default_mesh_shape() -> ttnn.MeshShape:
@@ -242,6 +243,9 @@ def run_demo(
     """
     model_path = str(model_path or os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
     cache_dir = str(cache_dir or os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
+    # Initialize Benchmarking
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "deepseek-demo-e2e"
 
     # Validate model directory per mode
     validate_model_path(
@@ -263,11 +267,17 @@ def run_demo(
     else:
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
+    # Initialize the profiler
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
     if not random_weights:
         try:
+            profiler.start("loading_tokenizer")
             tokenizer = load_tokenizer(model_path)
+            profiler.end("loading_tokenizer")
         except Exception:
             logger.error(
                 "Failed to load tokenizer from model path. Ensure the directory contains tokenizer files (e.g., tokenizer.model or tokenizer.json)."
@@ -295,6 +305,7 @@ def run_demo(
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":
+            profiler.start("loading_model")
             gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
                 model_path=Path(model_path),
@@ -302,11 +313,13 @@ def run_demo(
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
                 dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
+                override_num_layers=5,
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
             )
+            profiler.end("loading_model")
         else:  # generator == "pp"
+            raise error
             if enable_trace:
                 assert False, "Tracing is not supported for pp generator."
             gen = DeepseekGeneratorPP(
@@ -324,8 +337,10 @@ def run_demo(
             prompt_list = [""]
         else:
             if token_acc is not None:
+                profiler.start("loading_prompts")
                 # Prepare prompt text from reference tokens to align with teacher forcing
                 prompt_list = [token_acc.prepare_ref_tokens(gen.tokenizer)]
+                profiler.end("loading_prompts")
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
@@ -339,6 +354,59 @@ def run_demo(
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
+            profiler=profiler,
+        )
+
+        # Add measurements to benchmark data for Superset
+        # Note: add_measurement() and save_partial_run_json() are no-ops in non-CI environments
+        # They automatically check IS_CI_ENV internally, so safe to call in both CI and local runs
+        # Use iteration 0 since there's only one run (not multiple batches)
+        if statistics:
+            # Time to First Token (TTFT) in milliseconds
+            if "prefill_time_to_token" in statistics:
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,  # iteration
+                    "inference_prefill",  # step_name (matches profiler step)
+                    "ttft_e2e",  # name (what appears in Superset)
+                    round(statistics["prefill_time_to_token"] * 1000, 2),  # value in ms
+                )
+
+            # Prefill tokens per second
+            if "prefill_t/s" in statistics:
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_prefill",
+                    "prefill_tok_s",
+                    round(statistics["prefill_t/s"], 2),
+                )
+
+            # Decode tokens per second per user
+            if "decode_t/s/u" in statistics:
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    "decode_tok_s_user",
+                    round(statistics["decode_t/s/u"], 2),
+                )
+
+            # Decode tokens per second (total throughput)
+            if "decode_t/s" in statistics:
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    "decode_tok_s",
+                    round(statistics["decode_t/s"], 2),
+                )
+
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"deepseek_demo_{mesh_shape}",
+            ml_model_name=f"deepseek_685B",
+            dataset_name="default_prompt",
         )
 
         # Process all generations

@@ -26,6 +26,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers,
 )
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def generate_reference_io(
@@ -103,7 +104,10 @@ def run_test_forward_pass_ppmodel(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    profiler,
 ):
+    model_type = "pp"
+
     # Check params
     if mode == "prefill":
         assert batch_size == 1, "Prefill only supports a batch size of 1"
@@ -166,11 +170,15 @@ def run_test_forward_pass_ppmodel(
     # Forward pass
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
+        profiler.start(f"deepseek_model_{model_type}_{mode}")
         tt_output = RowPipelinedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        profiler.end(f"deepseek_model_{model_type}_{mode}")
     else:
+        profiler.start(f"deepseek_model_{model_type}_{mode}")
         tt_output = RowPipelinedModel.forward_decode(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
         )
+        profiler.end(f"deepseek_model_{model_type}_{mode}")
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     assert (
@@ -193,7 +201,9 @@ def run_test_forward_pass_dpmodel(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    profiler,
 ):
+    model_type = "dp"
     # Check params
     if mode == "prefill":
         assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
@@ -259,11 +269,15 @@ def run_test_forward_pass_dpmodel(
     # Forward pass
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
+        profiler.start(f"deepseek_model_{model_type}_{mode}")
         tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        profiler.end(f"deepseek_model_{model_type}_{mode}")
     else:
+        profiler.start(f"deepseek_model_{model_type}_{mode}")
         tt_output = RowBatchedModel.forward_decode(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
         )
+        profiler.start(f"deepseek_model_{model_type}_{mode}")
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
@@ -311,9 +325,21 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Initialize benchmarking
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    # Determine model type from test closure
+    model_type = "pp" if test_closure == run_test_forward_pass_ppmodel else "dp"
+    step_name = f"deepseek_model_{model_type}_{mode}"
+
+    # Start profiling the entire run
+    profiler.start("run")
+
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
 
+    # Run the actual test
     test_closure(
         use_real_weights,
         mode,
@@ -326,6 +352,61 @@ def test_forward_pass(
         ccl,
         force_recalculate_weight_config,
         state_dict,
+        profiler,
+    )
+
+    # End profiling
+    profiler.end("run")
+
+    # Get timing measurements
+    step_duration = profiler.get_duration(step_name)
+    total_duration = profiler.get_duration("run")
+
+    # Add measurements to benchmark data
+    benchmark_data.add_measurement(
+        profiler,
+        0,  # iteration
+        step_name,
+        f"{mode}_time",
+        round(step_duration * 1000, 2),  # Convert to ms
+    )
+
+    # Calculate tokens per second
+    if mode == "decode":
+        batch_size = batch_size_per_row * mesh_device.shape[0] if model_type == "dp" else batch_size_per_row
+        tokens_per_sec = batch_size / step_duration
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            step_name,
+            "decode_tok_s",
+            round(tokens_per_sec, 2),
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            step_name,
+            "decode_tok_s_user",
+            round(tokens_per_sec / batch_size, 2),
+        )
+    elif mode == "prefill":
+        tokens_per_sec = seq_len / step_duration
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            step_name,
+            "prefill_tok_s",
+            round(tokens_per_sec, 2),
+        )
+
+    # Save benchmark data to Superset
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"deepseek_model_{model_type}_{mode}_{mesh_device.shape}",
+        ml_model_name="deepseek_685B",
+        num_layers=hf_config_short.num_hidden_layers,
+        batch_size=batch_size_per_row,
+        input_sequence_length=seq_len if mode == "prefill" else None,
     )
 
 

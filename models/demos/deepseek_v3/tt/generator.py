@@ -467,6 +467,7 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
+        profiler: BenchmarkProfiler = None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -476,8 +477,9 @@ class DeepseekGenerator:
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
         # Initialize profiler
-        profiler = BenchmarkProfiler()
-        profiler.start("run")
+        if profiler is None:
+            profiler = BenchmarkProfiler()
+            profiler.start("run")
 
         prompts = list(prompts)
         num_of_prompts = len(prompts)
