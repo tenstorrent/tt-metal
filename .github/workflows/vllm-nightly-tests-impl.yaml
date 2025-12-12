@@ -59,7 +59,7 @@ jobs:
             {
               "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -145,7 +145,7 @@ jobs:
             {
               "name": "[WH-GLX] Llama-8B DP=16",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -206,7 +206,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -271,7 +271,7 @@ jobs:
             {
               "name": "[WH-GLX][v1] Llama-8B DP=16",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
