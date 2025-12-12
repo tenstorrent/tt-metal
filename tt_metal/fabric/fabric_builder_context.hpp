@@ -168,7 +168,7 @@ private:
 
     const FabricContext& fabric_context_;
 
-    IntermeshVCConfig intermesh_vc_config_{};
+    IntermeshVCConfig intermesh_vc_config_;
 
     // Computed max channel counts based on actual router types in this fabric
     std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_{};
