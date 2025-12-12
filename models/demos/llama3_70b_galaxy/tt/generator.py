@@ -405,7 +405,7 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        reset_batch=True,
+        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
@@ -627,6 +627,9 @@ class Generator:
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            if isinstance(tt_out, tuple):
+                # Get logits and skip log-probs
+                tt_out = tt_out[0]
             return tt_out.cpu()
 
         logits, read_event = self.model.process_output_decode(tt_out)

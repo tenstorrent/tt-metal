@@ -18,7 +18,8 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC)
+    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
+    - cron: '0 */3 * * *'  # Every 3 hours - T3K schedule
 
 jobs:
   build-artifact:
@@ -29,8 +30,9 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
+
   multi-host-t3k:
-    if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == 'true') && github.event_name != 'schedule' }}
+    if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
@@ -85,7 +87,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.glx_2x_multihost == 'true') && github.event_name != 'schedule' }}
+    if: ${{ github.event.inputs.glx_2x_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
@@ -140,7 +142,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.glx_4x_multihost == 'true' }}
+    if: ${{ github.event.inputs.glx_4x_multihost == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x

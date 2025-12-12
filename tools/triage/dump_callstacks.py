@@ -59,10 +59,6 @@ def run(args, context: Context):
 
     show_all_cores: bool = args["--all-cores"]
 
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
 
     run_checks = get_run_checks(args, context)

@@ -4,6 +4,7 @@
 
 #include "fabric_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -172,15 +173,45 @@ void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
     const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
+    // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
+    // routers on the same device together
+    if (topology == Topology::NeighborExchange) {
+        return;
+    }
+
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair
+    std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>> routers_by_direction_map{};
+    // Connect each pair (inter-device INTRA_MESH connections)
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+
+        routers_by_direction_map[router1.get()].insert({router2->get_location().direction, router2.get()});
+        routers_by_direction_map[router2.get()].insert({router1->get_location().direction, router1.get()});
+    }
+
+    // Configure local connections between routers on this device
+    configure_local_connections(routers_by_direction_map);
+}
+
+void FabricBuilder::configure_local_connections(
+    const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>& routers_by_direction_map) {
+    // Generic local connection establishment: iterate through all routers and
+    // establish connections to local targets based on their connection mappings
+
+    // For each router, establish its local connections
+    for (const auto& [source_router, target_routers_by_direction] : routers_by_direction_map) {
+        // Build map of potential local targets (all other routers on this device)
+        std::map<RoutingDirection, FabricRouterBuilder*> local_targets;
+        for (const auto& [target_dir, target_router] : target_routers_by_direction) {
+            local_targets[target_dir] = target_router;
+        }
+
+        source_router->configure_local_connections(local_targets);
     }
 }
 

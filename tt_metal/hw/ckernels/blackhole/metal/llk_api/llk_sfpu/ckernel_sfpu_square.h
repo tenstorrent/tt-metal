@@ -5,20 +5,14 @@
 #pragma once
 
 #include "sfpi.h"
+// NOTE: The following header is from the external tt-llk and not defined in tt-metal
+#include "sfpu/ckernel_sfpu_square.h"
 
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_square() {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = in * in;
-
-        sfpi::dst_reg[0] = result;
-
-        sfpi::dst_reg++;
-    }
+    _calculate_square_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 }  // namespace ckernel::sfpu

@@ -67,9 +67,11 @@ CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor* input_tensor_b,
     const std::optional<Tensor>& output_tensor,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // If sub_core_grids is provided, use it directly
     if (sub_core_grids.has_value()) {
+        log_debug(tt::LogOp, "Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
 
@@ -85,14 +87,64 @@ CoreRangeSet get_worker_grid(
         __builtin_unreachable();
     };
 
-    if (input_tensor_a.is_sharded()) {
-        return get_tensor_grid(input_tensor_a);
-    } else if (input_tensor_b && input_tensor_b->is_sharded()) {
-        return get_tensor_grid(*input_tensor_b);
-    } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
+    if (output_tensor.has_value() && output_tensor->is_sharded()) {
+        log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
         return get_tensor_grid(*output_tensor);
     }
 
+    if (memory_config.has_value() && memory_config->is_sharded()) {
+        // Use the shard spec from memory config if provided
+        const auto& shard_spec_opt = memory_config->shard_spec();
+        if (shard_spec_opt.has_value()) {
+            log_debug(tt::LogOp, "Using memory config shard spec grid for worker grid {}", shard_spec_opt->grid.str());
+            auto* device = input_tensor_a.device();
+            for (const auto& sub_device_id : device->get_sub_device_ids()) {
+                const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+                if (sub_device_workers.intersects(shard_spec_opt->grid)) {
+                    return sub_device_workers;
+                }
+            }
+        }
+    }
+
+    if (output_tensor.has_value() || memory_config.has_value()) {
+        // If output tensor or memory config is provided but not sharded, use all worker cores
+        log_debug(
+            tt::LogOp, "Using all worker cores of the device for worker grid, output or memory config not sharded");
+        auto* device = input_tensor_a.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    }
+
+    // now c is not specified, gets its shard spec from a or b
+    TensorSpec c = input_tensor_a.tensor_spec();
+    if (input_tensor_b && input_tensor_b->is_sharded()) {
+        if (!input_tensor_a.is_sharded()) {
+            c = input_tensor_b->tensor_spec();
+        } else if (input_tensor_b->shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+            c = input_tensor_b->tensor_spec();
+        }
+    }
+
+    if (is_native_L1_sharding(
+            input_tensor_a.tensor_spec(),
+            input_tensor_b ? std::optional<TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
+            c)) {
+        if (input_tensor_a.is_sharded()) {
+            log_debug(
+                tt::LogOp,
+                "Native L1 sharding using input tensor A grid for worker grid {}",
+                input_tensor_a.shard_spec()->grid.str());
+            return get_tensor_grid(input_tensor_a);
+        } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+            log_debug(
+                tt::LogOp,
+                "Native L1 sharding using input tensor B grid for worker grid {}",
+                input_tensor_b->shard_spec()->grid.str());
+            return get_tensor_grid(*input_tensor_b);
+        }
+    }
+    // use all worker cores of the device
+    log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
     auto* device = input_tensor_a.device();
     return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
@@ -253,7 +305,8 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         if (i <= -6) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: {}, "
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: "
+                "{}, "
                 "dim b: {}",
                 i,
                 a_dim,
@@ -467,6 +520,22 @@ BinaryNgDeviceOperation::invoke(
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     bool is_where_op = (binary_op_type == BinaryOpType::WHERE_TTS || binary_op_type == BinaryOpType::WHERE_TST);
+
+    MemoryConfig mem_config = input_tensor_a.memory_config();
+    if (!memory_config.has_value() && !output_tensor.has_value()) {
+        if (input_tensor_b.memory_config().is_sharded()) {
+            if (!input_tensor_a.memory_config().is_sharded()) {
+                mem_config = input_tensor_b.memory_config();
+            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+                mem_config = input_tensor_b.memory_config();
+            }
+        }
+    } else if (memory_config.has_value()) {
+        mem_config = *memory_config;
+    } else {
+        mem_config = output_tensor->memory_config();
+    }
+
     return {
         operation_attributes_t{
             binary_op_type,
@@ -474,14 +543,11 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar_value,
-            memory_config.value_or(
-                output_tensor.has_value()                     ? output_tensor->memory_config()
-                : input_tensor_a.memory_config().is_sharded() ? input_tensor_a.memory_config()
-                                                              : input_tensor_b.memory_config()),
+            mem_config,
             is_where_op ? dtype_b : dtype_a,  // TODO: For mixed dtypes we need to set this value to the appropriate
                                               // dtype depending on which LLK is meant to be used.
             output_dtype,
-            get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor, sub_core_grids),
+            get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor, memory_config, sub_core_grids),
             std::nullopt,
             sub_core_grids,
             subtile_broadcast_type,
@@ -509,6 +575,9 @@ BinaryNgDeviceOperation::invoke(
     bool is_sfpu_op =
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
+    MemoryConfig mem_config = memory_config.value_or(
+        output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
+
     return {
         operation_attributes_t{
             binary_op_type,
@@ -516,11 +585,10 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
-            memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+            mem_config,
             input_tensor_a.dtype(),
             output_dtype,
-            get_worker_grid(input_tensor_a, nullptr, output_tensor, sub_core_grids),
+            get_worker_grid(input_tensor_a, nullptr, output_tensor, memory_config, sub_core_grids),
             std::nullopt,
             sub_core_grids,
             SubtileBroadcastType::NONE,
