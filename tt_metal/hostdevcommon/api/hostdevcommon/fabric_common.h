@@ -38,7 +38,8 @@ enum eth_chan_directions : std::uint8_t {
     WEST = 1,
     NORTH = 2,
     SOUTH = 3,
-    COUNT = 4,
+    Z = 4,
+    COUNT = 5,
 };
 
 template <size_t ArraySize>
@@ -50,27 +51,15 @@ struct port_direction_t {
     chan_id_t directions[eth_chan_directions::COUNT];
 };
 
-struct fabric_router_l1_config_t {
-    routing_table_t<MAX_MESH_SIZE> intra_mesh_table;
-    routing_table_t<MAX_NUM_MESHES> inter_mesh_table;
-    port_direction_t port_direction;
-    std::uint16_t my_mesh_id;  // Do we need this if we tag routing tables with magic values for outbound eth channels
-                               // and route to local NOC?
-    std::uint8_t my_device_id;
-    std::uint8_t east_dim;
-    std::uint8_t north_dim;
-    std::uint8_t padding[7];  // pad to 16-byte alignment.
-} __attribute__((packed));
-static_assert(sizeof(fabric_router_l1_config_t) == 1296, "Fabric router config must be 1296 bytes");
-
 // 3 bit expression
 enum class compressed_routing_values : std::uint8_t {
     COMPRESSED_EAST = 0,
     COMPRESSED_WEST = 1,
     COMPRESSED_NORTH = 2,
     COMPRESSED_SOUTH = 3,
-    COMPRESSED_INVALID_DIRECTION = 4,            // Maps to INVALID_DIRECTION (0xDD)
-    COMPRESSED_INVALID_ROUTING_TABLE_ENTRY = 5,  // Maps to INVALID_ROUTING_TABLE_ENTRY (0xFF)
+    COMPRESSED_Z = 4,
+    COMPRESSED_INVALID_DIRECTION = 5,            // Maps to INVALID_DIRECTION (0xDD)
+    COMPRESSED_INVALID_ROUTING_TABLE_ENTRY = 6,  // Maps to INVALID_ROUTING_TABLE_ENTRY (0xFF)
 };
 
 // Compressed routing table base structure using 3 bits
