@@ -253,6 +253,8 @@ public:
     virtual std::string common_flags(const Params& params) const = 0;
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
+    // Returns a string of linker flags to be added to linker command line.
+    virtual std::string linker_flags(const Params& params) const = 0;
     // Returns true if firmware should be linked into the kernel as an object.
     virtual bool firmware_is_kernel_object(const Params& params) const = 0;
     // Returns the target name for the build.
