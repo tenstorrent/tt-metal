@@ -285,16 +285,70 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Build indexed constraint representation
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
-    // Run DFS search (state is now internal to the engine)
+    // Initialize search state
+    typename DFSSearchEngine<TargetNode, GlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Pre-assign nodes from required constraints (pinnings)
+    size_t assigned_count = 0;
+    const auto& valid_mappings = constraints.get_valid_mappings();
+    for (size_t i = 0; i < graph_data.n_target; ++i) {
+        const auto& target_node = graph_data.target_nodes[i];
+        auto it = valid_mappings.find(target_node);
+        if (it != valid_mappings.end() && it->second.size() == 1) {
+            // This target node has exactly one required constraint (pinning)
+            const GlobalNode& required_global = *it->second.begin();
+            auto global_it = graph_data.global_to_idx.find(required_global);
+            if (global_it != graph_data.global_to_idx.end()) {
+                size_t global_idx = global_it->second;
+
+                // Validate that this pre-assignment is consistent with already-assigned neighbors
+                for (size_t neighbor : graph_data.target_adj_idx[i]) {
+                    if (state.mapping[neighbor] != -1) {
+                        size_t neighbor_global_idx = static_cast<size_t>(state.mapping[neighbor]);
+                        // Check if edge exists between global_idx and neighbor_global_idx
+                        bool edge_exists = std::binary_search(
+                            graph_data.global_adj_idx[global_idx].begin(),
+                            graph_data.global_adj_idx[global_idx].end(),
+                            neighbor_global_idx);
+                        if (!edge_exists) {
+                            std::string error_msg = fmt::format(
+                                "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                                "but target node {} (adjacent to {}) is already mapped to global node {}, "
+                                "and global nodes {} and {} are not adjacent. This violates graph isomorphism requirements.",
+                                target_node,
+                                required_global,
+                                graph_data.target_nodes[neighbor],
+                                target_node,
+                                graph_data.global_nodes[neighbor_global_idx],
+                                required_global,
+                                graph_data.global_nodes[neighbor_global_idx]);
+                            log_error(tt::LogFabric, "{}", error_msg);
+                            MappingResult<TargetNode, GlobalNode> result;
+                            result.success = false;
+                            result.error_message = error_msg;
+                            return result;
+                        }
+                    }
+                }
+
+                state.mapping[i] = static_cast<int>(global_idx);
+                state.used[global_idx] = true;
+                assigned_count++;
+            }
+        }
+    }
+
+    // Run DFS search
     DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode);
+    search_engine.search(assigned_count, graph_data, constraint_data, state, connection_validation_mode);
 
     // Calculate elapsed time
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-    // Get state from engine and build result using validator
-    const auto& state = search_engine.get_state();
+    // Build result using validator
     auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
         state.mapping, graph_data, state, constraints, connection_validation_mode);
 
@@ -305,34 +359,41 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 }
 
 template <typename TargetNode, typename GlobalNode>
-void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result) {
+void MappingResult<TargetNode, GlobalNode>::print(const AdjacencyGraph<TargetNode>& target_graph) const {
     std::stringstream ss;
     ss << "\n=== Mapping Result ===" << std::endl;
-    ss << "Success: " << (result.success ? "true" : "false") << std::endl;
-    if (!result.error_message.empty()) {
-        ss << "Error: " << result.error_message << std::endl;
+    ss << "Success: " << (success ? "true" : "false") << std::endl;
+    if (!error_message.empty()) {
+        ss << "Error: " << error_message << std::endl;
     }
 
     ss << "\nMappings:" << std::endl;
-    for (const auto& [target_node, global_node] : result.target_to_global) {
-        ss << "  Target node " << target_node << " -> Global node " << global_node << std::endl;
+    const auto& target_nodes = target_graph.get_nodes();
+    size_t mapped_count = 0;
+    for (const auto& target_node : target_nodes) {
+        auto it = target_to_global.find(target_node);
+        if (it != target_to_global.end()) {
+            ss << "  Target node " << target_node << " -> Global node " << it->second << std::endl;
+            mapped_count++;
+        } else {
+            ss << "  Target node " << target_node << " -> UNMAPPED" << std::endl;
+        }
     }
-    ss << "Total mapped: " << result.target_to_global.size() << " target nodes" << std::endl;
+    ss << "Total mapped: " << mapped_count << " of " << target_nodes.size() << " target nodes" << std::endl;
 
-    if (!result.warnings.empty()) {
-        ss << "\nWarnings (" << result.warnings.size() << "):" << std::endl;
-        for (const auto& warning : result.warnings) {
+    if (!warnings.empty()) {
+        ss << "\nWarnings (" << warnings.size() << "):" << std::endl;
+        for (const auto& warning : warnings) {
             ss << "  - " << warning << std::endl;
         }
     }
 
     ss << "\nStatistics:" << std::endl;
-    ss << "  DFS calls: " << result.stats.dfs_calls << std::endl;
-    ss << "  Backtracks: " << result.stats.backtrack_count << std::endl;
-    ss << "  Elapsed time: " << result.stats.elapsed_time.count() << " ms" << std::endl;
-    ss << "  Required constraints satisfied: " << result.constraint_stats.required_satisfied << std::endl;
-    ss << "  Preferred constraints satisfied: " << result.constraint_stats.preferred_satisfied << "/"
-       << result.constraint_stats.preferred_total << std::endl;
+    ss << "  DFS calls: " << stats.dfs_calls << std::endl;
+    ss << "  Backtracks: " << stats.backtrack_count << std::endl;
+    ss << "  Required constraints satisfied: " << constraint_stats.required_satisfied << std::endl;
+    ss << "  Preferred constraints satisfied: " << constraint_stats.preferred_satisfied << "/"
+       << constraint_stats.preferred_total << std::endl;
 
     ss << "======================" << std::endl;
     log_info(tt::LogFabric, "{}", ss.str());
