@@ -33,7 +33,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
     auto* device = input_tensor.device();
 
     auto compute_cores = device->get_compute_cores();
-    log_info(tt::LogOp, "Available compute cores: {}", compute_cores.num_cores());
+    log_debug(tt::LogOp, "Available compute cores: {}", compute_cores.num_cores());
     constexpr bool row_wise = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_cores, num_tiles, row_wise);
