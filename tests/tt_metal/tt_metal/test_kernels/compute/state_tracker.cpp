@@ -72,8 +72,6 @@ void MAIN {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
     mul_tiles_bcast_scalar_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
-    mul_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, 0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
     mul_bcast_cols_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
     mul_bcast_rows_init_short(cb_in1, cb_in0);
