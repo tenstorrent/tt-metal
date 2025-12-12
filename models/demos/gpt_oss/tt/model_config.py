@@ -20,6 +20,7 @@ from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
     get_base_model_name,
+    get_capped_warmup_seq_len,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
@@ -101,7 +102,7 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
+        self.capped_warmup_seq_len = get_capped_warmup_seq_len(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):

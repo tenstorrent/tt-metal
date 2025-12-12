@@ -69,7 +69,9 @@ def create_multimodal_model(
     from models.demos.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, optimizations=optimizations)
+    tt_model_args = ModelArgs(
+        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, max_seq_len=max_seq_len
+    )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
     # limit length or we'll run out of space
