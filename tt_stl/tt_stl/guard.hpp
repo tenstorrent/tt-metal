@@ -27,8 +27,17 @@ public:
 
     Guard(const Guard&) = delete;
     Guard& operator=(const Guard&) = delete;
-    Guard(Guard&& other) = delete;
-    Guard& operator=(Guard&&) = delete;
+    Guard(Guard&& other) : close_func_(std::move(other.close_func_)) { other.close_func_ = {}; }
+    Guard& operator=(Guard&& other) {
+        if (this != &other) {
+            if (close_func_) {
+                close_func_();
+            }
+            close_func_ = std::move(other.close_func_);
+            other.close_func_ = {};
+        }
+        return *this;
+    }
 
     void release() { close_func_ = {}; }
 
