@@ -3536,7 +3536,6 @@ public:
      * @return Reference to the element at the given index
      */
     T& operator[](uint32_t index) const {
-        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
         DEBUG_SANITIZE_L1_ADDR(address_ + (index + 1) * sizeof(T), sizeof(T));
         return get_unsafe_ptr()[index];
     }
