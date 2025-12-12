@@ -9,6 +9,7 @@
 #include <tuple>
 #include <utility>
 
+#include "conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
@@ -20,6 +21,8 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
@@ -351,7 +354,7 @@ public:
         Tensor& weight_tensor,
         OptionalRefTensor bias_tensor,
         conv2d::Conv2dConfig& conv_config,
-        DeviceComputeKernelConfig& compute_config,
+        const DeviceComputeKernelConfig& compute_config,
         MeshDevice* device,
         bool mirror_kernel);
     std::tuple<IOShape, IOShape> get_input_slice(
@@ -527,24 +530,23 @@ Result conv_transpose2d_DRAM(
     return {dram_output_tensor, dims.output_height, dims.output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
-// Enum to represent the execution path for conv2d operations
-enum class ConvT2dExecutionPath {
-    L1,   // Execute conv2d using L1 memory
-    DRAM  // Execute conv2d using DRAM slicing
-};
-
-// Helper function to determine which conv2d execution path to take based on
-// slice configuration and input tensor properties
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config) {
+    return determine_conv_transpose2d_execution_path(
+        input_tensor.storage_type(), input_tensor.memory_config(), slice_config);
+}
+
+ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
+    const tt::tt_metal::StorageType& storage_type,
+    const MemoryConfig& memory_config,
+    const std::optional<const op_slicing::Op2DSliceConfig>& slice_config) {
     // If slice config explicitly specifies L1_FULL, use L1 path
     if (slice_config.has_value() && slice_config->slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
         return ConvT2dExecutionPath::L1;
     }
 
     // If no slice config and input is already on device in L1, use L1 path
-    if (!slice_config.has_value() && tt::tt_metal::is_device_tensor(input_tensor) &&
-        input_tensor.memory_config().is_l1()) {
+    if (!slice_config.has_value() && storage_type == tt::tt_metal::StorageType::DEVICE && memory_config.is_l1()) {
         return ConvT2dExecutionPath::L1;
     }
 
@@ -569,7 +571,7 @@ ConvT2DSliceAttr::ConvT2DSliceAttr(
     Tensor& weight_tensor,
     OptionalRefTensor bias_tensor,
     Conv2dConfig& conv_config,
-    DeviceComputeKernelConfig& compute_config,
+    const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device,
     bool mirror_kernel) :
     batch_size(batch_size),
@@ -947,6 +949,50 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
 }
 std::string ConvT2DSliceAttr::name() { return "ConvTranspose2D"; }
 
+std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    Layout input_layout,
+    DataType input_dtype,
+    DataType conv_output_dtype,
+    Tensor& weight_tensor,
+    std::optional<std::reference_wrapper<Tensor>> bias_tensor,
+    const conv2d::Conv2dConfig& conv_config_,
+    const DeviceComputeKernelConfig& compute_config,
+    MeshDevice* device,
+    bool mirror_kernel) {
+    Conv2dConfig conv_config = conv_config_;
+    ConvT2DSliceAttr* op_slice_attr = new ConvT2DSliceAttr(
+        batch_size,
+        {input_height, input_width},
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding_n4,
+        output_padding,
+        dilation,
+        groups,
+        input_layout,
+        input_dtype,
+        conv_output_dtype,
+        std::ref(weight_tensor),
+        bias_tensor.has_value() ? std::make_optional(std::ref(bias_tensor.value())) : std::nullopt,
+        conv_config,
+        compute_config,
+        device,
+        mirror_kernel);
+    return std::unique_ptr<op_slicing::OpSliceAttr>(op_slice_attr);
+}
 ResultWithOptions ConvTranpose2dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
