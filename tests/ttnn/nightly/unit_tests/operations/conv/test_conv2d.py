@@ -680,13 +680,13 @@ def test_conv_features_multi_device(
 @pytest.mark.parametrize(
     "activation",
     [
-        # None,
-        # ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-        # ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        None,
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
-        # ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
-        # ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
-        # ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
     ],
 )
 def test_conv_activation(
