@@ -29,7 +29,7 @@ void bind_transpose(py::module& module) {
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`dim1`: First dim of transpose.
                 * :attr:`dim2`: Second dim of transpose.
-                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
+                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be `0.0`.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
@@ -54,7 +54,7 @@ void bind_transpose(py::module& module) {
             py::arg("dim2"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("pad_value") = 0.0f,
+            py::arg("pad_value") = std::nullopt,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail
