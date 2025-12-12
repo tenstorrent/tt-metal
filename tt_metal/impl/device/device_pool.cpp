@@ -887,14 +887,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const ChipId device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        distributed::MeshDevice* mesh_device = nullptr;
-        try {
-            mesh_device = device->get_mesh_device().get();
-        } catch (const std::exception&) {
-            log_info(
-                tt::LogMetal, "Device {} is not managed by MeshDevice", device_id);
-        }
-        detail::ReadDeviceProfilerResults(mesh_device, device, ProfilerReadState::LAST_FD_READ);
+        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
     }
 
     dispatch_firmware_active_ = false;
@@ -978,14 +971,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
     for (const ChipId device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        distributed::MeshDevice* mesh_device = nullptr;
-        try {
-            mesh_device = device->get_mesh_device().get();
-        } catch (const std::exception&) {
-            log_info(
-                tt::LogMetal, "Device {} is not managed by MeshDevice", device_id);
-        }
-        detail::ReadDeviceProfilerResults(mesh_device, device, ProfilerReadState::ONLY_DISPATCH_CORES);
+        detail::ReadDeviceProfilerResults(device, ProfilerReadState::ONLY_DISPATCH_CORES);
     }
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);

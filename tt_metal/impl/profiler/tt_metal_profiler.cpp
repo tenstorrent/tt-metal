@@ -956,7 +956,6 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
 }
 
 void ReadDeviceProfilerResults(
-    distributed::MeshDevice* mesh_device,
     IDevice* device,
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
@@ -975,6 +974,13 @@ void ReadDeviceProfilerResults(
     TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
     DeviceProfiler& profiler = profiler_it->second;
 
+    distributed::MeshDevice* mesh_device = nullptr;
+    try {
+        mesh_device = device->get_mesh_device().get();
+    } catch (const std::exception&) {
+        log_info(
+            tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
+    }
     if (useFastDispatch(mesh_device, device)) {
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
             ZoneScopedN("Skipping! Last FD dispatch is done");

@@ -64,7 +64,7 @@ void ProfilerSync(ProfilerSyncState state);
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
-void ReadDeviceProfilerResults(distributed::MeshDevice* mesh_device,
+void ReadDeviceProfilerResults(
     IDevice* device,
     ProfilerReadState = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
