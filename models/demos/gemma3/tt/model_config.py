@@ -19,7 +19,12 @@ from models.tt_transformers.tt.common import (
     num_to_core_range_set,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import DecodersPrecision, HfAttentionWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
+)
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 from models.tt_transformers.tt.model_config import determine_device_name, num_to_corerange
 
@@ -1166,6 +1171,13 @@ class ModelArgs(TTModelArgs):
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
+    def reference_rms_norm_text(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
     def get_hf_model_cls(self):
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
 
@@ -1298,6 +1310,19 @@ class ModelArgs(TTModelArgs):
             rotary_emb_local = model.model.rotary_emb_local
             wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
 
+        return wrapper
+
+    def reference_decoder_text(self, i=0):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0]
+        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        if hasattr(model.model, "rotary_emb_local"):
+            rotary_emb_local = model.model.rotary_emb_local
+        else:
+            rotary_emb_local = None
+        wrapper = HfDecoderWrapper(
+            layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
+        )
         return wrapper
 
     def reference_attention(self, rope_embeddings="global"):
