@@ -47,10 +47,10 @@ def test_torch_conversion_unsigned_edge_cases_random(device, shape, ttnn_dtype, 
 @pytest.mark.parametrize(
     "tensor_data,ttnn_dtype,torch_input_type",
     [
-        ([np.iinfo(np.uint16).max], ttnn.uint16, torch.int32),
-        ([np.iinfo(np.uint16).min], ttnn.uint16, torch.int32),
-        ([np.iinfo(np.uint32).max], ttnn.uint32, torch.int64),
-        ([np.iinfo(np.uint32).min], ttnn.uint32, torch.int64),
+        ([np.iinfo(np.uint16).max], ttnn.uint16, torch.uint16),
+        ([np.iinfo(np.uint16).min], ttnn.uint16, torch.uint16),
+        ([np.iinfo(np.uint32).max], ttnn.uint32, torch.uint32),
+        ([np.iinfo(np.uint32).min], ttnn.uint32, torch.uint32),
     ],
 )
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
