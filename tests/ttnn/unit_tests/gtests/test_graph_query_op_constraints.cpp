@@ -20,7 +20,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/shape_base.hpp>
+#include <tt_stl/shape_base.hpp>
 #include "impl/context/metal_context.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"

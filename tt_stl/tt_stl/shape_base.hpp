@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
@@ -16,7 +18,10 @@ namespace tt::tt_metal {
 // This allows the compiler to optimize hot loops that repeatedly index shapes, eliminating
 // function call overhead.
 namespace detail {
-[[noreturn]] void normalized_index_out_of_range(int32_t index, int32_t full_size, int32_t orig_size);
+[[noreturn, gnu::noinline]] inline void normalized_index_out_of_range(
+    int32_t index, int32_t full_size, int32_t orig_size) {
+    TT_THROW("ShapeBase[] index out of range. {} not in [{}, {})", index, -full_size, orig_size);
+}
 
 inline int32_t normalized_index(int32_t index, size_t original_size, size_t container_size) {
     const int32_t orig_size = static_cast<int32_t>(original_size);
@@ -53,9 +58,17 @@ public:
         return same_size && std::equal(value_.begin(), value_.end(), other.begin());
     }
 
-    bool operator==(const ShapeBase& other) const;
-    bool operator==(const Container& other) const;
-    bool operator==(const std::vector<uint32_t>& other) const;
+    bool operator==(const ShapeBase& other) const = default;
+
+    bool operator==(const Container& other) const {
+        auto original_view = view();
+        return std::equal(original_view.begin(), original_view.end(), other.begin(), other.end());
+    }
+
+    bool operator==(const std::vector<uint32_t>& other) const {
+        auto original_view = view();
+        return std::equal(original_view.begin(), original_view.end(), other.begin(), other.end());
+    }
 
     uint32_t operator[](int32_t index) const {
         auto norm_index = detail::normalized_index(index, original_size_, value_.size());
@@ -67,16 +80,26 @@ public:
         return value_[norm_index];
     }
 
-    Container::const_iterator cbegin() const;
-    Container::const_iterator cend() const;
+    Container::const_iterator cbegin() const { return this->value_.cbegin() + (value_.size() - original_size_); }
 
-    tt::stl::Span<const uint32_t> view() const;
+    Container::const_iterator cend() const { return this->value_.cend(); }
 
-    bool empty() const;
+    tt::stl::Span<const uint32_t> view() const { return tt::stl::Span<const uint32_t>{cbegin(), cend()}; }
+
+    bool empty() const { return original_size_ == 0; }
 
 protected:
-    void init();
-    size_t size() const;
+    void init() {
+        original_size_ = value_.size();
+        const size_t min_internal_size = 4;
+
+        if (original_size_ < min_internal_size) {
+            Container ones(min_internal_size - original_size_, 1);
+            value_.insert(value_.begin(), ones.begin(), ones.end());
+        }
+    }
+
+    size_t size() const { return original_size_; }
 
     Container value_;
 

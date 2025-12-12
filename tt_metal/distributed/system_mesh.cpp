@@ -16,7 +16,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
-#include "shape_base.hpp"
+#include <tt_stl/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"

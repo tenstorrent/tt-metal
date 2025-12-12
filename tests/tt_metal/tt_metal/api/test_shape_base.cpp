@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/shape_base.hpp>
+#include <tt_stl/shape_base.hpp>
 #include <exception>
 #include <memory>
 

@@ -18,7 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/shape_base.hpp>
+#include <tt_stl/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"

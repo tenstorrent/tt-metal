@@ -10,7 +10,7 @@
 #include <ostream>
 #include <tuple>
 
-#include <tt-metalium/shape_base.hpp>
+#include <tt_stl/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {

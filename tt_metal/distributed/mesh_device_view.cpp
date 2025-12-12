@@ -20,7 +20,7 @@
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape2d.hpp"
-#include "shape_base.hpp"
+#include <tt_stl/shape_base.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {

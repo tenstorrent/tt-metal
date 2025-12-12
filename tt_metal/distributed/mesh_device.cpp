@@ -33,7 +33,7 @@
 #include "mesh_trace.hpp"
 #include "profiler_types.hpp"
 #include <experimental/fabric/routing_table_generator.hpp>
-#include "shape_base.hpp"
+#include <tt_stl/shape_base.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "common/thread_pool.hpp"

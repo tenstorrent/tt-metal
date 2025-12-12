@@ -21,6 +21,7 @@ target_sources(
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
+            tt_stl/shape_base.hpp
             tt_stl/small_vector.hpp
             tt_stl/llvm/llvm_small_vector.hpp
             tt_stl/span.hpp

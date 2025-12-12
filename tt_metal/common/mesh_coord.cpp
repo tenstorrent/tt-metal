@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include "shape_base.hpp"
+#include <tt_stl/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal::distributed {
