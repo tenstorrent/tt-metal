@@ -28,19 +28,6 @@ void ClearProfilerControlBuffer(IDevice* device);
 
 // clang-format off
 /**
- * Initialize device profiling data buffers
- *
- * Return value: void
- *
- * | Argument | Description                                    | Type     | Valid Range | Required |
- * |----------|------------------------------------------------|----------|-------------|----------|
- * | device   | The device holding the program being profiled. | IDevice* |             | True     |
- * */
-// clang-format on
-void InitDeviceProfiler(IDevice* device);
-
-// clang-format off
-/**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
  *
  * Return value: void
