@@ -60,6 +60,8 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     bool bcast_batch = args.matmul_struct.bcast_batch.value();
     bool untilize_out = args.matmul_struct.untilize_out;
 
+    ttnn::Tensor persistent_intermediate_buffer = tensor_args.persistent_intermediate;
+
     tt::tt_metal::Program program{};
 
     std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -89,7 +91,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         ttnn::reduce_scatter_minimal_async_helper(
             program,
             output_tensors.mm,
-            args.persistent_intermediate_buffer,
+            persistent_intermediate_buffer,
             mesh_coord,
             forward_coord,
             backward_coord,
@@ -169,7 +171,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
                 program,
                 {output_tensors.mm}, /* matmul output tensor */
                 {},
-                {args.persistent_intermediate_buffer, output_tensors.reduce_scatter} /* all gather output tensor */
+                {tensor_args.persistent_intermediate, output_tensors.reduce_scatter} /* all gather output tensor */
             );
         }
     }

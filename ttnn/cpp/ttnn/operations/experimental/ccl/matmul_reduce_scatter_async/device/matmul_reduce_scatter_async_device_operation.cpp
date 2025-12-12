@@ -74,7 +74,7 @@ tensor_return_value_t MatmulReduceScatterAsyncDeviceOperation::create_output_ten
     ttnn::Tensor matmul_output_tensor =
         args.matmul_struct.create_output_tensors({tensor_args.input, tensor_args.weight})[0];
 
-    return {.mm = matmul_output_tensor, .reduce_scatter = args.persistent_output_buffer};
+    return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
 
 tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
@@ -188,13 +188,13 @@ MatmulReduceScatterAsyncDeviceOperation::invoke(
 
     return {
         operation_attributes_t(
-            reduce_scatter_minimal_async_struct,
-            matmul_struct,
-            reduce_scatter_core_grid_offset,
-            devices,
-            persistent_intermediate_buffer,
-            persistent_output_buffer),
-        tensor_args_t{.input = input_tensor, .weight = weight_tensor, .bias = bias}};
+            reduce_scatter_minimal_async_struct, matmul_struct, reduce_scatter_core_grid_offset, devices),
+        tensor_args_t{
+            .input = input_tensor,
+            .weight = weight_tensor,
+            .bias = bias,
+            .persistent_intermediate = persistent_intermediate_buffer,
+            .persistent_output = persistent_output_buffer}};
 }
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async

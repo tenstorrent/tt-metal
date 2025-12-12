@@ -23,23 +23,16 @@ struct operation_attributes_t {
     /* Physical Devices this op runs on*/
     std::vector<IDevice*> devices;
 
-    Tensor& persistent_intermediate_buffer;
-    Tensor& persistent_output_buffer;
-
     // Constructor required because operation structs are not default constructible.
     operation_attributes_t(
         ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct,
         operations::matmul::Matmul matmul_struct,
         CoreCoord reduce_scatter_core_grid_offset,
-        std::vector<IDevice*> devices,
-        Tensor& persistent_intermediate_buffer,
-        Tensor& persistent_output_buffer) :
+        std::vector<IDevice*> devices) :
         reduce_scatter_minimal_async_struct(std::move(reduce_scatter_minimal_async_struct)),
         matmul_struct(std::move(matmul_struct)),
         reduce_scatter_core_grid_offset(reduce_scatter_core_grid_offset),
-        devices(std::move(devices)),
-        persistent_intermediate_buffer(persistent_intermediate_buffer),
-        persistent_output_buffer(persistent_output_buffer) {}
+        devices(std::move(devices)) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "reduce_scatter_core_grid_offset");
     auto attribute_values() const {
@@ -61,6 +54,8 @@ struct tensor_args_t {
     Tensor input;
     Tensor weight;
     std::optional<Tensor> bias;
+    Tensor persistent_intermediate;
+    Tensor persistent_output;
 };
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
