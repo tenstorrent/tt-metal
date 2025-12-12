@@ -210,6 +210,25 @@ async function run() {
       .filter(Boolean)
       .join('\n');
 
+    // TEMPORARY: inject a clearly fake regression so we can exercise
+    // the downstream Slack + auto-triage pipeline wiring.
+    // NOTE: remove this block once testing is complete.
+    const fakeRegression = {
+      name: 'FAKE REGRESSION FOR TESTING ONLY',
+      run_id: 0,
+      run_url: 'https://example.com/fake-regression-run',
+      created_at: new Date().toISOString(),
+      workflow_url: `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/workflows/fake-regression-test.yaml`,
+      workflow_path: '.github/workflows/fake-regression-test.yaml',
+      aggregate_run_url: `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/runs/${github.context.runId}`,
+      commit_sha: '0000000000000000000000000000000000000000',
+      commit_short: '0000000',
+      commit_url: `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/0000000000000000000000000000000000000000`,
+      owners: [],
+      failing_jobs: ['fake-job-for-testing'],
+    };
+    regressedDetails.push(fakeRegression);
+
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', finalReport);

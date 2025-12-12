@@ -71,6 +71,7 @@ async function run() {
     const slackTs = core.getInput('slack_ts') || '';
     const slackChannelId = core.getInput('slack_channel_id') || '';
     const slackBotToken = core.getInput('slack_bot_token') || '';
+    const sendSlackMessage = core.getInput('send-slack-message') || 'true';
 
     const regressedWorkflows = JSON.parse(regressedWorkflowsJson);
     const octokit = github.getOctokit(githubToken);
@@ -120,7 +121,8 @@ async function run() {
             inputs: {
               workflow_name: workflowFileName,
               job_name: jobName,
-              slack_ts: slackTs
+              slack_ts: slackTs,
+              'send-slack-message': sendSlackMessage
             }
           });
 
