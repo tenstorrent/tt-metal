@@ -18,7 +18,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tile.hpp>
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -140,7 +139,7 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
 
     // Open device
     auto device_id = 0;
-    auto device = ttnn::device::open_mesh_device(device_id);
+    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
 
     ttnn::DataType dtype = test_config.dtype;
     MathFidelity math_fidelity = test_config.fidelity;
@@ -303,7 +302,7 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
             input_tensor_1,
             /*bias=*/std::nullopt,
             /*parameters=*/matmul_params);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         output_tensor.deallocate();
     }
 
@@ -311,7 +310,7 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
 
     // Performance measurement iterations
     if (use_trace) {
-        auto tid = ttnn::operations::trace::begin_trace_capture(dev_ptr, ttnn::QueueId(0));
+        auto tid = ttnn::operations::trace::begin_trace_capture(dev_ptr, std::nullopt);
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
             output_tensor = ttnn::operations::matmul::matmul(
                 input_tensor_0,
@@ -320,13 +319,13 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
                 /*parameters=*/matmul_params);
             output_tensor.deallocate();
         }
-        ttnn::operations::trace::end_trace_capture(dev_ptr, tid, ttnn::QueueId(0));
+        ttnn::operations::trace::end_trace_capture(dev_ptr, tid, std::nullopt);
 
         auto start_time = std::chrono::high_resolution_clock::now();
         {
             ZoneScopedN("Matmul trace iterations");
-            ttnn::operations::trace::execute_trace(dev_ptr, tid, ttnn::QueueId(0), false);
-            tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+            ttnn::operations::trace::execute_trace(dev_ptr, tid, std::nullopt, false);
+            tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -343,7 +342,7 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
                     input_tensor_1,
                     /*bias=*/std::nullopt,
                     /*parameters=*/matmul_params);
-                tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+                tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();
@@ -361,7 +360,7 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
     double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
 
-    const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
     double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
 
     double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
@@ -397,7 +396,7 @@ void RunMatmulBenchmark(benchmark::State& state, const MatmulTestConfig& test_co
     input_tensor_1.deallocate();
 
     // Close device
-    ttnn::device::close_device(*device);
+    device->close();
 }
 namespace BFloat16_Tests {
 const auto configs = std::vector<MatmulTestConfig>{
@@ -535,7 +534,9 @@ void BM_Matmul_BFLOAT16(benchmark::State& state) {
     const MatmulTestConfig& test_config = configs[config_index];
     const MatmulShape& matmul_shape = shapes[shape_index];
 
-    RunMatmulBenchmark(state, test_config, matmul_shape);
+    for (auto _ : state) {
+        RunMatmulBenchmark(state, test_config, matmul_shape);
+    }
 }
 }  // namespace BFloat16_Tests
 
@@ -667,7 +668,9 @@ void BM_Matmul_BFLOAT8_B(benchmark::State& state) {
     const MatmulTestConfig& test_config = configs[config_index];
     const MatmulShape& matmul_shape = shapes[shape_index];
 
-    RunMatmulBenchmark(state, test_config, matmul_shape);
+    for (auto _ : state) {
+        RunMatmulBenchmark(state, test_config, matmul_shape);
+    }
 }
 }  // namespace BFloat8_B_Tests
 
@@ -805,7 +808,9 @@ void BM_Matmul_BFLOAT4_B(benchmark::State& state) {
     const MatmulTestConfig& test_config = configs[config_index];
     const MatmulShape& matmul_shape = shapes[shape_index];
 
-    RunMatmulBenchmark(state, test_config, matmul_shape);
+    for (auto _ : state) {
+        RunMatmulBenchmark(state, test_config, matmul_shape);
+    }
 }
 }  // namespace BFloat4_B_Tests
 
@@ -816,7 +821,8 @@ BENCHMARK(BFloat16_Tests::BM_Matmul_BFLOAT16)
         benchmark::CreateDenseRange(0, BFloat16_Tests::configs.size() - 1, /*step=*/1),  // config indices
         benchmark::CreateDenseRange(0, BFloat16_Tests::shapes.size() - 1, /*step=*/1)    // shape indices
     })
-    ->UseManualTime();
+    ->UseManualTime()
+    ->Iterations(1);  // Setting only one iteration since it has iteration loop inside the test
 
 BENCHMARK(BFloat8_B_Tests::BM_Matmul_BFLOAT8_B)
     ->Unit(benchmark::kMillisecond)
@@ -824,7 +830,8 @@ BENCHMARK(BFloat8_B_Tests::BM_Matmul_BFLOAT8_B)
         benchmark::CreateDenseRange(0, BFloat8_B_Tests::configs.size() - 1, /*step=*/1),  // config indices
         benchmark::CreateDenseRange(0, BFloat8_B_Tests::shapes.size() - 1, /*step=*/1)    // shape indices
     })
-    ->UseManualTime();
+    ->UseManualTime()
+    ->Iterations(1);  // Setting only one iteration since it has iteration loop inside the test
 
 BENCHMARK(BFloat4_B_Tests::BM_Matmul_BFLOAT4_B)
     ->Unit(benchmark::kMillisecond)
@@ -832,7 +839,8 @@ BENCHMARK(BFloat4_B_Tests::BM_Matmul_BFLOAT4_B)
         benchmark::CreateDenseRange(0, BFloat4_B_Tests::configs.size() - 1, /*step=*/1),  // config indices
         benchmark::CreateDenseRange(0, BFloat4_B_Tests::shapes.size() - 1, /*step=*/1)    // shape indices
     })
-    ->UseManualTime();
+    ->UseManualTime()
+    ->Iterations(1);  // Setting only one iteration since it has iteration loop inside the test
 }  // namespace
 
 BENCHMARK_MAIN();
