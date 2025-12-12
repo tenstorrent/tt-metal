@@ -187,7 +187,6 @@ class CallstackProvider:
         full_callstack: bool,
         gdb_callstack: bool,
         gdb_server: GdbServer | None,
-        gdb_error_stream: io.StringIO | None,
         force_active_eth: bool = False,
     ):
         self.dispatcher_data = dispatcher_data
@@ -195,7 +194,6 @@ class CallstackProvider:
         self.full_callstack = full_callstack
         self.gdb_callstack = gdb_callstack
         self.gdb_server = gdb_server
-        self.gdb_error_stream = gdb_error_stream
         self.force_active_eth = force_active_eth
 
     def __del__(self):
@@ -259,14 +257,13 @@ class CallstackProvider:
                     callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
                     # If GDB failed to get callstack, surface errors and default to top callstack
                     if len(gdb_callstack) == 0:
-                        err_txt = self.gdb_error_stream.getvalue().strip() if self.gdb_error_stream else ""
-                        if self.gdb_error_stream:
-                            # Clear after read so we don't repeat the same errors next time
-                            self.gdb_error_stream.seek(0)
-                            self.gdb_error_stream.truncate(0)
                         error_message = ""
-                        if err_txt:
-                            error_message += f"\n  {err_txt}"
+                        if self.gdb_server.error_stream:
+                            error_message = f"\n  {self.gdb_server.error_stream.getvalue().strip()}"
+                            # Clear after read so we don't repeat the same errors next time
+                            self.gdb_server.error_stream.seek(0)
+                            self.gdb_server.error_stream.truncate(0)
+                        # Default to top callstack
                         callstack_with_message = get_callstack(
                             location,
                             risc_name,
@@ -330,18 +327,17 @@ def find_available_port() -> int:
         raise TTTriageError(f"No available port found: {e}")
 
 
-def start_gdb_server(port: int, context: Context) -> tuple[GdbServer, io.StringIO]:
+def start_gdb_server(port: int, context: Context) -> GdbServer:
     """Start GDB server and return it along with an error stream buffer."""
     try:
         server = ServerSocket(port)
         server.start()
-        err_buf = io.StringIO()
-        gdb_server = GdbServer(context, server, error_stream=err_buf)
+        gdb_server = GdbServer(context, server, error_stream=io.StringIO())
         gdb_server.start()
     except Exception as e:
         raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
 
-    return gdb_server, err_buf
+    return gdb_server
 
 
 @triage_singleton
@@ -359,12 +355,11 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
 
     gdb_server: GdbServer | None = None
-    gdb_error_stream: io.StringIO | None = None
     if gdb_callstack:
         # Locking thread until we start gdb server on available port
         with _port_lock:
             port = find_available_port()
-            gdb_server, gdb_error_stream = start_gdb_server(port, context)
+            gdb_server = start_gdb_server(port, context)
 
     return CallstackProvider(
         dispatcher_data,
@@ -372,7 +367,6 @@ def run(args, context: Context):
         full_callstack,
         gdb_callstack,
         gdb_server,
-        gdb_error_stream,
         force_active_eth,
     )
 
