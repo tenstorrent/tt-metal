@@ -1158,7 +1158,7 @@ def test_rdiv(device):
     value = 2
 
     # Compute reverse division (value / tensor)
-    output = ttnn.rdiv(tensor, value, round_mode=None)
+    output = ttnn.rdiv(tensor, value, rounding_mode=None)
     logger.info(f"Reverse division: {output}")
 
 

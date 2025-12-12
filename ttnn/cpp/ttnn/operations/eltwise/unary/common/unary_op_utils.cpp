@@ -270,14 +270,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::RDIV: {
-            uint32_t round_mode_value = params[1];
-            static constexpr const char* round_mode_strs[] = {
+            uint32_t rounding_mode_value = params[1];
+            static constexpr const char* rounding_mode_strs[] = {
                 "ckernel::RoundingMode::None", "ckernel::RoundingMode::Trunc", "ckernel::RoundingMode::Floor"};
             op_init_and_name = {
                 "rdiv_tile_init();",
                 fmt::format(
                     "rdiv_tile<{}>({}, {:#x}u);",
-                    round_mode_strs[round_mode_value],
+                    rounding_mode_strs[rounding_mode_value],
                     idst,
                     std::bit_cast<uint32_t>(param0))};
             break;
