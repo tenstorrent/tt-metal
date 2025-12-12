@@ -1343,7 +1343,6 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     result.success = true;
     return result;
 }
-
 }  // namespace tt::tt_fabric::detail
 
 #endif  // TOPOLOGY_SOLVER_INTERNAL_TPP
