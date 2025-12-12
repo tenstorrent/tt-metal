@@ -77,24 +77,26 @@ uint32_t default_workers(
         // workers start scaling.
         constexpr double RING_HIGH_DATA_THRESHOLD_MB = 50.0;
         constexpr double RING_LOW_DATA_THRESHOLD_MB = 1.0;
-        if (data_moved_per_link_bytes > RING_HIGH_DATA_THRESHOLD_MB) {
-            candidate_worker_counts = {8, 4, 2, 1};
-        } else if (data_moved_per_link_bytes < RING_LOW_DATA_THRESHOLD_MB) {
+        double data_moved_per_link_bytes_MB = data_moved_per_link_bytes / (1024.0 * 1024.0);
+        if (data_moved_per_link_bytes_MB > RING_HIGH_DATA_THRESHOLD_MB) {
+            candidate_worker_counts = {3, 2, 1};
+        } else if (data_moved_per_link_bytes_MB < RING_LOW_DATA_THRESHOLD_MB) {
             candidate_worker_counts = {2, 1};
         } else {
-            candidate_worker_counts = {4, 2, 1};
+            candidate_worker_counts = {3, 2, 1};
         }
     } else if (topology == ttnn::ccl::Topology::Linear) {
         // For linear, 4+MB is where 8 workers start scaling. 0.5-4MB is where 4 workers start scaling. 0-0.5MB is where
         // 2 workers start scaling.
         constexpr double LINEAR_HIGH_DATA_THRESHOLD_MB = 4.0;
         constexpr double LINEAR_LOW_DATA_THRESHOLD_MB = 0.5;
-        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD_MB) {
-            candidate_worker_counts = {8, 4, 2, 1};
-        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD_MB) {
+        double data_moved_per_link_bytes_MB = data_moved_per_link_bytes / (1024.0 * 1024.0);
+        if (data_moved_per_link_bytes_MB > LINEAR_HIGH_DATA_THRESHOLD_MB) {
+            candidate_worker_counts = {3, 2, 1};
+        } else if (data_moved_per_link_bytes_MB < LINEAR_LOW_DATA_THRESHOLD_MB) {
             candidate_worker_counts = {2, 1};
         } else {
-            candidate_worker_counts = {4, 2, 1};
+            candidate_worker_counts = {3, 2, 1};
         }
     }
     for (auto worker_count : candidate_worker_counts) {
@@ -636,7 +638,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             fused_op_signaler,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            core_grid_offset);
     } else {
         TT_FATAL(topology == ccl::Topology::Linear, "Must be line or ring");
         return line_reduce_scatter_minimal_async_helper(
@@ -716,9 +719,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
-    num_workers_per_direction = 1;
-    printf("num_workers_per_direction=%d", num_workers_per_direction);
-    printf("core_grid_offset=%zu,%zu\n", core_grid_offset.x, core_grid_offset.y);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
@@ -735,8 +735,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         topology, sender_device_coord, forward_coord, backward_coord, ring_size - 1, ring_size - 1, mesh_device);
 
     const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, CoreCoord(0, 6));
-    // core_grid_offset);
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
 
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;
