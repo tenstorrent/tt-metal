@@ -21,9 +21,11 @@ StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAda
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
+    uint32_t /*sender_channel_idx*/,
     eth_chan_directions downstream_direction,
     CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
+    // Track connections per VC for packing
     downstream_edms_connected_by_vc.at(inbound_vc_idx).push_back(
         {downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
 
@@ -38,6 +40,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         this->downstream_edms_connected |= (1 << compact_index);
 
         // Store addresses indexed by [vc_idx][compact_index]
+        // NOTE: For INTRA_MESH connections, this works fine (one connection per compact_index)
+        // For Z router multi-target, we'll use vc_to_downstreams_ instead
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(compact_index) =
             adapter_spec.edm_buffer_base_addr;
         this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(compact_index) =
@@ -84,14 +88,30 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
+    // Standard packing for all connection types
+    //
+    // IMPORTANT: All connections on the same VC share the same downstream buffer address.
+    // This is a fundamental constraint of the fabric architecture:
+    // - For INTRA_MESH: Each sender channel connects to one downstream router
+    // - For Z_TO_MESH: Multiple sender channels (one per direction) each connect to one downstream router
+    // - All connections on a VC write to the same receiver channel buffer on their respective targets
+    //
+    // Because of this constraint, the standard packing path (which stores one buffer address per VC)
+    // is sufficient for all connection types, including multi-target scenarios.
     if (is_2D_routing) {
-        // For 2D: Temporary, until support for VC1 is added
-        TT_FATAL(vc_idx == 0, "VC1 is not supported for 2D routing");
-        // Get the appropriate downstream EDM count based on VC index
-        uint32_t num_downstream_edms = (vc_idx == 0) ? builder_config::get_vc0_downstream_edm_count(is_2D_routing)
-                                                     : builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+        // For 2D: Use fixed slot count based on VC (kernel expects fixed-size arrays)
+        // VC0: 3 slots (mesh directions)
+        // VC1: 3 slots (XY intermesh) or 4 slots (Z intermesh) - determined by actual connections
+        size_t num_downstream_edms;
+        if (vc_idx == 0) {
+            num_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
+        } else {
+            // VC1: Use actual connection count (3 for XY, 4 for Z)
+            // This is safe because VC1 channels are only created when intermesh is configured
+            num_downstream_edms = downstream_edms_connected_by_vc[vc_idx].size();
+        }
 
-        // Pack connection mask (3-bit mask for 3 downstream EDMs)
+        // Pack connection mask (bit mask indicating which slots are valid)
         args_out.push_back(this->downstream_edms_connected);
 
         // Pack buffer base addresses (one per compact index)
@@ -190,18 +210,16 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
         downstream_edms_connected_by_vc,
     uint32_t vc_idx,
     const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
-    if (vc_idx == 1) {
-        // DELETEME (non-vc0 code) Issue #33360
-        return 0;
-    }
     if (!is_2D_routing) {
+        // 1D routing: single downstream connection
         if (downstream_edms_connected_by_vc[vc_idx].empty()) {
             return 0; // no connection here
         }
-        TT_FATAL(downstream_edms_connected_by_vc[vc_idx].size() == 1, "Downstream edms connected by vc should be 1 for vc1 or non-2D routing. vc_idx: {}, size: {}", vc_idx, downstream_edms_connected_by_vc[vc_idx].size());
+        TT_FATAL(downstream_edms_connected_by_vc[vc_idx].size() == 1, "Downstream edms connected by vc should be 1 for non-2D routing. vc_idx: {}, size: {}", vc_idx, downstream_edms_connected_by_vc[vc_idx].size());
         auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().second);
         return ord;
     } else {
+        // 2D routing: encode NOC coordinates using compact index (works for both VC0 and VC1)
         uint32_t ord = 0;
         for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
             // Calculate compact index based on direction relative to my_direction

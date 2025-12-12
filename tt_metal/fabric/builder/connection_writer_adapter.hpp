@@ -59,6 +59,7 @@ public:
     virtual void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
+        uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing) = 0;
@@ -96,6 +97,7 @@ public:
     void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
+        uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing) override;
