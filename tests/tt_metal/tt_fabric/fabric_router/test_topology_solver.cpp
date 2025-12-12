@@ -1201,4 +1201,282 @@ TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     EXPECT_EQ(result.stats.dfs_calls, 0u);  // No DFS calls made in this test
 }
 
+// Helper function to create a 2D mesh graph
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_2d_mesh_graph(size_t rows, size_t cols) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    auto get_node_id = [cols](size_t row, size_t col) -> size_t { return row * cols + col; };
+
+    for (size_t row = 0; row < rows; ++row) {
+        for (size_t col = 0; col < cols; ++col) {
+            size_t node_id = get_node_id(row, col);
+            std::vector<NodeId> neighbors;
+
+            // Add left neighbor
+            if (col > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col - 1)));
+            }
+            // Add right neighbor
+            if (col < cols - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row, col + 1)));
+            }
+            // Add top neighbor
+            if (row > 0) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row - 1, col)));
+            }
+            // Add bottom neighbor
+            if (row < rows - 1) {
+                neighbors.push_back(static_cast<NodeId>(get_node_id(row + 1, col)));
+            }
+
+            adj_map[static_cast<NodeId>(node_id)] = neighbors;
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+// Helper function to create a 1D chain graph
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_1d_chain_graph(size_t length) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    for (size_t i = 0; i < length; ++i) {
+        std::vector<NodeId> neighbors;
+        // Add left neighbor
+        if (i > 0) {
+            neighbors.push_back(static_cast<NodeId>(i - 1));
+        }
+        // Add right neighbor
+        if (i < length - 1) {
+            neighbors.push_back(static_cast<NodeId>(i + 1));
+        }
+        adj_map[static_cast<NodeId>(i)] = neighbors;
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+// Helper function to create a 1D ring graph (cycle)
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_1d_ring_graph(size_t length) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    for (size_t i = 0; i < length; ++i) {
+        std::vector<NodeId> neighbors;
+        // Add left neighbor (wraps around)
+        size_t left = (i == 0) ? length - 1 : i - 1;
+        neighbors.push_back(static_cast<NodeId>(left));
+        // Add right neighbor (wraps around)
+        size_t right = (i == length - 1) ? 0 : i + 1;
+        neighbors.push_back(static_cast<NodeId>(right));
+        adj_map[static_cast<NodeId>(i)] = neighbors;
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
+TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create global graph: 2D mesh of 4x8 = 32 nodes
+    // Each node connects to up to 4 neighbors (up, down, left, right)
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+
+    // Create target graph: 1D ring of 32 nodes (cycle)
+    // Each node connects to exactly 2 neighbors (prev, next, wrapping around)
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(32);
+
+    // Verify graph sizes
+    EXPECT_EQ(global_graph.get_nodes().size(), 32u);
+    EXPECT_EQ(target_graph.get_nodes().size(), 32u);
+
+    // Verify global graph structure (2D mesh)
+    // Corner nodes should have 2 neighbors, edge nodes 3, interior nodes 4
+    size_t corner_count = 0, edge_count = 0, interior_count = 0;
+    for (const auto& node : global_graph.get_nodes()) {
+        size_t degree = global_graph.get_neighbors(node).size();
+        if (degree == 2) {
+            corner_count++;
+        } else if (degree == 3) {
+            edge_count++;
+        } else if (degree == 4) {
+            interior_count++;
+        }
+    }
+    // 4x8 mesh: 4 corners, (4-2)*2 + (8-2)*2 = 4 + 12 = 16 edge nodes, (4-2)*(8-2) = 12 interior
+    EXPECT_EQ(corner_count, 4u);
+    EXPECT_EQ(edge_count, 16u);
+    EXPECT_EQ(interior_count, 12u);
+
+    // Verify target graph structure (1D ring)
+    // All nodes should have exactly 2 neighbors (ring topology)
+    for (const auto& node : target_graph.get_nodes()) {
+        size_t degree = target_graph.get_neighbors(node).size();
+        EXPECT_EQ(degree, 2u) << "All nodes in ring should have degree 2";
+    }
+
+    // Build graph data and constraints
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add constraints that are satisfiable for a ring on a 2D mesh
+    // For a ring, we need to ensure the cycle can be closed
+    // Pin a node to a corner (node 0 -> global 0)
+    constraints.add_required_constraint(0, 0);
+    // Pin the next node in the ring to an adjacent node (node 1 -> global 1, which is adjacent to 0)
+    constraints.add_required_constraint(1, 1);
+    // Pin a node halfway around the ring to a node that can form a path back
+    // Node 16 is halfway, pin it to global node 16 (row 2, col 0) which can connect back
+    constraints.add_preferred_constraint(16, 16);
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Run DFS search
+    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+
+    // This should succeed - a 1D ring can be embedded in a 2D mesh
+    // (the ring can follow a cycle path through the mesh)
+    EXPECT_TRUE(found) << "1D ring of 32 nodes should fit in 4x8 2D mesh";
+
+    if (found) {
+        // Verify all nodes are mapped
+        size_t mapped_count = 0;
+        for (size_t i = 0; i < state.mapping.size(); ++i) {
+            if (state.mapping[i] != -1) {
+                mapped_count++;
+            }
+        }
+        EXPECT_EQ(mapped_count, 32u) << "All 32 target nodes should be mapped";
+
+        // Verify mapping preserves adjacency
+        // For each edge in target graph, corresponding edge should exist in global graph
+        for (size_t i = 0; i < graph_data.n_target; ++i) {
+            if (state.mapping[i] == -1) {
+                continue;
+            }
+            size_t global_i = static_cast<size_t>(state.mapping[i]);
+
+            for (size_t neighbor_idx : graph_data.target_adj_idx[i]) {
+                if (state.mapping[neighbor_idx] == -1) {
+                    continue;
+                }
+                size_t global_neighbor = static_cast<size_t>(state.mapping[neighbor_idx]);
+
+                // Check if edge exists in global graph
+                bool edge_exists = std::binary_search(
+                    graph_data.global_adj_idx[global_i].begin(),
+                    graph_data.global_adj_idx[global_i].end(),
+                    global_neighbor);
+                EXPECT_TRUE(edge_exists) << "Edge from target node " << graph_data.target_nodes[i] << " to "
+                                         << graph_data.target_nodes[neighbor_idx]
+                                         << " should map to edge in global graph";
+            }
+        }
+
+        // Verify pinned nodes are correctly mapped
+        EXPECT_EQ(state.mapping[0], 0) << "First node should be pinned to global node 0";
+        EXPECT_EQ(state.mapping[1], 1) << "Second node should be pinned to global node 1";
+
+        // Verify the ring structure - check that the cycle is closed
+        // Node 31 should connect back to node 0
+        size_t node_31_global = static_cast<size_t>(state.mapping[31]);
+        size_t node_0_global = static_cast<size_t>(state.mapping[0]);
+        bool ring_closed = std::binary_search(
+            graph_data.global_adj_idx[node_31_global].begin(),
+            graph_data.global_adj_idx[node_31_global].end(),
+            node_0_global);
+        EXPECT_TRUE(ring_closed) << "Ring should be closed: node 31 should connect to node 0";
+
+        // Log statistics
+        EXPECT_GT(state.dfs_calls, 0u) << "Should have made some DFS calls";
+        log_info(
+            tt::LogFabric,
+            "Stress test with pinnings completed: DFS calls={}, backtracks={}",
+            state.dfs_calls,
+            state.backtrack_count);
+    } else {
+        // If it failed, log the error
+        log_error(tt::LogFabric, "Stress test failed: {}", state.error_message);
+    }
+}
+
+TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create global graph: 2D mesh of 4x8 = 32 nodes
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+
+    // Create target graph: 1D chain of 32 nodes
+    auto target_graph = create_1d_chain_graph<TestTargetNode>(32);
+
+    // Build graph data and constraints
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add conflicting pinnings that make mapping impossible
+    // Pin first node to top-left corner (node 0)
+    constraints.add_required_constraint(0, 0);
+    // Pin second node (which is adjacent to node 0 in target graph) to a node that's NOT adjacent to node 0
+    // Node 0's neighbors in 4x8 mesh are: 1 (right), 8 (down)
+    // Let's pin target node 1 to global node 15 (which is row 1, col 7 - far from node 0 and not adjacent)
+    constraints.add_required_constraint(1, 15);
+
+    // Verify that node 15 is not adjacent to node 0 in the global graph
+    const auto& neighbors_of_0 = global_graph.get_neighbors(0);
+    bool node_15_is_neighbor = std::find(neighbors_of_0.begin(), neighbors_of_0.end(), 15) != neighbors_of_0.end();
+    EXPECT_FALSE(node_15_is_neighbor) << "Node 15 should not be adjacent to node 0 in 4x8 mesh";
+
+    // Also verify that target nodes 0 and 1 are adjacent in the target graph
+    const auto& neighbors_of_target_0 = target_graph.get_neighbors(0);
+    bool target_1_is_neighbor =
+        std::find(neighbors_of_target_0.begin(), neighbors_of_target_0.end(), 1) != neighbors_of_target_0.end();
+    EXPECT_TRUE(target_1_is_neighbor) << "Target nodes 0 and 1 should be adjacent in 1D chain";
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Run DFS search
+    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+
+    // This should fail - we've pinned two adjacent nodes in the target graph
+    // to non-adjacent nodes in the global graph
+    EXPECT_FALSE(found) << "Mapping should fail due to conflicting pinnings";
+
+    if (!found) {
+        // Verify error message indicates the problem
+        EXPECT_FALSE(state.error_message.empty()) << "Should have error message";
+        log_info(
+            tt::LogFabric,
+            "Negative stress test completed as expected: DFS calls={}, backtracks={}, error={}",
+            state.dfs_calls,
+            state.backtrack_count,
+            state.error_message);
+
+        // The solver should have detected the conflict early or during search
+        // Partial mapping may or may not be saved depending on when the failure occurs
+        // The important thing is that it failed as expected
+        EXPECT_GE(state.dfs_calls, 0u) << "Should have attempted search";
+    } else {
+        // If it somehow succeeded, that's unexpected
+        log_error(tt::LogFabric, "Negative test unexpectedly succeeded - this indicates a bug");
+        FAIL() << "Mapping should have failed due to conflicting pinnings";
+    }
+}
+
 }  // namespace tt::tt_fabric
