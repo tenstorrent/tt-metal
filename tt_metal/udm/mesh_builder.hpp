@@ -52,6 +52,10 @@ public:
     // Getters
     const Mesh& get_mesh() const;
 
+    const Mesh& get_flattened_mesh() const;
+
+    const Shape& get_flattened_grid() const;
+
     const std::vector<Grid>& get_all_grids_in_mesh() const;
 
     const std::vector<Gcore>& get_all_gcores_in_grid(const Grid& grid) const;

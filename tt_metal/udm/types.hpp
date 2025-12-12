@@ -96,6 +96,12 @@ struct Grid {
         }
         return total;
     }
+
+    // Getters
+    uint32_t rank() const { return dims.rank(); }
+    uint32_t volume() const { return dims.volume(); }
+    uint32_t operator[](size_t index) const { return dims[index]; }
+    const tt::tt_metal::Shape& shape() const { return dims; }
 };
 
 // ==================================================
@@ -115,6 +121,12 @@ struct Mesh {
     Mesh() = default;
 
     explicit Mesh(const tt::tt_metal::Shape& dims) : dims(dims) {}
+
+    // Getters
+    uint32_t rank() const { return dims.rank(); }
+    uint64_t volume() const { return dims.volume(); }
+    uint32_t operator[](size_t index) const { return dims[index]; }
+    const tt::tt_metal::Shape& shape() const { return dims; }
 };
 
 // ==================================================

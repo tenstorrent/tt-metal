@@ -26,18 +26,30 @@ public:
 
         // Create mesh object with the mesh_shape passed in as its dims
         create_mesh();
-        log_debug(tt::LogOp, "  Created mesh with dims: {}", mesh_.dims);
+        log_debug(tt::LogOp, "  Created mesh with dims: {}", mesh_.shape());
 
-        // Create the map: mesh -> [grids], create the grid for each mesh coordinate
+        // Create grids for each mesh coordinate
         create_grids();
         if (!grids_.empty()) {
-            log_debug(tt::LogOp, "  Created {} grids with shape: {}", grids_.size(), grid.dims);
+            log_debug(tt::LogOp, "  Created {} grids with shape: {}", grids_.size(), grid.shape());
             for (auto grid : grids_) {
                 log_debug(tt::LogOp, "    Created grid at coord {}", grid.coord);
             }
         }
 
-        // Create the map: [grids] -> [gcores], for each core in a grid
+        // Build grid lookup maps
+        build_grid_to_fabric_node_id_map();
+        log_debug(tt::LogOp, "  Built grid fabric node id mapping");
+
+        // Create flattened mesh shape by combining grid and mesh dimensions
+        create_flattened_mesh();
+        log_debug(tt::LogOp, "  Created flattened mesh with dims: {}", flattened_mesh_.shape());
+
+        // Create flattened grid shape aligned to same rank as flattened mesh
+        create_flattened_grid();
+        log_debug(tt::LogOp, "  Created flattened grid with dims: {}", flattened_grid_);
+
+        // Create gcores using flattened mesh
         create_gcores();
         log_debug(tt::LogOp, "  Created {} gcores total", gcores_.size());
         for (auto gcore : gcores_) {
@@ -49,10 +61,18 @@ public:
                 gcore.local_coord,
                 gcore.global_coord);
         }
+
+        // Build lookup maps for gcores
+        build_gcore_maps();
+        log_debug(tt::LogOp, "  Built gcore lookup maps");
     }
 
     // Getters
     const Mesh& get_mesh() const { return mesh_; }
+
+    const Mesh& get_flattened_mesh() const { return flattened_mesh_; }
+
+    const Shape& get_flattened_grid() const { return flattened_grid_; }
 
     const std::vector<Grid>& get_all_grids_in_mesh() const { return grids_; }
 
@@ -65,9 +85,12 @@ public:
     const std::vector<Gcore>& get_all_gcores_in_mesh() const { return gcores_; }
 
     const Grid& get_grid_from_coord(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
-        auto it = coord_to_grid_.find(coord);
-        TT_FATAL(it != coord_to_grid_.end(), "Mesh coordinate not found");
-        return grids_[it->second];
+        for (const auto& grid : grids_) {
+            if (grid.coord == coord) {
+                return grid;
+            }
+        }
+        TT_FATAL(false, "Mesh coordinate not found: {}", coord);
     }
 
     const Gcore& get_gcore_with_local_coord(
@@ -81,32 +104,31 @@ public:
 
     const Gcore& get_gcore_with_global_coord(
         const tt::tt_metal::distributed::MeshCoordinate& gcore_global_coord) const {
-        auto it = global_coord_to_gcore_.find(gcore_global_coord);
-        TT_FATAL(it != global_coord_to_gcore_.end(), "Global gcore coordinate not found");
-        return gcores_[it->second];
+        for (const auto& gcore : gcores_) {
+            if (gcore.global_coord == gcore_global_coord) {
+                return gcore;
+            }
+        }
+        TT_FATAL(false, "Global gcore coordinate not found: {}", gcore_global_coord);
     }
 
     std::unordered_map<uint32_t, tt::tt_metal::CoreRangeSet> get_grid_core_range_set_from_gcores(
         const std::vector<Gcore>& gcores) const {
         std::unordered_map<uint32_t, std::vector<tt::tt_metal::CoreCoord>> grid_to_core_coords;
 
-        // Group gcores by grid using precomputed maps
+        // Group gcores by grid using precomputed map
         for (const auto& gcore : gcores) {
-            // find which grid this gcore belongs to
             auto grid_it = gcore_global_id_to_grid_id_.find(gcore.global_id);
             TT_FATAL(
                 grid_it != gcore_global_id_to_grid_id_.end(),
-                "Gcore with global_id {} not found in any grid",
+                "Gcore with global_id {} not found in grid mapping",
                 gcore.global_id);
+            uint32_t grid_id = grid_it->second;
 
-            // get precomputed CoreCoord
-            auto coord_it = gcore_global_id_to_core_coord_.find(gcore.global_id);
-            TT_FATAL(
-                coord_it != gcore_global_id_to_core_coord_.end(),
-                "CoreCoord for gcore global_id {} not found",
-                gcore.global_id);
+            // Convert gcore to CoreCoord
+            tt::tt_metal::CoreCoord core_coord = gcore.to_core_coord();
 
-            grid_to_core_coords[grid_it->second].push_back(coord_it->second);
+            grid_to_core_coords[grid_id].push_back(core_coord);
         }
 
         // Convert vectors of CoreCoords to CoreRangeSets
@@ -134,14 +156,14 @@ public:
         MeshGridDimensions result{};
 
         // Extract mesh dimensions
-        result.mesh_num_dims = mesh_.dims.rank();
+        result.mesh_num_dims = mesh_.rank();
         for (uint32_t i = 0; i < result.mesh_num_dims; ++i) {
-            result.mesh_dims[i] = mesh_.dims[i];
+            result.mesh_dims[i] = mesh_[i];
         }
 
         // Extract grid dimensions from first grid
         TT_FATAL(!grids_.empty(), "No grids in mesh");
-        const auto& grid_shape = grids_[0].dims;
+        const auto& grid_shape = grids_[0].shape();
         result.grid_num_dims = grid_shape.rank();
         for (uint32_t i = 0; i < result.grid_num_dims; ++i) {
             result.grid_dims[i] = grid_shape[i];
@@ -221,59 +243,6 @@ public:
     }
 
 private:
-    tt::tt_metal::distributed::MeshCoordinate compute_gcore_local_coord(
-        uint32_t flat_idx, const tt::tt_metal::Shape& grid_shape) const {
-        std::vector<uint32_t> local_coord_vals(grid_shape.rank(), 0);
-        uint32_t idx = flat_idx;
-        for (int dim = grid_shape.rank() - 1; dim >= 0; --dim) {
-            local_coord_vals[dim] = idx % grid_shape[dim];
-            idx /= grid_shape[dim];
-        }
-
-        return tt::tt_metal::distributed::MeshCoordinate(
-            tt::stl::Span<const uint32_t>(local_coord_vals.data(), local_coord_vals.size()));
-    }
-
-    tt::tt_metal::distributed::MeshCoordinate compute_gcore_global_coord(
-        const tt::tt_metal::distributed::MeshCoordinate& grid_coord_in_mesh,
-        const tt::tt_metal::Shape& grid_dims,
-        const tt::tt_metal::distributed::MeshCoordinate& local_coord_in_grid) const {
-        // Copy to arrays
-        std::array<uint32_t, tt::tt_metal::experimental::udm::MAX_RANK> grid_coord_arr{};
-        std::array<uint32_t, tt::tt_metal::experimental::udm::MAX_RANK> grid_dims_arr{};
-        std::array<uint32_t, tt::tt_metal::experimental::udm::MAX_RANK> local_coord_arr{};
-
-        uint32_t mesh_rank = grid_coord_in_mesh.dims();
-        uint32_t grid_rank = grid_dims.rank();
-        uint32_t local_rank = local_coord_in_grid.dims();
-
-        for (size_t i = 0; i < mesh_rank; ++i) {
-            grid_coord_arr[i] = grid_coord_in_mesh[i];
-        }
-        for (size_t i = 0; i < grid_rank; ++i) {
-            grid_dims_arr[i] = grid_dims[i];
-        }
-        for (size_t i = 0; i < local_rank; ++i) {
-            local_coord_arr[i] = local_coord_in_grid[i];
-        }
-
-        // Find max rank and adjust all independently to it
-        uint32_t max_rank = std::max({mesh_rank, grid_rank, local_rank});
-
-        adjust_array_to_rank(grid_coord_arr, mesh_rank, max_rank, 0);
-        adjust_array_to_rank(grid_dims_arr, grid_rank, max_rank, 1);
-        adjust_array_to_rank(local_coord_arr, local_rank, max_rank, 0);
-
-        // Compute global coord: global[i] = mesh[i] * grid[i] + local[i]
-        std::vector<uint32_t> global_coord_vals(max_rank);
-        for (size_t i = 0; i < max_rank; ++i) {
-            global_coord_vals[i] = grid_coord_arr[i] * grid_dims_arr[i] + local_coord_arr[i];
-        }
-
-        return tt::tt_metal::distributed::MeshCoordinate(
-            tt::stl::Span<const uint32_t>(global_coord_vals.data(), global_coord_vals.size()));
-    }
-
     void create_mesh() {
         // Create mesh object with the mesh_shape passed in as its dims
         std::vector<uint32_t> dims;
@@ -283,69 +252,197 @@ private:
         mesh_.dims = Shape(std::move(dims));
     }
 
+    void create_flattened_mesh() {
+        // Flatten grid dimensions with mesh dimensions to form expanded mesh shape
+        // The flattened mesh combines grid[i] with mesh[mesh_rank - grid_rank + i]
+        // For example, if grid is [Y, X] and mesh is [M0, M1]:
+        //   flattened_mesh = [Y * M0, X * M1] (when mesh_rank == grid_rank == 2)
+        // Or if grid is [Y, X] and mesh is [M0, M1, M2]:
+        //   flattened_mesh = [M0, Y * M1, X * M2] (when mesh_rank == 3, grid_rank == 2)
+
+        TT_FATAL(!grids_.empty(), "Grids must be created before flattened mesh");
+
+        const auto& grid_shape = grids_[0].shape();
+        uint32_t mesh_rank = mesh_.rank();
+        uint32_t grid_rank = grids_[0].rank();
+
+        // Determine the rank of the flattened mesh
+        uint32_t flattened_rank = std::max(mesh_rank, grid_rank);
+
+        // Initialize flattened mesh dimensions with mesh dimensions aligned to the trailing positions
+        // Prepend 1s at the beginning if mesh_rank < flattened_rank
+        std::vector<uint32_t> flattened_dims(flattened_rank);
+        for (uint32_t i = 0; i < flattened_rank; ++i) {
+            if (i < flattened_rank - mesh_rank) {
+                // Prepend 1s at the beginning
+                flattened_dims[i] = 1;
+            } else {
+                // Copy mesh dims to trailing positions
+                flattened_dims[i] = mesh_[i - (flattened_rank - mesh_rank)];
+            }
+        }
+
+        // Multiply the last grid_rank dimensions of flattened_mesh with corresponding grid dimensions
+        // This aligns grid dimensions with the trailing dimensions of the mesh
+        for (uint32_t i = 0; i < grid_rank; ++i) {
+            uint32_t flattened_idx = flattened_rank - grid_rank + i;
+            flattened_dims[flattened_idx] *= grid_shape[i];
+        }
+
+        flattened_mesh_.dims = Shape(std::move(flattened_dims));
+    }
+
+    void create_flattened_grid() {
+        // Create flattened_grid_ with same rank as flattened_mesh_
+        // Prepend 1s to grid dimensions to align with flattened_mesh_ rank
+        TT_FATAL(!grids_.empty(), "Grids must be created before flattened grid");
+
+        const auto& grid_shape = grids_[0].shape();
+        uint32_t grid_rank = grid_shape.rank();
+        uint32_t flattened_rank = flattened_mesh_.rank();
+
+        std::vector<uint32_t> flattened_grid_dims(flattened_rank);
+        for (uint32_t i = 0; i < flattened_rank; ++i) {
+            if (i < flattened_rank - grid_rank) {
+                flattened_grid_dims[i] = 1;
+            } else {
+                flattened_grid_dims[i] = grid_shape[i - (flattened_rank - grid_rank)];
+            }
+        }
+
+        flattened_grid_ = Shape(std::move(flattened_grid_dims));
+    }
+
     void create_grids() {
         // Get compute grid size from mesh device
         auto compute_grid_size = mesh_device_->compute_with_storage_grid_size();
         std::vector<uint32_t> grid_dims = {compute_grid_size.y, compute_grid_size.x};
 
-        // Reserve space for grids and fabric node mappings
         grids_.reserve(mesh_coords_.size());
-        grid_to_fabric_node_id_.reserve(mesh_coords_.size());
 
         for (size_t i = 0; i < mesh_coords_.size(); ++i) {
             Grid grid(i, Shape(grid_dims), mesh_coords_[i]);
-
             grids_.push_back(grid);
-            coord_to_grid_[mesh_coords_[i]] = i;
+        }
+    }
 
-            // Extract fabric node id for this grid
-            auto fabric_node_id = mesh_device_->get_fabric_node_id(mesh_coords_[i]);
+    void build_grid_to_fabric_node_id_map() {
+        grid_to_fabric_node_id_.reserve(grids_.size());
+        for (const auto& grid : grids_) {
+            auto fabric_node_id = mesh_device_->get_fabric_node_id(grid.coord);
             grid_to_fabric_node_id_.push_back(fabric_node_id);
         }
     }
 
-    void create_gcores() {
-        uint32_t global_gcore_id = 0;
+    tt::tt_metal::distributed::MeshCoordinate compute_global_coord_from_flat_index(uint32_t flat_index) const {
+        const auto& flattened_shape = flattened_mesh_.shape();
+        uint32_t flattened_rank = flattened_shape.rank();
 
-        // For each grid, create gcores
-        for (const auto& grid : grids_) {
-            std::vector<Gcore> grid_gcores;
-            // Get grid dimensions
-            const auto& grid_shape = grid.dims;
-            uint32_t grid_size = grid.size();
-            grid_gcores.reserve(grid_size);
-
-            // Iterate through all cores in the grid in row-major order
-            uint32_t local_gcore_id = 0;
-            for (uint32_t flat_idx = 0; flat_idx < grid_size; ++flat_idx) {
-                // Build local and global coordinates
-                auto local_coord = compute_gcore_local_coord(flat_idx, grid_shape);
-                auto global_coord = compute_gcore_global_coord(grid.coord, grid_shape, local_coord);
-
-                // Create gcore
-                Gcore gcore(local_gcore_id, global_gcore_id, local_coord, global_coord);
-
-                // Store gcore
-                gcores_.push_back(gcore);
-                grid_gcores.push_back(gcore);
-
-                // Convert gcore to CoreCoord once at construction using safe helper
-                // TODO: remove the hardcoded passing of first two coords once we support virtualizing
-                //          grids, then need a mapping from [gcore.local_coord]->[core_coord]
-                tt::tt_metal::CoreCoord core_coord = gcore.to_core_coord();
-
-                // Build lookup maps
-                local_coord_to_gcore_[{grid.id, gcore.local_coord}] = global_gcore_id;
-                global_coord_to_gcore_[gcore.global_coord] = global_gcore_id;
-                gcore_global_id_to_grid_id_[gcore.global_id] = grid.id;
-                gcore_global_id_to_core_coord_[gcore.global_id] = core_coord;
-                local_gcore_id++;
-                global_gcore_id++;
-            }
-
-            // Store grid -> gcores mapping
-            grid_to_gcores_[grid.id] = std::move(grid_gcores);
+        std::vector<uint32_t> global_coord_vals(flattened_rank);
+        uint32_t idx = flat_index;
+        for (int dim = flattened_rank - 1; dim >= 0; --dim) {
+            global_coord_vals[dim] = idx % flattened_shape[dim];
+            idx /= flattened_shape[dim];
         }
+
+        return tt::tt_metal::distributed::MeshCoordinate(
+            tt::stl::Span<const uint32_t>(global_coord_vals.data(), global_coord_vals.size()));
+    }
+
+    tt::tt_metal::distributed::MeshCoordinate compute_local_coord_from_global_coord(
+        const tt::tt_metal::distributed::MeshCoordinate& global_coord) const {
+        uint32_t grid_rank = grids_[0].rank();
+        uint32_t flattened_rank = flattened_mesh_.rank();
+
+        // Extract local coordinate from the last grid_rank dimensions of global_coord
+        std::vector<uint32_t> local_coord_vals(grid_rank);
+        for (uint32_t i = 0; i < grid_rank; ++i) {
+            uint32_t global_idx = flattened_rank - grid_rank + i;
+            local_coord_vals[i] = global_coord[global_idx] % flattened_grid_[global_idx];
+        }
+
+        return tt::tt_metal::distributed::MeshCoordinate(
+            tt::stl::Span<const uint32_t>(local_coord_vals.data(), local_coord_vals.size()));
+    }
+
+    uint32_t compute_local_gcore_id_from_local_coord(
+        const tt::tt_metal::distributed::MeshCoordinate& local_coord) const {
+        const auto& grid_shape = grids_[0].shape();
+        uint32_t grid_rank = grid_shape.rank();
+
+        uint32_t local_gcore_id = 0;
+        uint32_t stride = 1;
+        for (int i = grid_rank - 1; i >= 0; --i) {
+            local_gcore_id += local_coord[i] * stride;
+            stride *= grid_shape[i];
+        }
+
+        return local_gcore_id;
+    }
+
+    void create_gcores() {
+        uint32_t total_num_gcores = flattened_mesh_.volume();
+        gcores_.reserve(total_num_gcores);
+
+        for (uint32_t global_gcore_id = 0; global_gcore_id < total_num_gcores; ++global_gcore_id) {
+            auto global_coord = compute_global_coord_from_flat_index(global_gcore_id);
+            auto local_coord = compute_local_coord_from_global_coord(global_coord);
+            uint32_t local_gcore_id = compute_local_gcore_id_from_local_coord(local_coord);
+
+            Gcore gcore(local_gcore_id, global_gcore_id, local_coord, global_coord);
+            gcores_.push_back(gcore);
+        }
+    }
+
+    uint32_t compute_grid_id_from_global_coord(const tt::tt_metal::distributed::MeshCoordinate& global_coord) const {
+        uint32_t flattened_rank = flattened_mesh_.rank();
+        uint32_t mesh_rank = mesh_.rank();
+
+        std::vector<uint32_t> grid_coord_vals(mesh_rank, 0);
+
+        // Compute grid coordinate: grid_coord[i] = global_coord[i] / flattened_grid_[i]
+        // Align to mesh_rank by taking the last mesh_rank dimensions
+        uint32_t offset = flattened_rank - mesh_rank;
+        for (uint32_t i = 0; i < mesh_rank; ++i) {
+            grid_coord_vals[i] = global_coord[offset + i] / flattened_grid_[offset + i];
+        }
+
+        auto grid_coord = tt::tt_metal::distributed::MeshCoordinate(
+            tt::stl::Span<const uint32_t>(grid_coord_vals.data(), grid_coord_vals.size()));
+
+        for (const auto& grid : grids_) {
+            if (grid.coord == grid_coord) {
+                return grid.id;
+            }
+        }
+        TT_FATAL(false, "Grid coordinate not found: {}", grid_coord);
+    }
+
+    void build_grid_to_gcores_map() {
+        for (const auto& gcore : gcores_) {
+            uint32_t grid_id = compute_grid_id_from_global_coord(gcore.global_coord);
+            grid_to_gcores_[grid_id].push_back(gcore);
+        }
+    }
+
+    void build_local_coord_to_gcore_map() {
+        for (const auto& gcore : gcores_) {
+            uint32_t grid_id = compute_grid_id_from_global_coord(gcore.global_coord);
+            local_coord_to_gcore_[{grid_id, gcore.local_coord}] = gcore.global_id;
+        }
+    }
+
+    void build_gcore_id_to_grid_id_map() {
+        for (const auto& gcore : gcores_) {
+            uint32_t grid_id = compute_grid_id_from_global_coord(gcore.global_coord);
+            gcore_global_id_to_grid_id_[gcore.global_id] = grid_id;
+        }
+    }
+
+    void build_gcore_maps() {
+        build_grid_to_gcores_map();
+        build_local_coord_to_gcore_map();
+        build_gcore_id_to_grid_id_map();
     }
 
     // Hash function for coordinate pair in local_coord_to_gcore_ map
@@ -361,19 +458,18 @@ private:
 
     // Constructed objects
     Mesh mesh_;
+    Mesh flattened_mesh_;   // Flattened mesh shape combining grid and mesh dimensions
+    Shape flattened_grid_;  // Grid shape aligned to same rank as flattened_mesh_
     std::vector<Grid> grids_;
     std::vector<Gcore> gcores_;
 
     // Lookup maps
-    std::unordered_map<tt::tt_metal::distributed::MeshCoordinate, size_t> coord_to_grid_;
     std::unordered_map<uint32_t, std::vector<Gcore>> grid_to_gcores_;
     std::unordered_map<std::pair<uint32_t, tt::tt_metal::distributed::MeshCoordinate>, size_t, CoordPairHash>
         local_coord_to_gcore_;
-    std::unordered_map<tt::tt_metal::distributed::MeshCoordinate, size_t> global_coord_to_gcore_;
 
-    // Efficient mapping for get_grid_core_range_set_from_gcores: gcore global_id -> grid_id and CoreCoord
+    // Efficient mapping for finding grid_id from gcore global_id
     std::unordered_map<uint32_t, uint32_t> gcore_global_id_to_grid_id_;
-    std::unordered_map<uint32_t, tt::tt_metal::CoreCoord> gcore_global_id_to_core_coord_;
 
     // Grid to fabric node id mapping
     std::vector<tt::tt_fabric::FabricNodeId> grid_to_fabric_node_id_;
@@ -408,6 +504,10 @@ MeshBuilder::MeshBuilder(MeshBuilder&&) noexcept = default;
 MeshBuilder& MeshBuilder::operator=(MeshBuilder&&) noexcept = default;
 
 const Mesh& MeshBuilder::get_mesh() const { return impl_->get_mesh(); }
+
+const Mesh& MeshBuilder::get_flattened_mesh() const { return impl_->get_flattened_mesh(); }
+
+const Shape& MeshBuilder::get_flattened_grid() const { return impl_->get_flattened_grid(); }
 
 const std::vector<Grid>& MeshBuilder::get_all_grids_in_mesh() const { return impl_->get_all_grids_in_mesh(); }
 
