@@ -322,26 +322,32 @@ public:
     };
 
     /**
-     * @brief Start DFS search from current state
+     * @brief Start DFS search
      *
-     * **Note**: Even if this returns false (search failed), `state.mapping` will contain
+     * **Note**: Even if this returns false (search failed), the internal state's mapping will contain
      * the best partial mapping found, which will be saved by MappingValidator for debugging.
      *
-     * @param assigned_count Number of already-assigned target nodes
      * @param graph_data Indexed graph data
      * @param constraint_data Indexed constraint data
-     * @param state Search state (modified in place, mapping always contains best found)
+     * @param constraints Mapping constraints (for pre-assignment)
      * @param validation_mode Connection validation mode
-     * @return true if complete valid mapping found, false otherwise (but state.mapping still has best found)
+     * @return true if complete valid mapping found, false otherwise (but state still has best found)
      */
     bool search(
-        size_t assigned_count,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        SearchState& state,
+        const MappingConstraints<TargetNode, GlobalNode>& constraints,
         ConnectionValidationMode validation_mode);
 
+    /**
+     * @brief Get the current search state
+     *
+     * @return const reference to the internal search state
+     */
+    const SearchState& get_state() const { return state_; }
+
 private:
+    SearchState state_;  // Internal state for the search
     /**
      * @brief Hash state for memoization (FNV-1a hash)
      *
@@ -356,7 +362,6 @@ private:
      * @param pos Current position (number of assigned nodes)
      * @param graph_data Indexed graph data
      * @param constraint_data Indexed constraint data
-     * @param state Search state (modified in place)
      * @param validation_mode Connection validation mode
      * @return true if mapping found, false otherwise
      */
@@ -364,7 +369,6 @@ private:
         size_t pos,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        SearchState& state,
         ConnectionValidationMode validation_mode);
 };
 
