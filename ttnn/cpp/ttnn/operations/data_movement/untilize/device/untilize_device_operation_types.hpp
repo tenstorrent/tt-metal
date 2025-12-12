@@ -4,6 +4,14 @@
 
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <vector>
+#include <optional>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 
 namespace ttnn::operations::data_movement::untilize_types {
 struct operation_attributes_t {
