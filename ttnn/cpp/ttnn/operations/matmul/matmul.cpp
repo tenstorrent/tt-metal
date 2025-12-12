@@ -224,8 +224,8 @@ ttnn::Tensor bound_matmul(
                              .at(0);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
-        output_tensor = ttnn::reshape(
-            output_tensor, ttnn::operations::matmul::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
+        output_tensor =
+            ttnn::reshape(output_tensor, utilities::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
     }
 
     // Apply bias as post-processing if needed

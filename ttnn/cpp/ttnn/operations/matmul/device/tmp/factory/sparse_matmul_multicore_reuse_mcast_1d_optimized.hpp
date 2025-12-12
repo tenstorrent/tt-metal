@@ -18,7 +18,7 @@ struct SparseMatmulMultiCoreReuseMcast1DProgramFactory {
         CoreCoord start_core;
         std::vector<CoreCoord> cores;
         uint32_t num_cores_with_work{};
-        matmul::Matmul1DType type{};  // TODO: Should I include matmul op types?
+        matmul::Matmul1DType type{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
