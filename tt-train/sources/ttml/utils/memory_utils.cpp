@@ -54,7 +54,6 @@ DRAMUsage extract_DRAM_usage(const nlohmann::json& trace) {
         if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
             auto device_id = v[kParams][kDeviceId].get<std::string>();
             size_t buffer_size = std::stoll(v[kParams][kSize].get<std::string>());
-            fmt::print("[kNodeBufferAllocate] Found buffer: size: {} device: {}\n", buffer_size, device_id);
             current_buffer[device_id] += buffer_size;
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
@@ -62,7 +61,6 @@ DRAMUsage extract_DRAM_usage(const nlohmann::json& trace) {
             if (buffer[kParams][kType] == "DRAM") {
                 auto device_id = v[kParams][kDeviceId].get<std::string>();
                 size_t buffer_size = std::stoll(buffer[kParams][kSize].get<std::string>());
-                fmt::print("[kNodeBufferDeallocate] Deallocated buffer: size: {} device: {}\n", buffer_size, device_id);
                 current_buffer[device_id] -= buffer_size;
             }
         }
