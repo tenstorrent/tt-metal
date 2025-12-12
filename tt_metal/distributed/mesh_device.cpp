@@ -552,6 +552,10 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
 CoreRangeSet MeshDevice::get_compute_cores(std::optional<SubDeviceId> sub_device_id) const {
     auto requested_sub_device_id = current_sub_device_id_.value_or(sub_device_id.value_or(SubDeviceId(0)));
     const auto& sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    TT_FATAL(
+        sub_device_manager->has_sub_device(requested_sub_device_id),
+        "Requested SubDeviceId {} does not exist in the active sub_device_manager.",
+        static_cast<uint32_t>(requested_sub_device_id));
     const auto& sub_device = sub_device_manager->sub_device(requested_sub_device_id);
     return sub_device.cores(HalProgrammableCoreType::TENSIX);
 }
