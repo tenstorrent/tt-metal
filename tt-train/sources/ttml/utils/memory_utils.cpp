@@ -4,11 +4,42 @@
 
 #include "memory_utils.hpp"
 
+#include <regex>
+
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 
 namespace ttml::utils {
 using namespace ttnn::graph;
+
+namespace {
+// Parse CoreRangeSet string format: "{[(x=X1,y=Y1) - (x=X2,y=Y2)], [(x=X3,y=Y3) - (x=X4,y=Y4)], ...}"
+// Returns total number of cores across all ranges.
+size_t parse_core_range_set_num_cores(const std::string& core_range_set_str) {
+    size_t total_cores = 0;
+
+    // Regex to match each CoreRange: [(x=X1,y=Y1) - (x=X2,y=Y2)]
+    // Captures: x1, y1, x2, y2
+    std::regex range_pattern(R"(\[\(x=(\d+),y=(\d+)\)\s*-\s*\(x=(\d+),y=(\d+)\)\])");
+
+    auto ranges_begin = std::sregex_iterator(core_range_set_str.begin(), core_range_set_str.end(), range_pattern);
+    auto ranges_end = std::sregex_iterator();
+
+    for (auto it = ranges_begin; it != ranges_end; ++it) {
+        const std::smatch& match = *it;
+        size_t x1 = std::stoul(match[1].str());
+        size_t y1 = std::stoul(match[2].str());
+        size_t x2 = std::stoul(match[3].str());
+        size_t y2 = std::stoul(match[4].str());
+
+        // Number of cores in this range: (x2 - x1 + 1) * (y2 - y1 + 1)
+        size_t cores_in_range = (x2 - x1 + 1) * (y2 - y1 + 1);
+        total_cores += cores_in_range;
+    }
+
+    return total_cores;
+}
+}  // namespace
 
 // Very simple implementation:
 // - Only tracks (de)allocations. If allocation we increase the current usage, if deallocation we decrease it.
@@ -57,13 +88,13 @@ L1Usage extract_L1_usage(const nlohmann::json& trace) {
 
         if (v[kNodeType] == kNodeCBAllocate) {
             auto device_id = v[kParams][kDeviceId].get<std::string>();
-            current_cb[device_id] += std::stoll(v[kParams][kSize].get<std::string>());
+            auto core_range_set_str = v[kParams][kCoreRangeSet].get<std::string>();
+            size_t num_cores = parse_core_range_set_num_cores(core_range_set_str);
+            size_t size_per_core = std::stoll(v[kParams][kSize].get<std::string>());
+            size_t total_size = size_per_core * num_cores;
+
+            current_cb[device_id] += total_size;
             result.peak_cb[device_id] = std::max(result.peak_cb[device_id], current_cb[device_id]);
-            fmt::print(
-                "[kNodeCBAllocate] Found CB: size: {} device: {}, kCoreRangeSet: {}\n",
-                current_cb[device_id],
-                device_id,
-                v[kParams][kCoreRangeSet].get<std::string>());
         } else if (v[kNodeType] == kNodeCBDeallocateAll) {
             auto device_id = v[kParams][kDeviceId].get<std::string>();
             current_cb[device_id] = 0;
