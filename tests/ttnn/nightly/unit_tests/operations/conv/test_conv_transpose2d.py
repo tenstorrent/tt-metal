@@ -109,7 +109,7 @@ def run_conv_transpose2d(
     if preprocess_weights_bias:
         tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
             weight_tensor=tt_weight_tensor,
-            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG if dram_slice_config is not None else ttnn.L1_MEMORY_CONFIG,
             input_layout=layout,
             weights_format="IOHW",
             in_channels=input_channels,
@@ -128,6 +128,7 @@ def run_conv_transpose2d(
             compute_config=compute_config,
             mirror_kernel=mirror_kernel,
             input_dtype=activations_dtype,
+            dram_slice_config=dram_slice_config,
         )
 
         tt_bias_tensor = (
@@ -150,6 +151,7 @@ def run_conv_transpose2d(
                 conv_config=conv_config,
                 compute_config=compute_config,
                 input_dtype=activations_dtype,
+                dram_slice_config=dram_slice_config,
             )
             if has_bias
             else None
@@ -230,6 +232,7 @@ def run_conv_transpose2d(
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ],
 )
+@pytest.mark.parametrize("auto_slice", [True, False])
 @pytest.mark.parametrize("preprocess_weights", [True, False])
 @pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_convt2d_dram(
@@ -256,11 +259,13 @@ def test_convt2d_dram(
     preprocess_weights,
     num_slices,
     slice_type,
+    auto_slice,
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
+        num_slices=0 if auto_slice else num_slices,
     )
     if is_blackhole() and config is not None:
         # Blackhole requires different act_block_h to be divisble
