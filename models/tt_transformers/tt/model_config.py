@@ -21,6 +21,7 @@ from models.tt_transformers.tt.common import (
     cap_seq_lens_to_max_prefill_chunk_size,
     encode_prompt_hf,
     get_base_model_name,
+    get_capped_warmup_seq_len,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
@@ -1306,7 +1307,7 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
-        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
+        self.capped_warmup_seq_len = get_capped_warmup_seq_len(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):

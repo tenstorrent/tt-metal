@@ -567,6 +567,23 @@ def get_all_padded_prefill_lengths(max_len):
     return lengths
 
 
+def first_smaller_power_of_2(x):
+    if x & (x - 1) == 0:
+        return x
+    else:
+        return 2 ** math.floor(math.log2(x))
+
+
+def get_capped_warmup_seq_len(max_prefill_chunk_size, max_seq_len):
+    smaller = min(max_prefill_chunk_size, max_seq_len)
+    cap_seq_len = first_smaller_power_of_2(smaller)
+    if cap_seq_len < 128:
+        return 0
+    if cap_seq_len < 1024:
+        return 128
+    return cap_seq_len
+
+
 def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens):
     max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
     to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
