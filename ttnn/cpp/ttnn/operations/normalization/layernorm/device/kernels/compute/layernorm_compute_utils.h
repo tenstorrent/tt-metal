@@ -84,4 +84,24 @@ inline void adjust_variance_for_partial_last_tile(uint32_t cb_var, uint32_t cb_m
         cb_pop_front(cb_var, 1);
     }
 }
+
+/**
+ * @brief A special pop function that keeps the CB
+ * in sync with the reader by making sure
+ * that a full pass over the CB blocks puts
+ * the read/write pointers back at the beginning
+ * of the CB
+ *
+ * @param cb CB to pop
+ * @param block Block to pop
+ */
+template <typename Block>
+inline void pop_block(uint32_t cb, const Block& block) {
+    cb_pop_front(cb, block.size());
+
+    if (block.remainder() > 0) {
+        cb_wait_front(cb, block.remainder());
+        cb_pop_front(cb, block.remainder());
+    }
+}
 }  // namespace norm::layernorm::device::kernels::compute

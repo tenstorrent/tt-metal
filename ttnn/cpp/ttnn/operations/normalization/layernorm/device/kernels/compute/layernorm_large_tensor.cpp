@@ -24,7 +24,7 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
-
+namespace layernorm_compute_utils = norm::layernorm::device::kernels::compute;
 namespace NAMESPACE {
 
 void MAIN {
@@ -73,20 +73,6 @@ void MAIN {
 #endif
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    // A special pop function that keeps the CB
-    // in sync with the reader by making sure
-    // that a full pass over the CB blocks puts
-    // the read/write pointers back at the beginning
-    // of the CB
-    auto pop_block = [](const auto& cb, const auto& block) {
-        cb_pop_front(cb, block.size());
-
-        if (block.remainder() > 0) {
-            cb_wait_front(cb, block.remainder());
-            cb_pop_front(cb, block.remainder());
-        }
-    };
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
@@ -127,7 +113,7 @@ void MAIN {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
 #endif
-            pop_block(cb_in, block);
+            layernorm_compute_utils::pop_block(cb_in, block);
 #ifdef FUSE_PRE_ADD
             cb_wait_front(cb_inb, block.size());
             reconfig_data_format_srca(cb_in, cb_inb);
@@ -135,7 +121,7 @@ void MAIN {
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
             }
-            pop_block(cb_inb, block);
+            layernorm_compute_utils::pop_block(cb_inb, block);
 #endif
             // (x-E[x])^2. Pack to CB
             square_tile_init();
@@ -190,7 +176,7 @@ void MAIN {
             cb_push_back(pack_cb, onetile);
         }
 
-        norm::layernorm::device::kernels::compute::adjust_variance_for_partial_last_tile<W>(cb_ex2, cb_ex);
+        layernorm_compute_utils::adjust_variance_for_partial_last_tile<W>(cb_ex2, cb_ex);
 
         // End of
         // Var Calculation
@@ -265,7 +251,7 @@ void MAIN {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
 #endif
-            pop_block(cb_in, block);
+            layernorm_compute_utils::pop_block(cb_in, block);
 #ifdef FUSE_PRE_ADD
             cb_wait_front(cb_inb, block.size());
             reconfig_data_format_srca(cb_inb);
@@ -273,7 +259,7 @@ void MAIN {
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
             }
-            pop_block(cb_inb, block);
+            layernorm_compute_utils::pop_block(cb_inb, block);
 #endif
             tile_regs_commit();
             tile_regs_wait();
@@ -327,7 +313,7 @@ void MAIN {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
-                pop_block(cb_gamma, block);
+                layernorm_compute_utils::pop_block(cb_gamma, block);
                 cb_pop_front(cb_fusion, block.size());
                 if constexpr (!do_beta) {
                     cb_reserve_back(cb_out, block.size());
@@ -357,7 +343,7 @@ void MAIN {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
-                pop_block(cb_beta, block);
+                layernorm_compute_utils::pop_block(cb_beta, block);
                 cb_pop_front(cb_fusion, block.size());
                 cb_reserve_back(cb_out, block.size());
                 for (auto i : block.local()) {
