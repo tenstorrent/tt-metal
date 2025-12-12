@@ -58,6 +58,7 @@ target_sources(
             fill_pad/device/fill_pad_device_operation.hpp
             fill_rm/fill_rm.hpp
             fill_rm/device/fill_rm_device_operation.hpp
+            move/device/move_device_operation.hpp
             pad/pad.hpp
             permute/permute.hpp
             repeat/repeat.hpp
@@ -144,6 +145,8 @@ target_sources(
         moe_routing_remap/device/moe_routing_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
+        move/device/move_overlap_program_factory.cpp
+        move/device/move_sharded_program_factory.cpp
         move/move.cpp
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
