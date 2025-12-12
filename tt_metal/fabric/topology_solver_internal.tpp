@@ -14,6 +14,8 @@
 #include <cstddef>   // For SIZE_MAX
 #include <unordered_set>
 
+#include <fmt/format.h>
+
 namespace tt::tt_fabric::detail {
 
 template <typename TargetNode, typename GlobalNode>
@@ -540,6 +542,230 @@ size_t ConsistencyChecker::count_reachable_unused(
     }
 
     return count;
+}
+
+// ============================================================================
+// DFSSearchEngine Implementation
+// ============================================================================
+
+template <typename TargetNode, typename GlobalNode>
+uint64_t DFSSearchEngine<TargetNode, GlobalNode>::hash_state(const std::vector<int>& mapping) const {
+    // FNV-1a hash function
+    const uint64_t fnv_offset = 1469598103934665603ull;
+    const uint64_t fnv_prime = 1099511628211ull;
+    uint64_t h = fnv_offset;
+
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        if (mapping[i] != -1) {
+            // Hash (target_idx, global_idx) pair
+            uint64_t pairh = (static_cast<uint64_t>(i) << 32) ^ static_cast<uint64_t>(mapping[i] + 1);
+            h ^= pairh;
+            h *= fnv_prime;
+        }
+    }
+
+    return h;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
+    size_t pos,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    SearchState& state,
+    ConnectionValidationMode validation_mode) {
+    // Base case: all target nodes assigned
+    if (pos >= graph_data.n_target) {
+        return true;
+    }
+
+    // Periodic progress logging (similar to topology_mapper_utils.cpp)
+    state.dfs_calls++;
+    if ((state.dfs_calls & ((1u << 18) - 1)) == 0) {
+        size_t assigned = 0;
+        for (auto v : state.mapping) {
+            assigned += (v != -1);
+        }
+        log_info(
+            tt::LogFabric,
+            "TopologySolver DFS progress: calls={}, assigned={}/{}, failed_states={}",
+            state.dfs_calls,
+            assigned,
+            graph_data.n_target,
+            state.failed_states.size());
+    }
+
+    // Check memoization cache
+    uint64_t state_hash = hash_state(state.mapping);
+    if (state.failed_states.find(state_hash) != state.failed_states.end()) {
+        return false;
+    }
+
+    // Select next target node and generate ordered candidates
+    auto selection = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, state.mapping, state.used, validation_mode);
+
+    // Check if no unassigned nodes found (shouldn't happen if pos < n_target, but handle gracefully)
+    if (selection.target_idx == SIZE_MAX || selection.candidates.empty()) {
+        // No valid candidates - explain why mapping failed
+        if (selection.target_idx != SIZE_MAX) {
+            // Found a target node but no valid candidates in global graph
+            size_t remaining_targets = graph_data.n_target - pos;
+            size_t remaining_global = graph_data.n_global;
+            for (size_t i = 0; i < graph_data.n_global; ++i) {
+                if (state.used[i]) {
+                    remaining_global--;
+                }
+            }
+            std::string error_msg = fmt::format(
+                "Cannot place target node {} in global graph: no valid candidates found. "
+                "Remaining: {} target nodes to place, {} unused nodes in global graph",
+                graph_data.target_nodes[selection.target_idx],
+                remaining_targets,
+                remaining_global);
+            log_error(tt::LogFabric, "{}", error_msg);
+            if (state.error_message.empty()) {
+                state.error_message = error_msg;
+            }
+        } else {
+            // No unassigned target nodes found (shouldn't happen)
+            std::string error_msg = fmt::format(
+                "Search error: no unassigned target nodes found, but {} nodes still need to be placed",
+                graph_data.n_target - pos);
+            log_error(tt::LogFabric, "{}", error_msg);
+            if (state.error_message.empty()) {
+                state.error_message = error_msg;
+            }
+        }
+        state.failed_states.insert(state_hash);
+        return false;
+    }
+
+    size_t target_idx = selection.target_idx;
+
+    // Try each candidate in order (best first)
+    for (size_t global_idx : selection.candidates) {
+        // Check local consistency (edges to already-mapped neighbors)
+        if (!ConsistencyChecker::check_local_consistency(
+                target_idx, global_idx, graph_data, state.mapping, validation_mode)) {
+            continue;  // Skip invalid candidate
+        }
+
+        // Check forward consistency (future neighbors have viable options)
+        if (!ConsistencyChecker::check_forward_consistency(
+                target_idx, global_idx, graph_data, constraint_data, state.mapping, state.used, validation_mode)) {
+            continue;  // Skip candidate that leaves no options
+        }
+
+        // Assign candidate
+        state.mapping[target_idx] = static_cast<int>(global_idx);
+        state.used[global_idx] = true;
+
+        // Recursive call
+        if (dfs_recursive(pos + 1, graph_data, constraint_data, state, validation_mode)) {
+            return true;  // Success!
+        }
+
+        // Backtrack
+        state.mapping[target_idx] = -1;
+        state.used[global_idx] = false;
+        state.backtrack_count++;
+    }
+
+    // All candidates failed - mark state as failed
+    state.failed_states.insert(state_hash);
+    return false;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::search(
+    size_t assigned_count,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    SearchState& state,
+    ConnectionValidationMode validation_mode) {
+    // Validate initial state
+    if (assigned_count > graph_data.n_target) {
+        std::string error_msg = fmt::format(
+            "Invalid search state: {} target nodes already assigned, but target graph only has {} nodes",
+            assigned_count,
+            graph_data.n_target);
+        log_error(tt::LogFabric, "{}", error_msg);
+        state.error_message = error_msg;
+        return false;
+    }
+
+    // Check if global graph has enough nodes
+    if (graph_data.n_global < graph_data.n_target) {
+        std::string error_msg = fmt::format(
+            "Cannot map target graph to global graph: target graph has {} nodes, but global graph only has {} nodes",
+            graph_data.n_target,
+            graph_data.n_global);
+        log_error(tt::LogFabric, "{}", error_msg);
+        state.error_message = error_msg;
+        return false;
+    }
+
+    // Initialize state if needed
+    if (state.mapping.size() != graph_data.n_target) {
+        state.mapping.resize(graph_data.n_target, -1);
+    }
+    if (state.used.size() != graph_data.n_global) {
+        state.used.resize(graph_data.n_global, false);
+    }
+
+    // Verify assigned_count matches actual assignments
+    size_t actual_assigned = 0;
+    for (size_t i = 0; i < graph_data.n_target; ++i) {
+        if (state.mapping[i] != -1) {
+            actual_assigned++;
+        }
+    }
+
+    if (actual_assigned != assigned_count) {
+        std::string error_msg = fmt::format(
+            "Invalid search state: expected {} target nodes assigned, but found {} in mapping",
+            assigned_count,
+            actual_assigned);
+        log_error(tt::LogFabric, "{}", error_msg);
+        state.error_message = error_msg;
+        return false;
+    }
+
+    // Check if enough unused nodes remain in global graph
+    size_t unused_count = 0;
+    for (size_t i = 0; i < graph_data.n_global; ++i) {
+        if (!state.used[i]) {
+            unused_count++;
+        }
+    }
+    size_t remaining_targets = graph_data.n_target - assigned_count;
+    if (unused_count < remaining_targets) {
+        std::string error_msg = fmt::format(
+            "Cannot complete mapping: {} target nodes still need to be placed, but only {} unused nodes remain in global graph",
+            remaining_targets,
+            unused_count);
+        log_error(tt::LogFabric, "{}", error_msg);
+        state.error_message = error_msg;
+        return false;
+    }
+
+    // Start DFS from current position
+    bool found = dfs_recursive(assigned_count, graph_data, constraint_data, state, validation_mode);
+
+    if (!found && assigned_count == 0) {
+        // Search failed from the beginning - provide summary
+        std::string error_msg = fmt::format(
+            "Failed to find mapping: target graph with {} nodes cannot be placed in global graph with {} nodes under given constraints",
+            graph_data.n_target,
+            graph_data.n_global);
+        log_error(tt::LogFabric, "{}", error_msg);
+        if (state.error_message.empty()) {
+            state.error_message = error_msg;
+        }
+    }
+
+    return found;
 }
 
 }  // namespace tt::tt_fabric::detail
