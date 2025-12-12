@@ -293,6 +293,28 @@ struct MappingResult {
 template <typename TargetNode, typename GlobalNode>
 void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
 
+/**
+ * @brief Solve topology mapping using constraint satisfaction
+ *
+ * Stateless function that performs constraint satisfaction search to find a valid
+ * mapping from target graph to global graph. Enforces required constraints first,
+ * then optimizes for preferred constraints.
+ *
+ * @tparam TargetNode The type used to identify nodes in the target graph (must be explicitly specified)
+ * @tparam GlobalNode The type used to identify nodes in the global graph (must be explicitly specified)
+ * @param target_graph The target graph (subgraph pattern to find)
+ * @param global_graph The global graph (larger host graph that contains the target)
+ * @param constraints The mapping constraints to satisfy
+ * @param connection_validation_mode How to validate connection counts (default: RELAXED)
+ * @return MappingResult containing success status, bidirectional mappings, and warnings
+ */
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED);
+
 }  // namespace tt::tt_fabric
 
 // Include template implementations
