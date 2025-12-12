@@ -233,6 +233,11 @@ static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 b
 // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 template <typename Derived>
 struct PacketHeaderBase {
+private:
+    PacketHeaderBase() = default;
+    friend Derived;
+
+public:
     NocCommandFields command_fields;  // size = 40B due to scatter metadata
     uint16_t payload_size_bytes;
     // TODO: trim this down noc_send_type 2 bits (4 values):
