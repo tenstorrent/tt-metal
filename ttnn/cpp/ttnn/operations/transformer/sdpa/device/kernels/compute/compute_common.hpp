@@ -1393,10 +1393,14 @@ void sdpa_inner_loop(
                 sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
 
                 // alias_sub = cb_prev_out - alias_cur_out
+                reconfig_data_format(cb_prev_out, alias_cur_out);
                 sub_block(cb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
+                reconfig_data_format(alias_sub, alias_sig);
                 mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
                 // cb_out = cb_prev_out - alias_sub
+                reconfig_data_format(cb_prev_out, alias_sub);
+                pack_reconfig_data_format(cb_out);
                 sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
                 cb_pop_front(cb_prev_out, out_chunk_tiles);
                 cb_pop_front(alias_cur_out, out_chunk_tiles);
@@ -1405,6 +1409,8 @@ void sdpa_inner_loop(
                 // alias_sig = sigmoid(cb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // cb_lse_out = cb_lse_in - alias_cur_lse
+                pack_reconfig_data_format(alias_sig);
+                reconfig_data_format(cb_lse_in, alias_cur_lse);
                 logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
                 sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
                 cb_pop_front(alias_sig, Sq_chunk_t);
@@ -1414,6 +1420,7 @@ void sdpa_inner_loop(
                 pack_reconfig_data_format(cb_out);
                 copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
 
+                pack_reconfig_data_format(cb_lse_out);
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
             }
         } else {
