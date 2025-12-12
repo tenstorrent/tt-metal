@@ -45,6 +45,12 @@ BufferCorePageMapping core_page_mapping_from_page_mapping(const std::vector<uint
     return core_page_mapping;
 }
 
+/**
+ * Tests the BufferCorePageMapping::Iterator by simulating the dispatch write path.
+ * Compares the iterator-based approach against a naive golden reference implementation.
+ * Verifies that both approaches produce identical src/dst offset pairs when writing pages from host to device.
+ * The pages_per_txn parameter simulates different transaction sizes to test edge cases around padding handling.
+ */
 void test_BufferCorePageMapping_Iterator(const std::vector<uint32_t>& page_mapping, uint32_t pages_per_txn) {
     const auto core_page_mapping = core_page_mapping_from_page_mapping(page_mapping);
 
