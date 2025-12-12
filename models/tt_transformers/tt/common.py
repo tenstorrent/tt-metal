@@ -564,7 +564,9 @@ def get_all_padded_prefill_lengths(max_len):
     return lengths
 
 
-def generate_warmup_prefill_seq_lens(max_seq_len_to_warmup, trace_prefill_supported_seq_lens):
+def generate_warmup_prefill_seq_lens(max_seq_len_to_warmup, capped_warmup_seq_len, trace_prefill_supported_seq_lens):
+    if max_seq_len_to_warmup > capped_warmup_seq_len:
+        max_seq_len_to_warmup = capped_warmup_seq_len
     to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
     for trace_supported_seq_len in trace_prefill_supported_seq_lens:
         if trace_supported_seq_len not in to_warmup_seq_lens:

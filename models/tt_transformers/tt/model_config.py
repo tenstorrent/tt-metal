@@ -1319,7 +1319,7 @@ class ModelArgs:
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
 
         to_warmup_seq_lens = generate_warmup_prefill_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
+            max_seq_len_to_warmup, self.capped_warmup_seq_len, self.trace_prefill_supported_seq_lens
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
