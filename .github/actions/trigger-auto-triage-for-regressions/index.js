@@ -71,7 +71,8 @@ async function run() {
     const slackTs = core.getInput('slack_ts') || '';
     const slackChannelId = core.getInput('slack_channel_id') || '';
     const slackBotToken = core.getInput('slack_bot_token') || '';
-    const sendSlackMessage = core.getInput('send-slack-message') || 'true';
+    // Whether downstream auto-triage workflows should send their own Slack message.
+    const sendSlackMessageFlag = core.getInput('send-slack-message') || 'true';
 
     // Use the same ref as the workflow that is invoking this action so that
     // auto-triage.yml runs on the same branch (and picks up any in-branch changes),
@@ -127,7 +128,7 @@ async function run() {
               workflow_name: workflowFileName,
               job_name: jobName,
               slack_ts: slackTs,
-              'send-slack-message': sendSlackMessage
+              'send-slack-message': sendSlackMessageFlag
             }
           });
 

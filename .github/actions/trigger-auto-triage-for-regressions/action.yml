@@ -19,6 +19,7 @@ inputs:
   send-slack-message:
     description: 'Whether auto-triage should send a Slack message'
     required: false
+    default: true
 
 runs:
   using: 'node20'
