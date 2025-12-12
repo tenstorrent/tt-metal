@@ -42,6 +42,9 @@ DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_
 
 template <bool hugepage_write>
 DeviceCommand<hugepage_write>& DeviceCommand<hugepage_write>::operator=(const DeviceCommand& other) {
+    if (this == &other) {
+        return *this;
+    }
     this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
     this->cmd_write_offsetB = other.cmd_write_offsetB;
     this->cmd_region_vector = other.cmd_region_vector;
