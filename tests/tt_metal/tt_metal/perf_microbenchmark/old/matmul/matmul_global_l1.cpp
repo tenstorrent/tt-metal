@@ -36,7 +36,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "impl/profiler/tt_metal_profiler.hpp"
+#include "impl/profiler/tt_metal_profiler_internal.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>

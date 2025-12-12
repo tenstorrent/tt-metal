@@ -24,7 +24,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/profiler/tt_metal_profiler.hpp"
+#include "impl/profiler/tt_metal_profiler_internal.hpp"
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
