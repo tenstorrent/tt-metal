@@ -109,15 +109,15 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
         return
 
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
     assert pcc_result, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}"
 
-    # Convert torch dtype from uint64 to int64
-    # Note: torch does not have uint64
-    torch_result = torch_result.to(torch.int64)
+    # Convert torch dtype from uint64 to int32
+    # Note: torch does not have uint32
+    torch_result = torch_result.to(torch.int32)
 
     atol = rtol = 0.1
     assert torch.allclose(
