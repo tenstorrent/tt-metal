@@ -28,41 +28,29 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        # pytest.param(
-        #     (1, 8),  # mesh_device
-        #     (1, 0),  # cfg
-        #     (1, 0),  # sp
-        #     (8, 1),  # tp
-        #     (8, 1),  # encoder_tp
-        #     (8, 1),  # vae_tp
-        #     ttnn.Topology.Linear,
-        #     1,  # num_links
-        #     "1x8tp1",
-        #     id="1x8tp1",
-        # ),
         pytest.param(
-            (2, 4),  # mesh_device
-            (2, 0),  # cfg
+            (1, 8),  # mesh_device
+            (1, 0),  # cfg
             (1, 0),  # sp
-            (4, 1),  # tp
-            (4, 1),  # encoder_tp
-            (4, 1),  # vae_tp
+            (8, 1),  # tp
+            (8, 1),  # encoder_tp
+            (8, 1),  # vae_tp
             ttnn.Topology.Linear,
             1,  # num_links
-            "2x4cfg0sp0tp1",
-            id="2x4cfg0sp0tp1",
+            "1x8tp1",
+            id="1x8tp1",
         ),
         # pytest.param(
         #     (2, 4),  # mesh_device
-        #     (2, 1),  # cfg
-        #     (2, 0),  # sp
-        #     (2, 1),  # tp
+        #     (2, 0),  # cfg
+        #     (1, 0),  # sp
+        #     (4, 1),  # tp
         #     (4, 1),  # encoder_tp
         #     (4, 1),  # vae_tp
         #     ttnn.Topology.Linear,
         #     1,  # num_links
-        #     "2x4cfg1sp0tp1",
-        #     id="2x4cfg1sp0tp1",
+        #     "2x4cfg0sp0tp1",
+        #     id="2x4cfg0sp0tp1",
         # ),
     ],
     indirect=["mesh_device"],
@@ -70,15 +58,15 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        # pytest.param(True, id="encoder_cpu"),
-        pytest.param(False, id="encoder_device"),
+        pytest.param(True, id="encoder_cpu"),
+        # pytest.param(False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
     "traced",
     [
-        pytest.param(True, id="traced"),
-        # pytest.param(False, id="not_traced"),
+        # pytest.param(True, id="traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_qwenimage_pipeline(
@@ -184,4 +172,3 @@ def test_qwenimage_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
-
