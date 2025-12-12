@@ -100,27 +100,18 @@ class PerCoreCheckResult(PerBlockCheckResult):
     risc_name: str = triage_field("RiscV")
 
 
-def is_4u_galaxy(device: Device) -> bool:
+def is_galaxy(device: Device) -> bool:
     return device.cluster_desc["chip_to_boardtype"][device._id] == "GALAXY"
-
-
-def is_6u_wormhole_galaxy(device: Device) -> bool:
-    return device.cluster_desc["chip_to_boardtype"][device._id] == "UBB_WORMHOLE"
 
 
 def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
     block_locations = device.idle_eth_block_locations
-
-    # For 6u wormhole galaxy, we do not remove any idle eth blocks
-    if is_6u_wormhole_galaxy(device):
-        return device.idle_eth_block_locations
-
     # We remove idle eth blocks that are reserved for syseng use
     # These are blocks on wormhole mmio capable devices with connections to remote devices
     # If board type is galaxy, we remove idle eth blocks at locations e0,0 e0,1 e0,2 e0,3 and e0,15,
     # if not we just remove e0,15
     if device.is_wormhole() and device._has_mmio:
-        locations_to_remove = {"e0,0", "e0,1", "e0,2", "e0,3", "e0,15"} if is_4u_galaxy(device) else {"e0,15"}
+        locations_to_remove = {"e0,0", "e0,1", "e0,2", "e0,3", "e0,15"} if is_galaxy(device) else {"e0,15"}
         block_locations = [loc for loc in block_locations if loc.to_str("logical") not in locations_to_remove]
 
     return block_locations
