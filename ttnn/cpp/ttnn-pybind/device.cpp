@@ -113,8 +113,7 @@ void py_device_module_types(py::module& m_device) {
             py::arg("type"),
             py::arg("axis"));
 
-    py::class_<SubDevice> sub_device_class(
-        m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
+    py::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
     py::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
 
