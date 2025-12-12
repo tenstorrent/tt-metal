@@ -498,6 +498,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0))};
             break;
         case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
+        case UnaryOpType::LOGIT: op_init_and_name = {}; break;
         case UnaryOpType::SOFTSHRINK:
             op_init_and_name = {
                 "softshrink_tile_init();",
@@ -1026,6 +1027,7 @@ std::string get_compute_kernel_path(
             }
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
         case UnaryOpType::WHERE_TSS: return fmt::format("{}/{}", compute_root, "where_tss_kernel.cpp");
+        case UnaryOpType::LOGIT: return fmt::format("{}/{}", compute_root, "logit_kernel.cpp");
         case UnaryOpType::HARDSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return fmt::format("{}/{}", compute_root, "hardshrink_kernel_sfpu.cpp");
@@ -1044,26 +1046,28 @@ std::string get_compute_kernel_path(
     }
 }
 
-template <typename T>
-uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
-    if constexpr (std::same_as<T, uint32_t>) {
-        return param;
-    } else {
-        return std::bit_cast<uint32_t>(param);
+std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
+    if (dtype == DataType::UINT32 || dtype == DataType::INT32) {
+        return std::bit_cast<std::uint32_t>(static_cast<std::int32_t>(param));
     }
+    // This handles the case where dtype is not an integer type
+    return std::bit_cast<std::uint32_t>(param);
+}
+
+std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype) { return param; }
+
+std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype) {
+    return std::bit_cast<std::uint32_t>(param);
 }
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype) {
     return std::visit(
-        [index, dtype](const auto& variant) -> uint32_t {
-            if constexpr (requires { variant.get_param_if(index); }) {
-                if (auto param = variant.get_param_if(index)) {
-                    return pack_scalar_runtime_arg_impl(*param, dtype);
-                }
+        [index, dtype](const auto& op_specialization) -> uint32_t {
+            if (auto param = op_specialization.get_param_if(index)) {
+                return pack_scalar_runtime_arg_impl(*param, dtype);
             }
             TT_THROW("Unsupported parameter type for index {}", index);
         },
         op.base);
 }
-
 }  // namespace ttnn::operations::unary::utils
