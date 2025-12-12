@@ -398,8 +398,16 @@ GROUPED_GATE_TEST_PARAMS = [
     (1, 1, 8192),
 ]
 
+GROUPED_GATE_TEST_PARAMS_IDS = [
+    "minimal_case",
+    "just_over_one_tile",
+    "larger_sequence",
+    "odd_batches_and_sequence_lengths",
+    "stress_test",
+]
 
-@pytest.mark.parametrize("num_batches,batch_size,seq_len", GROUPED_GATE_TEST_PARAMS)
+
+@pytest.mark.parametrize("num_batches,batch_size,seq_len", GROUPED_GATE_TEST_PARAMS, ids=GROUPED_GATE_TEST_PARAMS_IDS)
 def test_grouped_gate(device, num_batches, batch_size, seq_len):
     """
     Test grouped_gate operation with various batch sizes, sequence lengths, and batch counts.
