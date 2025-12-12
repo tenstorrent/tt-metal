@@ -1317,27 +1317,10 @@ class ModelArgs:
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
-        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
-            max_seq_len_to_warmup = self.capped_warmup_seq_len
-
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
-        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
-
-        return to_warmup_seq_lens
-
-    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
-        # TODO: Add more model-specific filtering here
-        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
-
-        # TODO: https://github.com/tenstorrent/tt-metal/issues/33991 - for P100 only, P150 has assert for ISL > 1K
-        if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P100":
-            for seq_len in to_warmup_seq_lens:
-                if seq_len > 1024:
-                    to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
-                    break
         return to_warmup_seq_lens
 
     def get_trace_prefill_supported_seq_lens(self):
@@ -1346,6 +1329,10 @@ class ModelArgs:
             "N300": [128, 1024],
             "T3K": [128, 1024],
             "TG": [128, 1024],
+            "P150": [128, 1024],
+            "P300": [128, 1024],
+            "P150x4": [128, 1024],
+            "P150x8": [128, 1024],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
