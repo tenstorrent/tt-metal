@@ -404,7 +404,10 @@ class FastOperation:
     def __call__(self, *function_args, **function_kwargs):
         from contextlib import nullcontext
 
-        cq_id = function_kwargs.pop("queue_id", None) or function_kwargs.pop("cq_id", None)
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        else:
+            cq_id = function_kwargs.pop("cq_id", None)
         sub_device_id = function_kwargs.pop("sub_device_id", None)
 
         cq_ctx = command_queue(cq_id) if cq_id is not None else nullcontext()
