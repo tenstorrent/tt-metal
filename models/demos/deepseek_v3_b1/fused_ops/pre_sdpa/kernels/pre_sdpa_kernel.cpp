@@ -33,13 +33,14 @@ KERNEL_ENTRY {
         deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_tiny_tile") == 1>;
 
     // RMSNorm reader runtime args
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_rt_args;
-    rmsnorm_rt_args.input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-    rmsnorm_rt_args.scalars_cb = get_named_compile_time_arg_val("rmsnorm_scalars_cb");
-    rmsnorm_rt_args.gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-    rmsnorm_rt_args.num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-    rmsnorm_rt_args.epsilon = get_arg_val<uint32_t>(0);
-    rmsnorm_rt_args.scalar = get_arg_val<uint32_t>(1);
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_rt_args{
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_arg_val<uint32_t>(0),  // epsilon
+        get_arg_val<uint32_t>(1),  // scalar
+    };
 
     // Mcast sender compile-time args (only what must be compile-time)
     using McastCTArgs = Mcast::SenderCTArgs<
@@ -52,40 +53,43 @@ KERNEL_ENTRY {
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
 
     // Mcast sender args (from compile-time args, passed to op as runtime args)
-    Mcast::SenderArgs mcast_args;
-    mcast_args.dest_noc_start_x = get_named_compile_time_arg_val("mcast_dest_noc_start_x");
-    mcast_args.dest_noc_start_y = get_named_compile_time_arg_val("mcast_dest_noc_start_y");
-    mcast_args.dest_noc_end_x = get_named_compile_time_arg_val("mcast_dest_noc_end_x");
-    mcast_args.dest_noc_end_y = get_named_compile_time_arg_val("mcast_dest_noc_end_y");
-    mcast_args.data_sender_semaphore_id = get_named_compile_time_arg_val("mcast_data_sender_semaphore");
-    mcast_args.data_receiver_semaphore_id = get_named_compile_time_arg_val("mcast_data_receiver_semaphore");
-    mcast_args.data_size_bytes = get_named_compile_time_arg_val("mcast_data_size_bytes");
-    mcast_args.src_cb = mcast_src_cb;
-    mcast_args.src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
-    mcast_args.input_data_addr = get_read_ptr(mcast_src_cb);
-    mcast_args.mcast_receiver_data_addr = get_write_ptr(mcast_dst_cb);
+    Mcast::SenderArgs mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
+        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_named_compile_time_arg_val("mcast_data_size_bytes"),
+        mcast_src_cb,
+        get_named_compile_time_arg_val("mcast_src_num_pages"),
+        get_read_ptr(mcast_src_cb),
+        get_write_ptr(mcast_dst_cb),
+    };
 
     // Matmul reader args (from compile-time args, passed to op as runtime args)
     using Matmul = deepseek_b1_ops::Matmul;
-    Matmul::ReaderArgs matmul_args;
-    matmul_args.in1 = get_named_compile_time_arg_val("matmul_in1");
-    matmul_args.num_tiles = get_named_compile_time_arg_val("matmul_num_tiles");
+    Matmul::ReaderArgs matmul_args{
+        get_named_compile_time_arg_val("matmul_in1"),
+        get_named_compile_time_arg_val("matmul_num_tiles"),
+    };
 
     // Gather sender args (from compile-time args, passed to op as runtime args)
     using Gather = deepseek_b1_ops::Gather;
-    Gather::SenderArgs gather_args;
-    gather_args.dest_noc_x = get_named_compile_time_arg_val("gather_dest_noc_x");
-    gather_args.dest_noc_y = get_named_compile_time_arg_val("gather_dest_noc_y");
-    gather_args.data_size_bytes = get_named_compile_time_arg_val("gather_data_size_bytes");
-    gather_args.receiver_semaphore_id = get_named_compile_time_arg_val("gather_receiver_semaphore_id");
-    gather_args.src_cb = get_named_compile_time_arg_val("gather_src_cb");
-    gather_args.src_num_pages = get_named_compile_time_arg_val("gather_src_num_pages");
-    gather_args.sender_grid_start_x = get_named_compile_time_arg_val("gather_sender_grid_start_x");
-    gather_args.sender_grid_start_y = get_named_compile_time_arg_val("gather_sender_grid_start_y");
-    gather_args.sender_grid_end_x = get_named_compile_time_arg_val("gather_sender_grid_end_x");
-    gather_args.sender_grid_end_y = get_named_compile_time_arg_val("gather_sender_grid_end_y");
-    gather_args.row_major = get_named_compile_time_arg_val("gather_row_major");
-    gather_args.receiver_data_addr = get_arg_val<uint32_t>(2);  // gather receiver data address
+    Gather::SenderArgs gather_args{
+        get_named_compile_time_arg_val("gather_dest_noc_x"),
+        get_named_compile_time_arg_val("gather_dest_noc_y"),
+        get_named_compile_time_arg_val("gather_data_size_bytes"),
+        get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_src_cb"),
+        get_named_compile_time_arg_val("gather_src_num_pages"),
+        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+        get_named_compile_time_arg_val("gather_row_major"),
+        get_arg_val<uint32_t>(2),  // receiver_data_addr
+    };
 
 // ============================================================================
 // BRISC (Writer + Mcast Receiver) - WriterConfigDescriptor compiles as BRISC
@@ -96,33 +100,37 @@ KERNEL_ENTRY {
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
 
     // RMSNorm writer runtime args
-    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_rt_args;
-    rmsnorm_rt_args.output_cb = get_named_compile_time_arg_val("rmsnorm_output_cb");
-    rmsnorm_rt_args.num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_rt_args{
+        get_named_compile_time_arg_val("rmsnorm_output_cb"),
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+    };
 
     // Mcast receiver compile-time args (none needed for receiver)
     using McastCTArgs = Mcast::ReceiverCTArgs;
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
-    Mcast::ReceiverArgs mcast_args;
-    mcast_args.data_receiver_semaphore_id = get_named_compile_time_arg_val("mcast_data_receiver_semaphore");
-    mcast_args.dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    mcast_args.dst_num_pages = get_named_compile_time_arg_val("mcast_dst_num_pages");
+    Mcast::ReceiverArgs mcast_args{
+        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_named_compile_time_arg_val("mcast_dst_cb"),
+        get_named_compile_time_arg_val("mcast_dst_num_pages"),
+    };
 
     // Matmul writer args (from compile-time args, passed to op as runtime args)
     using Matmul = deepseek_b1_ops::Matmul;
-    Matmul::WriterArgs matmul_args;
-    matmul_args.out = get_named_compile_time_arg_val("matmul_out");
+    Matmul::WriterArgs matmul_args{
+        get_named_compile_time_arg_val("matmul_out"),
+    };
 
     // Gather receiver args (from compile-time args, passed to op as runtime args)
     using Gather = deepseek_b1_ops::Gather;
-    Gather::ReceiverArgs gather_args;
-    gather_args.noc0_num_senders = get_named_compile_time_arg_val("gather_noc0_num_senders");
-    gather_args.noc1_num_senders = get_named_compile_time_arg_val("gather_noc1_num_senders");
-    gather_args.noc0_receiver_semaphore_id = get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id");
-    gather_args.noc1_receiver_semaphore_id = get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id");
-    gather_args.dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
-    gather_args.dst_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
+    Gather::ReceiverArgs gather_args{
+        get_named_compile_time_arg_val("gather_noc0_num_senders"),
+        get_named_compile_time_arg_val("gather_noc1_num_senders"),
+        get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_dst_cb"),
+        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    };
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -135,32 +143,34 @@ KERNEL_ENTRY {
         >;
 
     // RMSNorm compute runtime args
-    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_rt_args;
-    rmsnorm_rt_args.input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-    rmsnorm_rt_args.scalars_cb = get_named_compile_time_arg_val("rmsnorm_scalars_cb");
-    rmsnorm_rt_args.interm_cb = get_named_compile_time_arg_val("rmsnorm_interm_cb");
-    rmsnorm_rt_args.gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-    rmsnorm_rt_args.output_cb = get_named_compile_time_arg_val("rmsnorm_output_cb");
-    rmsnorm_rt_args.num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-    rmsnorm_rt_args.epsilon_index = get_named_compile_time_arg_val("rmsnorm_epsilon_index");
-    rmsnorm_rt_args.scalar_index = get_named_compile_time_arg_val("rmsnorm_scalar_index");
+    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_rt_args{
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
+        get_named_compile_time_arg_val("rmsnorm_interm_cb"),
+        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("rmsnorm_output_cb"),
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_epsilon_index"),
+        get_named_compile_time_arg_val("rmsnorm_scalar_index"),
+    };
 
     // Mcast compute compile-time args (none needed, no-op for TRISC)
     using Mcast = deepseek_b1_ops::Mcast;
     using McastCTArgs = Mcast::ComputeCTArgs;
-    Mcast::ComputeArgs mcast_args;
+    Mcast::ComputeArgs mcast_args{};
 
     // Matmul compute args (from compile-time args, passed to op as runtime args)
     using Matmul = deepseek_b1_ops::Matmul;
-    Matmul::ComputeArgs matmul_args;
-    matmul_args.in0 = get_named_compile_time_arg_val("matmul_in0");
-    matmul_args.in1 = get_named_compile_time_arg_val("matmul_in1");
-    matmul_args.out = get_named_compile_time_arg_val("matmul_out");
-    matmul_args.num_tiles = get_named_compile_time_arg_val("matmul_num_tiles");
+    Matmul::ComputeArgs matmul_args{
+        get_named_compile_time_arg_val("matmul_in0"),
+        get_named_compile_time_arg_val("matmul_in1"),
+        get_named_compile_time_arg_val("matmul_out"),
+        get_named_compile_time_arg_val("matmul_num_tiles"),
+    };
 
     // Gather compute args (no-op for TRISC)
     using Gather = deepseek_b1_ops::Gather;
-    Gather::ComputeArgs gather_args;
+    Gather::ComputeArgs gather_args{};
 #endif
 
     // ========================================================================
