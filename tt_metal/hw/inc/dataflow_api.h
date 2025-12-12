@@ -28,6 +28,7 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/sanitize.h"
 
 // clang-format off
 /**
@@ -3535,8 +3536,7 @@ public:
      * @return Reference to the element at the given index
      */
     T& operator[](uint32_t index) const {
-        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
-        ASSERT(address_ + (index + 1) * sizeof(T) <= MEM_L1_SIZE);
+        DEBUG_SANITIZE_L1_ADDR(address_ + (index + 1) * sizeof(T), sizeof(T));
         return get_unsafe_ptr()[index];
     }
 
@@ -3545,8 +3545,7 @@ public:
      * @return Reference to the value at the address
      */
     T& operator*() const {
-        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
-        ASSERT(address_ + sizeof(T) <= MEM_L1_SIZE);
+        DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
         return get_unsafe_ptr()[0];
     }
 
@@ -3555,8 +3554,7 @@ public:
      * @return Pointer to the structure in the core's local memory
      */
     tt_l1_ptr T* operator->() const {
-        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
-        ASSERT(address_ + sizeof(T) <= MEM_L1_SIZE);
+        DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
         return get_unsafe_ptr();
     }
 
