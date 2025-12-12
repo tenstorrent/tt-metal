@@ -1166,6 +1166,25 @@ class ModelArgs(TTModelArgs):
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) == dict:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
+    def reference_mlp(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
         from transformers import AutoConfig, AutoModelForCausalLM
 
