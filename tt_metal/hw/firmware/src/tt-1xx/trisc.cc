@@ -52,7 +52,9 @@ volatile tt_reg_ptr uint* PTR_CONST reg_base = reinterpret_cast<volatile uint*>(
 volatile tt_reg_ptr uint* PTR_CONST pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
 volatile tt_reg_ptr uint* PTR_CONST regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
 #undef PTR_CONST
-
+#if defined(__INSTRN_BUFFER_TOS)
+volatile tt_reg_ptr uint32_t* const instrn_buffer = reinterpret_cast<volatile uint32_t*>(INSTRN_BUF_BASE);
+#endif
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
 

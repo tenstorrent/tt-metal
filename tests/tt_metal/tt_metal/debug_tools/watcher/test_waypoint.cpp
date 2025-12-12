@@ -200,7 +200,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch
                     int k_id = 1 + 2;
-                    k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
+                    // NOLINTNEXTLINE(bugprone-unused-local-non-trivial-variable)
+                    std::string k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
                 } else {
                     k_id_s = "";
                 }
