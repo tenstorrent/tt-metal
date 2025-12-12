@@ -1,4 +1,10 @@
 """
+SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+"""
 Test device-side operations for DPT-Large to eliminate CPU round-trip.
 
 Key optimizations from ViT demo:
@@ -141,7 +147,9 @@ class OptimizedEncoderLayer:
         proj_w = state_dict[f"{base}.attention.output.dense.weight"].T.contiguous()
         proj_b = state_dict[f"{base}.attention.output.dense.bias"]
         self.proj_weight = ttnn.from_torch(proj_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.proj_bias = ttnn.from_torch(proj_b.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.proj_bias = ttnn.from_torch(
+            proj_b.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
         # FFN weights
         ff1_w = state_dict[f"{base}.intermediate.dense.weight"].T.contiguous()
@@ -221,10 +229,7 @@ class OptimizedEncoder:
 
     def __init__(self, state_dict, config, device, program_configs=None):
         self.device = device
-        self.layers = [
-            OptimizedEncoderLayer(state_dict, i, config, device, program_configs)
-            for i in range(24)
-        ]
+        self.layers = [OptimizedEncoderLayer(state_dict, i, config, device, program_configs) for i in range(24)]
 
     def __call__(self, hidden_states):
         outputs = []
@@ -441,6 +446,7 @@ def test_optimized_encoder():
 
     except Exception as e:
         import traceback
+
         print(f"Test failed: {e}")
         traceback.print_exc()
 
