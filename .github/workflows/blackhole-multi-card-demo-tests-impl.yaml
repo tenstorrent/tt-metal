@@ -162,7 +162,7 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
             arch: blackhole
@@ -170,15 +170,15 @@ jobs:
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 40960
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-131072-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-40960-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-131072-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-40960-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
