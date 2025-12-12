@@ -204,29 +204,31 @@ def run_sdpa_noncausal(
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
-    # tt_back = ttnn.to_torch(tt_back)
-    # # Slice out any tile-padding
-    # tt_back = tt_back[:, :, :sq, :]
+    tt_back = ttnn.to_torch(tt_back)
+    # Slice out any tile-padding
+    tt_back = tt_back[:, :, :sq, :]
 
-    # if nkv > 1 and nkv != nh:
-    #     assert nh % nkv == 0
-    #     K = K.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
-    #     V = V.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
+    if nkv > 1 and nkv != nh:
+        assert nh % nkv == 0
+        K = K.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
+        V = V.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
 
-    # gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
 
-    # out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
-    # logger.debug(f"python vs pytorch: {out_pcc}")
-    # rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
-    # logger.debug(f"rmse: {rmse}")
-    # if rmse_threshold is not None:
-    #     assert rmse < rmse_threshold
+    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
+    logger.debug(f"python vs pytorch: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
+    logger.debug(f"rmse: {rmse}")
+    if rmse_threshold is not None:
+        assert rmse < rmse_threshold
 
-    # assert out_pass
+    assert out_pass
 
 
 q_chunks = [32, 64, 128, 256, 512]
 k_chunks = [64, 128, 256, 512, 1024]
+# q_chunks = [128]
+# k_chunks = [512]
 
 shapes = [
     [1, 8, 8, 1024, 128],
@@ -364,13 +366,41 @@ def test_create_perf_table():
                 measured_ms_str = f"{measured_ms:.3f}"
                 print(f"| {q} | {k} | {measured_ms_str} |")
 
+    def flops_util(shape, latency_ms):
+        b, nh, nkv, s, d = shape
+        flops = 4 * b * nh * s**2 * d
+        core_flops = 2 * 8 * 16 * 16 / 2 * 64 * 1e9
+        sol_time_ms = flops / core_flops * 1e3
+        return sol_time_ms / latency_ms
+
+    def dram_util(shape, latency_ms):
+        b, nh, nkv, s, d = shape
+        bytes_read = 3 * 2 * b * nh * s * d
+        bytes_written = 2 * b * nh * s * d
+        bytes_io = bytes_read + bytes_written
+        dram_bw_Bps = 200.0 * 1e9
+        dram_util = bytes_io / (latency_ms / 1e3) / dram_bw_Bps
+        return dram_util
+
     # Print the best measured performance for each tested shape/causal config
     print("\n========== SDPA Performance Summary ==========")
-    print("| Causal | Shape ID | q_chunk | k_chunk | Measured Perf (ms) |")
-    print("|--------|----------|---------|---------|--------------------|")
+    print("| Causal | Shape ID | q_chunk | k_chunk | Measured Perf (ms) | FLOPS Util (%) | DRAM Util (%) |")
+    print("|--------|----------|---------|---------|--------------------|----------------|----------------|")
     for causal, shape_id, (duration_ns, q_chunk, k_chunk) in results:
         ms = duration_ns / 1e6
-        print(f"| {'causal' if causal else 'noncausal'} | {shape_id} | {q_chunk} | {k_chunk} | {ms:.3f} |")
+        # Find the shape corresponding to shape_id
+        matching_shape = None
+        for sid, shape_val in zip(shape_ids, shapes):
+            if sid == shape_id:
+                matching_shape = shape_val
+                break
+        if matching_shape is None:
+            raise RuntimeError(f"Could not find shape for shape_id {shape_id}")
+        flop_pct = flops_util(matching_shape, ms) * 100
+        dram_pct = dram_util(matching_shape, ms) * 100
+        print(
+            f"| {'causal' if causal else 'noncausal'} | {shape_id} | {q_chunk} | {k_chunk} | {ms:.3f} | {flop_pct:.1f} | {dram_pct:.1f} |"
+        )
     print("==============================================\n")
 
 
