@@ -12,11 +12,11 @@ namespace tt::tt_metal {
 constexpr uint32_t PADDING = UncompressedBufferPageMapping::PADDING;
 
 // Converts a simple page mapping vector to BufferCorePageMapping.
-// 
+//
 // The input 'page_mapping' is a vector where each index represents a device page,
 // and the value at that index is either a host page number or PADDING.
 // Contiguous device pages with non-PADDING values are assumed to map to sequential host pages.
-// 
+//
 // Example:
 //   {1, 2, 3, PADDING, 4, 5}
 // means device pages 0-2 map to host pages 1-3,
@@ -213,6 +213,16 @@ INSTANTIATE_TEST_SUITE_P(
         Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, 1, 2, PADDING, PADDING, 3, 4}, 2},
         Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, 1, 2, PADDING, PADDING, 3, 4}, 4},
         Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, 1, 2, PADDING, PADDING, 3, 4}, 5},
-        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, 1, 2, PADDING, PADDING, 3, 4}, 8}));
+        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, 1, 2, PADDING, PADDING, 3, 4}, 8},
+        Test_BufferCorePageMapping_Iterator_params{{1}, 1},
+        Test_BufferCorePageMapping_Iterator_params{{PADDING, 1, PADDING}, 1},
+        Test_BufferCorePageMapping_Iterator_params{{1, 2, 3, PADDING, PADDING}, 1},
+        Test_BufferCorePageMapping_Iterator_params{{1, 2, 3, PADDING, PADDING}, 2},
+        Test_BufferCorePageMapping_Iterator_params{{1, 2, 3, PADDING, PADDING}, 3},
+        Test_BufferCorePageMapping_Iterator_params{{1, 2, 3, PADDING, PADDING}, 4},
+        Test_BufferCorePageMapping_Iterator_params{{1, 2, 3, PADDING, PADDING}, 5},
+        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 1},
+        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 2},
+        Test_BufferCorePageMapping_Iterator_params{{PADDING, PADDING, PADDING}, 3}));
 
 }  // namespace tt::tt_metal
