@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,59 +17,54 @@ namespace ckernel
 {
 namespace sfpu
 {
-inline sfpi::vInt _float_to_int32_(sfpi::vFloat in)
+
+// computes L1=trunc(L0).
+inline void _trunc_body_()
 {
-    sfpi::vInt result;
-    sfpi::vInt exp = exexp(in); // extract exponent
-    v_if (exp < 0)
-    {
-        result = 0;
-    }
-    v_elseif (exp > 30) // overflow occurs above this range
-    {
-        // set to int32 max value in case of overflow
-        result = std::numeric_limits<int32_t>::max();
-        // check sign
-        v_if (in < 0)
-        {
-            result = sfpi::reinterpret<sfpi::vInt>(sfpi::setsgn(sfpi::reinterpret<sfpi::vFloat>(result), 1));
-        }
-        v_endif;
-    }
-    v_else
-    {
-        // extract mantissa
-        sfpi::vInt man = exman8(in);
-        // shift the mantissa by (23-exponent) to the right
-        sfpi::vInt shift = exp - 23; // 23 is number of mantissa in float32
-        man              = shft(sfpi::reinterpret<sfpi::vUInt>(man), shift);
-        // check sign
-        v_if (in < 0)
-        {
-            man = sfpi::reinterpret<sfpi::vInt>(sfpi::setsgn(sfpi::reinterpret<sfpi::vFloat>(man), 1));
-        }
-        v_endif;
-        result = man;
-    }
-    v_endif;
-    return result;
+    // set L3=23.  TODO: this could be stored in a constant register, but use by rdiv prevents this for now.
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23);
+    // mask = 0x8000_0000
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
+    // disable lanes where exp < 0
+    TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
+    // mask = 0xffff_ffff
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_SHORT, 0xffff);
+    // exp = 23 - exp
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+    // mask <<= exp
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    // reset lanes
+    TTI_SFPENCC(0, 0, 0, 0);
+    // apply mask
+    TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
 }
 
-inline sfpi::vInt _float_to_int31_(sfpi::vFloat v)
+// computes L1=floor(L0).
+inline void _floor_body_()
 {
-    sfpi::vInt q = float_to_int16(v * 0x1p-15f, 0);
-    sfpi::vInt r = float_to_int16(v - int32_to_float(q, 0) * 0x1p15f, 0);
-    v_if (r < 0)
-    {
-        r = sfpi::setsgn(r, 0);
-        q = (q << 15) - r;
-    }
-    v_else
-    {
-        q = (q << 15) + r;
-    }
-    v_endif;
-    return q;
+    _trunc_body_();
+    // if v>u, set v=v-1; this only happens for negative values.
+    // on Wormhole, we don't have SFPGT, so use u<0 and (v-u)<0 instead.
+    // First, ensure u<0.
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    // Then, ensure (v-u)<0 (two's complement).
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+    TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
+// computes L1=ceil(L0).
+inline void _ceil_body_()
+{
+    _trunc_body_();
+    // if v<u, set v=v+1.
+    // on Wormhole, we don't have SFPGT, so use u>=0 and (v-u)<0 instead.
+    // First, ensure u>=0.
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    // Then, ensure (v-u)<0 (two's complement).
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+    TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
 }
 
 inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
@@ -79,229 +75,75 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
     1e23F,  1e24F,  1e25F,  1e26F,  1e27F,  1e28F,  1e29F,  1e30F,  1e31F,  1e32F,  1e33F,  1e34F,  1e35F,  1e36F,  1e37F,  1e38F,
 };
 
-template <bool APPROXIMATION_MODE, bool USE_FP32>
-inline sfpi::vFloat _floor_body_(sfpi::vFloat v)
-{
-    sfpi::vInt tmp;
-
-    if constexpr (USE_FP32)
-    {
-        tmp = _float_to_int32_(v);
-    }
-    else
-    {
-        tmp = float_to_int16(v, 0);
-    }
-
-    sfpi::vFloat result = int32_to_float(tmp, 0);
-
-    v_if (result > v)
-    {
-        result = result - 1;
-    }
-    v_endif;
-
-    if constexpr (!USE_FP32)
-    {
-        v_if (v <= SHRT_MIN || v >= SHRT_MAX)
-        {
-            result = v;
-        }
-        v_endif;
-    }
-    v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(v))
-    {
-        result = v;
-    }
-    v_endif;
-    return result;
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool USE_FP32 = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void _calculate_floor_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat v   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = _floor_body_<APPROXIMATION_MODE, USE_FP32>(v);
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+        _floor_body_();
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool USE_FP32 = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void _calculate_ceil_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat result = sfpi::dst_reg[0];
-        sfpi::vFloat v      = result;
-
-        sfpi::vInt tmp;
-        if constexpr (USE_FP32)
-        {
-            tmp = _float_to_int32_(result);
-        }
-        else
-        {
-            tmp = float_to_int16(result, 0);
-        }
-
-        result = int32_to_float(tmp, 0);
-
-        v_if (result < v)
-        {
-            result = result + 1;
-        }
-        v_endif;
-
-        if constexpr (!USE_FP32)
-        {
-            v_if (v <= SHRT_MIN || v >= SHRT_MAX)
-            {
-                result = v;
-            }
-            v_endif;
-        }
-
-        sfpi::dst_reg[0] = result;
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+        _ceil_body_();
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, bool USE_FP32>
-inline sfpi::vFloat _trunc_body_(sfpi::vFloat in)
-{
-    sfpi::vInt tmp;
-
-    sfpi::vFloat result = sfpi::setsgn(in, 0);
-
-    sfpi::vFloat v = result;
-
-    if constexpr (USE_FP32)
-    {
-        tmp = _float_to_int32_(result);
-    }
-    else
-    {
-        tmp = float_to_int16(result, 0);
-    }
-
-    result = int32_to_float(tmp, 0);
-
-    v_if (result > v)
-    {
-        result = result - 1;
-    }
-    v_endif;
-
-    if constexpr (!USE_FP32)
-    {
-        v_if (v <= SHRT_MIN || v >= SHRT_MAX)
-        {
-            result = v;
-        }
-        v_endif;
-    }
-
-    v_if (in < 0)
-    {
-        result = sfpi::setsgn(result, 1);
-    }
-    v_endif;
-
-    v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(in))
-    {
-        result = in;
-    }
-    v_endif;
-    return result;
-}
-
-template <bool APPROXIMATION_MODE, bool USE_FP32 = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void _calculate_trunc_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = _trunc_body_<APPROXIMATION_MODE, USE_FP32>(in);
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+        _trunc_body_();
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, bool USE_FP32 = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void _calculate_frac_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in     = sfpi::dst_reg[0];
-        sfpi::vFloat result = in;
-        sfpi::vInt tmp;
-
-        v_if (in < 0)
-        {
-            result = 0 - result;
-        }
-        v_endif;
-
-        sfpi::vFloat v = result;
-
-        if constexpr (USE_FP32)
-        {
-            tmp = _float_to_int32_(result);
-        }
-        else
-        {
-            tmp = float_to_int16(result, 0);
-        }
-
-        result = int32_to_float(tmp, 0);
-
-        v_if (result > v)
-        {
-            result = result - 1;
-        }
-        v_endif;
-
-        if constexpr (!USE_FP32)
-        {
-            v_if (v <= SHRT_MIN || v >= SHRT_MAX)
-            {
-                result = v;
-            }
-            v_endif;
-        }
-
-        v_if (in < 0)
-        {
-            result = 0 - result;
-        }
-        v_endif;
-
-        sfpi::dst_reg[0] = in - result;
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+        _trunc_body_();
+        // frac(x) = x - trunc(x)
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPNOP;
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }
 }
 
 inline sfpi::vFloat _round_even_(sfpi::vFloat v)
 {
-    sfpi::vFloat result;
-    v_if (sfpi::abs(v) < 0x1p30f)
+    // Create a temporary copy tmp = abs(v).
+    sfpi::vFloat tmp = sfpi::setsgn(v, 0);
+    // For all 0 ≤ x < 2**23, x + 2**23 will shift out the fractional part with round-to-nearest-even.
+    tmp += 8388608.0f;
+    // Hide SFPNOP; extract exponent.
+    sfpi::vInt exp = sfpi::exexp(v);
+    // Subtract 2**23 to restore exponent.
+    tmp += -8388608.0f;
+    // Hide SFPNOP; check exponent.  If x ≥ 2**23, then there is no fractional part.
+    v_if (exp < 23)
     {
-        result = int32_to_float(_float_to_int31_(v), 0);
-        v_if (sfpi::abs(v - result) == 0.5F)
-        {
-            sfpi::vInt res = float_to_int16(result, 0);
-            res            = res & 0xFFFE; // 0xFFFE = 1111 1111 1111 1110
-            result         = sfpi::int32_to_float(res, 0);
-        }
-        v_endif;
-    }
-    v_else
-    {
-        result = v;
+        // v.{Exp,Man}=tmp.{Exp,Man}; retaining original sign.
+        v = sfpi::setsgn(tmp, v);
     }
     v_endif;
-    return result;
+    return v;
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
@@ -328,8 +170,7 @@ void _calculate_round_(const int decimals)
     for (int d = 0; d < ITERATIONS; ++d)
     {
         sfpi::vFloat v      = sfpi::dst_reg[0];
-        sfpi::vFloat result = inverse * _round_even_(sfpi::abs(v) * coeff);
-        result              = sfpi::setsgn(result, v);
+        sfpi::vFloat result = inverse * _round_even_(v * coeff);
         sfpi::dst_reg[0]    = result;
         sfpi::dst_reg++;
     }
