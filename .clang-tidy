@@ -38,7 +38,6 @@
 Checks: >
   *,
   -bugprone-branch-clone,
-  -bugprone-crtp-constructor-accessibility,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-forwarding-reference-overload,
@@ -47,7 +46,6 @@ Checks: >
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
   -bugprone-unchecked-optional-access,
-  -bugprone-unhandled-self-assignment,
   -concurrency-mt-unsafe,
   -cppcoreguidelines-avoid-c-arrays,
   -cppcoreguidelines-avoid-const-or-ref-data-members,

@@ -205,6 +205,8 @@ class CallstackProvider:
         location: OnChipCoordinate,
         risc_name: str,
         rewind_pc_for_ebreak: bool = False,
+        use_full_callstack: bool | None = None,
+        use_gdb_callstack: bool | None = None,
     ) -> CallstacksData:
         dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
         risc_debug = location.noc_block.get_risc_debug(risc_name)
@@ -224,7 +226,7 @@ class CallstackProvider:
                 rewind_pc_for_ebreak=rewind_pc_for_ebreak,
             )
         else:
-            if self.gdb_callstack:
+            if use_gdb_callstack or (use_gdb_callstack is None and self.gdb_callstack):
                 if risc_name == "ncrisc":
                     # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
                     error_message = (
@@ -286,7 +288,7 @@ class CallstackProvider:
                     risc_name,
                     dispatcher_core_data,
                     self.elfs_cache,
-                    self.full_callstack,
+                    use_full_callstack or (use_full_callstack is None and self.full_callstack),
                     rewind_pc_for_ebreak=rewind_pc_for_ebreak,
                 )
 

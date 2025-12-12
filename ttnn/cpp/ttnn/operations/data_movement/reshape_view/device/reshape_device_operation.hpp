@@ -8,6 +8,7 @@
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
+#include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_without_device_mapping_pf.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
 
@@ -16,7 +17,8 @@ struct ReshapeDeviceOperation {
     using tensor_args_t = reshape::tensor_args_t;
     using spec_return_value_t = reshape::spec_return_value_t;
     using tensor_return_value_t = reshape::tensor_return_value_t;
-    using program_factory_t = std::variant<ReshapeRMProgramFactory, ReshapeTiledProgramFactory>;
+    using program_factory_t = std::
+        variant<ReshapeRMProgramFactory, ReshapeTiledProgramFactory, ReshapeTiledWithoutDeviceMappingProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -42,7 +44,8 @@ struct ReshapeDeviceOperation {
         const ttnn::Shape& padded_output_shape,
         const tt::tt_metal::MemoryConfig& output_mem_config,
         bool recreate_mapping_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grid);
+        const std::optional<CoreRangeSet>& sub_core_grid,
+        std::optional<bool> on_device_mappings);
 };
 
 }  // namespace ttnn::operations::data_movement::reshape

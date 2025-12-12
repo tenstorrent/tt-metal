@@ -484,23 +484,18 @@ struct profileScopeGuaranteed {
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
         if constexpr (TRACE_ON_TENSIX) {
-            uint32_t trace_controls = profiler_control_buffer[CURRENT_TRACE_ID];
+            uint32_t trace_replay_status = profiler_control_buffer[TRACE_REPLAY_STATUS];
             if constexpr (index == 0) {
 #if !defined(COMPILE_FOR_TRISC)
-                if (trace_controls & TRACE_MARK_FW_START) {
+                if (trace_replay_status & TRACE_MARK_FW_START) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
-                    profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_KERNEL_START;
-                } else if (trace_controls == 0) {
-                    mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
-                    wIndex = CUSTOM_MARKERS;
+                    profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_KERNEL_START;
                 }
 #endif
             } else {
-                if (trace_controls & TRACE_MARK_KERNEL_START) {
+                if (trace_replay_status & TRACE_MARK_KERNEL_START) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
-                    profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_ALL_ENDS;
-                } else if (trace_controls == 0) {
-                    mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
+                    profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_ALL_ENDS;
                 }
             }
         } else {
@@ -512,16 +507,12 @@ struct profileScopeGuaranteed {
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
         if constexpr (TRACE_ON_TENSIX) {
-            if (profiler_control_buffer[CURRENT_TRACE_ID] == TRACE_MARK_ALL_ENDS) {
+            if (profiler_control_buffer[TRACE_REPLAY_STATUS] == TRACE_MARK_ALL_ENDS) {
                 mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
 #if defined(COMPILE_FOR_BRISC)
                 // Validate profiler_data_buffer in L1
                 profiler_data_buffer[myRiscID].data[ID_HH] = 0x0;
 #endif
-            } else if (
-                profiler_control_buffer[CURRENT_TRACE_ID] == 0 &&
-                profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] == 0) {
-                mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
             }
             if constexpr (index == 0) {
                 profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] = wIndex;
@@ -592,7 +583,7 @@ __attribute__((noinline)) void trace_only_init() {
         }
         traceCount++;
         set_host_counter(traceCount);
-        profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_FW_START;
+        profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_FW_START;
         // Invalidate profiler_data_buffer in L1
         // As the start of profiler buffer ID_HH = 0x0
         // indicates valid profiler data
