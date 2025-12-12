@@ -487,6 +487,16 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
             ct_args.push_back(this->sender_channels_num_buffers[vc][i]);
             ct_args.push_back(static_cast<uint32_t>(this->remote_sender_channels_base_address[vc][i]));
             ct_args.push_back(this->remote_sender_channels_num_buffers[vc][i]);
+            log_debug(
+                LogFabric,
+                "VC{} Sender Channel[{}]: base_addr=0x{:x} num_buffers={} remote_base_addr=0x{:x} "
+                "remote_num_buffers={}",
+                vc,
+                i,
+                this->sender_channels_base_address[vc][i],
+                this->sender_channels_num_buffers[vc][i],
+                this->remote_sender_channels_base_address[vc][i],
+                this->remote_sender_channels_num_buffers[vc][i]);
         }
     }
 
@@ -497,6 +507,16 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
             ct_args.push_back(this->receiver_channels_num_buffers[vc][i]);
             ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[vc][i]));
             ct_args.push_back(this->remote_receiver_channels_num_buffers[vc][i]);
+            log_debug(
+                LogFabric,
+                "VC{} Receiver Channel[{}]: base_addr=0x{:x} num_buffers={} remote_base_addr=0x{:x} "
+                "remote_num_buffers={}",
+                vc,
+                i,
+                this->receiver_channels_base_address[vc][i],
+                this->receiver_channels_num_buffers[vc][i],
+                this->remote_receiver_channels_base_address[vc][i],
+                this->remote_receiver_channels_num_buffers[vc][i]);
         }
     }
 }

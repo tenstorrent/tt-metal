@@ -973,7 +973,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Determine NUM_VCS: 2 if VC1 runtime args are being passed, otherwise 1
     // VC1 runtime args are passed when VC1 is needed (2D routing AND not an inter-mesh router)
     bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0 && !isInterMesh;
-    uint32_t num_vcs = needs_vc1 ? 2 : 1;
 
     // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
@@ -985,7 +984,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.num_fwd_paths,
         num_vc0_downstream_edms,
         num_vc1_downstream_edms,  // NUM_DOWNSTREAM_SENDERS_VC1: number of VC1 downstream senders
-        num_vcs,                  // NUM_VCS: 2 if VC1 runtime args are passed, 1 otherwise
         this->wait_for_host_signal ? 1 : 0,
 
         this->firmware_context_switch_interval,
@@ -1431,15 +1429,8 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 
     // Use VC-aware allocator getters for buffer slots and base address
-    size_t sender_channels_num_buffer = 0;
-    if (this->has_tensix_extension) {
-        sender_channels_num_buffer = static_channel_allocator->get_sender_channel_number_of_slots(vc, ds_edm);
-    } else {
-        static constexpr std::size_t non_zero_buffer_slot_idx = 1;
-        // For non-tensix, use VC0 channel 1 as reference
-        sender_channels_num_buffer =
-            static_channel_allocator->get_sender_channel_number_of_slots(0, non_zero_buffer_slot_idx);
-    }
+    // Always use the specific VC and channel being queried
+    size_t sender_channels_num_buffer = static_channel_allocator->get_sender_channel_number_of_slots(vc, ds_edm);
 
     TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");
 

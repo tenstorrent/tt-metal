@@ -312,15 +312,26 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     }
 }
 
-void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const {
+void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(
+    std::vector<uint32_t>& ct_args_out, size_t /*num_fwd_paths*/) const {
+    // Always emit MAX_NUM_RECEIVER_CHANNELS elements (one per VC) to match device side array size
     ct_args_out.insert(
         ct_args_out.end(),
         this->downstream_sender_channels_num_buffers.begin(),
-        this->downstream_sender_channels_num_buffers.begin() + num_fwd_paths);
+        this->downstream_sender_channels_num_buffers.begin() + builder_config::num_max_receiver_channels);
+    log_debug(LogFabric, "downstream_sender_channels_num_buffers:");
+    for (size_t i = 0; i < this->downstream_sender_channels_num_buffers.size(); ++i) {
+        log_debug(LogFabric, "  [{}]: {}", i, this->downstream_sender_channels_num_buffers[i]);
+    }
 
-    for (size_t i = 0; i < num_fwd_paths; i++) {
-        if (this->downstream_edms_connected_by_vc_set.find(i) != this->downstream_edms_connected_by_vc_set.end()) {
-            TT_FATAL(this->downstream_sender_channels_num_buffers[i] != 0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
+    // Validate that all connected VCs have non-zero buffer counts
+    // downstream_sender_channels_num_buffers is indexed by VC (receiver channel), not by sender channel
+    for (size_t vc_idx = 0; vc_idx < builder_config::num_max_receiver_channels; vc_idx++) {
+        if (this->downstream_edms_connected_by_vc_set.find(vc_idx) != this->downstream_edms_connected_by_vc_set.end()) {
+            TT_FATAL(
+                this->downstream_sender_channels_num_buffers[vc_idx] != 0,
+                "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}",
+                vc_idx);
         }
     }
 }

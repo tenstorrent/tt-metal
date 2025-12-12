@@ -2187,15 +2187,30 @@ FORCE_INLINE void teardown(
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
         NUM_TRANSACTION_IDS,
-        0,
+        RX_CH_TRID_STARTS[0],
         edm_to_local_chip_noc,
-        edm_to_downstream_noc> receiver_channel_0_trid_tracker) {
+        edm_to_downstream_noc> receiver_channel_0_trid_tracker
+#if defined(FABRIC_2D_VC1_ACTIVE)
+    ,
+    WriteTransactionIdTracker<
+        RECEIVER_NUM_BUFFERS_ARRAY[1],
+        NUM_TRANSACTION_IDS,
+        RX_CH_TRID_STARTS[1],
+        edm_to_local_chip_noc,
+        edm_to_downstream_noc> receiver_channel_1_trid_tracker
+#endif
+) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
     if constexpr (is_receiver_channel_serviced[0]) {
         receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
     }
+#if defined(FABRIC_2D_VC1_ACTIVE)
+    if constexpr (is_receiver_channel_serviced[1]) {
+        receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
+    }
+#endif
 
     // at minimum, the below call must be updated because in dynamic noc mode, the counters would be shared, so you'd
     // want a sync before this and coordination about which erisc should do the reset (only one of them should do it)
@@ -2784,7 +2799,7 @@ void kernel_main() {
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
         NUM_TRANSACTION_IDS,
-        0,
+        RX_CH_TRID_STARTS[0],
         edm_to_local_chip_noc,
         edm_to_downstream_noc>
         receiver_channel_0_trid_tracker;
@@ -2794,7 +2809,7 @@ void kernel_main() {
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[1],
         NUM_TRANSACTION_IDS,
-        0,
+        RX_CH_TRID_STARTS[1],
         edm_to_local_chip_noc,
         edm_to_downstream_noc>
         receiver_channel_1_trid_tracker;
@@ -3018,7 +3033,15 @@ void kernel_main() {
     *sender0_worker_semaphore_ptr = 99;
 
     // make sure all the noc transactions are acked before re-init the noc counters
-    teardown(termination_signal_ptr, edm_status_ptr, receiver_channel_0_trid_tracker);
+    teardown(
+        termination_signal_ptr,
+        edm_status_ptr,
+        receiver_channel_0_trid_tracker
+#if defined(FABRIC_2D_VC1_ACTIVE)
+        ,
+        receiver_channel_1_trid_tracker
+#endif
+    );
 
     set_l1_data_cache<false>();
     WAYPOINT("DONE");
