@@ -109,7 +109,8 @@ class QwenImagePipeline:
         ]
 
         self.encoder_device = self._submesh_devices[0] if not use_torch_text_encoder else None
-        self.encoder_mesh_shape = ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
+        # Store original submesh shape for encoder operations (following Flux pattern - no reshape needed)
+        self.original_submesh_shape = tuple(self._submesh_devices[0].shape)
         self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
         self.vae_submesh_idx = 0  # Use submesh 0 for VAE
@@ -276,19 +277,8 @@ class QwenImagePipeline:
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
-        if device is None:
-            yield
-            return
-
-        original_mesh_shape = ttnn.MeshShape(tuple(device.shape))
-        assert (
-            original_mesh_shape.mesh_size() == self.encoder_mesh_shape.mesh_size()
-        ), f"Device cannot be reshaped device shape: {device.shape} encoder mesh shape: {self.encoder_mesh_shape}"
-        if original_mesh_shape != self.encoder_mesh_shape:
-            device.reshape(self.encoder_mesh_shape)
+        # Following Flux pattern: no reshaping needed, encoder works on full submesh
         yield
-        if original_mesh_shape != device.shape:
-            device.reshape(original_mesh_shape)
 
     @staticmethod
     def create_pipeline(
@@ -307,6 +297,15 @@ class QwenImagePipeline:
         height: int = 1024,
     ) -> QwenImagePipeline:
         default_config = {
+            # 8-chip configurations
+            (1, 8): {
+                "cfg_config": (1, 0),  # no CFG parallel
+                "sp": (1, 0),
+                "tp": (8, 1),
+                "encoder_tp": (8, 1),
+                "vae_tp": (8, 1),
+                "num_links": 1,
+            },
             (2, 4): {
                 "cfg_config": (2, 1),
                 "sp": (2, 0),
@@ -315,6 +314,7 @@ class QwenImagePipeline:
                 "vae_tp": (4, 1),
                 "num_links": 1,
             },
+            # 6U (32-chip Galaxy) configuration - matching Stable Diffusion
             (4, 8): {
                 "cfg_config": (2, 1),
                 "sp": (4, 0),
@@ -739,16 +739,23 @@ class QwenImagePipeline:
                 cond = noise_pred_list[0][split_pos:]
                 noise_pred_list[0] = uncond + cfg_scale * (cond - uncond)
             else:
-                # uncond and cond are replicated, so it is fine to get a single tensor from each
-                uncond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[0])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
-                cond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[1])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
+                # With CFG parallel > 1 and SP > 1, noise predictions are sharded across SP axis.
+                # We need to all-gather to get full sequence, do CFG, then re-shard.
+                # Use tensor.to_torch with mesh_axes to properly compose the sharded tensor.
+                uncond = tensor.to_torch(
+                    noise_pred_list[0].cpu(blocking=True),
+                    mesh_axes=[None, sp_axis, None],
+                    composer_device=self._submesh_devices[0],
+                ).to(torch.float32)
+                cond = tensor.to_torch(
+                    noise_pred_list[1].cpu(blocking=True),
+                    mesh_axes=[None, sp_axis, None],
+                    composer_device=self._submesh_devices[1],
+                ).to(torch.float32)
 
                 torch_noise_pred = uncond + cfg_scale * (cond - uncond)
 
+                # Re-shard the CFG result back to the submeshes with the same sharding as latents
                 noise_pred_list[0] = tensor.from_torch(
                     torch_noise_pred, device=self._submesh_devices[0], mesh_axes=[None, sp_axis, None]
                 )
