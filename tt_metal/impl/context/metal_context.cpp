@@ -482,13 +482,10 @@ const distributed::multihost::DistributedContext& MetalContext::full_world_distr
 }
 
 const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
-    log_critical(tt::LogMetal, "Getting global distributed context");
-    // Get all compute mesh IDs (excludes switches) from control plane mesh graph
-    this->get_control_plane().get_mesh_graph();
-
-    log_critical(tt::LogMetal, "Getting compute only distributed context");
-
-    return *distributed_context_;
+    // If control plane is not initilazed, return the global distributed context
+    if (!control_plane_) {
+        return *distributed_context_;
+    }
     // Lazy initilazation of compute only distributed context
     if (!compute_only_distributed_context_) {
         compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
