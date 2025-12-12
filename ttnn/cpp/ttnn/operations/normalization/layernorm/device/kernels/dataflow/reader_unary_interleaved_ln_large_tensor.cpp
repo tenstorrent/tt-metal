@@ -10,17 +10,22 @@
 
 namespace generic = norm::kernel_util::generic;
 
-template <typename T>
+template <typename T, typename Block>
 void read_row_to_cb(
-    const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const uint32_t blk) {
-    cb_reserve_back(cb_id, blk);
+    const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
+    cb_reserve_back(cb_id, block.size());
     uint32_t l1_write_addr = get_write_ptr(cb_id);
-    for (uint32_t r = 0; r < blk; r++) {
+    for (uint32_t r = 0; r < block.size(); r++) {
         noc_async_read_tile(offset + r, addr, l1_write_addr);
         l1_write_addr += tile_bytes;
     }
     noc_async_read_barrier();
-    cb_push_back(cb_id, blk);
+    cb_push_back(cb_id, block.size());
+
+    if (block.remainder() > 0) {
+        cb_reserve_back(cb_id, block.remainder());
+        cb_push_back(cb_id, block.remainder());
+    }
 }
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -75,38 +80,38 @@ void kernel_main() {
 #ifndef RMSNORM
         // Data for Calculating E[X]
         for (auto block : generic::blocks(Wt, blk)) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block.size());
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
         }  // wt loop
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, blk)) {
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block.size());
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
         }
 #endif
 #endif
 
         // Data for Calculating Variance
         for (auto block : generic::blocks(Wt, blk)) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block.size());
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block.size());
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
 #endif
         }  // wt loop
 
         // Data for calculating the final value
         for (auto block : generic::blocks(Wt, blk)) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block.size());
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block.size());
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
 #endif
 #ifdef FUSE_GAMMA
             {
-                read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block.size());
+                read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
             }
 #endif
 
 #ifdef FUSE_BETA
             {
-                read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block.size());
+                read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
             }
 #endif
         }  // wt loop

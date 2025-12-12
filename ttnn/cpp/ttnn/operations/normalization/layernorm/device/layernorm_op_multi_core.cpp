@@ -218,7 +218,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         // cout << "im6_t=Wt=" << Wt << endl;
         in0_t = 2 * block_size;
     }
-    uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
+    uint32_t im5_t = block_size;      // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
     uint32_t im1_t = 2;
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
@@ -226,8 +226,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
-    constexpr uint32_t no_weights_max_size = 120;
-    constexpr uint32_t with_weights_max_size = 60;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -249,21 +247,19 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
-            Wt = std::min(Wt, with_weights_max_size);
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
-            Wt = std::min(Wt, no_weights_max_size);
         }
     }
     if (large_tensor_needed) {
-        in0_t = Wt;
-        im0_t = Wt;  // buffer for saving xmm
-        im3_t = Wt;  // buffer for xmm^2
-        in5_t = Wt;  // buffer for gamma
-        in6_t = Wt;  // buffer for beta
+        in0_t = block_size;
+        im0_t = block_size;  // buffer for saving xmm
+        im3_t = block_size;  // buffer for xmm^2
+        in5_t = block_size;  // buffer for gamma
+        in6_t = block_size;  // buffer for beta
         if (b) {
-            im6_t = Wt;
-            in0_t = 2 * block_size;
+            im6_t = block_size;
+            in0_t = block_size;
         }
     }
 
