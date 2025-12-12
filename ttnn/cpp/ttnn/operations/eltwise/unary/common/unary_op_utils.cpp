@@ -94,6 +94,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::HARDGELU: return "SFPU_OP_HARDGELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -586,6 +587,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "sqrt_tile_init<false>();", fmt::format("sqrt_tile<false, {1}>({0});", idst, param0_raw)};
             break;
         }
+        case UnaryOpType::HARDGELU: {
+            op_init_and_name = {
+                fmt::format("hardgelu_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("hardgelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -841,6 +848,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             op_init_and_name = {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
             break;
         case UnaryOpType::LOGSIGMOID: op_init_and_name = {}; break;
+        case UnaryOpType::HARDGELU:
+            op_init_and_name = {"hardgelu_tile_init();", fmt::format("hardgelu_tile({});", idst)};
+            break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -929,6 +939,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
     } else if (name == "mish") {
         return UnaryWithParam(UnaryOpType::MISH);
+    } else if (name == "hardgelu") {
+        return UnaryWithParam(UnaryOpType::HARDGELU, static_cast<float>(true));
     }
     TT_THROW("Unknown unary op: {}", name);
 }
