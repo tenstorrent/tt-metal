@@ -131,6 +131,10 @@ class ModelArgs:
         if self.model_name == "gpt-oss-120b":
             if 6144 in to_warmup_seq_lens:
                 to_warmup_seq_lens.remove(6144)
+
+        for seq_len in to_warmup_seq_lens:
+            if seq_len >= 64 * 1024:
+                to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
         return to_warmup_seq_lens
 
     @property
