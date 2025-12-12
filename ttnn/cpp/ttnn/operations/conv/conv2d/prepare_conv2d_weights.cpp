@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "conv2d/conv2d_utils.hpp"
+#include "conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include <tt_stl/assert.hpp>

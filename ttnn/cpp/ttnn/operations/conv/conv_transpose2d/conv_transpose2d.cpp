@@ -693,9 +693,10 @@ uint32_t ConvT2DSliceAttr::get_L1_usage(
         bias_tensor.has_value(),
         false,
         in_channels_padded);
-    log_info(
+    log_debug(
         tt::LogOp,
-        "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, precise_max_halo_bytes = {}, conv size = "
+        "Conv Transpose DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, precise_max_halo_bytes = {}, conv "
+        "size = "
         "{}",
         slice_config.num_slices,
         sliced_input_tensor_memory_config.shard_spec().value(),

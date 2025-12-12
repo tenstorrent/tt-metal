@@ -374,25 +374,4 @@ struct ConvDRAMParamters {
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 
-namespace conv2d {
-std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 4> padding_n4,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    Layout input_layout,
-    DataType input_dtype,
-    DataType conv_output_dtype,
-    Tensor& weight_tensor,
-    std::optional<std::reference_wrapper<Tensor>> bias_tensor,
-    const Conv2dConfig& conv_config_,
-    const DeviceComputeKernelConfig& compute_config,
-    MeshDevice* device);
-}
 }  // namespace ttnn::operations::conv
