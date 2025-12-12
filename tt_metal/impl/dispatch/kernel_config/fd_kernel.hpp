@@ -20,8 +20,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class IDevice;
 class Program;
@@ -203,8 +202,7 @@ protected:
     std::vector<uint32_t> runtime_args_;
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace std {
 template <>

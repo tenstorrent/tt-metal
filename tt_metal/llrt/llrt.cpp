@@ -54,10 +54,8 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }
 }  // namespace
 
-namespace tt {
-
 // llrt = lower-level runtime
-namespace llrt {
+namespace tt::llrt {
 
 using std::uint16_t;
 using std::uint32_t;
@@ -501,6 +499,4 @@ void set_metal_eth_fw_run_flag(tt::ChipId device_id, const CoreCoord& virtual_co
 
 }  // namespace internal_
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

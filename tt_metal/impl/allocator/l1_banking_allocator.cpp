@@ -29,11 +29,9 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt {
+namespace tt::tt_metal {
 
-namespace tt_metal {
-
-void Allocator::init_compute_and_storage_l1_bank_manager() {
+void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     TT_FATAL(config_->worker_grid.contains(config_->compute_grid), "Compute grid must be a subset of worker grid");
 
     uint32_t num_l1_banks = 0;
@@ -165,7 +163,7 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         config_->disable_interleaved);
 }
 
-L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Allocator(alloc_config) {
+L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : AllocatorImpl(alloc_config) {
     this->init_one_bank_per_channel();
     this->init_compute_and_storage_l1_bank_manager();
     this->validate_bank_assignments();
@@ -245,6 +243,4 @@ AllocatorConfig L1BankingAllocator::generate_config(
     return config;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -11,6 +11,18 @@ on:
         description: "Job/subjob name within the workflow"
         required: true
         type: string
+      slack_ts:
+        description: "Slack message timestamp for threading replies"
+        required: false
+        default: ""
+        type: string
+      send-slack-message:
+        description: "Send slack message"
+        required: false
+        default: false
+        type: boolean
+
+
 jobs:
   auto-triage:
     runs-on: ubuntu-latest
@@ -30,6 +42,10 @@ jobs:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
           copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+          slack_ts: ${{ inputs.slack_ts }}
+          allow-pings: true
+          send-slack-message: ${{ inputs.send-slack-message }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_TESTING_CHANNEL }}
+          # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}

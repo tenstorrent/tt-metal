@@ -233,6 +233,11 @@ static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 b
 // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 template <typename Derived>
 struct PacketHeaderBase {
+private:
+    PacketHeaderBase() = default;
+    friend Derived;
+
+public:
     NocCommandFields command_fields;  // size = 40B due to scatter metadata
     uint16_t payload_size_bytes;
     // TODO: trim this down noc_send_type 2 bits (4 values):
@@ -784,7 +789,8 @@ static_assert(
 
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
-    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE)) != 0))
 // 1D routing with UDM is not supported
 static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
 

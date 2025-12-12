@@ -29,8 +29,7 @@
 #include "strided_all_gather_minimal_matmul_async_device_operation_types.hpp"
 #include "strided_all_gather_minimal_matmul_async_program.hpp"
 
-namespace ttnn::operations::experimental::ccl {
-namespace strided_all_gather_minimal_matmul_async {
+namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async {
 
 struct StridedAllGatherMinimalMatmulAsync {
     using operation_attributes_t = strided_all_gather_minimal_matmul_async::operation_attributes_t;
@@ -70,8 +69,7 @@ struct StridedAllGatherMinimalMatmulAsync {
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<bool> read_local_slice_from_input);
 };
-}  // namespace strided_all_gather_minimal_matmul_async
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
 
 namespace ttnn::prim {
 

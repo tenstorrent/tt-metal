@@ -30,8 +30,7 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
@@ -40,8 +39,7 @@ class MeshDevice;
 class MeshWorkload;
 }  // namespace distributed
 struct ProgramCommandSequence;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 

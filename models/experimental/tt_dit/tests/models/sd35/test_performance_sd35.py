@@ -7,11 +7,9 @@ import pytest
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.common.utility_functions import is_blackhole
 
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    StableDiffusion3Pipeline,
-    TimingCollector,
-)
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 
 
 @pytest.mark.parametrize(
@@ -109,30 +107,27 @@ def test_sd35_new_pipeline_performance(
     ]
     negative_prompt = ""
 
-    # Warmup run (not timed)
+    # Warmup run
     logger.info("Running warmup iteration...")
-    timer_warmup = TimingCollector()
-    pipeline.timing_collector = timer_warmup
 
-    images = pipeline(
-        prompt_1=[prompts[0]],
-        prompt_2=[prompts[0]],
-        prompt_3=[prompts[0]],
-        negative_prompt_1=[negative_prompt],
-        negative_prompt_2=[negative_prompt],
-        negative_prompt_3=[negative_prompt],
-        num_inference_steps=num_inference_steps,
-        seed=0,
-        traced=True,
-    )
+    with benchmark_profiler("run", iteration=0):
+        images = pipeline(
+            prompt_1=[prompts[0]],
+            prompt_2=[prompts[0]],
+            prompt_3=[prompts[0]],
+            negative_prompt_1=[negative_prompt],
+            negative_prompt_2=[negative_prompt],
+            negative_prompt_3=[negative_prompt],
+            num_inference_steps=num_inference_steps,
+            seed=0,
+            traced=True,
+        )
     images[0].save(f"sd35_new_{image_w}_{image_h}_warmup.png")
 
-    warmup_timing = timer_warmup.get_timing_data()
-    logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
-    all_timings = []
     num_perf_runs = 4  # Use 4 different prompts for performance testing
 
     # Optional Tracy profiling (if available)
@@ -150,10 +145,6 @@ def test_sd35_new_pipeline_performance(
         for i in range(num_perf_runs):
             logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-            # Create timing collector for this run
-            timer = TimingCollector()
-            pipeline.timing_collector = timer
-
             # Run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
@@ -167,13 +158,13 @@ def test_sd35_new_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     seed=0,  # Different seed for each run
                     traced=True,
+                    timer=benchmark_profiler,
+                    timer_iteration=i,
                 )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 
             # Collect timing data
-            timing_data = timer.get_timing_data()
-            all_timings.append(timing_data)
-            logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s")
+            logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     finally:
         if profiler:
@@ -181,16 +172,20 @@ def test_sd35_new_pipeline_performance(
             logger.info("Tracy profiling disabled")
 
     # Calculate statistics
-    clip_times = [t.clip_encoding_time for t in all_timings]
-    t5_times = [t.t5_encoding_time for t in all_timings]
-    total_encoding_times = [t.total_encoding_time for t in all_timings]
-    vae_times = [t.vae_decoding_time for t in all_timings]
-    total_times = [t.total_time for t in all_timings]
+    clip_times = [benchmark_profiler.get_duration("clip_encoding", i) for i in range(num_perf_runs)]
+    t5_times = [benchmark_profiler.get_duration("t5_encoding", i) for i in range(num_perf_runs)]
+    total_encoding_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
 
     # Calculate per-step denoising times
     all_denoising_steps = []
-    for timing in all_timings:
-        all_denoising_steps.extend(timing.denoising_step_times)
+    for i in range(num_perf_runs):
+        for j in range(num_inference_steps):
+            assert benchmark_profiler.contains_step(
+                f"denoising_step_{j}", i
+            ), f"All runs should have {num_inference_steps} denoising steps"
+            all_denoising_steps.append(benchmark_profiler.get_duration(f"denoising_step_{j}", i))
 
     # Report results
     cfg_factor = pipeline.dit_parallel_config.cfg_parallel.factor
@@ -273,16 +268,6 @@ def test_sd35_new_pipeline_performance(
 
     print("=" * 80)
 
-    # Validate that we got reasonable results
-    assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
-    assert all(t.total_time > 0 for t in all_timings), "All runs should have positive total time"
-    assert all(
-        len(t.denoising_step_times) == num_inference_steps for t in all_timings
-    ), f"All runs should have {num_inference_steps} denoising steps"
-
-    # Clean up
-    pipeline.timing_collector = None
-
     # Validate performance
     measurements = {
         "clip_encoding_time": statistics.mean(clip_times),
@@ -315,14 +300,45 @@ def test_sd35_new_pipeline_performance(
 
     if is_ci_env:
         # In CI, dump a performance report
-        profiler_model_name = (
-            f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
-        )
         benchmark_data = BenchmarkData()
+        for iteration in range(num_perf_runs):
+            for step_name, target in zip(
+                ["encoder", "denoising", "vae", "run"],
+                [
+                    None,
+                    expected_metrics["denoising_steps_time"],
+                    expected_metrics["vae_decoding_time"],
+                    expected_metrics["total_time"],
+                ],
+            ):
+                benchmark_data.add_measurement(
+                    profiler=benchmark_profiler,
+                    iteration=iteration,
+                    step_name=step_name,
+                    name=step_name,
+                    value=benchmark_profiler.get_duration(step_name, iteration),
+                    target=target,
+                )
+        device_name_map = {
+            (2, 4): "WH_T3K",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type="sd35_traced",
-            ml_model_name=profiler_model_name,
+            run_type=device_name_map[tuple(mesh_device.shape)],
+            ml_model_name="SD35",
+            batch_size=1,
+            config_params={
+                "width": image_w,
+                "height": image_h,
+                "num_frames": 1,
+                "num_steps": num_inference_steps,
+                "sp_factor": sp_factor,
+                "tp_factor": tp_factor,
+                "topology": str(topology),
+                "num_links": num_links,
+                "fsdp": False,
+            },
         )
 
     pass_perf_check = True

@@ -405,7 +405,7 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        reset_batch=True,
+        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
@@ -627,6 +627,9 @@ class Generator:
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            if isinstance(tt_out, tuple):
+                # Get logits and skip log-probs
+                tt_out = tt_out[0]
             return tt_out.cpu()
 
         logits, read_event = self.model.process_output_decode(tt_out)
@@ -721,6 +724,23 @@ class Generator:
         else:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+        # page_table gets padded properly in prefill_forward_text
+        # be sure to pad correctly for non traced sequences in future warmup calls
+        page_table = torch.zeros(1, 1, dtype=torch.int32)
+        # in case of multiple sampling parameters, we need to warmup for each one
+        for s in sampling_params:
+            self.warmup_prefill_traces(
+                tokens=None,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=None,
+                enable_trace=enable_trace,
+                sampling_params=s,
+                empty_slots=None,
+                tt_out_logits_all_users=None,
+            )
 
     ## Destructor (used to delete ttnn trace if exists)
 

@@ -1,18 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads_pybind.hpp"
+#include "all_reduce_create_qkv_heads.hpp"
+
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/types.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
-#include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/global_semaphore.hpp"
-
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
 

@@ -542,16 +542,45 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
 
 def get_padded_prefill_len(seq_len: int) -> int:
     """
-    If seq_len is less than 128, pad to 128
-    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
-    TODO: Generalize for max_mm_seq_len different from 2048
+    Get the padded prefill length for a given sequence length.
+    This is used to pad the sequence length to the nearest power of 2.
     """
+    # TODO: https://github.com/tenstorrent/tt-metal/issues/34117
     if seq_len <= 128:
         return 128
-    pow_2_pad = nearest_pow_2(seq_len)
-    mult_2048_pad = 2048 * math.ceil(seq_len / 2048)
-    min_extended_pad = min(pow_2_pad, mult_2048_pad)
-    return min_extended_pad
+    if seq_len <= 1024:
+        return 1024
+    else:
+        # return next power of 2 greater than seq_len
+        return 2 ** (seq_len - 1).bit_length()
+
+
+def get_all_padded_prefill_lengths(max_len):
+    lengths = [128]
+    k = 0
+    while (v := (1 << k) * 1024) <= max_len:
+        lengths.append(v)
+        k += 1
+    return lengths
+
+
+def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens):
+    max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
+    to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
+    for trace_supported_seq_len in trace_supported_seq_lens:
+        if trace_supported_seq_len not in to_warmup_seq_lens:
+            to_warmup_seq_lens.append(trace_supported_seq_len)
+    to_warmup_seq_lens.sort()
+
+    return to_warmup_seq_lens
+
+
+def cap_seq_lens_to_max_prefill_chunk_size(seq_lens, cap):
+    for seq_len in seq_lens:
+        if seq_len > cap:
+            seq_lens = seq_lens[: seq_lens.index(seq_len)]
+            break
+    return seq_lens
 
 
 def get_block_size(kv_cache):
@@ -781,3 +810,29 @@ def get_decode_mask(args, mesh_device, paged_attention_config=None):
         )
 
     return mask
+
+
+def build_encoder_attention_mask(
+    x: torch.Tensor,
+    ar: torch.Tensor,
+    ntok: int,
+    num_chunks: int,
+    n_heads: int,
+):
+    """
+    Build vision encoder attention mask that omits padding tokens.
+    """
+
+    def get_negative_inf_value(dtype):
+        return torch.finfo(dtype).min
+
+    masks = []
+    for arx in ar:
+        mask_i = torch.ones((num_chunks, x.shape[2], 1), dtype=x.dtype)
+        mask_i[: arx[0] * arx[1], :ntok] = 0
+        mask_i = mask_i.view(num_chunks * x.shape[2], -1)
+        mask_i = mask_i @ mask_i.T * get_negative_inf_value(x.dtype)
+        mask_i = mask_i.unsqueeze(0)
+        masks.append(mask_i)
+    masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
+    return masks

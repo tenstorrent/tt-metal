@@ -40,7 +40,7 @@ def dump_callstacks(
     try:
         # Skip DONE cores unless --all-cores is specified
         if not show_all_cores:
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
         return callstack_provider.get_callstacks(location, risc_name)
@@ -58,10 +58,6 @@ def run(args, context: Context):
     from triage import set_verbose_level
 
     show_all_cores: bool = args["--all-cores"]
-
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
 
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
 

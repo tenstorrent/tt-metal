@@ -606,6 +606,25 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     const size_t udm_memory_pool_size = udm_memory_pool_slot_size_ * udm_memory_pool_num_slots_;
     udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
     current_address = udm_memory_pool_region_.get_end_address();
+    log_debug(
+        tt::LogMetal,
+        "udm memory pool has: {} slots, each slot is: {} bytes",
+        udm_memory_pool_num_slots_,
+        udm_memory_pool_slot_size_);
+
+    // Allocate response pool region - use remaining L1 space
+    // RegisteredResponse is 32 bytes per slot
+    const size_t available_l1_bytes = l1_end_address - current_address;
+    udm_registered_response_num_slots_ = available_l1_bytes / udm_registered_response_slot_size_;
+    const size_t udm_registered_response_pool_size =
+        udm_registered_response_num_slots_ * udm_registered_response_slot_size_;
+    udm_registered_response_pool_region_ = MemoryRegion(current_address, udm_registered_response_pool_size, 1);
+    current_address = udm_registered_response_pool_region_.get_end_address();
+    log_debug(
+        tt::LogMetal,
+        "udm registered response pool has: {} slots, each slot is: {} bytes",
+        udm_registered_response_num_slots_,
+        udm_registered_response_slot_size_);
 
     memory_map_end_address_ = current_address;
 
@@ -819,6 +838,12 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_num_slots_));  // 47: udm_memory_pool_num_slots
     ct_args.push_back(static_cast<uint32_t>(direction));                   // 48: direction
 
+    // Response pool args
+    ct_args.push_back(
+        udm_registered_response_pool_region_.get_address());  // 49: udm_registered_response_pool_base_address
+    ct_args.push_back(
+        static_cast<uint32_t>(udm_registered_response_num_slots_));  // 50: udm_registered_response_pool_num_slots
+
     // Note: router NOC coords and sync address will be added by the builder
     return ct_args;
 }
@@ -938,6 +963,9 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
             // Router channels: topology-based fabric router stream IDs (only in Legacy MUX mode)
             const auto topology = fabric_context.get_fabric_topology();
             switch (topology) {
+                case tt::tt_fabric::Topology::NeighborExchange:
+                    TT_THROW("NeighborExchange topology has not been tested in MUX mode");
+                    break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
                     fabric_stream_ids = {tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};

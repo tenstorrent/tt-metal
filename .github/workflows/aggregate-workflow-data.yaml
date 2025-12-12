@@ -246,6 +246,8 @@ jobs:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
+    outputs:
+      slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Handle failed workflows
@@ -254,15 +256,18 @@ jobs:
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
+        id: slack-report
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
   trigger-auto-triage:
-    needs: analyze-data
-    if: ${{ fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
+    needs: [analyze-data, handle-failures]
+    if: ${{ always() && needs.analyze-data.result == 'success' && fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -277,3 +282,7 @@ jobs:
         with:
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
+          slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          send-slack-message: true
