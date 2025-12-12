@@ -252,6 +252,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DLIGHTWEIGHT_KERNEL_ASSERTS ";
     }
 
+    if (rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENABLE_LLK_ASSERT ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
@@ -348,6 +352,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto common_flags = jit_build_query.common_flags(params);
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
+        this->lflags_ += jit_build_query.linker_flags(params);
     }
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
