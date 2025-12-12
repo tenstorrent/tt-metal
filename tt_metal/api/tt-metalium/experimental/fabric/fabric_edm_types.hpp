@@ -10,6 +10,11 @@ namespace tt::tt_fabric {
 
 enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
 
+// Topology classification utilities
+constexpr bool is_2D_topology(Topology topology) { return topology == Topology::Mesh || topology == Topology::Torus; }
+
+constexpr bool is_ring_or_torus(Topology topology) { return topology == Topology::Ring || topology == Topology::Torus; }
+
 struct WorkerXY {
     uint16_t x;
     uint16_t y;

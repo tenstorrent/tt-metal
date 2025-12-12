@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     Tensor& output,
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
-    LayerNormDistributedDefaultProgramConfig program_config) {
+    LayerNormDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -303,7 +303,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    LayerNormDistributedDefaultProgramConfig program_config) {
+    LayerNormDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();

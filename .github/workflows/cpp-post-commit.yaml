@@ -23,6 +23,14 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
       gtest_filter:
         required: false
         default: "*"
@@ -131,6 +139,8 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
           slow-dispatch-timeout: 10
       - name: ${{ matrix.test-group.name }} tests

@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
+#include <algorithm>
 
 namespace tt::tt_fabric {
 
@@ -50,31 +51,38 @@ static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
+// Z router channel counts
+// VC0: 4 channels (same as 2D mesh for consistency)
+// VC1: 4 sender channels (Z→mesh, one per direction), 1 receiver channel (mesh→Z)
+static constexpr std::size_t num_sender_channels_z_router_vc0 = 4;
+static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
+static constexpr std::size_t num_sender_channels_z_router = num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
+static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
+
 static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Worker + 3 of [N/E/S/W] = 4 channels
 // VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels
 // Total 2D: 4 + 3 = 7 channels (channel 7 reserved for future Z-axis)
 static constexpr std::size_t num_sender_channels_2d = 8;
-static constexpr std::size_t num_max_sender_channels = 8;  // Reserve space for future expansion (Z-axis channel)
+static constexpr std::size_t num_max_sender_channels = std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router, num_sender_channels_2d});
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;
-static constexpr std::size_t num_max_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d);
+static constexpr std::size_t num_max_receiver_channels = std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;
+static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
+static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
-static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms_1d, num_downstream_edms_2d);
+static constexpr std::size_t max_downstream_edms = std::max({num_downstream_edms_1d, num_downstream_edms_2d, num_downstream_edms_2d_vc1_with_z});
+
+// 2D mesh directions (N, E, S, W)
+static constexpr uint32_t num_mesh_directions_2d = 4;
 
 uint32_t get_sender_channel_count(bool is_2D_routing);
 
 uint32_t get_receiver_channel_count(bool is_2D_routing);
-
-// Per-VC channel counts (index 0 = VC0, index 1 = VC1)
-std::array<uint32_t, 2> get_sender_channel_count_per_vc(Topology topology);
-
-std::array<uint32_t, 2> get_receiver_channel_count_per_vc(Topology topology);
 
 uint32_t get_num_used_sender_channel_count(Topology topology);
 

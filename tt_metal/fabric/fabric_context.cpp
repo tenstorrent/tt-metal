@@ -56,10 +56,6 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
-bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
-}
-
 size_t FabricContext::compute_packet_header_size_bytes() const {
     bool udm_enabled =
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
@@ -93,8 +89,8 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology_from_config(fabric_config);
 
-    this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
-    this->bubble_flow_control_enabled_ = (this->topology_ == Topology::Ring || this->topology_ == Topology::Torus);
+    this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
+    this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
     this->packet_header_size_bytes_ = this->compute_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->compute_max_payload_size_bytes();
@@ -103,6 +99,9 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     // Query tensix config from MetalContext at init time
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
+
+    // Compute intermesh VC configuration (requires ControlPlane to be initialized)
+    // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
 
     // Builder context will be lazy-initialized on first access
     builder_context_ = nullptr;
@@ -127,6 +126,32 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     // Stub: returns false for now (all meshes are compute meshes)
     // TODO: Implement when switch mesh support lands - delegate to ControlPlane
     (void)mesh_id;  // Unused for now
+    return false;
+}
+
+bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+
+    // Iterate through all meshes to find which one contains this device
+    const auto& mesh_ids = mesh_graph.get_mesh_ids();
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& mesh_connections = inter_mesh_connectivity[*mesh_id];
+
+        // Check if this device ID is within this mesh's connectivity map
+        if (device_id < mesh_connections.size()) {
+            const auto& chip_connections = mesh_connections[device_id];
+
+            // Check if any connection from this chip uses Z direction
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    return true;
+                }
+            }
+        }
+    }
+
     return false;
 }
 
@@ -164,5 +189,6 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
 
     return false;
 }
+
 
 }  // namespace tt::tt_fabric

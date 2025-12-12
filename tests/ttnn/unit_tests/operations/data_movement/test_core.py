@@ -530,7 +530,7 @@ def test_bh_alignment_i2s(
     )
     # So far the sharded tensor alignment is controled by keep_l1_aligned flag, will remove it later after launch
     x_t_sharded = ttnn.interleaved_to_sharded(x_t, shard_config, keep_l1_aligned=True)
-    x_t = ttnn.sharded_to_interleaved(x_t_sharded, output_buffer_type, is_l1_aligned=True)
+    x_t = ttnn.sharded_to_interleaved(x_t_sharded, output_buffer_type)
     output_data = ttnn.from_device(x_t)
     output_data = ttnn.to_torch(output_data)
     passing = torch.equal(input_data, output_data)
@@ -591,7 +591,7 @@ def test_mnist_max_pool_s2i(
         ceil_mode=False,
     )
 
-    x_t = ttnn.sharded_to_interleaved(output, output_buffer_type, is_l1_aligned=True)
+    x_t = ttnn.sharded_to_interleaved(output, output_buffer_type)
     output_data = ttnn.from_device(x_t)
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_data))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
