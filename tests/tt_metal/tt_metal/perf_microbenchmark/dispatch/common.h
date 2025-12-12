@@ -546,8 +546,7 @@ inline void DeviceData::overflow_check(IDevice* device) {
     }
 }
 
-namespace tt::tt_dispatch_tests {
-namespace Common {
+namespace tt::tt_dispatch_tests::Common {
 
 // Forward declare the accessor
 // This accessor class provides test access to private members
@@ -564,7 +563,7 @@ namespace DeviceDataUpdater {
 // Update DeviceData for linear write
 // Mirrors a dispatcher linear-write transaction into the DeviceData expectation model
 // Takes provided payload and pushes exactly those values into destination worker_range
-void update_linear_write(
+inline void update_linear_write(
     const std::vector<uint32_t>& payload, DeviceData& device_data, const CoreRange& worker_range, bool is_mcast) {
     // Update expected device_data
     if (is_mcast) {
@@ -584,7 +583,7 @@ void update_linear_write(
 
 // Update DeviceData for paged write
 // Tracks page-wise writes so validate() can check DRAM/L1 bank contents after the test runs
-void update_paged_write(
+inline void update_paged_write(
     const std::vector<uint32_t>& payload,
     DeviceData& device_data,
     const CoreCoord& bank_core,
@@ -598,7 +597,7 @@ void update_paged_write(
 
 // Update DeviceData for packed write
 // Applies packed write payloads to every selected worker
-void update_packed_write(
+inline void update_packed_write(
     const std::vector<uint32_t>& payload,
     DeviceData& device_data,
     const std::vector<CoreCoord>& worker_cores,
@@ -686,7 +685,7 @@ HostMemDeviceCommand build_paged_write_command(
 
 // Serializes a packed-unicast command including sub-command table
 // and optional replicated payloads when stride is enabled
-HostMemDeviceCommand build_packed_write_command(
+inline HostMemDeviceCommand build_packed_write_command(
     const std::vector<uint32_t>& payload,
     const std::vector<CQDispatchWritePackedUnicastSubCmd>& sub_cmds,
     uint32_t common_addr,
@@ -924,9 +923,6 @@ inline uint32_t clamp_to_max_fetch(
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
-public:
-    virtual ~BaseTestFixture() = default;
-
 protected:
     // DispatchPayloadGenerator for generating payloads
     std::unique_ptr<DispatchPayloadGenerator> payload_generator_;
@@ -956,6 +952,9 @@ protected:
     DispatchTestConfig cfg_;
 
     void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         tt_metal::GenericMeshDeviceFixture::SetUp();
 
         // Setup Config
@@ -989,8 +988,18 @@ protected:
         max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     }
 
+    bool validate_dispatch_mode() {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            return false;
+        }
+        return true;
+    }
+
     // Helper function that polls completion queue until expected data is written into by dispatcher
-    // Without this, we can fail verification as there can a be race condition
+    // Without this, we can fail validation as there can a be an occasional race condition
+    // TODO: Alternatively, could we use tt_driver_atomics::mfence before validation?
     void wait_for_completion_queue_bytes(uint32_t total_expected_cq_payload, uint32_t timeout_ms = 0) {
         std::atomic<bool> exit_condition{false};
         const auto start = std::chrono::steady_clock::now();
@@ -1000,8 +1009,8 @@ protected:
                 mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition);
             const uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
             const uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
-            const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
             const uint32_t completion_q_read_ptr = mgr_->get_completion_queue_read_ptr(fdcq_->id());
+            const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
             const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
 
             if (completion_q_write_ptr > completion_q_read_ptr and
@@ -1148,6 +1157,4 @@ protected:
         }
     }
 };
-
-}  // namespace Common
-}  // namespace tt::tt_dispatch_tests
+}  // namespace tt::tt_dispatch_tests::Common

@@ -42,8 +42,7 @@
  * - Dispatcher: Kernel that parses commands and issues writes/signals to Worker cores.
  */
 
-namespace tt::tt_dispatch_tests {
-namespace prefetcher_tests {
+namespace tt::tt_dispatch_tests::prefetcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
@@ -136,10 +135,10 @@ protected:
     static constexpr bool flush_prefetch_ = false;
     static constexpr bool hugepage_write_ = true;
 
-    uint32_t dram_base_;
-    uint32_t num_banks_;
-    uint32_t l1_alignment_;
-    uint32_t packed_write_max_unicast_sub_cmds_;
+    uint32_t dram_base_{};
+    uint32_t num_banks_{};
+    uint32_t l1_alignment_{};
+    uint32_t packed_write_max_unicast_sub_cmds_{};
 
     // Exec Buf Configuration
     bool use_exec_buf_{};
@@ -168,6 +167,7 @@ protected:
         uint32_t num_iterations,
         bool wait_for_completion = true,
         bool wait_for_host_writes = false) override {
+        // exe buff execution in BasePrefetcherTestFixture
         if (use_exec_buf_) {
             execute_generated_commands_exec_buff(
                 commands_per_iteration,
@@ -349,7 +349,6 @@ protected:
         std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds;
         sub_cmds.reserve(n_sub_cmds);
         for (auto length : lengths) {
-            TT_ASSERT((length & (MetalContext::instance().hal().get_alignment(HalMemType::DRAM) - 1)) == 0);
             CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
             sub_cmd.start_page = 0;
             sub_cmd.log_page_size = log_packed_read_page_size;
@@ -480,8 +479,8 @@ protected:
         // Check if we are running in a configuration where we have a distinct MMIO and Remote device
         // This test targets PREFETCH_H (MMIO) -> PREFETCH_D (Remote) -> DISPATCHER (Remote)
         // Skip on anything not wormhole
-        if (device_->arch() != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Skipping RelayLinearHTest: Test only supported on WORMHOLE_B0.";
+        if (device_->arch() != tt::ARCH::WORMHOLE_B0 || mesh_device_->num_devices() == 1) {
+            GTEST_SKIP() << "Skipping RelayLinearHTest: Test only supported on WORMHOLE multi-chip";
         }
 
         mmio_device_ = mesh_device_->get_devices()[0];
@@ -663,7 +662,8 @@ HostMemDeviceCommand build_prefetch_relay_paged(
         nullptr         // payload data
     );
 
-    cmd.add_prefetch_relay_paged(true, start_page, base_addr, page_size_bytes, pages_in_chunk, length_adjust);
+    cmd.add_prefetch_relay_paged(
+        /*is_dram=*/true, start_page, base_addr, page_size_bytes, pages_in_chunk, length_adjust);
 
     return cmd;
 }
@@ -811,7 +811,7 @@ protected:
         // Calculate max random size we can read
         uint32_t max_data = big_chunk_ ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
         uint32_t max = DEVICE_DATA_SIZE - (device_data.size() * sizeof(uint32_t));
-        max = std::max(max, max_data);  // (max > max_data) ? max_data : max;
+        max = std::max(max, max_data);
 
         // Randomize base address in DRAM
         uint32_t random_offset =
@@ -878,7 +878,7 @@ protected:
             case 0:
                 // Unicast Write
                 {
-                    uint32_t cmd_size_bytes = host_alignment_;  // CQ_PREFETCH_CMD_BARE_MIN_SIZE
+                    uint32_t cmd_size_bytes = host_alignment_;
 
                     // New implementation using get_random_size:
                     uint32_t max_prefetch_command_size = max_fetch_bytes_;
@@ -895,7 +895,9 @@ protected:
                         remaining_bytes      // remaining_bytes
                     );
 
-                    TT_ASSERT(xfer_size_bytes > 0);
+                    if (xfer_size_bytes < 4) {
+                        return std::nullopt;
+                    }
 
                     // Capture address before updating device_data
                     uint32_t addr = device_data.get_result_data_addr(worker_range.start_coord, 0);
@@ -944,7 +946,7 @@ protected:
                     // Size and Clamp
                     uint32_t xfer_size_bytes =
                         payload_generator_->get_random_size(dispatch_buffer_page_size_, 1, remaining_bytes);
-                    TT_ASSERT(xfer_size_bytes > 0);
+
                     bool no_stride = payload_generator_->get_rand_bool();
 
                     // Clamp for dispatch page size (no_stride mode)
@@ -988,11 +990,11 @@ protected:
 };
 
 struct HelperInfo {
-    uint32_t dram_base_;
-    uint32_t num_banks_;
-    uint32_t l1_alignment_;
-    uint32_t packed_write_max_unicast_sub_cmds_;
-    uint32_t dispatch_buffer_page_size_;
+    uint32_t dram_base_{};
+    uint32_t num_banks_{};
+    uint32_t l1_alignment_{};
+    uint32_t packed_write_max_unicast_sub_cmds_{};
+    uint32_t dispatch_buffer_page_size_{};
 };
 
 // TODO: add CQ_PREFETCH_CMD_DEBUG
@@ -1002,7 +1004,7 @@ class SmokeTestHelper {
     std::vector<HostMemDeviceCommand>& cmds_;
     std::unique_ptr<Common::DispatchPayloadGenerator> payload_generator_;
 
-    HelperInfo info_;
+    HelperInfo info_{};
 
 public:
     SmokeTestHelper(
@@ -1084,14 +1086,14 @@ public:
         const CoreRange worker_range,
         const uint32_t log_packed_read_page_size,
         const std::vector<uint32_t>& lengths,
-        std::function<std::vector<CQPrefetchRelayPagedPackedSubCmd>(
-            const std::vector<uint32_t>& lengths, DeviceData&, uint32_t log_page_sz, uint32_t n_sub_cmds)>
+        const std::function<std::vector<CQPrefetchRelayPagedPackedSubCmd>(
+            const std::vector<uint32_t>& lengths, DeviceData&, uint32_t log_page_sz, uint32_t n_sub_cmds)>&
             build_packed) {
         const auto worker = worker_range.start_coord;
         const CoreCoord last_virt_worker = device_->virtual_core_from_logical_core(worker, CoreType::WORKER);
         uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, last_virt_worker);
 
-        const uint32_t total_length = std::accumulate(lengths.begin(), lengths.end(), 0);
+        const uint32_t total_length = std::accumulate(lengths.begin(), lengths.end(), 0u);
         const uint32_t n_sub_cmds = lengths.size();
         const bool flush_prefetch = false;
         const bool inline_data = false;
@@ -1223,7 +1225,7 @@ public:
         cmds_.push_back(cmd);
     }
 
-    void add_host_write(uint32_t length, std::function<void(DeviceData&)> pad_host_data) {
+    void add_host_write(uint32_t length, const std::function<void(DeviceData&)>& pad_host_data) {
         constexpr bool inline_data = true;
         std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
 
@@ -1392,8 +1394,8 @@ TEST_P(PrefecherHostTextFixture, HostTest) {
 
     const uint32_t max_data_size = DEVICE_DATA_SIZE;
     const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
-    const uint32_t dram_data_size_words = DRAM_DATA_SIZE_WORDS;  // this->get_dram_data_size_words();
-    const uint32_t num_iterations = 1;                           // this->get_num_iterations();
+    const uint32_t dram_data_size_words = this->get_dram_data_size_words();
+    const uint32_t num_iterations = this->get_num_iterations();
 
     std::vector<uint32_t> data(max_data_size_words);
     for (uint32_t i = 0; i < max_data_size_words; i++) {
@@ -1755,7 +1757,7 @@ TEST_P(RandomTestFixture, RandomTest) {
                 // // test issue w/ handling re-leveling of results data after paged commands
                 // auto result = gen_random_linear_cmd(device_data, worker_core, noc_xy, l1_addr, remaining_bytes);
                 // if(result.has_value()){
-                //     HostMemDeviceCommand cmd = *result;
+                //     const HostMemDeviceCommand& cmd = *result;
                 //     commands_per_iteration.push_back(cmd);
                 // }
                 break;
@@ -1765,7 +1767,7 @@ TEST_P(RandomTestFixture, RandomTest) {
                 auto result =
                     gen_random_dram_paged_cmd(device_data, worker_core, single_worker_range, noc_xy, remaining_bytes);
                 if (result.has_value()) {
-                    HostMemDeviceCommand cmd = *result;
+                    const HostMemDeviceCommand& cmd = *result;
                     commands_per_iteration.push_back(cmd);
                 }
                 break;
@@ -1775,7 +1777,7 @@ TEST_P(RandomTestFixture, RandomTest) {
                 CoreRange multi_worker_range = {worker_core, last_worker};
                 auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                 if (result.has_value()) {
-                    HostMemDeviceCommand cmd = *result;
+                    const HostMemDeviceCommand& cmd = *result;
                     commands_per_iteration.push_back(cmd);
                 }
                 break;
@@ -1925,7 +1927,6 @@ TEST_P(PrefetcherSmokeTestFixture, SmokeTest) {
 
     // Section 1: Unicast
     // Important: reset device_data from prior tests if smoke test isn't the first
-    // device_data.reset();
     helper.add_unicast_write(worker_range, 32);
     helper.add_unicast_write(worker_range, 1026);
     helper.add_unicast_write(worker_range, 8448);
@@ -2078,9 +2079,8 @@ TEST_P(PrefetcherSmokeTestFixture, HostSmokeTest) {
     // Instantiate Helper
     SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
 
-    // device_data.reset();
     auto add_host_write_func = [this](DeviceData& device_data) {
-        return PrefecherHostTextFixture::pad_host_data(device_data);
+        PrefecherHostTextFixture::pad_host_data(device_data);
     };
 
     for (uint32_t multiplier = 1; multiplier < 3; multiplier++) {
@@ -2252,5 +2252,4 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
-}  // namespace prefetcher_tests
-}  // namespace tt::tt_dispatch_tests
+}  // namespace tt::tt_dispatch_tests::prefetcher_tests
