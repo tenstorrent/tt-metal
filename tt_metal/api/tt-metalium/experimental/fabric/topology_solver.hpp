@@ -83,6 +83,17 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physi
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
+ * @brief Connection validation mode for topology mapping
+ *
+ * Controls how connection counts (multi-edge channel counts) are validated during mapping.
+ */
+enum class ConnectionValidationMode {
+    STRICT,   ///< Require exact channel counts, fail if not met
+    RELAXED,  ///< Prefer correct channel counts, allow mismatches with warnings (default)
+    NONE      ///< Only check edge existence, ignore channel counts
+};
+
+/**
  * @brief Unified constraint system for topology mapping
  *
  * MappingConstraints represents all constraints internally as trait maps. Both trait-based
