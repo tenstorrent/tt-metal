@@ -5,7 +5,8 @@
 #pragma once
 
 #include "all_gather_async_device_operation_types.hpp"
-#include "all_gather_async_program_factory.hpp"
+#include "all_gather_async_default_program_factory.hpp"
+#include "all_gather_async_llama_sharded_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
