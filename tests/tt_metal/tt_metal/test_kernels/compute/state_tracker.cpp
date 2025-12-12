@@ -72,16 +72,16 @@ void MAIN {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
     mul_tiles_bcast_scalar_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
-    mul_bcast_cols_init_short(cb_in0, cb_in1);
+    mul_bcast_cols_init_short(cb_in1, cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
-    mul_bcast_rows_init_short(cb_in1, cb_in0);
+    mul_bcast_rows_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
-    sub_bcast_cols_init_short(cb_in0, cb_in1);
+    sub_bcast_cols_init_short(cb_in1, cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
-    sub_tiles_bcast_scalar_init_short(cb_in1, cb_in0);
+    sub_tiles_bcast_scalar_init_short(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);
+    binary_tiles_init<false, ELWADD>(cb_in2, cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
     binary_dest_reuse_tiles_init(cb_in1);
