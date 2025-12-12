@@ -207,6 +207,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor& input_tensor_b,
     Tensor& output_tensor,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,

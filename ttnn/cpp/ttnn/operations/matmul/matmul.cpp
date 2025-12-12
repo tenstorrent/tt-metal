@@ -193,7 +193,8 @@ ttnn::Tensor bound_matmul(
     // Decide if we need to manually transpose or if the program config will handle it
     bool needs_manual_transpose =
         !(std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) ||
-          std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config));
+          std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
+          std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(chosen_program_config));
     bool needs_manual_transpose_a = parameters.transpose_a && needs_manual_transpose;
     bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
 
