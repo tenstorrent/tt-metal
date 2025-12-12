@@ -16,6 +16,7 @@ class GraphTemplate;
 class NodeDescriptor;
 class Port;
 class ChildInstance;
+class PortConnections;
 }  // namespace tt::scaleout_tools::cabling_generator::proto
 
 namespace tt::scaleout_tools {
@@ -91,8 +92,15 @@ private:
         MergeValidationResult& result);
 
     static void normalize_torus_descriptors(
+        cabling_generator::proto::ClusterDescriptor& target,
+        const cabling_generator::proto::ClusterDescriptor& source,
+        const std::string& template_name);
+
+    static void add_torus_internal_connections(
         cabling_generator::proto::GraphTemplate& target_template,
-        const cabling_generator::proto::GraphTemplate& source_template);
+        const std::string& target_desc,
+        const std::string& source_desc,
+        const std::string& child_name);
 
     static std::set<uint32_t> extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor);
 
@@ -134,6 +142,26 @@ private:
     static bool is_a_torus(const std::string& desc);
     static bool has_same_torus_architecture(const std::string& desc1, const std::string& desc2);
     static std::string extract_torus_architecture(const std::string& desc);
+
+    static bool has_torus_variant(const std::string& desc, const std::string& variant);
+
+    static void add_wh_x_torus_connections(
+        cabling_generator::proto::PortConnections* connections, const std::string& node);
+    static void add_wh_y_torus_connections(
+        cabling_generator::proto::PortConnections* connections, const std::string& node);
+    static void add_bh_x_torus_connections(
+        cabling_generator::proto::PortConnections* connections, const std::string& node);
+    static void add_bh_y_torus_connections(
+        cabling_generator::proto::PortConnections* connections, const std::string& node);
+
+    static void add_internal_connection(
+        cabling_generator::proto::PortConnections* connections,
+        const std::string& node_a,
+        int tray_a,
+        int port_a,
+        const std::string& node_b,
+        int tray_b,
+        int port_b);
 };
 
 }  // namespace tt::scaleout_tools

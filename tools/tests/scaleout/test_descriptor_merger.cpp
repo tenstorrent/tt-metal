@@ -9,6 +9,7 @@
 
 #include <cabling_generator/descriptor_merger.hpp>
 #include <cabling_generator/cabling_generator.hpp>
+#include <factory_system_descriptor/utils.hpp>
 #include "protobuf/cluster_config.pb.h"
 #include "protobuf/factory_system_descriptor.pb.h"
 
@@ -16,6 +17,194 @@ namespace tt::scaleout_tools {
 
 class DescriptorMergerTest : public ::testing::Test {
 protected:
+    // Helper to create a test directory
+    static std::string create_test_dir(const std::string& test_name) {
+        const std::string dir = "generated/tests/" + test_name + "/";
+        std::filesystem::create_directories(dir);
+        return dir;
+    }
+
+    // Helper to write a string to a textproto file
+    static void write_textproto(const std::string& path, const std::string& content) { std::ofstream(path) << content; }
+
+    // Helper to write a protobuf message to a textproto file
+    template <typename T>
+    static void write_proto_to_textproto(const std::string& path, const T& proto) {
+        std::string proto_str;
+        google::protobuf::TextFormat::PrintToString(proto, &proto_str);
+        write_textproto(path, proto_str);
+    }
+
+    // Helper to create a simple single-node descriptor
+    static void create_simple_descriptor(
+        const std::string& path,
+        const std::string& template_name,
+        const std::string& node_name,
+        const std::string& node_descriptor,
+        uint32_t host_id = 0) {
+        write_textproto(
+            path,
+            "graph_templates {\n"
+            "  key: \"" +
+                template_name +
+                "\"\n"
+                "  value {\n"
+                "    children {\n"
+                "      name: \"" +
+                node_name +
+                "\"\n"
+                "      node_ref { node_descriptor: \"" +
+                node_descriptor +
+                "\" }\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+                "root_instance {\n"
+                "  template_name: \"" +
+                template_name +
+                "\"\n"
+                "  child_mappings { key: \"" +
+                node_name + "\" value { host_id: " + std::to_string(host_id) +
+                " } }\n"
+                "}\n");
+    }
+
+    // Helper to generate FSD and YAML for a descriptor
+    static std::string generate_yaml_from_descriptor(
+        const std::string& descriptor_path,
+        const std::string& output_dir,
+        const std::string& yaml_prefix,
+        const std::vector<std::string>& hostnames = {"host0"}) {
+        CablingGenerator gen(descriptor_path, hostnames);
+        const std::string fsd_path = output_dir + yaml_prefix + "_fsd.textproto";
+        gen.emit_factory_system_descriptor(fsd_path);
+        return generate_cluster_descriptor_from_fsd(fsd_path, output_dir, yaml_prefix + "_cluster");
+    }
+
+    // Compare YAML ClusterDescriptors - the universal format where all connections are flattened
+    static void assert_yaml_cluster_descriptors_equal(
+        const std::string& yaml_path1, const std::string& yaml_path2, const std::string& context = "") {
+        std::ifstream file1(yaml_path1);
+        ASSERT_TRUE(file1.is_open()) << context << ": Failed to open " << yaml_path1;
+        const std::string yaml1((std::istreambuf_iterator<char>(file1)), std::istreambuf_iterator<char>());
+
+        std::ifstream file2(yaml_path2);
+        ASSERT_TRUE(file2.is_open()) << context << ": Failed to open " << yaml_path2;
+        const std::string yaml2((std::istreambuf_iterator<char>(file2)), std::istreambuf_iterator<char>());
+
+        EXPECT_EQ(yaml1, yaml2) << context << ": YAML ClusterDescriptor mismatch\n"
+                                << "  File 1: " << yaml_path1 << "\n"
+                                << "  File 2: " << yaml_path2;
+    }
+
+    // Helper to create a two-node descriptor with a connection
+    static void create_two_node_descriptor_with_connection(
+        const std::string& path,
+        const std::string& template_name,
+        const std::string& node1_descriptor,
+        const std::string& node2_descriptor,
+        const std::string& conn_path_b,  // "node2", "node3", etc.
+        uint32_t tray_a = 1,
+        uint32_t port_a = 1,
+        uint32_t tray_b = 1,
+        uint32_t port_b = 1) {
+        write_textproto(
+            path,
+            "graph_templates {\n"
+            "  key: \"" +
+                template_name +
+                "\"\n"
+                "  value {\n"
+                "    children { name: \"node1\" node_ref { node_descriptor: \"" +
+                node1_descriptor +
+                "\" } }\n"
+                "    children { name: \"node2\" node_ref { node_descriptor: \"" +
+                node2_descriptor +
+                "\" } }\n"
+                "    internal_connections {\n"
+                "      key: \"QSFP_DD\"\n"
+                "      value {\n"
+                "        connections {\n"
+                "          port_a { path: [\"node1\"] tray_id: " +
+                std::to_string(tray_a) + " port_id: " + std::to_string(port_a) +
+                " }\n"
+                "          port_b { path: [\"" +
+                conn_path_b + "\"] tray_id: " + std::to_string(tray_b) + " port_id: " + std::to_string(port_b) +
+                " }\n"
+                "        }\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+                "root_instance {\n"
+                "  template_name: \"" +
+                template_name +
+                "\"\n"
+                "  child_mappings { key: \"node1\" value { host_id: 0 } }\n"
+                "  child_mappings { key: \"node2\" value { host_id: 1 } }\n"
+                "}\n");
+    }
+
+    // Helper to create a multi-node descriptor with a connection
+    static void create_multi_node_descriptor_with_connection(
+        const std::string& path,
+        const std::string& template_name,
+        const std::vector<std::string>& node_names,
+        const std::string& node_descriptor,
+        const std::string& conn_from,
+        const std::string& conn_to,
+        uint32_t tray_a = 1,
+        uint32_t port_a = 1,
+        uint32_t tray_b = 1,
+        uint32_t port_b = 1) {
+        std::string content = "graph_templates {\n  key: \"" + template_name + "\"\n  value {\n";
+
+        // Add children
+        for (const auto& node_name : node_names) {
+            content += "    children { name: \"" + node_name + "\" node_ref { node_descriptor: \"" + node_descriptor +
+                       "\" } }\n";
+        }
+
+        // Add connection
+        content +=
+            "    internal_connections {\n"
+            "      key: \"QSFP_DD\"\n"
+            "      value {\n"
+            "        connections {\n"
+            "          port_a { path: [\"" +
+            conn_from + "\"] tray_id: " + std::to_string(tray_a) + " port_id: " + std::to_string(port_a) +
+            " }\n"
+            "          port_b { path: [\"" +
+            conn_to + "\"] tray_id: " + std::to_string(tray_b) + " port_id: " + std::to_string(port_b) +
+            " }\n"
+            "        }\n"
+            "      }\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "root_instance {\n"
+            "  template_name: \"" +
+            template_name + "\"\n";
+
+        // Add child mappings
+        for (size_t i = 0; i < node_names.size(); ++i) {
+            content +=
+                "  child_mappings { key: \"" + node_names[i] + "\" value { host_id: " + std::to_string(i) + " } }\n";
+        }
+
+        content += "}\n";
+        write_textproto(path, content);
+    }
+
+    // Helper to load a ClusterDescriptor from file
+    static cabling_generator::proto::ClusterDescriptor load_descriptor(const std::string& path) {
+        std::ifstream file(path);
+        EXPECT_TRUE(file.is_open()) << "Failed to open " << path;
+        const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        cabling_generator::proto::ClusterDescriptor desc;
+        EXPECT_TRUE(google::protobuf::TextFormat::ParseFromString(content, &desc)) << "Failed to parse " << path;
+        return desc;
+    }
 
     std::vector<std::string> split_descriptor(
         const std::string& source_path,
@@ -97,9 +286,7 @@ protected:
         std::vector<std::string> paths;
         for (int i = 0; i < num_splits; i++) {
             const std::string path = output_dir + "/part" + std::to_string(i + 1) + ".textproto";
-            std::string part_str;
-            google::protobuf::TextFormat::PrintToString(parts[i], &part_str);
-            std::ofstream(path) << part_str;
+            write_proto_to_textproto(path, parts[i]);
             paths.push_back(path);
         }
 
@@ -137,11 +324,8 @@ protected:
         std::string nodes_path = output_dir + "nodes.textproto";
         std::string conns_path = output_dir + "connections.textproto";
 
-        std::string nodes_str, conns_str;
-        google::protobuf::TextFormat::PrintToString(nodes_only, &nodes_str);
-        google::protobuf::TextFormat::PrintToString(conns_only, &conns_str);
-        std::ofstream(nodes_path) << nodes_str;
-        std::ofstream(conns_path) << conns_str;
+        write_proto_to_textproto(nodes_path, nodes_only);
+        write_proto_to_textproto(conns_path, conns_only);
 
         return {nodes_path, conns_path};
     }
@@ -160,12 +344,8 @@ TEST_F(DescriptorMergerTest, FindDescriptorFilesInDirectory) {
 }
 
 TEST_F(DescriptorMergerTest, FindDescriptorFilesEmptyDirectory) {
-    const std::string empty_dir = "generated/tests/empty_merge_test_dir/";
-    std::filesystem::create_directories(empty_dir);
-
+    const std::string empty_dir = create_test_dir("empty_merge_test_dir");
     EXPECT_THROW(DescriptorMerger::find_descriptor_files(empty_dir), std::runtime_error);
-
-    std::filesystem::remove_all(empty_dir);
 }
 
 TEST_F(DescriptorMergerTest, FindDescriptorFilesNonexistentDirectory) {
@@ -209,19 +389,11 @@ TEST_F(DescriptorMergerTest, NonexistentFileThrows) {
 
 TEST_F(DescriptorMergerTest, MergeConnectionsFromSplitDescriptor) {
     const std::string source = "tools/tests/scaleout/cabling_descriptors/8x16_wh_galaxy_xy_torus_superpod.textproto";
-    const std::string test_dir = "generated/tests/connection_merge_test/";
+    const std::string test_dir = create_test_dir("connection_merge_test");
 
-    // Use split_nodes_vs_connections to split only connections
     auto [nodes_path, conns_path] = split_nodes_vs_connections(source, test_dir);
-
     const auto merged = DescriptorMerger::merge_descriptors({nodes_path, conns_path});
-
-    // Load original for comparison
-    std::ifstream file(source);
-    ASSERT_TRUE(file.is_open());
-    const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    cabling_generator::proto::ClusterDescriptor original;
-    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(content, &original));
+    const auto original = load_descriptor(source);
 
     // Verify structure matches
     EXPECT_EQ(merged.graph_templates_size(), original.graph_templates_size());
@@ -256,182 +428,40 @@ TEST_F(DescriptorMergerTest, MergeTorusDescriptorsKeepsSeparateTemplates) {
 }
 
 TEST_F(DescriptorMergerTest, ValidateStructureIdentityAllowsXAndYTorusMerge) {
-    // Test that WH_GALAXY_X_TORUS and WH_GALAXY_Y_TORUS can be merged
-    const std::string test_dir = "generated/tests/structure_validation_test/";
-    std::filesystem::create_directories(test_dir);
+    const std::string test_dir = create_test_dir("xy_torus_internal_connections");
 
-    std::ofstream(test_dir + "file1.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
+    // Create test descriptors
+    create_simple_descriptor(test_dir + "x_torus.textproto", "test_cluster", "node1", "WH_GALAXY_X_TORUS");
+    create_simple_descriptor(test_dir + "y_torus.textproto", "test_cluster", "node1", "WH_GALAXY_Y_TORUS");
+    create_simple_descriptor(test_dir + "xy_torus.textproto", "test_cluster", "node1", "WH_GALAXY_XY_TORUS");
 
-    std::ofstream(test_dir + "file2.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_X_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 2 port_id: 2 }
-          port_b { path: ["node2"] tray_id: 2 port_id: 2 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
-
-    // Should succeed because X_TORUS and Y_TORUS are allowed to merge
+    // Merge X_TORUS + Y_TORUS → should produce WH_GALAXY + internal_connections
     const auto merged =
-        DescriptorMerger::merge_descriptors({test_dir + "file1.textproto", test_dir + "file2.textproto"});
+        DescriptorMerger::merge_descriptors({test_dir + "x_torus.textproto", test_dir + "y_torus.textproto"});
 
-    // Validate merged structure
+    // Verify merged descriptor has WH_GALAXY base and internal_connections
     ASSERT_EQ(merged.graph_templates_size(), 1);
-    ASSERT_TRUE(merged.graph_templates().contains("test_cluster"));
     const auto& merged_template = merged.graph_templates().at("test_cluster");
+    ASSERT_EQ(merged_template.children_size(), 1);
+    EXPECT_EQ(merged_template.children(0).node_ref().node_descriptor(), "WH_GALAXY");
+    EXPECT_GT(merged_template.internal_connections_size(), 0) << "Should have torus as internal_connections";
 
-    // Validate children: should have node1 and node2
-    EXPECT_EQ(merged_template.children_size(), 2);
+    // Save merged descriptor and generate YAMLs for comparison
+    write_proto_to_textproto(test_dir + "merged.textproto", merged);
 
-    // Find node1 and node2 in merged template
-    const cabling_generator::proto::ChildInstance* node1_child = nullptr;
-    const cabling_generator::proto::ChildInstance* node2_child = nullptr;
-    for (const auto& child : merged_template.children()) {
-        if (child.name() == "node1") {
-            node1_child = &child;
-        } else if (child.name() == "node2") {
-            node2_child = &child;
-        }
-    }
+    const std::string merged_yaml = generate_yaml_from_descriptor(test_dir + "merged.textproto", test_dir, "merged");
+    const std::string xy_yaml = generate_yaml_from_descriptor(test_dir + "xy_torus.textproto", test_dir, "xy");
 
-    ASSERT_NE(node1_child, nullptr) << "node1 should be present in merged template";
-    ASSERT_NE(node2_child, nullptr) << "node2 should be present in merged template";
-
-    // node1 should have base WH_GALAXY descriptor (X_TORUS + Y_TORUS normalized to base)
-    ASSERT_TRUE(node1_child->has_node_ref());
-    EXPECT_EQ(node1_child->node_ref().node_descriptor(), "WH_GALAXY")
-        << "node1 should have base WH_GALAXY descriptor when X_TORUS and Y_TORUS are merged";
-
-    // node2 should have Y_TORUS (same in both files)
-    ASSERT_TRUE(node2_child->has_node_ref());
-    EXPECT_EQ(node2_child->node_ref().node_descriptor(), "WH_GALAXY_Y_TORUS");
-
-    // Validate connections: should have connections from both files
-    ASSERT_TRUE(merged_template.internal_connections().contains("QSFP_DD"));
-    const auto& connections = merged_template.internal_connections().at("QSFP_DD");
-    EXPECT_EQ(connections.connections_size(), 2) << "Should have 2 connections (one from each file)";
-
-    // Validate root_instance
-    ASSERT_TRUE(merged.has_root_instance());
-    EXPECT_EQ(merged.root_instance().template_name(), "test_cluster");
-    EXPECT_EQ(merged.root_instance().child_mappings_size(), 2);
-    EXPECT_TRUE(merged.root_instance().child_mappings().contains("node1"));
-    EXPECT_TRUE(merged.root_instance().child_mappings().contains("node2"));
+    assert_yaml_cluster_descriptors_equal(
+        merged_yaml, xy_yaml, "Merged X_TORUS + Y_TORUS (as internal_connections) vs direct XY_TORUS");
 }
 
 TEST_F(DescriptorMergerTest, ValidateStructureIdentityRejectsDifferentChildren) {
-    // Create two descriptors with same template name but different children (non-torus case)
-    const std::string test_dir = "generated/tests/structure_validation_test2/";
-    std::filesystem::create_directories(test_dir);
+    const std::string test_dir = create_test_dir("structure_validation_test2");
 
-    std::ofstream(test_dir + "file1.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
-
-    std::ofstream(test_dir + "file2.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "N300_T3K_NODE" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 2 port_id: 2 }
-          port_b { path: ["node2"] tray_id: 2 port_id: 2 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
+    // Minimal test: just one node with different descriptors between files
+    create_simple_descriptor(test_dir + "file1.textproto", "test_cluster", "node1", "WH_GALAXY_Y_TORUS");
+    create_simple_descriptor(test_dir + "file2.textproto", "test_cluster", "node1", "N300_T3K_NODE");
 
     // Should throw because node1 has different node_descriptor (not X/Y torus pair)
     EXPECT_THROW(
@@ -440,9 +470,7 @@ root_instance {
                 DescriptorMerger::merge_descriptors({test_dir + "file1.textproto", test_dir + "file2.textproto"});
                 FAIL() << "Expected std::runtime_error for different children";
             } catch (const std::runtime_error& e) {
-                const std::string error_msg = e.what();
-                EXPECT_NE(error_msg.find("node_descriptor"), std::string::npos)
-                    << "Error should mention node_descriptor difference";
+                EXPECT_NE(std::string(e.what()).find("node_descriptor"), std::string::npos);
                 throw;
             }
         },
@@ -450,135 +478,23 @@ root_instance {
 }
 
 TEST_F(DescriptorMergerTest, DetectConnectionConflictBetweenDescriptor1And2) {
-    // Test that conflicts are detected between any descriptors, not just descriptor 0
-    const std::string test_dir = "generated/tests/conflict_test_1_2/";
-    std::filesystem::create_directories(test_dir);
+    const std::string test_dir = create_test_dir("conflict_test_1_2");
 
-    // All files must have the same children structure
-    // File 0: node1 -> node2 (port 1)
-    std::ofstream(test_dir + "file0.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node3"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node4"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-  child_mappings { key: "node3" value { host_id: 2 } }
-  child_mappings { key: "node4" value { host_id: 3 } }
-}
-)";
+    // Minimal test: 3 files, conflict happens between file1 and file2 (not 0 and 1)
+    const std::vector<std::string> nodes = {"node1", "node2", "node3", "node4"};
 
-    // File 1: node1 -> node3 (port 2) - no conflict with file 0
-    std::ofstream(test_dir + "file1.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node3"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node4"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 2 }
-          port_b { path: ["node3"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-  child_mappings { key: "node3" value { host_id: 2 } }
-  child_mappings { key: "node4" value { host_id: 3 } }
-}
-)";
+    // File 0: node1 port 1 -> node2
+    create_multi_node_descriptor_with_connection(
+        test_dir + "file0.textproto", "test_cluster", nodes, "WH_GALAXY", "node1", "node2", 1, 1);
 
-    // File 2: node1 -> node4 (port 2) - conflicts with file 1 where node1 port 2 connects to node3
-    std::ofstream(test_dir + "file2.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node3"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node4"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 2 }
-          port_b { path: ["node4"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-  child_mappings { key: "node3" value { host_id: 2 } }
-  child_mappings { key: "node4" value { host_id: 3 } }
-}
-)";
+    // File 1: node1 port 2 -> node3 (no conflict with file 0)
+    create_multi_node_descriptor_with_connection(
+        test_dir + "file1.textproto", "test_cluster", nodes, "WH_GALAXY", "node1", "node3", 1, 2);
 
-    // Should throw because file1 and file2 have conflicting connections for node1 port 2
+    // File 2: node1 port 2 -> node4 (CONFLICTS with file 1 on node1 port 2)
+    create_multi_node_descriptor_with_connection(
+        test_dir + "file2.textproto", "test_cluster", nodes, "WH_GALAXY", "node1", "node4", 1, 2);
+
     EXPECT_THROW(
         {
             try {
@@ -586,11 +502,8 @@ root_instance {
                     {test_dir + "file0.textproto", test_dir + "file1.textproto", test_dir + "file2.textproto"});
                 FAIL() << "Expected std::runtime_error for connection conflict";
             } catch (const std::runtime_error& e) {
-                const std::string error_msg = e.what();
-                EXPECT_NE(error_msg.find("Connection conflict"), std::string::npos)
-                    << "Error should mention connection conflict. Actual: " << error_msg;
-                EXPECT_NE(error_msg.find("node1"), std::string::npos)
-                    << "Error should mention conflicting endpoint. Actual: " << error_msg;
+                EXPECT_NE(std::string(e.what()).find("Connection conflict"), std::string::npos);
+                EXPECT_NE(std::string(e.what()).find("node1"), std::string::npos);
                 throw;
             }
         },
@@ -598,81 +511,21 @@ root_instance {
 }
 
 TEST_F(DescriptorMergerTest, ErrorPropagatesFromConstructor) {
-    // Test that errors during merge propagate to CablingGenerator constructor
-    const std::string test_dir = "generated/tests/error_propagation_test/";
-    std::filesystem::create_directories(test_dir);
+    const std::string test_dir = create_test_dir("error_propagation_test");
 
-    // Create two files with conflicting connections
-    std::ofstream(test_dir + "file1.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
+    // Minimal test: same endpoint connecting to different destinations = conflict
+    create_two_node_descriptor_with_connection(
+        test_dir + "file1.textproto", "test_cluster", "WH_GALAXY", "WH_GALAXY", "node2");
+    create_two_node_descriptor_with_connection(
+        test_dir + "file2.textproto", "test_cluster", "WH_GALAXY", "WH_GALAXY", "node3");
 
-    std::ofstream(test_dir + "file2.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["node3"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
-
-    // CablingGenerator constructor should throw when merging conflicting descriptors
     EXPECT_THROW(
         {
             try {
                 CablingGenerator gen(test_dir, std::vector<std::string>{"host0", "host1"});
                 FAIL() << "Expected std::runtime_error from CablingGenerator constructor";
             } catch (const std::runtime_error& e) {
-                const std::string error_msg = e.what();
-                EXPECT_NE(error_msg.find("Connection conflict"), std::string::npos)
-                    << "Error should mention connection conflict";
+                EXPECT_NE(std::string(e.what()).find("Connection conflict"), std::string::npos);
                 throw;
             }
         },
@@ -680,52 +533,18 @@ root_instance {
 }
 
 TEST_F(DescriptorMergerTest, MultipleConflictsDetectedDuringMerge) {
-    // Test that multiple conflicts are detected and reported during merge
-    const std::string test_dir = "generated/tests/multiple_conflicts_test/";
-    std::filesystem::create_directories(test_dir);
+    const std::string test_dir = create_test_dir("multiple_conflicts_test");
 
-    std::ofstream(test_dir + "file1.textproto") << R"(
+    // Minimal test: file1 has node1->node2, file2 has node1->node3 AND node2->node4 (both conflict)
+    create_two_node_descriptor_with_connection(
+        test_dir + "file1.textproto", "test_cluster", "WH_GALAXY", "WH_GALAXY", "node2");
+
+    write_textproto(test_dir + "file2.textproto", R"(
 graph_templates {
   key: "test_cluster"
   value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 1 port_id: 1 }
-        }
-      }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)";
-
-    std::ofstream(test_dir + "file2.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
+    children { name: "node1" node_ref { node_descriptor: "WH_GALAXY" } }
+    children { name: "node2" node_ref { node_descriptor: "WH_GALAXY" } }
     internal_connections {
       key: "QSFP_DD"
       value {
@@ -746,20 +565,17 @@ root_instance {
   child_mappings { key: "node1" value { host_id: 0 } }
   child_mappings { key: "node2" value { host_id: 1 } }
 }
-)";
+)");
 
-    // Should throw with error message containing both conflicts
     EXPECT_THROW(
         {
             try {
                 DescriptorMerger::merge_descriptors({test_dir + "file1.textproto", test_dir + "file2.textproto"});
-                FAIL() << "Expected std::runtime_error for multiple connection conflicts";
+                FAIL() << "Expected std::runtime_error for multiple conflicts";
             } catch (const std::runtime_error& e) {
                 const std::string error_msg = e.what();
-                // Should detect conflict for node1
-                EXPECT_NE(error_msg.find("node1"), std::string::npos) << "Error should mention node1 conflict";
-                // Should detect conflict for node2
-                EXPECT_NE(error_msg.find("node2"), std::string::npos) << "Error should mention node2 conflict";
+                EXPECT_NE(error_msg.find("node1"), std::string::npos);
+                EXPECT_NE(error_msg.find("node2"), std::string::npos);
                 throw;
             }
         },
@@ -767,117 +583,23 @@ root_instance {
 }
 
 TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusProducesSameFSDAsXYTorus) {
-    // Test that merging X_TORUS + Y_TORUS produces the same FSD as having XY_TORUS from the start
-    // Torus connections are intra-node (defined in NodeDescriptor), not graph-level connections
-    const std::string test_dir = "generated/tests/xy_torus_merge_test/";
-    std::filesystem::create_directories(test_dir);
+    const std::string test_dir = create_test_dir("xy_torus_merge_test");
 
-    // File 1: node1 with X_TORUS (torus connections are in NodeDescriptor, not graph-level)
-    std::ofstream(test_dir + "x_torus.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_X_TORUS" }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)";
+    // Create test descriptors
+    create_simple_descriptor(test_dir + "x_torus.textproto", "test_cluster", "node1", "WH_GALAXY_X_TORUS");
+    create_simple_descriptor(test_dir + "y_torus.textproto", "test_cluster", "node1", "WH_GALAXY_Y_TORUS");
+    create_simple_descriptor(test_dir + "xy_torus.textproto", "test_cluster", "node1", "WH_GALAXY_XY_TORUS");
 
-    // File 2: node1 with Y_TORUS (torus connections are in NodeDescriptor, not graph-level)
-    std::ofstream(test_dir + "y_torus.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)";
-
-    // Reference file: node1 with XY_TORUS (torus connections are in NodeDescriptor, not graph-level)
-    std::ofstream(test_dir + "xy_torus.textproto") << R"(
-graph_templates {
-  key: "test_cluster"
-  value {
-    children {
-      name: "node1"
-      node_ref { node_descriptor: "WH_GALAXY_XY_TORUS" }
-    }
-  }
-}
-root_instance {
-  template_name: "test_cluster"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)";
-
-    // Merge X_TORUS and Y_TORUS
+    // Merge and save
     const auto merged =
         DescriptorMerger::merge_descriptors({test_dir + "x_torus.textproto", test_dir + "y_torus.textproto"});
+    write_proto_to_textproto(test_dir + "merged.textproto", merged);
 
-    // Verify merged descriptor has WH_GALAXY (normalized from X_TORUS + Y_TORUS)
-    ASSERT_EQ(merged.graph_templates_size(), 1);
-    const auto& merged_template = merged.graph_templates().at("test_cluster");
-    ASSERT_EQ(merged_template.children_size(), 1);
-    EXPECT_EQ(merged_template.children(0).node_ref().node_descriptor(), "WH_GALAXY")
-        << "Merged X_TORUS + Y_TORUS should normalize to WH_GALAXY";
+    // Generate and compare YAMLs
+    const std::string merged_yaml = generate_yaml_from_descriptor(test_dir + "merged.textproto", test_dir, "merged");
+    const std::string xy_yaml = generate_yaml_from_descriptor(test_dir + "xy_torus.textproto", test_dir, "xy");
 
-    // Save merged descriptor to file for CablingGenerator
-    std::string merged_desc_str;
-    google::protobuf::TextFormat::PrintToString(merged, &merged_desc_str);
-    const std::string merged_desc_path = test_dir + "merged.textproto";
-    std::ofstream(merged_desc_path) << merged_desc_str;
-
-    // Generate FSD from merged descriptor
-    CablingGenerator merged_gen(merged_desc_path, std::vector<std::string>{"host0"});
-    const std::string merged_fsd_path = test_dir + "merged_fsd.textproto";
-    merged_gen.emit_factory_system_descriptor(merged_fsd_path);
-
-    // Generate FSD from XY_TORUS reference
-    CablingGenerator xy_gen(test_dir + "xy_torus.textproto", std::vector<std::string>{"host0"});
-    const std::string xy_fsd_path = test_dir + "xy_fsd.textproto";
-    xy_gen.emit_factory_system_descriptor(xy_fsd_path);
-
-    // Load and compare FSDs
-    std::ifstream merged_file(merged_fsd_path);
-    ASSERT_TRUE(merged_file.is_open());
-    const std::string merged_content((std::istreambuf_iterator<char>(merged_file)), std::istreambuf_iterator<char>());
-
-    std::ifstream xy_file(xy_fsd_path);
-    ASSERT_TRUE(xy_file.is_open());
-    const std::string xy_content((std::istreambuf_iterator<char>(xy_file)), std::istreambuf_iterator<char>());
-
-    fsd::proto::FactorySystemDescriptor merged_fsd;
-    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(merged_content, &merged_fsd));
-
-    fsd::proto::FactorySystemDescriptor xy_fsd;
-    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(xy_content, &xy_fsd));
-
-    // Compare FSDs - note: they won't be identical because:
-    // - Merged: WH_GALAXY (base, no torus connections in NodeDescriptor)
-    // - XY_TORUS: WH_GALAXY_XY_TORUS (has torus connections in NodeDescriptor)
-    // The torus connections are intra-node (in NodeDescriptor C++ code), not graph-level connections
-    // So normalizing to base loses those connections. This is expected behavior.
-    // We verify both FSDs were generated successfully
-    EXPECT_EQ(merged_fsd.hosts_size(), xy_fsd.hosts_size()) << "Should have same number of hosts";
-    EXPECT_GT(merged_fsd.eth_connections().connection_size(), 0) << "Merged FSD should have connections";
-    EXPECT_GT(xy_fsd.eth_connections().connection_size(), 0) << "XY_TORUS FSD should have connections";
-
-    // XY_TORUS will have more connections (includes torus) than merged WH_GALAXY (no torus)
-    EXPECT_LE(merged_fsd.eth_connections().connection_size(), xy_fsd.eth_connections().connection_size())
-        << "XY_TORUS should have at least as many connections as merged WH_GALAXY";
+    assert_yaml_cluster_descriptors_equal(merged_yaml, xy_yaml, "X_TORUS + Y_TORUS merge");
 }
 
 }  // namespace tt::scaleout_tools

@@ -202,7 +202,7 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors_
                     return merged;
                 }
                 // Normalize torus descriptors to base descriptor (topology defined by connections)
-                normalize_torus_descriptors(*merged_template, tmpl);
+                normalize_torus_descriptors(merged, source, name);
             }
         }
 
@@ -287,8 +287,12 @@ void DescriptorMerger::merge_internal_connections(
 }
 
 void DescriptorMerger::normalize_torus_descriptors(
-    cabling_generator::proto::GraphTemplate& target_template,
-    const cabling_generator::proto::GraphTemplate& source_template) {
+    cabling_generator::proto::ClusterDescriptor& target,
+    const cabling_generator::proto::ClusterDescriptor& source,
+    const std::string& template_name) {
+    auto& target_template = (*target.mutable_graph_templates())[template_name];
+    const auto& source_template = source.graph_templates().at(template_name);
+
     std::map<std::string, int> target_children_indices;
     for (int i = 0; i < target_template.children_size(); ++i) {
         target_children_indices[target_template.children(i).name()] = i;
@@ -312,11 +316,13 @@ void DescriptorMerger::normalize_torus_descriptors(
             continue;
         }
 
-        // Validation already ensured they're compatible torus variants
-        // Always normalize to base architecture - topology is defined by connections, not descriptor name
+        // Normalize to base architecture and convert torus topology to internal_connections
         const std::string base_arch = extract_torus_architecture(target_desc);
         if (!base_arch.empty()) {
             target_child->mutable_node_ref()->set_node_descriptor(base_arch);
+
+            // Add torus connections as internal_connections (self-connections from node to node)
+            add_torus_internal_connections(target_template, target_desc, source_desc, source_child.name());
         }
     }
 }
@@ -330,12 +336,12 @@ bool DescriptorMerger::is_torus_compatible(const std::string& desc1, const std::
         return false;
     }
 
-    const bool desc1_x = desc1.find("_X_TORUS") != std::string::npos;
-    const bool desc1_y = desc1.find("_Y_TORUS") != std::string::npos;
-    const bool desc1_xy = desc1.find("_XY_TORUS") != std::string::npos;
-    const bool desc2_x = desc2.find("_X_TORUS") != std::string::npos;
-    const bool desc2_y = desc2.find("_Y_TORUS") != std::string::npos;
-    const bool desc2_xy = desc2.find("_XY_TORUS") != std::string::npos;
+    const bool desc1_x = has_torus_variant(desc1, "_X_TORUS");
+    const bool desc1_y = has_torus_variant(desc1, "_Y_TORUS");
+    const bool desc1_xy = has_torus_variant(desc1, "_XY_TORUS");
+    const bool desc2_x = has_torus_variant(desc2, "_X_TORUS");
+    const bool desc2_y = has_torus_variant(desc2, "_Y_TORUS");
+    const bool desc2_xy = has_torus_variant(desc2, "_XY_TORUS");
 
     return (desc1_x && desc2_y) || (desc1_y && desc2_x) ||    // X + Y
            (desc1_xy && desc2_x) || (desc1_x && desc2_xy) ||  // XY + X
@@ -344,8 +350,8 @@ bool DescriptorMerger::is_torus_compatible(const std::string& desc1, const std::
 }
 
 bool DescriptorMerger::is_a_torus(const std::string& desc) {
-    return desc.find("_X_TORUS") != std::string::npos || desc.find("_Y_TORUS") != std::string::npos ||
-           desc.find("_XY_TORUS") != std::string::npos;
+    return has_torus_variant(desc, "_X_TORUS") || has_torus_variant(desc, "_Y_TORUS") ||
+           has_torus_variant(desc, "_XY_TORUS");
 }
 
 bool DescriptorMerger::has_same_torus_architecture(const std::string& desc1, const std::string& desc2) {
@@ -362,6 +368,113 @@ std::string DescriptorMerger::extract_torus_architecture(const std::string& desc
         return "BH_GALAXY";
     }
     return "";
+}
+
+bool DescriptorMerger::has_torus_variant(const std::string& desc, const std::string& variant) {
+    return desc.find(variant) != std::string::npos;
+}
+
+void DescriptorMerger::add_torus_internal_connections(
+    cabling_generator::proto::GraphTemplate& target_template,
+    const std::string& target_desc,
+    const std::string& source_desc,
+    const std::string& child_name) {
+    // Determine which torus dimensions to add
+    const bool has_x = has_torus_variant(target_desc, "_X_TORUS") || has_torus_variant(target_desc, "_XY_TORUS") ||
+                       has_torus_variant(source_desc, "_X_TORUS") || has_torus_variant(source_desc, "_XY_TORUS");
+
+    const bool has_y = has_torus_variant(target_desc, "_Y_TORUS") || has_torus_variant(target_desc, "_XY_TORUS") ||
+                       has_torus_variant(source_desc, "_Y_TORUS") || has_torus_variant(source_desc, "_XY_TORUS");
+
+    const bool is_wh = target_desc.find("WH_GALAXY") == 0;
+    const bool is_bh = target_desc.find("BH_GALAXY") == 0;
+
+    if (!is_wh && !is_bh) {
+        return;
+    }
+
+    // Get or create QSFP_DD port connections
+    auto& port_connections_map = *target_template.mutable_internal_connections();
+    auto* qsfp_connections = &port_connections_map["QSFP_DD"];
+
+    // Add X-torus connections (from node.cpp)
+    if (has_x) {
+        if (is_wh) {
+            add_wh_x_torus_connections(qsfp_connections, child_name);
+        } else if (is_bh) {
+            add_bh_x_torus_connections(qsfp_connections, child_name);
+        }
+    }
+
+    // Add Y-torus connections (from node.cpp)
+    if (has_y) {
+        if (is_wh) {
+            add_wh_y_torus_connections(qsfp_connections, child_name);
+        } else if (is_bh) {
+            add_bh_y_torus_connections(qsfp_connections, child_name);
+        }
+    }
+}
+
+void DescriptorMerger::add_wh_x_torus_connections(
+    cabling_generator::proto::PortConnections* connections, const std::string& node) {
+    // WH Galaxy X-torus connections (from node.cpp WHGalaxyNode::add_x_torus_connections)
+    add_internal_connection(connections, node, 1, 3, node, 2, 3);
+    add_internal_connection(connections, node, 1, 4, node, 2, 4);
+    add_internal_connection(connections, node, 1, 5, node, 2, 5);
+    add_internal_connection(connections, node, 1, 6, node, 2, 6);
+    add_internal_connection(connections, node, 3, 6, node, 4, 6);
+    add_internal_connection(connections, node, 3, 5, node, 4, 5);
+    add_internal_connection(connections, node, 3, 4, node, 4, 4);
+    add_internal_connection(connections, node, 3, 3, node, 4, 3);
+}
+
+void DescriptorMerger::add_wh_y_torus_connections(
+    cabling_generator::proto::PortConnections* connections, const std::string& node) {
+    // WH Galaxy Y-torus connections (from node.cpp WHGalaxyNode::add_y_torus_connections)
+    add_internal_connection(connections, node, 1, 2, node, 3, 2);
+    add_internal_connection(connections, node, 1, 1, node, 3, 1);
+    add_internal_connection(connections, node, 2, 1, node, 4, 1);
+    add_internal_connection(connections, node, 2, 2, node, 4, 2);
+}
+
+void DescriptorMerger::add_bh_x_torus_connections(
+    cabling_generator::proto::PortConnections* connections, const std::string& node) {
+    // BH Galaxy X-torus connections (from node.cpp BHGalaxyNode::add_x_torus_connections)
+    add_internal_connection(connections, node, 1, 3, node, 3, 3);
+    add_internal_connection(connections, node, 1, 4, node, 3, 4);
+    add_internal_connection(connections, node, 1, 5, node, 3, 5);
+    add_internal_connection(connections, node, 1, 6, node, 3, 6);
+    add_internal_connection(connections, node, 2, 6, node, 4, 6);
+    add_internal_connection(connections, node, 2, 5, node, 4, 5);
+    add_internal_connection(connections, node, 2, 4, node, 4, 4);
+    add_internal_connection(connections, node, 2, 3, node, 4, 3);
+}
+
+void DescriptorMerger::add_bh_y_torus_connections(
+    cabling_generator::proto::PortConnections* connections, const std::string& node) {
+    // BH Galaxy Y-torus connections (from node.cpp BHGalaxyNode::add_y_torus_connections)
+    add_internal_connection(connections, node, 1, 2, node, 2, 2);
+    add_internal_connection(connections, node, 1, 1, node, 2, 1);
+    add_internal_connection(connections, node, 3, 1, node, 4, 1);
+    add_internal_connection(connections, node, 3, 2, node, 4, 2);
+}
+
+void DescriptorMerger::add_internal_connection(
+    cabling_generator::proto::PortConnections* connections,
+    const std::string& node_a,
+    int tray_a,
+    int port_a,
+    const std::string& node_b,
+    int tray_b,
+    int port_b) {
+    auto* conn = connections->add_connections();
+    conn->mutable_port_a()->add_path(node_a);
+    conn->mutable_port_a()->set_tray_id(tray_a);
+    conn->mutable_port_a()->set_port_id(port_a);
+    conn->mutable_port_b()->add_path(node_b);
+    conn->mutable_port_b()->set_tray_id(tray_b);
+    conn->mutable_port_b()->set_port_id(port_b);
 }
 
 std::set<uint32_t> DescriptorMerger::extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor) {
