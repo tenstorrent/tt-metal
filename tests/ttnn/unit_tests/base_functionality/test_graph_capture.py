@@ -62,7 +62,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node1[1] == "1"
     assert node1[2] == "2"
     assert node1[3] == "nullopt"
-    assert node1[4] == "0"
+    assert node1[4] == "nullopt"
 
     # ttnn::prim::permute
     node4 = captured_graph[4]["arguments"]
@@ -76,7 +76,7 @@ def test_graph_capture_with_all_parameters(device):
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
     assert node4[3] == "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]"
-    assert node4[4] == "0"
+    assert node4[4] == "nullopt"
 
     # PermuteDeviceOperation
     node5 = captured_graph[5]["arguments"]
@@ -279,7 +279,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert item0["arguments"][1]["arg1"] == "1"
     assert item0["arguments"][2]["arg2"] == "2"
     assert item0["arguments"][3]["arg3"] == "nullopt"
-    assert item0["arguments"][4]["arg4"] == "0"
+    assert item0["arguments"][4]["arg4"] == "nullopt"
 
     # Content item 1
     item1 = data["content"][1]
@@ -291,7 +291,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert arg2_item1["buffer_type"] == "BufferType::L1"
     assert arg2_item1["shard_spec"] == "std::nullopt"
     assert item1["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]"
-    assert item1["arguments"][4]["arg4"] == "0"
+    assert item1["arguments"][4]["arg4"] == "nullopt"
 
     # Content item 2
     item2 = data["content"][2]
