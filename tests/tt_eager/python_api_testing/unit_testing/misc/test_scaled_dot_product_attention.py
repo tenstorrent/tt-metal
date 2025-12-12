@@ -158,7 +158,7 @@ def run_sdpa_noncausal(
         sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
