@@ -2803,6 +2803,8 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                     input_tensor_b,
                     output_tensor,
                     broadcast_batch,
+                    this->transpose_a,
+                    this->transpose_b,
                     program_config.compute_with_storage_grid_size,
                     output_dtype,
                     this->compute_kernel_config.value(),
