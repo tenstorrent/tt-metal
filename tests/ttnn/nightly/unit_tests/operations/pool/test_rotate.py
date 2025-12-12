@@ -4,8 +4,6 @@
 
 import pytest
 import torch
-import torchvision.transforms.functional as TF
-from torchvision.transforms import InterpolationMode
 from loguru import logger
 
 import ttnn
@@ -66,10 +64,9 @@ def test_rotate_various_angles(device, input_shape, angle):
     # Generate random input in NHWC format
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    # PyTorch reference (expects NCHW)
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.NEAREST)
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=float(angle))
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -165,10 +162,9 @@ def test_rotate_exact_multiples_of_90(device, input_shape, angle):
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    # PyTorch reference
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.NEAREST)
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=float(angle))
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -210,12 +206,9 @@ def test_rotate_with_fill_value(device, input_shape, fill_value):
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 45.0  # 45 degrees will create out-of-bounds areas in corners
 
-    # PyTorch reference
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(
-        torch_input_nchw, angle=angle, interpolation=InterpolationMode.NEAREST, fill=[fill_value]
-    )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, fill=fill_value)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -328,10 +321,9 @@ def test_rotate_small_angles(device, input_shape):
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
     for angle in [0.1, 1.0, 5.0]:
-        # PyTorch reference
-        torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-        torch_output_nchw = TF.rotate(torch_input_nchw, angle=angle, interpolation=InterpolationMode.NEAREST)
-        torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+        # PyTorch reference using golden function
+        golden_function = ttnn.get_golden_function(ttnn.rotate)
+        torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle)
 
         # TTNN
         ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -447,10 +439,9 @@ def test_rotate_nearest_various_angles(device, input_shape, angle):
     # Generate random input in NHWC format
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    # PyTorch reference (expects NCHW)
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.NEAREST)
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=float(angle), interpolation_mode="nearest")
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -545,11 +536,9 @@ def test_rotate_interpolation_mode_comparison(device, input_shape, interpolation
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 45.0  # Angle that shows clear differences between modes
 
-    # PyTorch reference
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_interp_mode = InterpolationMode.BILINEAR if interpolation_mode == "bilinear" else InterpolationMode.NEAREST
-    torch_output_nchw = TF.rotate(torch_input_nchw, angle=angle, interpolation=torch_interp_mode)
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode=interpolation_mode)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -607,12 +596,9 @@ def test_rotate_nearest_fill_values(device, input_shape, fill_value):
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     angle = 45.0  # Creates out-of-bounds areas in corners
 
-    # PyTorch reference
-    torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
-    torch_output_nchw = TF.rotate(
-        torch_input_nchw, angle=angle, interpolation=InterpolationMode.NEAREST, fill=[fill_value]
-    )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode="nearest", fill=fill_value)
 
     # TTNN
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -690,15 +676,15 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
         # PyTorch reference (vadv2 pattern):
         # Reshape to spatial: (bev_h, bev_w, embed_dims)
         torch_spatial = prev_bev_single.view(bev_h, bev_w, embed_dims)
-        # Permute to CHW: (embed_dims, bev_h, bev_w)
-        torch_chw = torch_spatial.permute(2, 0, 1).to(torch.float32)
-        # Rotate with custom center
-        torch_rotated = TF.rotate(
-            torch_chw, angle=rotation_angle, interpolation=InterpolationMode.NEAREST, center=rotate_center
+        # Add batch dimension for golden function: (1, bev_h, bev_w, embed_dims)
+        torch_spatial_batched = torch_spatial.unsqueeze(0)
+        # Use golden function with custom center
+        golden_function = ttnn.get_golden_function(ttnn.rotate)
+        torch_spatial_out_batched = golden_function(
+            torch_spatial_batched, angle=rotation_angle, center=rotate_center, interpolation_mode="nearest"
         )
-        torch_rotated = torch_rotated.to(torch.bfloat16)
-        # Permute back: (bev_h, bev_w, embed_dims)
-        torch_spatial_out = torch_rotated.permute(1, 2, 0)
+        # Remove batch dimension: (bev_h, bev_w, embed_dims)
+        torch_spatial_out = torch_spatial_out_batched.squeeze(0)
         torch_outputs.append(torch_spatial_out)
 
         # TTNN (should match the vadv2 pattern):
