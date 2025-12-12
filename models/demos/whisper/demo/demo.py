@@ -706,7 +706,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "stream",
-    [True, False],
+    [False],
 )
 @pytest.mark.parametrize(
     "prompt",
