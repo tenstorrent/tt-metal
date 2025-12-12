@@ -1280,6 +1280,39 @@ AdjacencyGraph<NodeId> create_1d_ring_graph(size_t length) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
+// Helper function to create a disconnected graph with multiple components
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_disconnected_graph(
+    const std::vector<std::vector<std::pair<size_t, size_t>>>& components, size_t base_node_id = 0) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    AdjacencyMap adj_map;
+
+    size_t current_node_id = base_node_id;
+    for (const auto& component : components) {
+        // Create nodes for this component
+        std::map<size_t, size_t> local_to_global;
+        for (const auto& edge : component) {
+            if (local_to_global.find(edge.first) == local_to_global.end()) {
+                local_to_global[edge.first] = current_node_id++;
+            }
+            if (local_to_global.find(edge.second) == local_to_global.end()) {
+                local_to_global[edge.second] = current_node_id++;
+            }
+        }
+
+        // Build adjacency map for this component
+        for (const auto& edge : component) {
+            size_t global_from = local_to_global[edge.first];
+            size_t global_to = local_to_global[edge.second];
+
+            adj_map[static_cast<NodeId>(global_from)].push_back(static_cast<NodeId>(global_to));
+            adj_map[static_cast<NodeId>(global_to)].push_back(static_cast<NodeId>(global_from));
+        }
+    }
+
+    return AdjacencyGraph<NodeId>(adj_map);
+}
+
 TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
     using namespace tt::tt_fabric::detail;
 
@@ -1476,6 +1509,232 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
         // If it somehow succeeded, that's unexpected
         log_error(tt::LogFabric, "Negative test unexpectedly succeeded - this indicates a bug");
         FAIL() << "Mapping should have failed due to conflicting pinnings";
+    }
+}
+
+TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedTargetGraph) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create global graph: single connected component (chain of 6 nodes)
+    auto global_graph = create_1d_chain_graph<TestGlobalNode>(6);
+
+    // Create target graph: two disconnected components
+    // Component 1: 3 nodes (0-1-2)
+    // Component 2: 3 nodes (3-4-5)
+    std::vector<std::vector<std::pair<size_t, size_t>>> target_components = {
+        {{0, 1}, {1, 2}},  // Component 1: chain of 3 nodes
+        {{3, 4}, {4, 5}}   // Component 2: chain of 3 nodes
+    };
+    auto target_graph = create_disconnected_graph<TestTargetNode>(target_components);
+
+    // Verify graphs
+    EXPECT_EQ(global_graph.get_nodes().size(), 6u);
+    EXPECT_EQ(target_graph.get_nodes().size(), 6u);
+
+    // Build graph data and constraints
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Run DFS search
+    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+
+    // This should succeed - two disconnected chains can map to one connected chain
+    EXPECT_TRUE(found) << "Disconnected target graph should map to connected global graph";
+
+    if (found) {
+        // Verify all nodes are mapped
+        size_t mapped_count = 0;
+        for (size_t i = 0; i < state.mapping.size(); ++i) {
+            if (state.mapping[i] != -1) {
+                mapped_count++;
+            }
+        }
+        EXPECT_EQ(mapped_count, 6u) << "All 6 target nodes should be mapped";
+
+        // Verify mapping preserves adjacency within each component
+        for (size_t i = 0; i < graph_data.n_target; ++i) {
+            if (state.mapping[i] == -1) {
+                continue;
+            }
+            size_t global_i = static_cast<size_t>(state.mapping[i]);
+
+            for (size_t neighbor_idx : graph_data.target_adj_idx[i]) {
+                if (state.mapping[neighbor_idx] == -1) {
+                    continue;
+                }
+                size_t global_neighbor = static_cast<size_t>(state.mapping[neighbor_idx]);
+
+                bool edge_exists = std::binary_search(
+                    graph_data.global_adj_idx[global_i].begin(),
+                    graph_data.global_adj_idx[global_i].end(),
+                    global_neighbor);
+                EXPECT_TRUE(edge_exists) << "Edge from target node " << graph_data.target_nodes[i] << " to "
+                                         << graph_data.target_nodes[neighbor_idx]
+                                         << " should map to edge in global graph";
+            }
+        }
+
+        log_info(
+            tt::LogFabric,
+            "Disconnected target test completed: DFS calls={}, backtracks={}",
+            state.dfs_calls,
+            state.backtrack_count);
+    }
+}
+
+TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedGlobalGraph) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: single connected component (chain of 6 nodes)
+    auto target_graph = create_1d_chain_graph<TestTargetNode>(6);
+
+    // Create global graph: two disconnected components
+    // Component 1: 3 nodes (0-1-2)
+    // Component 2: 3 nodes (3-4-5)
+    std::vector<std::vector<std::pair<size_t, size_t>>> global_components = {
+        {{0, 1}, {1, 2}},  // Component 1: chain of 3 nodes
+        {{3, 4}, {4, 5}}   // Component 2: chain of 3 nodes
+    };
+    auto global_graph = create_disconnected_graph<TestGlobalNode>(global_components);
+
+    // Verify graphs
+    EXPECT_EQ(target_graph.get_nodes().size(), 6u);
+    EXPECT_EQ(global_graph.get_nodes().size(), 6u);
+
+    // Build graph data and constraints
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Run DFS search
+    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+
+    // This should fail - a connected chain cannot map to disconnected components
+    // because the chain requires a path between all nodes
+    EXPECT_FALSE(found) << "Connected target graph should not map to disconnected global graph";
+
+    if (!found) {
+        EXPECT_FALSE(state.error_message.empty()) << "Should have error message";
+        log_info(
+            tt::LogFabric,
+            "Disconnected global test failed as expected: DFS calls={}, backtracks={}, error={}",
+            state.dfs_calls,
+            state.backtrack_count,
+            state.error_message);
+    }
+}
+
+TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Success) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: two disconnected components
+    // Component 1: chain of 3 nodes (0-1-2)
+    // Component 2: chain of 3 nodes (3-4-5)
+    std::vector<std::vector<std::pair<size_t, size_t>>> target_components = {{{0, 1}, {1, 2}}, {{3, 4}, {4, 5}}};
+    auto target_graph = create_disconnected_graph<TestTargetNode>(target_components);
+
+    // Create global graph: two disconnected components (same structure)
+    std::vector<std::vector<std::pair<size_t, size_t>>> global_components = {{{0, 1}, {1, 2}}, {{3, 4}, {4, 5}}};
+    auto global_graph = create_disconnected_graph<TestGlobalNode>(global_components);
+
+    // Verify graphs
+    EXPECT_EQ(target_graph.get_nodes().size(), 6u);
+    EXPECT_EQ(global_graph.get_nodes().size(), 6u);
+
+    // Build graph data and constraints
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Run DFS search
+    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+
+    // This should succeed - disconnected target can map to disconnected global
+    EXPECT_TRUE(found) << "Disconnected target graph should map to disconnected global graph with matching structure";
+
+    if (found) {
+        // Verify all nodes are mapped
+        size_t mapped_count = 0;
+        for (size_t i = 0; i < state.mapping.size(); ++i) {
+            if (state.mapping[i] != -1) {
+                mapped_count++;
+            }
+        }
+        EXPECT_EQ(mapped_count, 6u) << "All 6 target nodes should be mapped";
+
+        log_info(
+            tt::LogFabric,
+            "Disconnected both graphs test completed: DFS calls={}, backtracks={}",
+            state.dfs_calls,
+            state.backtrack_count);
+    }
+}
+
+TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: three disconnected components
+    // Component 1: 2 nodes (0-1)
+    // Component 2: 2 nodes (2-3)
+    // Component 3: 2 nodes (4-5)
+    std::vector<std::vector<std::pair<size_t, size_t>>> target_components = {{{0, 1}}, {{2, 3}}, {{4, 5}}};
+    auto target_graph = create_disconnected_graph<TestTargetNode>(target_components);
+
+    // Create global graph: two disconnected components (fewer components than target)
+    std::vector<std::vector<std::pair<size_t, size_t>>> global_components = {
+        {{0, 1}, {1, 2}},  // Component 1: chain of 3 nodes
+        {{3, 4}}           // Component 2: 2 nodes
+    };
+    auto global_graph = create_disconnected_graph<TestGlobalNode>(global_components);
+
+    // Verify graphs
+    EXPECT_EQ(target_graph.get_nodes().size(), 6u);
+    EXPECT_EQ(global_graph.get_nodes().size(), 5u);  // Only 5 nodes in global
+
+    // Build graph data and constraints
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Initialize search state
+    DFSSearchEngine<TestTargetNode, TestGlobalNode>::SearchState state;
+    state.mapping.resize(graph_data.n_target, -1);
+    state.used.resize(graph_data.n_global, false);
+
+    // Run DFS search
+    DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
+    bool found = search_engine.search(0, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
+
+    // This should fail - target has 6 nodes but global only has 5
+    EXPECT_FALSE(found) << "Target graph with more nodes than global should fail";
+
+    if (!found) {
+        EXPECT_FALSE(state.error_message.empty()) << "Should have error message";
+        log_info(
+            tt::LogFabric,
+            "Disconnected both graphs failure test completed as expected: DFS calls={}, backtracks={}, error={}",
+            state.dfs_calls,
+            state.backtrack_count,
+            state.error_message);
     }
 }
 
