@@ -10,6 +10,24 @@ Automatically extracts real-world operation configurations from model tests and 
 - ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
+### Currently Traced Models
+
+The following models have been traced and their configurations are available in `ttnn_operations_master.json`:
+
+**N300 Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| meta-llama/Llama-3.2-11B-Vision-Instruct | Vision-language model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-7B-Instruct | Code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| deepseek-ai/deepseek-llm-7b-chat | Chat model | `HF_MODEL=deepseek-ai/deepseek-llm-7b-chat python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| meta-llama/Llama-3.2-1B-Instruct | Small instruction-tuned model | `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
+
+These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
+
+*Last updated: December 10, 2025*
+
 ---
 
 ## Quick Reference

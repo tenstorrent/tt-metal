@@ -179,7 +179,7 @@ class Generator:
             use_batched_prefill = True
 
         if return_logits:
-            tt_out_logits_all_users = torch.zeros(batch, 1, 131072)
+            tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -234,7 +234,7 @@ class Generator:
 
             # If PCC check enabled or return_logits is True (we save output logits)
             if tt_out_logits_all_users is not None or return_logits:
-                tt_out_logits_saved = torch.zeros(1, 131072)
+                tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:
@@ -428,6 +428,7 @@ class Generator:
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True
+
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,
@@ -626,6 +627,9 @@ class Generator:
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            if isinstance(tt_out, tuple):
+                # Get logits and skip log-probs
+                tt_out = tt_out[0]
             return tt_out.cpu()
 
         logits, read_event = self.model.process_output_decode(tt_out)
@@ -704,6 +708,7 @@ class Generator:
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         page_table = page_table[:, :num_blocks]
@@ -719,6 +724,23 @@ class Generator:
         else:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+        # page_table gets padded properly in prefill_forward_text
+        # be sure to pad correctly for non traced sequences in future warmup calls
+        page_table = torch.zeros(1, 1, dtype=torch.int32)
+        # in case of multiple sampling parameters, we need to warmup for each one
+        for s in sampling_params:
+            self.warmup_prefill_traces(
+                tokens=None,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=None,
+                enable_trace=enable_trace,
+                sampling_params=s,
+                empty_slots=None,
+                tt_out_logits_all_users=None,
+            )
 
     ## Destructor (used to delete ttnn trace if exists)
 

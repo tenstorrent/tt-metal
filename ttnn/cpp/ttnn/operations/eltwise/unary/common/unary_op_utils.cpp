@@ -459,6 +459,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[0]),
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[1]))};
             break;
+        case UnaryOpType::BITCAST:
+            // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
+            op_init_and_name = {};
+            break;
         case UnaryOpType::MAXIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -824,6 +829,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
+        case UnaryOpType::BITCAST:
+            // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
+            op_init_and_name = {};
+            break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
         case UnaryOpType::CBRT: op_init_and_name = {}; break;

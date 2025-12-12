@@ -20,12 +20,13 @@ sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl)
 params = format_sampling_params(user_params, max_batch_size=32)
 sampling.reset_sampling_params(params)
 
+sampling.reset_seed(seed)
+
 sampling.reset_prompt_tokens(prompt_tokens)   # torch tensor shaped [B, S]
 sampling.reset_output_state(output_tokens)
 
 tt_tokens = sampling.sample(
     tt_logits,
-    seed=seed,
     tt_out_tok=tt_out_buffer,
 )
 ```
@@ -42,5 +43,3 @@ Before running decode, set `generator.enable_split_sampling = True` (or
    captures/executes a dedicated sampling trace immediately afterward.
 2. **Single trace:** Sampling runs inline as part of the model trace for
    maximum performance.
-
-Toggling the flag is inexpensive and can be done at runtime per request.

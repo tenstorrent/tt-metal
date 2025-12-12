@@ -40,6 +40,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     j[ttnn::graph::kParams] = data.params;
     j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kConnections] = data.connections;
+    j[ttnn::graph::kInputTensors] = data.input_tensors;
     j[ttnn::graph::kStackingLevel] = data.stacking_level;
     return j;
 }
@@ -60,9 +61,9 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mo
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
-    auto buffer_id = add_buffer(buffer);
+    node_id buffer_node_id = add_buffer(buffer);
 
-    auto counter = graph.size();
+    node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
 
     std::unordered_map<std::string, std::string> params = {
@@ -78,7 +79,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
             .counter = counter,
             .node_type = kNodeBufferAllocate,
             .params = std::move(params),
-            .connections = {buffer_id},
+            .connections = {buffer_node_id},
             .stacking_level = stacking_level});
         graph[current_op_id.top()].connections.push_back(counter);
     }
@@ -86,8 +87,8 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
 
 void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
-    auto buffer_id = add_buffer(buffer);
-    auto counter = graph.size();
+    node_id buffer_node_id = add_buffer(buffer);
+    node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
@@ -101,7 +102,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
             .counter = counter,
             .node_type = kNodeBufferDeallocate,
             .params = std::move(params),
-            .connections = {buffer_id},
+            .connections = {buffer_node_id},
             .stacking_level = stacking_level});
         graph[current_op_id.top()].connections.push_back(counter);
     }
@@ -121,7 +122,7 @@ void GraphProcessor::track_allocate_cb(
         {kCoreRangeSet, core_range_set.str()},
         {kGloballyAllocated, std::to_string(is_globally_allocated)},
         {kDeviceId, std::to_string(device->id())}};
-    auto counter = graph.size();
+    node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     {
         graph.push_back(Vertex{
@@ -137,7 +138,7 @@ void GraphProcessor::track_allocate_cb(
 void GraphProcessor::track_deallocate_cb(const tt::tt_metal::IDevice* device) {
     TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);
-    auto counter = graph.size();
+    node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     {
         graph.push_back(Vertex{
@@ -193,6 +194,10 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
 
     const std::lock_guard<std::mutex> lock(mutex);
     log_debug(tt::LogAlways, "Begin op: {}", function_name);
+
+    // Clear the input tensor list for this new operation
+    current_input_tensors.clear();
+
     std::unordered_map<std::string, std::string> params = {
         {kInputs, std::to_string(input_parameters.size())},
         {kName, std::string(function_name)},
@@ -201,7 +206,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     std::vector<std::string> serialized_arguments;
     serialized_arguments = GraphArgumentSerializer::instance().to_list(input_parameters);
 
-    auto counter = graph.size();
+    node_id counter = graph.size();
     // Track stacking level: current stack depth (before pushing this operation)
     int stacking_level = static_cast<int>(current_op_id.size());
     {
@@ -211,6 +216,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
             .params = std::move(params),
             .arguments = serialized_arguments,
             .connections = {/*current_op_id.top()*/},
+            .input_tensors = {},
             .stacking_level = stacking_level});
         if (last_finished_op_id != -1) {
             graph[last_finished_op_id].connections.push_back(counter);
@@ -230,16 +236,19 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
             log_debug(tt::LogAlways, "input any type name ignored: {}", graph_demangle(any.type().name()));
         }
     }
+
+    // Populate the input_tensors field of the function_start vertex
+    graph[counter].input_tensors = current_input_tensors;
 }
 
 void GraphProcessor::track_function_end_impl() {
     auto name = graph[current_op_id.top()].params[kName];
     log_debug(tt::LogAlways, "End op: {}", name);
 
-    int function_start_id = current_op_id.top();
+    node_id function_start_id = current_op_id.top();
     int stacking_level = graph[function_start_id].stacking_level;
 
-    auto counter = graph.size();
+    node_id counter = graph.size();
     {
         graph.push_back(Vertex{
             .counter = counter,
@@ -282,7 +291,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     current_op_id.pop();
 }
 
-int GraphProcessor::add_tensor(const Tensor& t) {
+node_id GraphProcessor::add_tensor(const Tensor& t) {
     const auto& storage = t.storage();
     tt::tt_metal::Buffer* buffer = std::visit(
         [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
@@ -312,7 +321,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             "for this tensor ahead of time.");
         tensor_id = tt::tt_metal::Tensor::next_tensor_id();
     }
-    auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
+    node_id tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
@@ -337,21 +346,21 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             "Tensor doesn't have buffer, but storage is {}",
             graph_demangle(get_type_in_var(t.storage()).name()));
     } else {
-        auto buffer_id = add_buffer(buffer);
-        graph[buffer_id].connections.push_back(tensor_counter);
+        node_id buffer_node_id = add_buffer(buffer);
+        graph[buffer_node_id].connections.push_back(tensor_counter);
     }
 
     return tensor_counter;
 }
 
-int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
-    const auto buffer_id = buffer->unique_id();
+node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
+    const auto buffer_unique_id = buffer->unique_id();
 
-    if (const auto it = buffer_id_to_counter.find(buffer_id); it != buffer_id_to_counter.end()) {
+    if (const auto it = buffer_id_to_counter.find(buffer_unique_id); it != buffer_id_to_counter.end()) {
         return it->second;
     }
 
-    const auto counter = graph.size();
+    const node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
@@ -366,13 +375,14 @@ int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
         .connections = {},
         .stacking_level = stacking_level});
     graph[current_op_id.top()].connections.push_back(counter);
-    buffer_id_to_counter.emplace(buffer_id, counter);
+    buffer_id_to_counter.emplace(buffer_unique_id, counter);
     return counter;
 }
 
 void GraphProcessor::begin_function_process(const Tensor& tensor) {
-    int tensor_id = add_tensor(tensor);
-    graph[tensor_id].connections.push_back(current_op_id.top());
+    node_id tensor_node_id = add_tensor(tensor);
+    graph[tensor_node_id].connections.push_back(current_op_id.top());
+    current_input_tensors.push_back(tensor_node_id);
 }
 
 template <typename T>
@@ -390,8 +400,8 @@ void GraphProcessor::begin_function_process(const std::vector<T>& tensor_vec) {
 }
 
 void GraphProcessor::end_function_process(const Tensor& tensor) {
-    int tensor_id = add_tensor(tensor);
-    graph[last_finished_op_id].connections.push_back(tensor_id);
+    node_id tensor_node_id = add_tensor(tensor);
+    graph[last_finished_op_id].connections.push_back(tensor_node_id);
 }
 
 template <typename T>
@@ -425,7 +435,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
 }
 nlohmann::json GraphProcessor::end_capture() {
     const std::lock_guard<std::mutex> lock(mutex);
-    int counter = graph.size();
+    node_id counter = graph.size();
     graph.push_back(
         Vertex{.counter = counter, .node_type = kNodeCaptureEnd, .params = {}, .connections = {}, .stacking_level = 0});
     if (last_finished_op_id != -1) {

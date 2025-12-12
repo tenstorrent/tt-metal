@@ -77,6 +77,7 @@
 #include "tt_stl/reflection.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -96,7 +97,7 @@ using namespace tt::tt_metal;
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator()->get_config().l1_unreserved_base -
+        return device->allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     } else {
@@ -234,10 +235,12 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
-    for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
-        const auto& semaphore_descriptor = descriptor.semaphores[i];
+    for (const auto& semaphore_descriptor : descriptor.semaphores) {
         internal_->add_semaphore(
-            semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
+            semaphore_descriptor.core_ranges,
+            semaphore_descriptor.id,
+            semaphore_descriptor.initial_value,
+            semaphore_descriptor.core_type);
     }
 
     for (const auto& kernel_descriptor : descriptor.kernels) {
@@ -245,6 +248,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
         std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
+        std::unordered_map<std::string, uint32_t> named_compile_args(
+            kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
         auto config = std::visit(
             tt::stl::overloaded{
@@ -252,14 +257,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
-                        {},
+                        std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
-                        {},
+                        std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
@@ -270,7 +275,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .noc_mode = dm_descriptor.noc_mode,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
                     };
                 },
@@ -285,7 +290,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .math_approx_mode = compute_descriptor.math_approx_mode,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                     };
                 },
@@ -297,7 +302,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .processor = ethernet_descriptor.processor,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
@@ -441,27 +446,46 @@ KernelGroup::KernelGroup(
         }
         auto class_id = kernel->dispatch_class();
 
-        if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-            // The code below sets the brisc_noc_id for use by the device firmware
-            // Use 0 if neither brisc nor ncrisc specify a noc
-            if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
-                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                // Use brisc's noc if brisc specifies a noc
-                kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
-                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
-                }
-            } else if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
-                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-                kernel_config.brisc_noc_id() = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
-                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
-                }
-            }
+        // Dynamic NOC assignment is only supported on certain core types
+        const bool is_tensix_core =
+            hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX;
+        const bool is_supported_eth_core =
+            hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::ACTIVE_ETH &&
+            !hal.get_eth_fw_is_cooperative();
+        if (is_tensix_core || is_supported_eth_core) {
+            std::visit(
+                [&](auto&& arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, EthernetConfig>) {
+                        // The code below sets the brisc_noc_id for use by the device firmware
+                        // Use 0 if neither brisc nor ncrisc specify a noc
+                        if (class_id ==
+                            ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+                            noc_modes.insert(arg.noc_mode);
+                            // Use brisc's noc if brisc specifies a noc
+                            kernel_config.brisc_noc_id() = arg.noc;
+                            // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
+                            // DM_DEDICATED_NOC
+                            if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                            }
+                        } else if (
+                            class_id ==
+                            ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+                            noc_modes.insert(arg.noc_mode);
+                            // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
+                            // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
+                            // validation
+                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
+                            // DM_DEDICATED_NOC
+                            if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                            }
+                        }
+                    }
+                },
+                kernel->config());
         }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
@@ -916,9 +940,31 @@ void detail::ProgramImpl::init_semaphores(
     }
 }
 
+void detail::ProgramImpl::validate_semaphore_id(
+    const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const {
+    TT_FATAL(semaphore_id < NUM_SEMAPHORES, "Semaphore id {} exceeds max value {}", semaphore_id, NUM_SEMAPHORES - 1);
+
+    for (const auto& core_range : crs.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                auto existing_semaphores = semaphores_on_core(logical_core, core_type);
+                for (const auto& semaphore : existing_semaphores) {
+                    TT_FATAL(
+                        semaphore.get().id() != semaphore_id,
+                        "Semaphore id {} already in use on core {}",
+                        semaphore_id,
+                        logical_core.str());
+                }
+            }
+        }
+    }
+}
+
 void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
+    validate_semaphore_id(crs, semaphore_id, core_type);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 

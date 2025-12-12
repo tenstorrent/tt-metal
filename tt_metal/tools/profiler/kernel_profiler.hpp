@@ -44,6 +44,8 @@ extern uint32_t traceCount;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
+constexpr uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC / sizeof(uint32_t);
+constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
@@ -53,6 +55,11 @@ constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
 constexpr bool TRACE_ON_TENSIX = true;
 #else
 constexpr bool TRACE_ON_TENSIX = false;
+#endif
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+constexpr bool DO_SUM = true;
+#else
+constexpr bool DO_SUM = false;
 #endif
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
@@ -477,23 +484,18 @@ struct profileScopeGuaranteed {
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
         if constexpr (TRACE_ON_TENSIX) {
-            uint32_t trace_controls = profiler_control_buffer[CURRENT_TRACE_ID];
+            uint32_t trace_replay_status = profiler_control_buffer[TRACE_REPLAY_STATUS];
             if constexpr (index == 0) {
 #if !defined(COMPILE_FOR_TRISC)
-                if (trace_controls & TRACE_MARK_FW_START) {
+                if (trace_replay_status & TRACE_MARK_FW_START) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
-                    profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_KERNEL_START;
-                } else if (trace_controls == 0) {
-                    mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
-                    wIndex = CUSTOM_MARKERS;
+                    profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_KERNEL_START;
                 }
 #endif
             } else {
-                if (trace_controls & TRACE_MARK_KERNEL_START) {
+                if (trace_replay_status & TRACE_MARK_KERNEL_START) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
-                    profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_ALL_ENDS;
-                } else if (trace_controls == 0) {
-                    mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
+                    profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_ALL_ENDS;
                 }
             }
         } else {
@@ -505,16 +507,12 @@ struct profileScopeGuaranteed {
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
         if constexpr (TRACE_ON_TENSIX) {
-            if (profiler_control_buffer[CURRENT_TRACE_ID] == TRACE_MARK_ALL_ENDS) {
+            if (profiler_control_buffer[TRACE_REPLAY_STATUS] == TRACE_MARK_ALL_ENDS) {
                 mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
 #if defined(COMPILE_FOR_BRISC)
                 // Validate profiler_data_buffer in L1
                 profiler_data_buffer[myRiscID].data[ID_HH] = 0x0;
 #endif
-            } else if (
-                profiler_control_buffer[CURRENT_TRACE_ID] == 0 &&
-                profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] == 0) {
-                mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
             }
             if constexpr (index == 0) {
                 profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] = wIndex;
@@ -534,11 +532,15 @@ struct profileScopeAccumulate {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
     inline __attribute__((always_inline)) profileScopeAccumulate() {
-        start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        if constexpr (kernel_profiler::DO_SUM) {
+            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        }
     }
     inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        sumIDs[index] = timer_id;
-        sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        if constexpr (kernel_profiler::DO_SUM) {
+            sumIDs[index] = timer_id;
+            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        }
     }
 };
 
@@ -581,7 +583,7 @@ __attribute__((noinline)) void trace_only_init() {
         }
         traceCount++;
         set_host_counter(traceCount);
-        profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_FW_START;
+        profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_FW_START;
         // Invalidate profiler_data_buffer in L1
         // As the start of profiler buffer ID_HH = 0x0
         // indicates valid profiler data

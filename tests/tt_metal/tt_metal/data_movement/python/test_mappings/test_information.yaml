@@ -492,3 +492,19 @@ tests:
 
   603:
     name: "PCIe Read Bandwidth"
+
+  610:
+    name: "Transaction ID - Write After Read"
+    comment: |
+      This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
+      has an input and output port. We have a core that is sending and receiving data at the same time,
+      with packets circulating around the torus. This does not happen in Read After Write tests because
+      the read requests get stuck behind the larger write requests.
+
+  611:
+    name: "Transaction ID - Write After Read One Packet Stateful"
+    comment: |
+      This test appears to yield between 1.5x and 2x the theoretical bandwidth. This is because the NIU
+      has an input and output port. We have a core that is sending and receiving data at the same time,
+      with packets circulating around the torus. This does not happen in Read After Write tests because
+      the read requests get stuck behind the larger write requests.

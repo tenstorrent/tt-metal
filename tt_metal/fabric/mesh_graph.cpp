@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "experimental/fabric/routing_table_generator.hpp"
 #include "fabric_host_utils.hpp"
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <iomanip>
@@ -20,7 +23,12 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include "physical_system_descriptor.hpp"
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include "impl/context/metal_context.hpp"
+#include <numeric>
+#include <set>
+#include <cmath>
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
@@ -30,6 +38,17 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
 namespace tt::tt_fabric {
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+
+/**
+ * @brief Determines the maximum number of local Ethernet connections per direction between ASICs in the system.
+ *
+ * For each ASIC in the provided PhysicalSystemDescriptor, this function examines all neighboring ASICs and counts
+ * the number of Ethernet connections to each neighbor that are marked as local (i.e., connection.is_local is true).
+ * It returns the maximum number of such local connections found in any direction for any ASIC.
+ *
+ * @param psd The PhysicalSystemDescriptor representing the system's ASICs and their interconnections.
+ * @return The maximum number of local Ethernet connections per direction between any two ASICs.
+ */
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
     switch (routing_direction) {
@@ -71,18 +90,15 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}
-         }},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}}},
         {tt::tt_fabric::FabricType::TORUS_Y,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}
-         }},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}}},
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}
-         }}});
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
@@ -433,6 +449,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
+        // Z, for all chips (only if using blackhole)
+        if (chip_spec_.num_z_ports > 0) {
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_z_ports; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
+                }
+            }
+        }
     }
 
     // Populate switches as meshes (switches are treated as meshes internally)
@@ -555,6 +580,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            }
+        }
+        // Z, for all chips (only if using blackhole)
+        if (chip_spec_.num_z_ports > 0) {
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_z_ports; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
+                }
             }
         }
     }
@@ -773,6 +807,161 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
     return mesh_host_ranks_[*mesh_id];
 }
 
+bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
+    auto it = intra_mesh_relaxed_policy_.find(mesh_id);
+    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No mode for mesh_id {}", *mesh_id);
+    return it->second;
+}
+
+/**
+ * Generate all possible mesh shapes that can be formed from a given number of chips.
+ *
+ * The function considers all pairs of positive integers (x, y) such that x * y = N,
+ * where N ranges from total_number_of_chips down to 1. Each pair represents a possible
+ * mesh shape (rows, columns). To avoid duplicates, shapes are normalized so that the
+ * larger dimension is always second (i.e., MeshShape(smaller_dim, larger_dim)).
+ *
+ * Filtering rules:
+ *   - Only shapes where both dimensions are even or 1 are considered (except for 1D shapes).
+ *     Odd dimensions (other than 1) are skipped to ensure compatibility with hardware constraints.
+ *   - 1D shapes (where one dimension is 1) are collected separately and appended at the end
+ *     of the result, so that 2D shapes are prioritized.
+ *   - Duplicate shapes are avoided.
+ *
+ * @param total_number_of_chips The total number of chips to partition into mesh shapes.
+ * @return A vector of possible MeshShape objects, with 2D shapes first (sorted by decreasing chip count),
+ *         followed by 1D shapes. Each shape appears only once.
+ */
+
+MeshGraph MeshGraph::generate_mesh_graph_of_shape(
+    MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction) {
+    MeshGraph mesh_graph;
+
+    // Get chip spec from MetalContext
+    const auto& metal_context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = metal_context.get_cluster();
+    tt::ARCH arch = cluster.get_cluster_desc()->get_arch();
+
+    // Get reliability mode from fabric config (stored in MetalContext)
+    tt::tt_fabric::FabricReliabilityMode reliability_mode = metal_context.get_fabric_reliability_mode();
+
+    // Use the provided num_connections_per_direction
+    std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;
+
+    // Set chip spec
+    mesh_graph.chip_spec_ = ChipSpec{
+        .arch = arch,
+        .num_eth_ports_per_direction = num_eth_ports_per_direction,
+        .num_z_ports = (arch == tt::ARCH::BLACKHOLE) ? num_eth_ports_per_direction : 0,
+    };
+
+    // Validate mesh shape dimensions
+    TT_FATAL(
+        mesh_shape[0] > 0 && mesh_shape[1] > 0,
+        "MeshGraph: Mesh shape dimensions must be positive, got {}x{}",
+        mesh_shape[0],
+        mesh_shape[1]);
+
+    // For WORMHOLE_B0 architecture, if both dimensions are odd, they must both be 1
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        bool both_odd = (mesh_shape[0] % 2 != 0) && (mesh_shape[1] % 2 != 0);
+        if (both_odd) {
+            TT_FATAL(
+                mesh_shape[0] == 1 && mesh_shape[1] == 1,
+                "MeshGraph: For WORMHOLE_B0 architecture, if both mesh dimensions are odd, they must both be 1, "
+                "got {}x{}",
+                mesh_shape[0],
+                mesh_shape[1]);
+        }
+    }
+
+    // Initialize for a single mesh (mesh_id = 0)
+    MeshId mesh_id(0);
+    uint32_t total_mesh_count = 1;
+
+    // Resize intra-mesh and inter-mesh connectivity (inter-mesh will remain empty)
+    mesh_graph.intra_mesh_connectivity_.resize(total_mesh_count);
+    mesh_graph.inter_mesh_connectivity_.resize(total_mesh_count);
+    mesh_graph.inter_mesh_connectivity_[0].resize(mesh_shape[0] * mesh_shape[1]);
+
+    // Set intra-mesh relaxed policy based on reliability mode
+    // RELAXED_SYSTEM_HEALTH_SETUP_MODE -> relaxed = true
+    // STRICT_SYSTEM_HEALTH_SETUP_MODE -> relaxed = false
+    bool is_relaxed = (reliability_mode == FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_graph.intra_mesh_relaxed_policy_[mesh_id] = is_relaxed;
+
+    // Build intra-mesh connectivity using fabric_type
+    MeshCoordinateRange mesh_coord_range(mesh_shape);
+    uint32_t mesh_size = mesh_shape[0] * mesh_shape[1];
+    mesh_graph.intra_mesh_connectivity_[*mesh_id].resize(mesh_size);
+    for (const auto& src_mesh_coord : mesh_coord_range) {
+        ChipId src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
+        mesh_graph.intra_mesh_connectivity_[*mesh_id][src_chip_id] =
+            mesh_graph.get_valid_connections(src_mesh_coord, mesh_coord_range, fabric_type);
+    }
+
+    // TODO: Enable this for multi-host meshes
+
+    // For auto-generated meshes, assume single host (host_shape = [1, 1])
+    MeshShape host_shape(1, 1);
+
+    // Populate mesh_host_ranks_ (single host)
+    std::vector<MeshHostRankId> mesh_host_ranks_values;
+    mesh_host_ranks_values.push_back(MeshHostRankId{0});
+
+    // Populate mesh_host_rank_coord_ranges_ (entire mesh belongs to host rank 0)
+    mesh_graph.mesh_host_rank_coord_ranges_.emplace(
+        std::make_pair(*mesh_id, MeshHostRankId{0}),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(mesh_shape[0] - 1, mesh_shape[1] - 1)));
+
+    // Populate mesh_host_ranks_
+    mesh_graph.mesh_host_ranks_.clear();
+    mesh_graph.mesh_host_ranks_.emplace_back(host_shape, mesh_host_ranks_values);
+
+    // Populate mesh_to_chip_ids
+    std::vector<ChipId> chip_ids(mesh_shape[0] * mesh_shape[1]);
+    std::iota(chip_ids.begin(), chip_ids.end(), 0);
+    mesh_graph.mesh_to_chip_ids_.emplace(*mesh_id, tt_metal::distributed::MeshContainer<ChipId>(mesh_shape, chip_ids));
+
+    // Set up mesh_edge_ports_to_chip_id_ with empty container
+    mesh_graph.mesh_edge_ports_to_chip_id_.resize(total_mesh_count);
+
+    // Get the edge ports of the mesh
+    // North, start from NW corner
+    std::uint32_t chan_id = 0;
+    for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
+        for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
+            mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+        }
+    }
+    // South, start from SW corner
+    chan_id = 0;
+    for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
+         chip_id < (mesh_shape[0] * mesh_shape[1]);
+         chip_id++) {
+        for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
+            mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+        }
+    }
+    // East, start from NE corner
+    chan_id = 0;
+    for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
+         chip_id += mesh_shape[1]) {
+        for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
+            mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+        }
+    }
+    // West, start from NW corner
+    chan_id = 0;
+    for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
+        for (std::uint32_t i = 0; i < mesh_graph.chip_spec_.num_eth_ports_per_direction; i++) {
+            mesh_graph.mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+        }
+    }
+
+    return mesh_graph;
+}
+
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
     const tt::tt_metal::ClusterType cluster_type,
     const std::string& root_dir,
@@ -804,12 +993,6 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
     }
 
     TT_THROW("Cannot find mesh graph descriptor for fabric type {} and cluster type {}", fabric_type, cluster_type);
-}
-
-bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
-    auto it = intra_mesh_relaxed_policy_.find(mesh_id);
-    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No mode for mesh_id {}", *mesh_id);
-    return it->second;
 }
 
 }  // namespace tt::tt_fabric

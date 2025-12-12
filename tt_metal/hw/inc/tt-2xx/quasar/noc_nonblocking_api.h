@@ -14,17 +14,28 @@
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
-#else
+#elif defined(COMPILE_FOR_NCRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_TRISC)
+// TRISC is not a data movement processor. This is just so it compiles
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#else
+// Lite Fabric compile
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(EthProcessorTypes::DM1);
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
 #define NOC_0_X(noc_index, noc_size_x, x) x
 #define NOC_0_Y(noc_index, noc_size_y, y) y
-#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
-#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
-#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(0))
+#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) x
+#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) y
+#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID)
 
 ////
 /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
@@ -48,17 +59,17 @@ constexpr uint32_t BRISC_RD_CMD_BUF = 1;      // for all reads
 constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 constexpr uint32_t BRISC_AT_CMD_BUF = 3;      // for atomics
 
-// BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
-// (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
-// while the coordinates go into hi register Metal does not need to use more than 32 bits for addresses but the 60th bit
-// needs to be set to enable NoC transactions through PCIe (see get_pcie_base_addr_from_device)
+/* Qsr has 64 bit addresses, use same encoding as BH and WH */
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 36;
 const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_HI;
 const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_HI;
 const uint32_t NOC_COORDINATE_MASK = 0xFFFFFF;
 
-// Mask for the 60th bit of the address in NOC_TARG/RET_ADDR_MID, which is set to enable PCIe transactions
+// ToDo check with Keranous if this is correct
 constexpr uint32_t NOC_PCIE_MASK = 0x1000000F;
+
+constexpr uint32_t WRITE_RESPONSE_STATIC_VC = 14;
+constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 
 extern uint32_t noc_reads_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -77,15 +88,35 @@ enum class NocBarrierType : uint8_t {
 
 static constexpr uint8_t NUM_BARRIER_TYPES = static_cast<uint32_t>(NocBarrierType::COUNT);
 
+struct BarrierCounter {
+    uint32_t barrier[NUM_BARRIER_TYPES];
+};
+
+struct RiscBarrierCounter {
+    BarrierCounter risc[MaxDMProcessorsPerCoreType];
+};
+
+struct NocBarrierCounter {
+    RiscBarrierCounter noc[NUM_NOCS];
+};
+
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
-    constexpr uint32_t offset =
-        MEM_NOC_COUNTER_BASE +
-        (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) * NUM_NOCS *
-            MEM_NOC_COUNTER_SIZE;
-    return offset + noc * MEM_NOC_COUNTER_SIZE;
+
+    constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
+
+    // Calculate most of the offset at compile time. Only the noc is variable at runtime.
+    constexpr uint32_t compile_time_offset =
+        offsetof(NocBarrierCounter, noc) + proc_t * sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0])) +
+        static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) *
+            sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0].barrier[0]));
+
+    constexpr uint32_t noc_stride = sizeof(decltype(std::declval<NocBarrierCounter>().noc[0]));
+
+    return base + noc * noc_stride + compile_time_offset;
 }
 
 // noc_nonposted_writes_acked
@@ -110,7 +141,7 @@ inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uin
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
 #if defined(WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION)
-    if (addr == NOC_CTRL) {
+    if (addr == NOC_CTRL_LO) {
         auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
         watcher_msg->noc_linked_status[noc] = (val & NOC_CMD_VC_LINKED) != 0;
     }
@@ -185,11 +216,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
-    // if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-    //     uint32_t noc_rd_cmd_field =
-    //         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(read_req_vc);
-    //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
-    // }
+
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
@@ -240,16 +267,16 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
     }
-    uint32_t noc_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-        (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
-        (posted ? 0 : NOC_CMD_RESP_MARKED);
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_STATIC_VC(vc) |
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
+                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
+                             (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
-    // if constexpr (use_trid) {
-    //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-    // }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
 
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    if constexpr (use_trid) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(trid));
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
@@ -286,11 +313,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
     }
     uint32_t noc_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+        NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
         NOC_BRCST_SRC_INCLUDE | NOC_CMD_RESP_MARKED;
 
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
@@ -323,11 +351,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_exclude_region(
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
     }
     uint32_t noc_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+        NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
         NOC_CMD_RESP_MARKED;
 
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
@@ -349,10 +378,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, num_times_to_write);
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_times_to_write);
     }
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | NOC_CMD_RESP_MARKED;
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
@@ -420,7 +450,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(0));
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
@@ -447,8 +477,8 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
             NOC_RET_ADDR_COORDINATE,
             (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                    NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
         NOC_CMD_BUF_WRITE_REG(
@@ -462,7 +492,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 inline __attribute__((always_inline)) void dynamic_noc_init() {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(0));
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
@@ -703,9 +733,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
         }
     }
     bool static_vc_alloc = true;
-    uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY |
-                             NOC_CMD_WR | NOC_CMD_WR_INLINE |
-                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
+    uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) |
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | NOC_CMD_CPY | NOC_CMD_WR |
+                             NOC_CMD_WR_INLINE | (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
                              (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
@@ -743,10 +773,6 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool linked,
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
-    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
-    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate force atomics to
-    // be non-posted.
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
@@ -770,7 +796,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
         cmd_buf,
         NOC_CTRL_LO,
         NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT);
+            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC));
     NOC_CMD_BUF_WRITE_REG(
         noc,
         cmd_buf,
@@ -786,7 +812,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
 }
 
 // issue noc reads while wait for outstanding transactions done
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
@@ -795,7 +821,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     uint32_t src_addr_;
     src_addr_ = src_base_addr + src_addr;
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    } else {
+        ASSERT(noc_cmd_buf_ready(noc, cmd_buf));
+    }
     while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID + 1) / 2));
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
@@ -822,7 +852,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_HI, NOC_CMD_PKT_TAG_ID(trid));
 }
 
 // clang-format off
@@ -854,13 +884,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                    NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
     }
     if constexpr (use_vc) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                    NOC_CMD_STATIC_VC(vc) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
     }
     // Handles reading from PCIe
@@ -983,11 +1013,9 @@ template <bool posted = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (!posted ? NOC_CMD_RESP_MARKED : 0x0);
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | 0x0 | 0x0 |
+                             (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     // Handles writing to PCIe
@@ -1130,7 +1158,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     }
 
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY | NOC_CMD_WR |
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(static_vc) |
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | NOC_CMD_CPY | NOC_CMD_WR |
                              NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)dest_addr);
@@ -1330,8 +1359,8 @@ enum CQNocSend {
 // clang-format on
 template <uint32_t cmd_buf>
 inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
-    uint32_t noc_rd_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
 }
@@ -1423,6 +1452,7 @@ template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
 inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
     constexpr bool multicast_path_reserve = true;
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) |
                              ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? NOC_CMD_VC_LINKED : 0x0) |
                              ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST)
                                   ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET)
@@ -1510,6 +1540,27 @@ inline __attribute__((always_inline)) void noc_write_with_state(
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += ndests;
+        }
+    }
+}
+
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
+inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
+    for (uint32_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
+        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
+            invalidate_l1_cache();
         }
     }
 }

@@ -16,6 +16,11 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.tt_transformers.tt.common import (
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+    get_base_model_name,
+)
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -98,6 +103,37 @@ class ModelArgs:
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
+    def get_warmup_prefill_supported_seq_lens(self):
+        DEFAULT_VALUE = self.max_prefill_chunk_size
+        # This dictionary is used to override the default ceil warmup prefill value
+        model_specific_ceil_warmup_lengths = {
+            # e.g. "gpt-oss-120b": 4096
+        }
+
+        max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+
+        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size
+        )
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
+        if self.model_name == "gpt-oss-120b":
+            if 6144 in to_warmup_seq_lens:
+                to_warmup_seq_lens.remove(6144)
+        return to_warmup_seq_lens
+
+    @property
+    def base_model_name(self):
+        return get_base_model_name(self.model_name)
+
     def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
@@ -129,12 +165,12 @@ class ModelArgs:
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
 
         # No supported sequence lengths found, return empty list
         return []

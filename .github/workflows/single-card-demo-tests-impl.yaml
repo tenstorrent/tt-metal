@@ -91,6 +91,7 @@ jobs:
             { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
             # Moved to t3k tests until OOM on single card runners resolved
             # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
+            { name: "qwen25_vl", runner-label: "N150", performance: false, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
             { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
             { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
             # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
@@ -182,8 +183,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -230,14 +236,14 @@ jobs:
           fi
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}

@@ -97,11 +97,8 @@ The current version is verified to work with the following models:
 
 ## Prerequisites
 
-1. Install [TT-Metalium and TTNN](../../INSTALLING.md).
-2. Install additional python dependencies:
-    ```
-    pip install -r models/tt_transformers/requirements.txt
-    ```
+Install [TT-Metalium and TTNN](../../INSTALLING.md).
+
 
 ## How to Run
 
@@ -135,49 +132,9 @@ export HF_MODEL=<org/name>
 
 ### Manual Setup
 
-If you wish, you can manually download the weights either [from Meta](#option-1-download-llama-weights-from-meta) or [from HuggingFace](#option-2-download-weights-from-huggingface) as described by the two following sections:
+If you wish, you can manually download the weights [from HuggingFace](#download-weights-from-huggingface) as described by the following section:
 
-#### Option 1: Download Llama Weights from Meta
-
-You can download Llama models [directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
-
-The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
-
-- If using Meta-provided weights you should set `LLAMA_DIR` to the path of the downloaded directory instead of setting `HF_MODEL`:
-```
-export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
-```
-
-##### Repack Weights (Llama3.1-70B and Llama3.2-90B from Meta only)
-Meta's Llama3.1-70B and Llama3.2-90B requires repacked weights. We provide scripts to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py` and `models/tt_transformers/scripts/repack_weights_90b.py`.
-
-The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
-If providing a different path, please make sure that you keep the string `3.1-70B` or `3.2-90B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
-
-Note: Use the default value of `10` for `chunk_size`.
-
-```
-# This concatenates the sharded checkpoints and makes it easier for us to load.
-python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir>
-```
-
-If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
-
-**⚠️ Warning**
->
-> For Llama3 models, weights downloaded from the `huggingface-cli` via
->```
->huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
->```
-> will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
-
-#### You are all set!
-
-- Skip to section: [Run the Demo](#run-the-demo)
-
----
-
-#### Option 2: Download Weights from HuggingFace
+#### Download Weights from HuggingFace
 
 Navigate to [HuggingFace](https://huggingface.co) and download the weights of the model you wish to run (check [models chart](#tt-transformers) for compatibility and direct links to HuggingFace models).
 
@@ -203,11 +160,9 @@ export HF_MODEL=<path_to_downloaded_directory>
 
 ### Run the Demo
 
-- Make sure either `HF_MODEL` or `LLAMA_DIR` has been set:
+- Make sure `HF_MODEL` has been set:
 
 `export HF_MODEL=<hf_model_name or hf_downloaded_directory>`
-
-`export LLAMA_DIR=<path_to_meta_downloaded_model_directory>`
 
 - Run the Demo
 
@@ -257,7 +212,6 @@ At the time of writing this covers the majority of popular HuggingFace text-gene
 ### Environment Variables Description
 
 - `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
-- `LLAMA_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
 - `TT_CACHE_PATH` is optional. It sets the path for ttnn's weight cache files. See below for more details.
 - `MESH_DEVICE` is optional. It allows you to use fewer devices than are available. See below for more details.
 
@@ -265,8 +219,7 @@ On the first execution of each model, TTNN will create weight cache files for th
 
 1. `TT_CACHE_PATH` if you have set it.
 2. `HF_MODEL/device_name` if a path to downloaded weights was specified using `HF_MODEL`.
-3. `LLAMA_DIR/device_name` if a path to downloaded Meta-provided weights was specified using `LLAMA_DIR`.
-4. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
+3. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
 
 The device name used is:
 

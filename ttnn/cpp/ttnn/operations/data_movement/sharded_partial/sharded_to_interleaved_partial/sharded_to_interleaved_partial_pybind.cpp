@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.hpp"
-
-#include "ttnn-pybind/decorators.hpp"
-#include "ttnn/types.hpp"
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
+#include "sharded_to_interleaved_partial.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

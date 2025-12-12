@@ -47,4 +47,5 @@ void kernel_main() {
         cb_push_back(final_values_cb_index, Wt_final);
         cb_push_back(final_indices_cb_index, Wt_final);
     }
+    noc_async_write_barrier();
 }

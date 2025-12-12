@@ -18,7 +18,6 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "tt_metal/fabric/ccl/ccl_common.hpp"
-#include "tt_metal/fabric/erisc_datamover_builder_helper.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"

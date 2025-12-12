@@ -125,11 +125,11 @@ def init_conditional_generation_tt_model(
         device=mesh_device,
     )
     # Note: config.max_length is typically 448 for whisper large models
-    kv_cache = init_kv_cache(
+    kv_cache, cross_attn_cache = init_kv_cache(
         config, mesh_device, max_batch_size, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
     )
 
-    return parameters, ttnn_linear_weight, kv_cache
+    return parameters, ttnn_linear_weight, kv_cache, cross_attn_cache
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(
@@ -154,7 +154,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(
         model_repo, generation_params.language, generation_params.task
     )
-    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
+    parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper
     )
 
@@ -187,6 +187,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             output_mesh_composer=output_mesh_composer,
             weights_mesh_mapper=weights_mesh_mapper,
             kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
             generation_params=params,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,
@@ -337,16 +338,17 @@ def run_demo_whisper_for_conditional_generation_inference(
 
             # Extract final metrics from last result
             if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = last_result
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
                 print()  # New line after streaming
             else:
                 # Fallback if no results
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = (
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
                     [""] * current_batch_size,
                     None,
                     None,
                     0.0,
                     0.0,
+                    False,
                 )
         else:
             # Non-streaming mode
@@ -411,11 +413,12 @@ def run_demo_whisper_for_conditional_generation_dataset(
                 last_result = result
             # Extract final result
             if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob = last_result
+                ttnn_output, avg_logprob, no_speech_prob, is_final = last_result
             else:
                 ttnn_output = [""] * current_batch_size
                 avg_logprob = None
                 no_speech_prob = None
+                is_final = False
         else:
             # Non-streaming mode
             ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
@@ -446,6 +449,7 @@ def run_demo_whisper_for_translation_dataset(
     num_inputs,
     generation_params: Optional[GenerationParams] = None,
     batch_size_per_device=1,
+    stream=False,
 ):
     torch.manual_seed(0)
 
@@ -542,11 +546,28 @@ def run_demo_whisper_for_translation_dataset(
             logger.info(f"Sample {i + j + 1}: {generation_params.language} text: {source_text}")
             logger.info(f"Sample {i + j + 1}: English reference: {english_translation}")
 
-        ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
-            current_batch,
-            stream=False,
-            return_perf_metrics=False,
-        )
+        # Perform model inference with optional streaming
+        if stream:
+            # Handle streaming mode - iterate over generator
+            logger.info(f"Streaming mode enabled for translation evaluation")
+            last_result = None
+            for result in model_pipeline(current_batch, stream=True, return_perf_metrics=False):
+                last_result = result
+            # Extract final result
+            if last_result is not None:
+                ttnn_output, avg_logprob, no_speech_prob, is_final = last_result
+            else:
+                ttnn_output = [""] * current_batch_size
+                avg_logprob = None
+                no_speech_prob = None
+                is_final = False
+        else:
+            # Non-streaming mode
+            ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
+                current_batch,
+                stream=False,
+                return_perf_metrics=False,
+            )
 
         # Process results for each sample in the batch
         for j in range(current_batch_size):
@@ -683,7 +704,11 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "stream",
-    [False],
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "prompt",
+    [None],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
@@ -702,6 +727,7 @@ def test_demo_for_conditional_generation(
     return_timestamps,
     batch_size_per_device,
     stream,
+    prompt,
     request,
 ):
     generation_params = GenerationParams(
@@ -712,6 +738,7 @@ def test_demo_for_conditional_generation(
         return_timestamps=return_timestamps,
         language=language,
         task=task,
+        prompt=prompt,
     )
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
@@ -734,16 +761,15 @@ def test_demo_for_conditional_generation(
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
-            1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
-            2: {"prefill_time_to_token": 0.27, "decode_t/s/u": 48.09},
-            8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
-            32: {"prefill_time_to_token": 0.35, "decode_t/s/u": 43.1},
+            2: {"prefill_time_to_token": 0.18, "decode_t/s/u": 94.03},
+            8: {"prefill_time_to_token": 0.22, "decode_t/s/u": 85.0},
+            32: {"prefill_time_to_token": 0.28, "decode_t/s/u": 49.9},
         }
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_time_to_token": 0.127, "decode_t/s/u": 87.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.075, "decode_t/s/u": 225.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.119, "decode_t/s/u": 94.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.070, "decode_t/s/u": 270.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
@@ -758,7 +784,9 @@ def test_demo_for_conditional_generation(
             "decode_t/s": True,
             "decode_t/s/u": True,
         }
-        verify_perf(measurements, expected_perf_metrics, expected_measurements=expected_measurements)
+        verify_perf(
+            measurements, expected_perf_metrics, high_tol_percentage=1.20, expected_measurements=expected_measurements
+        )
 
 
 @pytest.mark.parametrize(
@@ -796,6 +824,12 @@ def test_demo_for_conditional_generation(
     "stream",
     [False],
 )
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        'Here are several example lines using “Mister”: Good morning. This is Mister John Smith speaking. Mister Smith will join us shortly and Mister Jones is already here. I asked Mister Anderson if Mister Brown could review the file. From here on, whenever the speaker says the name "Mister …", use "Mister" (not "Mr.") in the transcription.'
+    ],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_conditional_generation_dataset(
     mesh_device,
@@ -810,6 +844,7 @@ def test_demo_for_conditional_generation_dataset(
     return_timestamps,
     batch_size_per_device,
     stream,
+    prompt,
     request,
 ):
     # Skip test in CI when using generate_kwargs
@@ -824,6 +859,7 @@ def test_demo_for_conditional_generation_dataset(
         return_timestamps=return_timestamps,
         language=language,
         task=task,
+        prompt=prompt,
     )
     return run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
@@ -858,6 +894,10 @@ def test_demo_for_conditional_generation_dataset(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
     [(0.0, None, None, None, False), (0.0, 2.4, -2.0, 0.6, True)],  # Translation needs relaxed thresholds
 )
+@pytest.mark.parametrize(
+    "stream",
+    [True],
+)
 def test_demo_for_translation_dataset(
     mesh_device,
     model_repo,
@@ -870,6 +910,7 @@ def test_demo_for_translation_dataset(
     logprob_threshold,
     no_speech_threshold,
     return_timestamps,
+    stream,
     request,
 ):
     if is_ci_env:
@@ -890,4 +931,5 @@ def test_demo_for_translation_dataset(
         num_inputs,
         generation_params,
         batch_size_per_device,
+        stream=stream,
     )

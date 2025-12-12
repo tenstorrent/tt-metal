@@ -39,6 +39,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
+            "bitcast": lambda x, dtype, **_: x.view(dtype),
             "cos": torch.cos,
             "erfinv": torch.erfinv,
             "exp2": torch.exp2,
@@ -121,6 +122,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.abs,
     ttnn.atan,
+    ttnn.bitcast,
     ttnn.cos,
     ttnn.erfinv,
     ttnn.exp2,

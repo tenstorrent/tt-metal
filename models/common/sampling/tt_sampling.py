@@ -10,6 +10,7 @@ import ttnn
 
 logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
+from models.common.utils import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -58,8 +59,9 @@ class TTSampling(LightweightModule):
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
-        self.vocab_size = args.vocab_size
-        self.padded_vocab_size = getattr(args, "padded_vocab_size", None)
+
+        padded_vocab_size = getattr(args, "padded_vocab_size", None)
+        self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.max_batch_size = 32
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
@@ -115,6 +117,9 @@ class TTSampling(LightweightModule):
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
+        # Log-probs tensor to store the log-probs for the batch
+        self.tt_log_probs = None
+        self.log_probs_calculator = LogProbsCalculator(self.mesh_device)
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -124,11 +129,8 @@ class TTSampling(LightweightModule):
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
-        per_device_vocab_size = (
-            self.vocab_size // num_devices_in_mesh
-            if self.cluster_shape[0] * self.cluster_shape[1] <= 8
-            else self.padded_vocab_size // num_devices_in_mesh
-        )
+        per_device_vocab_size = self.padded_vocab_size // num_devices_in_mesh
+
         for device_id in range(num_devices_in_mesh):
             indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
                 device_id * per_device_vocab_size
@@ -181,7 +183,7 @@ class TTSampling(LightweightModule):
             )
             return tt_logits
 
-    def reset_params(self, k, p, temp):
+    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
             torch.tensor(k),
@@ -206,10 +208,11 @@ class TTSampling(LightweightModule):
         ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
         ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
+        self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
+
     def forward(
         self,
         x: ttnn.Tensor,
-        seed: int = 0,
         tt_out_tok: ttnn.Tensor = None,
     ):
         """
@@ -221,7 +224,6 @@ class TTSampling(LightweightModule):
 
         Args:
             x: Input logits tensor
-            seed: Random seed for sampling
             tt_out_tok: Optional output tensor to write results to
 
         Returns:
@@ -340,7 +342,6 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            seed=seed,
             sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
             )
@@ -352,7 +353,11 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
-        return tt_out_tok
+        # Return dummy log-probs tensor with same shape as regular log-probs would be
+        # to satisfy the return type and for later post-processing
+        self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+
+        return tt_out_tok, self.tt_log_probs
 
 
 def clamp(value, min_value, max_value):

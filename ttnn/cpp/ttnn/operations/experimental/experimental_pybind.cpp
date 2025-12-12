@@ -64,8 +64,8 @@ void py_module(py::module& module) {
     transformer::detail::bind_split_qkv(module);
     transformer::detail::bind_nlp_create_qkv_heads(module);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(module);
+    nlp_concat_heads_decode::detail::bind_nlp_concat_heads_decode(module);
     nlp_concat_heads::detail::bind_nlp_concat_heads(module);
-    transformer::detail::bind_nlp_concat_heads_decode(module);
     transformer::detail::bind_nlp_concat_heads_boltz(module);
     transformer::detail::bind_nlp_create_qkv_heads_decode(module);
     transformer::detail::bind_nlp_create_qkv_heads_falcon7b(module);

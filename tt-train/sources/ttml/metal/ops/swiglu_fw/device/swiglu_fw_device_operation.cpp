@@ -4,6 +4,8 @@
 
 #include "swiglu_fw_device_operation.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace ttml::metal::ops::swiglu_fw::device {
 
 SwiGLUForwardDeviceOperation::program_factory_t SwiGLUForwardDeviceOperation::select_program_factory(
@@ -23,7 +25,7 @@ void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "SwiGLUForward operation requires {} to be on Device. Input storage type: {}",
             name,
-            static_cast<int>(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(
             tensor.buffer() != nullptr,
@@ -34,20 +36,20 @@ void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "SwiGLUForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
-            static_cast<int>(tensor.layout()));
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "SwiGLUForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
-            static_cast<int>(tensor.dtype()));
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "SwiGLUForward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

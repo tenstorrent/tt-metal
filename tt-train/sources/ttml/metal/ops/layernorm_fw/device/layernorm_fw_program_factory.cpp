@@ -8,7 +8,7 @@
 #include <metal/ttnn_all_includes.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
@@ -45,11 +45,11 @@ constexpr auto kMeanCbIndex = tt::CBIndex::c_7;    // mean (for backward pass)
 constexpr auto kRstdCbIndex = tt::CBIndex::c_8;    // rstd (for backward pass)
 
 // CBs with intermediate computations
-constexpr auto kSumCbIndex = tt::CBIndex::c_9;           // sum of inputs
-constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_10;    // broadcasted mean
-constexpr auto kVarianceSumCbIndex = tt::CBIndex::c_11;  // sum((x - mean)^2)
-constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;    // broadcasted rstd
-constexpr auto kXHatCbIndex = tt::CBIndex::c_13;         // normalized x_hat
+constexpr auto kSumCbIndex = tt::CBIndex::c_9;                  // sum of inputs
+constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_10;           // broadcasted mean
+constexpr auto kVarianceSumCbIndex = tt::CBIndex::c_11;         // sum((x - mean)^2)
+constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;           // broadcasted rstd
+constexpr auto kXHatCbIndex = tt::CBIndex::c_13;                // normalized x_hat
 constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
 
 constexpr uint32_t kNumScalerTiles = 1U;
@@ -137,11 +137,11 @@ void assign_per_core_runtime_args(
     uint32_t num_cores_y,
     uint32_t num_rows_per_core_group_1,
     uint32_t num_rows_per_core_group_2,
-    const CoreRangeSet& core_group_1,
-    const CoreRangeSet& core_group_2,
+    const tt::tt_metal::CoreRangeSet& core_group_1,
+    const tt::tt_metal::CoreRangeSet& core_group_2,
     bool return_mean_rstd) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -449,7 +449,7 @@ void LayerNormForwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_fw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, layernorm_fw_writer_kernel_id);
 
-    std::vector<CoreRange> all_ranges;
+    std::vector<tt::tt_metal::CoreRange> all_ranges;
     all_ranges.reserve(core_group_1.ranges().size() + core_group_2.ranges().size());
     all_ranges.insert(all_ranges.end(), core_group_1.ranges().begin(), core_group_1.ranges().end());
     all_ranges.insert(all_ranges.end(), core_group_2.ranges().begin(), core_group_2.ranges().end());

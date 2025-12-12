@@ -216,9 +216,7 @@ tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
 }
 /* LlamaAllGatherMatmulAsync Implementation ends here*/
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 namespace {
 
@@ -344,8 +342,6 @@ Tensor llama_all_gather_matmul_async(
         global_cb);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

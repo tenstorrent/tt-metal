@@ -17,14 +17,19 @@ on:
           - llama3_70b_dp
           - falcon7b
           - sentence_bert
+          - whisper
           - sd35
           - flux1
-          - motif
           - gpt-oss
+          - motif
           - wan22
           - mochi
-  schedule:
-    - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
+          - qwen3_32b
+          - qwen3_32b_long_context
+          - deepseek_v3
+  # Disabled till 15. Dec 2025 due to UF release
+  # schedule:
+  #   - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
