@@ -208,6 +208,14 @@ class Module(ABC):
                 msg = f"{err} while loading '{path}'"
                 raise LoadingError(msg) from err
 
+    def deallocate_weights(self) -> None:
+        """Deallocate all parameter weights from device memory recursively."""
+        for _, child in self.named_children():
+            child.deallocate_weights()
+
+        for _, parameter in self.named_parameters():
+            parameter.deallocate()
+
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         pass
@@ -395,6 +403,12 @@ class Parameter:
     def data(self, value: ttnn.Tensor) -> None:
         self._check_data(value)
         self._data = value
+
+    def deallocate(self) -> None:
+        """Deallocate the parameter's device memory."""
+        if self._data is not None:
+            ttnn.deallocate(self._data)
+            self._data = None
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:
