@@ -141,19 +141,19 @@ class LogProbsCalculator:
         # All-gather local max to get global max
         gathered_max_tensors = ttnn.all_gather(
             local_max_tensor,
-            dim=2,
+            dim=1,
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=None,
+            cluster_axis=0,
             topology=ttnn.Topology.Linear,
             **self.common_args,
         )
         # TODO: Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
-        print(f"gathered_max_tensors layout: {gathered_max_tensors.layout}")
-        gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, 32, 32), **self.common_args)
-        gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.TILE_LAYOUT, **self.common_args)
-        self.global_max = ttnn.max(gathered_max_tensors, dim=-1, keepdim=True, **self.common_args)
+        # print(f"gathered_max_tensors layout: {gathered_max_tensors.layout}")
+        # gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
+        # gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, 32, 32), **self.common_args)
+        # gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.TILE_LAYOUT, **self.common_args)
+        self.global_max = ttnn.max(gathered_max_tensors, dim=1, keepdim=True, **self.common_args)
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
         subtracted_tensor = ttnn.subtract(logits_tensor, self.global_max, **self.common_args)
@@ -163,20 +163,20 @@ class LogProbsCalculator:
         # All-gather stable local sum-exp to get global sum-exp
         gathered_sum_exp_tensors = ttnn.all_gather(
             sum_exp_tensor,
-            dim=2,
+            dim=1,
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=None,
+            cluster_axis=0,
             topology=ttnn.Topology.Linear,
             **self.common_args,
         )
         # TODO: Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
-        print(f"gathered_sum_exp_tensors layout: {gathered_sum_exp_tensors.layout}")
-        gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, 32, 32), **self.common_args)
-        gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
+        # print(f"gathered_sum_exp_tensors layout: {gathered_sum_exp_tensors.layout}")
+        # gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
+        # gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, 32, 32), **self.common_args)
+        # gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
 
-        self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1, keepdim=True, **self.common_args)
+        self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=1, keepdim=True, **self.common_args)
 
         # reshape global_max and global_exp_sum to support same output shape as sampling output -> (1, 1, 1, 32)
         # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
@@ -241,15 +241,15 @@ class LogProbsCalculator:
         # Use ttnn.all_gather to get logits across all devices
         selected_logits_tensor = ttnn.all_gather(
             selected_logits_tensor,
-            dim=2,
+            dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=None,
+            cluster_axis=0,
             topology=ttnn.Topology.Linear,
             **self.common_args,
         )
 
         # Apply sum over device dimension to get logits for each user on all chips
-        selected_logits_tensor = ttnn.sum(selected_logits_tensor, dim=2, keepdim=True, **self.common_args)
+        selected_logits_tensor = ttnn.sum(selected_logits_tensor, dim=1, keepdim=True, **self.common_args)
 
         return selected_logits_tensor
 
