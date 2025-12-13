@@ -541,3 +541,41 @@ def test_embedding_oom(
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("input_shape", [(10,), (5, 10)])
+def test_embedding_valid_rank(device, input_shape):
+    """Test that embedding accepts rank 1 and rank 2 input tensors"""
+    torch.manual_seed(1234)
+    vocabulary_size = 100
+    hidden_embedding_dim = 64
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, input_shape)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32), device)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16), device)
+
+    output_tensor = ttnn.embedding(input_tensor, weights)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("input_shape", [(2, 3, 10), (1, 2, 3, 10), (2, 2, 2, 2, 10)])
+def test_embedding_invalid_rank(device, input_shape):
+    """Test that embedding rejects input tensors with rank > 2"""
+    torch.manual_seed(1234)
+    vocabulary_size = 100
+    hidden_embedding_dim = 64
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, input_shape)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32), device)
+    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16), device)
+
+    # This should raise an error due to rank validation
+    with pytest.raises(RuntimeError, match="EmbeddingOp only supports input tensors of rank 1 or 2"):
+        output_tensor = ttnn.embedding(input_tensor, weights)
