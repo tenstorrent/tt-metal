@@ -247,6 +247,39 @@ void handle_mesh_adapter_cache_hit(
         });
 }
 
+// Helper for logging operation info
+template <DeviceOperationConcept mesh_device_operation_t>
+void set_mesh_workload_metadata(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    const typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value) {
+    auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+
+// GCC 12 has a bug that causes a segfault when using reflection
+#if defined(__clang__)
+    auto index = 0;
+    // tensor args - format as comma-separated list
+    constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
+    fmt::memory_buffer tensor_args_buffer;
+    tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);  // Will grow if needed
+
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&index, &tensor_args_buffer](const Tensor& tensor) {
+            if (index > 0) {
+                fmt::format_to(std::back_inserter(tensor_args_buffer), ", ");
+            }
+            fmt::format_to(std::back_inserter(tensor_args_buffer), "[{}]: {}", index, tensor);
+            index++;
+        },
+        tensor_args);
+
+    workload.set_metadata(operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
+#else
+    workload.set_metadata(operation_name, "");
+#endif
+}
+
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
@@ -283,6 +316,9 @@ void create_and_cache_mesh_workload(
             }
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+
+            set_mesh_workload_metadata<mesh_device_operation_t>(
+                cached_workload.workload, operation_attributes, tensor_args, tensor_return_value);
 
             if (program_cache.is_enabled()) {
                 program_cache.insert(
