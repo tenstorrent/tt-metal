@@ -163,6 +163,20 @@ Tests:
             destination:
               device: [3, 1]
 
+  - name: "InterMeshTestI"
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      size: 2048
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 5]
+
   - name: "InterMeshTest"
     fabric_setup:
       topology: Mesh
@@ -175,7 +189,13 @@ Tests:
       - device: [0, 0]
         patterns:
           - destination:
+              device: [1, 0]
+          - destination:
+              device: [2, 0]
+          - destination:
               device: [3, 0]
+          - destination:
+              device: [3, 1]
 
   - name: "InterMeshFourCorners"
     sync: true
@@ -193,34 +213,34 @@ Tests:
         patterns:
           - destination:
               device: [1, 0]
-          # - destination:
-          #     device: [2, 0]
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [3, 0]
       - device: [1, 0]
         patterns:
           - destination:
               device: [0, 0]
-      #     - destination:
-      #         device: [2, 0]
-      #     - destination:
-      #         device: [3, 0]
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [3, 0]
       - device: [2, 0]
         patterns:
-      #     - destination:
-      #         device: [1, 0]
-      #     - destination:
-      #         device: [0, 0]
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [3, 0]
       - device: [3, 0]
         patterns:
-      #     - destination:
-      #         device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [2, 0]
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
 
   - name: InterMeshStressTestInside02
     sync: true
@@ -393,8 +413,8 @@ Tests:
     senders:
       - device: [1, 4]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -411,8 +431,8 @@ Tests:
               device: [3, 7]
       - device: [1, 5]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -429,8 +449,8 @@ Tests:
               device: [3, 7]
       - device: [1, 6]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -447,8 +467,8 @@ Tests:
               device: [3, 7]
       - device: [1, 7]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -465,8 +485,8 @@ Tests:
               device: [3, 7]
       - device: [3, 4]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -483,8 +503,8 @@ Tests:
               device: [1, 7]
       - device: [3, 5]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -501,8 +521,8 @@ Tests:
               device: [1, 7]
       - device: [3, 6]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -519,8 +539,8 @@ Tests:
               device: [1, 7]
       - device: [3, 7]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -549,28 +569,28 @@ Tests:
       ntype: unicast_write
       num_packets: 50000
     senders:
-      # - device: [0, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [2, 0]
-      #     - destination:
-      #         device: [2, 1]
-      #     - destination:
-      #         device: [2, 2]
-      #     - destination:
-      #         device: [2, 3]
-      #     - destination:
-      #         device: [2, 4]
-      #     - destination:
-      #         device: [2, 5]
-      #     - destination:
-      #         device: [2, 6]
-      #     - destination:
-      #         device: [2, 7]
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
       - device: [0, 1]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -587,8 +607,8 @@ Tests:
               device: [2, 7]
       - device: [0, 2]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -605,8 +625,8 @@ Tests:
               device: [2, 7]
       - device: [0, 3]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -621,28 +641,28 @@ Tests:
               device: [2, 6]
           - destination:
               device: [2, 7]
-      # - device: [2, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [0, 0]
-      #     - destination:
-      #         device: [0, 1]
-      #     - destination:
-      #         device: [0, 2]
-      #     - destination:
-      #         device: [0, 3]
-      #     - destination:
-      #         device: [0, 4]
-      #     - destination:
-      #         device: [0, 5]
-      #     - destination:
-      #         device: [0, 6]
-      #     - destination:
-      #         device: [0, 7]
+      - device: [2, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
       - device: [2, 1]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -659,8 +679,8 @@ Tests:
               device: [0, 7]
       - device: [2, 2]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -677,8 +697,8 @@ Tests:
               device: [0, 7]
       - device: [2, 3]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -707,28 +727,28 @@ Tests:
       ntype: unicast_write
       num_packets: 50000
     senders:
-      # - device: [1, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [3, 0]
-      #     - destination:
-      #         device: [3, 1]
-      #     - destination:
-      #         device: [3, 2]
-      #     - destination:
-      #         device: [3, 3]
-      #     - destination:
-      #         device: [3, 4]
-      #     - destination:
-      #         device: [3, 5]
-      #     - destination:
-      #         device: [3, 6]
-      #     - destination:
-      #         device: [3, 7]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
       - device: [1, 1]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -745,8 +765,8 @@ Tests:
               device: [3, 7]
       - device: [1, 2]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -763,8 +783,8 @@ Tests:
               device: [3, 7]
       - device: [1, 3]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -779,28 +799,28 @@ Tests:
               device: [3, 6]
           - destination:
               device: [3, 7]
-      # - device: [3, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [1, 0]
-      #     - destination:
-      #         device: [1, 1]
-      #     - destination:
-      #         device: [1, 2]
-      #     - destination:
-      #         device: [1, 3]
-      #     - destination:
-      #         device: [1, 4]
-      #     - destination:
-      #         device: [1, 5]
-      #     - destination:
-      #         device: [1, 6]
-      #     - destination:
-      #         device: [1, 7]
+      - device: [3, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
       - device: [3, 1]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -817,8 +837,8 @@ Tests:
               device: [1, 7]
       - device: [3, 2]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -835,8 +855,8 @@ Tests:
               device: [1, 7]
       - device: [3, 3]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -865,28 +885,28 @@ Tests:
       ntype: unicast_write
       num_packets: 50000
     senders:
-      # - device: [0, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [2, 0]
-      #     - destination:
-      #         device: [2, 1]
-      #     - destination:
-      #         device: [2, 2]
-      #     - destination:
-      #         device: [2, 3]
-      #     - destination:
-      #         device: [2, 4]
-      #     - destination:
-      #         device: [2, 5]
-      #     - destination:
-      #         device: [2, 6]
-      #     - destination:
-      #         device: [2, 7]
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
       - device: [0, 1]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -903,8 +923,8 @@ Tests:
               device: [2, 7]
       - device: [0, 2]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -921,8 +941,8 @@ Tests:
               device: [2, 7]
       - device: [0, 3]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -939,8 +959,8 @@ Tests:
               device: [2, 7]
       - device: [0, 4]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -957,8 +977,8 @@ Tests:
               device: [2, 7]
       - device: [0, 5]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -975,8 +995,8 @@ Tests:
               device: [2, 7]
       - device: [0, 6]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -993,8 +1013,8 @@ Tests:
               device: [2, 7]
       - device: [0, 7]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -1009,28 +1029,28 @@ Tests:
               device: [2, 6]
           - destination:
               device: [2, 7]
-      # - device: [2, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [0, 0]
-      #     - destination:
-      #         device: [0, 1]
-      #     - destination:
-      #         device: [0, 2]
-      #     - destination:
-      #         device: [0, 3]
-      #     - destination:
-      #         device: [0, 4]
-      #     - destination:
-      #         device: [0, 5]
-      #     - destination:
-      #         device: [0, 6]
-      #     - destination:
-      #         device: [0, 7]
+      - device: [2, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
       - device: [2, 1]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1047,8 +1067,8 @@ Tests:
               device: [0, 7]
       - device: [2, 2]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1065,8 +1085,8 @@ Tests:
               device: [0, 7]
       - device: [2, 3]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1083,8 +1103,8 @@ Tests:
               device: [0, 7]
       - device: [2, 4]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1101,8 +1121,8 @@ Tests:
               device: [0, 7]
       - device: [2, 5]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1119,8 +1139,8 @@ Tests:
               device: [0, 7]
       - device: [2, 6]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1137,8 +1157,8 @@ Tests:
               device: [0, 7]
       - device: [2, 7]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1167,28 +1187,28 @@ Tests:
       ntype: unicast_write
       num_packets: 50000
     senders:
-      # - device: [1, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [3, 0]
-      #     - destination:
-      #         device: [3, 1]
-      #     - destination:
-      #         device: [3, 2]
-      #     - destination:
-      #         device: [3, 3]
-      #     - destination:
-      #         device: [3, 4]
-      #     - destination:
-      #         device: [3, 5]
-      #     - destination:
-      #         device: [3, 6]
-      #     - destination:
-      #         device: [3, 7]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
       - device: [1, 1]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1205,8 +1225,8 @@ Tests:
               device: [3, 7]
       - device: [1, 2]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1223,8 +1243,8 @@ Tests:
               device: [3, 7]
       - device: [1, 3]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1241,8 +1261,8 @@ Tests:
               device: [3, 7]
       - device: [1, 4]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1259,8 +1279,8 @@ Tests:
               device: [3, 7]
       - device: [1, 5]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1277,8 +1297,8 @@ Tests:
               device: [3, 7]
       - device: [1, 6]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1295,8 +1315,8 @@ Tests:
               device: [3, 7]
       - device: [1, 7]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1311,28 +1331,28 @@ Tests:
               device: [3, 6]
           - destination:
               device: [3, 7]
-      # - device: [3, 0]
-      #   patterns:
-      #     # - destination:
-      #     #     device: [1, 0]
-      #     - destination:
-      #         device: [1, 1]
-      #     - destination:
-      #         device: [1, 2]
-      #     - destination:
-      #         device: [1, 3]
-      #     - destination:
-      #         device: [1, 4]
-      #     - destination:
-      #         device: [1, 5]
-      #     - destination:
-      #         device: [1, 6]
-      #     - destination:
-      #         device: [1, 7]
+      - device: [3, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
       - device: [3, 1]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1349,8 +1369,8 @@ Tests:
               device: [1, 7]
       - device: [3, 2]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1367,8 +1387,8 @@ Tests:
               device: [1, 7]
       - device: [3, 3]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1385,8 +1405,8 @@ Tests:
               device: [1, 7]
       - device: [3, 4]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1403,8 +1423,8 @@ Tests:
               device: [1, 7]
       - device: [3, 5]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1421,8 +1441,8 @@ Tests:
               device: [1, 7]
       - device: [3, 6]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1439,8 +1459,8 @@ Tests:
               device: [1, 7]
       - device: [3, 7]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1472,8 +1492,8 @@ Tests:
       # Mesh 0 -> Mesh 3 (inside chips 4-7)
       - device: [0, 4]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1490,8 +1510,8 @@ Tests:
               device: [3, 7]
       - device: [0, 5]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1508,8 +1528,8 @@ Tests:
               device: [3, 7]
       - device: [0, 6]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1526,8 +1546,8 @@ Tests:
               device: [3, 7]
       - device: [0, 7]
         patterns:
-        #   - destination:
-        #       device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1545,8 +1565,8 @@ Tests:
       # Mesh 3 -> Mesh 0 (inside chips 4-7)
       - device: [3, 4]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1563,8 +1583,8 @@ Tests:
               device: [0, 7]
       - device: [3, 5]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1581,8 +1601,8 @@ Tests:
               device: [0, 7]
       - device: [3, 6]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1599,8 +1619,8 @@ Tests:
               device: [0, 7]
       - device: [3, 7]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1618,8 +1638,8 @@ Tests:
       # Mesh 1 -> Mesh 2 (inside chips 4-7)
       - device: [1, 4]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -1636,8 +1656,8 @@ Tests:
               device: [2, 7]
       - device: [1, 5]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -1654,8 +1674,8 @@ Tests:
               device: [2, 7]
       - device: [1, 6]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -1672,8 +1692,8 @@ Tests:
               device: [2, 7]
       - device: [1, 7]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -1691,8 +1711,8 @@ Tests:
       # Mesh 2 -> Mesh 1 (inside chips 4-7)
       - device: [2, 4]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1709,8 +1729,8 @@ Tests:
               device: [1, 7]
       - device: [2, 5]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1727,8 +1747,8 @@ Tests:
               device: [1, 7]
       - device: [2, 6]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1745,8 +1765,8 @@ Tests:
               device: [1, 7]
       - device: [2, 7]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1776,28 +1796,28 @@ Tests:
       num_packets: 50000
     senders:
       # Mesh 0 -> Mesh 1 (inside chips 0-3)
-      # - device: [0, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [1, 0]
-      #     - destination:
-      #         device: [1, 1]
-      #     - destination:
-      #         device: [1, 2]
-      #     - destination:
-      #         device: [1, 3]
-      #     - destination:
-      #         device: [1, 4]
-      #     - destination:
-      #         device: [1, 5]
-      #     - destination:
-      #         device: [1, 6]
-      #     - destination:
-      #         device: [1, 7]
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
       - device: [0, 1]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1814,8 +1834,8 @@ Tests:
               device: [1, 7]
       - device: [0, 2]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1832,8 +1852,8 @@ Tests:
               device: [1, 7]
       - device: [0, 3]
         patterns:
-          # - destination:
-          #     device: [1, 0]
+          - destination:
+              device: [1, 0]
           - destination:
               device: [1, 1]
           - destination:
@@ -1849,28 +1869,28 @@ Tests:
           - destination:
               device: [1, 7]
       # Mesh 1 -> Mesh 0 (inside chips 0-3)
-      # - device: [1, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [0, 0]
-      #     - destination:
-      #         device: [0, 1]
-      #     - destination:
-      #         device: [0, 2]
-      #     - destination:
-      #         device: [0, 3]
-      #     - destination:
-      #         device: [0, 4]
-      #     - destination:
-      #         device: [0, 5]
-      #     - destination:
-      #         device: [0, 6]
-      #     - destination:
-      #         device: [0, 7]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
       - device: [1, 1]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1887,8 +1907,8 @@ Tests:
               device: [0, 7]
       - device: [1, 2]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1905,8 +1925,8 @@ Tests:
               device: [0, 7]
       - device: [1, 3]
         patterns:
-          # - destination:
-          #     device: [0, 0]
+          - destination:
+              device: [0, 0]
           - destination:
               device: [0, 1]
           - destination:
@@ -1922,28 +1942,28 @@ Tests:
           - destination:
               device: [0, 7]
       # Mesh 2 -> Mesh 3 (inside chips 0-3)
-      # - device: [2, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [3, 0]
-      #     - destination:
-      #         device: [3, 1]
-      #     - destination:
-      #         device: [3, 2]
-      #     - destination:
-      #         device: [3, 3]
-      #     - destination:
-      #         device: [3, 4]
-      #     - destination:
-      #         device: [3, 5]
-      #     - destination:
-      #         device: [3, 6]
-      #     - destination:
-      #         device: [3, 7]
+      - device: [2, 0]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
       - device: [2, 1]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1960,8 +1980,8 @@ Tests:
               device: [3, 7]
       - device: [2, 2]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1978,8 +1998,8 @@ Tests:
               device: [3, 7]
       - device: [2, 3]
         patterns:
-          # - destination:
-          #     device: [3, 0]
+          - destination:
+              device: [3, 0]
           - destination:
               device: [3, 1]
           - destination:
@@ -1995,28 +2015,28 @@ Tests:
           - destination:
               device: [3, 7]
       # Mesh 3 -> Mesh 2 (inside chips 0-3)
-      # - device: [3, 0]
-      #   patterns:
-      #     - destination:
-      #         device: [2, 0]
-      #     - destination:
-      #         device: [2, 1]
-      #     - destination:
-      #         device: [2, 2]
-      #     - destination:
-      #         device: [2, 3]
-      #     - destination:
-      #         device: [2, 4]
-      #     - destination:
-      #         device: [2, 5]
-      #     - destination:
-      #         device: [2, 6]
-      #     - destination:
-      #         device: [2, 7]
+      - device: [3, 0]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
       - device: [3, 1]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -2033,8 +2053,8 @@ Tests:
               device: [2, 7]
       - device: [3, 2]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -2051,8 +2071,8 @@ Tests:
               device: [2, 7]
       - device: [3, 3]
         patterns:
-          # - destination:
-          #     device: [2, 0]
+          - destination:
+              device: [2, 0]
           - destination:
               device: [2, 1]
           - destination:
@@ -2067,3 +2087,20 @@ Tests:
               device: [2, 6]
           - destination:
               device: [2, 7]
+
+  - name: "FlowControlMultiMesh"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 10000
+
+    patterns:
+      - type: sequential_all_to_all

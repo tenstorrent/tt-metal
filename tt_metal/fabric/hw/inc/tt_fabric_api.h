@@ -198,28 +198,11 @@ bool fabric_set_unicast_route(
     }
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
     auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    DPRINT << "FSR: my_mesh=" << (uint32_t)routing_table->my_mesh_id << ENDL();
-    DPRINT << "FSR: my_chip=" << (uint32_t)routing_table->my_device_id << ENDL();
-    DPRINT << "FSR: dst_mesh=" << (uint32_t)dst_mesh_id << ENDL();
-    DPRINT << "FSR: dst_chip=" << (uint32_t)dst_dev_id << ENDL();
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
         auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
-        DPRINT << "FSR: exit_table[0]=" << (uint32_t)exit_node_table[0] << ENDL();
-        DPRINT << "FSR: exit_table[1]=" << (uint32_t)exit_node_table[1] << ENDL();
-        DPRINT << "FSR: exit_table[2]=" << (uint32_t)exit_node_table[2] << ENDL();
-        DPRINT << "FSR: exit_table[3]=" << (uint32_t)exit_node_table[3] << ENDL();
-        DPRINT << "FSR: inter_dir[0]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(0)
-               << ENDL();
-        DPRINT << "FSR: inter_dir[1]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(1)
-               << ENDL();
-        DPRINT << "FSR: inter_dir[2]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(2)
-               << ENDL();
-        DPRINT << "FSR: inter_dir[3]=" << (uint32_t)routing_table->inter_mesh_direction_table.get_original_direction(3)
-               << ENDL();
         dst_dev_id = exit_node_table[dst_mesh_id];
-        DPRINT << "FSR: exit_chip=" << (uint32_t)dst_dev_id << ENDL();
-        // dst_mesh_id = routing_table->my_mesh_id;
-    }
+        dst_mesh_id = routing_table->my_mesh_id;
+        }
     bool ok = false;
     if constexpr (called_from_router) {
         // This is to prepend additional one step, which is not needed for worker sender.
@@ -248,7 +231,7 @@ bool fabric_set_unicast_route(
             DPRINT << "FSR: Not exit chip, routing to it" << ENDL();
             ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
         } else {
-            DPRINT << "FSR: I am the exit chip" << ENDL();
+
             if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
                 // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done
                 DPRINT << "FSR: At dest mesh, drain local" << ENDL();
@@ -274,7 +257,6 @@ bool fabric_set_unicast_route(
     uint8_t ew_hops = compressed_route.get_ew_hops();
     uint8_t ew_direction = compressed_route.get_ew_direction();
     uint8_t turn_point = compressed_route.get_turn_point() + called_from_router;
-
     if (ns_hops > 0 && ew_hops > 0) {
         // 2D routing: turn from NS to EW at turn_point
         if (ew_direction) {
@@ -282,6 +264,9 @@ bool fabric_set_unicast_route(
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
         }
+    } else if(ns_hops > 0) {
+        packet_header->routing_fields.branch_east_offset = turn_point;
+        packet_header->routing_fields.branch_west_offset = turn_point;
     } else if (ns_hops == 0 && ew_hops > 0) {
         // East/West only routing: branch offset is set at position 1 (start_hop + 1)
         if (ew_direction) {
