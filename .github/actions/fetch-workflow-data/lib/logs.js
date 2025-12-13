@@ -207,7 +207,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
       let sawGtestFailure = false;
       let sawAnyFailureAnnotations = false;
       let annotationsFetchFailed = false;
-      const gtestJobNames = new Set();
+      const gtestJobsMap = new Map(); // Map<jobName, jobUrl> for gtest jobs
       try {
         // List jobs and extract check_run_ids along with job URLs
         const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
@@ -255,12 +255,16 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
                   sawAnyFailureAnnotations = true;
                   if (isUnknownFileLead) {
                     sawGtestFailure = true;
-                    if (job_name) gtestJobNames.add(String(job_name));
+                    if (job_name && !gtestJobsMap.has(String(job_name))) {
+                      gtestJobsMap.set(String(job_name), job_url || '');
+                    }
                   }
                   // Keep legacy job-name heuristic as a secondary signal
                   else if ((/gtest/i.test(String(job_name || '')) || /gtests/i.test(String(job_name || '')))) {
                     sawGtestFailure = true;
-                    if (job_name) gtestJobNames.add(String(job_name));
+                    if (job_name && !gtestJobsMap.has(String(job_name))) {
+                      gtestJobsMap.set(String(job_name), job_url || '');
+                    }
                   }
                 }
               } catch (_) { /* ignore */ }
@@ -298,13 +302,13 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
           const wanted = new Map();
           // Add any job names discovered via 'unknown file' annotations (gtest jobs)
-          for (const jn of Array.from(gtestJobNames.values())) {
+          for (const [jn, jUrl] of gtestJobsMap.entries()) {
             const key = sanitize(jn);
-            if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
+            if (!wanted.has(key)) wanted.set(key, { name: jn, url: jUrl, files: [] });
           }
           if (wanted.size === 0) {
             // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
-            wanted.set('gtest', { name: 'gtest', files: [] });
+            wanted.set('gtest', { name: 'gtest', url: '', files: [] });
           }
           // Walk extracted tree and record .txt files that match wanted keys
           const stack = [extractDir];
@@ -345,8 +349,9 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           // Extract quietly to avoid ENOBUFS
           execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-          // Fetch all failing job names from GitHub API with pagination (separate fetch to ensure all jobs are captured)
-          const failingJobNames = new Set();
+          // Fetch all failing jobs from GitHub API with pagination (separate fetch to ensure all jobs are captured)
+          // Store job names and URLs for linking in Slack messages
+          const failingJobsMap = new Map(); // Map<jobName, jobUrl>
           try {
             // Get jobs for this run - filter for failed jobs, handle pagination
             let page = 1;
@@ -359,7 +364,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
                 const conclusion = (job.conclusion || '').toLowerCase();
                 if (conclusion === 'failure' || conclusion === 'cancelled') {
                   if (job.name) {
-                    failingJobNames.add(String(job.name));
+                    failingJobsMap.set(String(job.name), job.html_url || '');
                   }
                 }
               }
@@ -387,15 +392,18 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
               }
             }
           }
-          // Store both file list and actual job names from GitHub API
+          // Store file list, job names, and job URLs from GitHub API
           const logsListPath = path.join(runDir, 'logs-list.json');
+          // Convert Map to array of {name, url} objects for JSON serialization
+          const failingJobsArray = Array.from(failingJobsMap.entries()).map(([name, url]) => ({ name, url }));
           fs.writeFileSync(logsListPath, JSON.stringify({
             files: logFiles,
-            job_names: Array.from(failingJobNames)
+            job_names: Array.from(failingJobsMap.keys()), // Keep for backward compatibility
+            failing_jobs: failingJobsArray // New format with URLs
           }));
           const relativeRunDir = path.relative(workspace, runDir) || runDir;
           otherLogsIndex[String(targetRun.id)] = relativeRunDir;
-          core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s), ${failingJobNames.size} failing job(s)`);
+          core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s), ${failingJobsMap.size} failing job(s)`);
         }
       } catch (e) {
         core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
