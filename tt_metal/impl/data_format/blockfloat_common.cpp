@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <tt-metalium/blockfloat_common.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "blockfloat_common.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
