@@ -10,7 +10,6 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -46,11 +45,7 @@ def test_rms_norm_inference(
 ):
     dtype = ttnn.bfloat16
 
-    base_model_name = os.getenv("HF_MODEL")
-    if "gemma-3" in base_model_name:
-        model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    else:
-        model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
@@ -80,13 +75,7 @@ def test_rms_norm_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-
-    base_model_name = os.getenv("HF_MODEL")
-    if "gemma-3" in base_model_name:
-        reference_model = model_args.reference_rms_norm_text()
-    else:
-        reference_model = model_args.reference_rms_norm()
-
+    reference_model = model_args.reference_rms_norm()
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)

@@ -10,7 +10,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.mlp import MLP
@@ -40,11 +39,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    base_model_name = os.getenv("HF_MODEL")
-    if "gemma-3" in base_model_name:
-        model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
-    else:
-        model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
