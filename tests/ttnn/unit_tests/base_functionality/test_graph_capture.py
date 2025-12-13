@@ -76,7 +76,7 @@ def test_graph_capture_with_all_parameters(device):
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
     assert node4[3] == "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]"
-    assert node4[4] == "nullopt"
+    assert node4[4] == "0"
 
     # PermuteDeviceOperation
     node5 = captured_graph[5]["arguments"]
