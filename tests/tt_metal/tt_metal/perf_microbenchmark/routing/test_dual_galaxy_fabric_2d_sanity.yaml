@@ -1,38 +1,11 @@
 Tests:
+
   - name: "SimpleUnicastWriteLinear"
     fabric_setup:
       topology: Mesh
       fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
 
     senders:
-      # Cross Galaxy row
-      - device: [0, 3]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 4]
-      # Within Galaxy 0 col
-      - device: [0, 1]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 17]
-      # Within Galaxy 1 col
-      - device: [0, 4]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 20]
-      # Traverse corner to corner
       - device: [0, 0]
         patterns:
           - ftype: unicast
@@ -40,4 +13,52 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 63]
+              device: [1, 15]
+      - device: [1, 15]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 0]
+
+  - name: UnicastRandomPairing
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [512, 1024, 2048, 4096]
+      num_packets: [100, 250]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 3
+
+  - name: "ClosetBoxSequentialAllToAll"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [512, 1024, 2048, 4096]
+      num_packets: [100, 250]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+
+    patterns:
+      - type: sequential_all_to_all
+        iterations: 25
+
+  - name: "UnicastAlltoAll"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [512, 1024, 2048, 4096]
+      num_packets: [100, 250]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+
+    patterns:
+      - type: all_to_all
+        iterations: 25
