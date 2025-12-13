@@ -75,7 +75,7 @@ static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3
 static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1;
-static constexpr std::size_t max_downstream_edms = std::max({num_downstream_edms_1d, num_downstream_edms_2d, num_downstream_edms_2d_vc1_with_z});
+static constexpr std::size_t max_downstream_edms = 8;
 
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
