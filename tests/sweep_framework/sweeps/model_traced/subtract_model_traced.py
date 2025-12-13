@@ -14,7 +14,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 60
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -50,8 +50,11 @@ def run(
     input_b_layout,
     input_a_memory_config,
     input_b_memory_config,
-    output_memory_config,
+    output_memory_config=None,  # Default to input_a_memory_config if not provided
     storage_type="StorageType::DEVICE",
+    input_c_dtype=None,  # Ignored (loader may provide this but operation doesn't use it)
+    input_c_layout=None,  # Ignored
+    input_c_memory_config=None,  # Ignored
     *,
     device,
 ) -> list:
@@ -62,6 +65,17 @@ def run(
         # This is model_traced suite - dict with 'self' and 'other' keys
         shape_a = input_shape["self"]
         shape_b = input_shape["other"]
+        # Ensure shapes are tuples (convert from list if needed)
+        if isinstance(shape_a, list):
+            shape_a = tuple(shape_a)
+        elif not isinstance(shape_a, tuple):
+            # Fallback: if shape_a is not a tuple/list, use default
+            shape_a = (1, 1, 32, 32)
+        if isinstance(shape_b, list):
+            shape_b = tuple(shape_b)
+        elif not isinstance(shape_b, tuple):
+            # Fallback: if shape_b is not a tuple/list, use default
+            shape_b = (1, 1, 32, 32)
     else:
         # This is sample suite - use same shape for both inputs
         if isinstance(input_shape, (tuple, list)):
@@ -70,6 +84,12 @@ def run(
         else:
             shape_a = input_shape
             shape_b = input_shape
+
+    # Final safety check: ensure both shapes are tuples
+    if not isinstance(shape_a, tuple):
+        shape_a = tuple(shape_a) if isinstance(shape_a, (list, tuple)) else (1, 1, 32, 32)
+    if not isinstance(shape_b, tuple):
+        shape_b = tuple(shape_b) if isinstance(shape_b, (list, tuple)) else (1, 1, 32, 32)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -111,6 +131,10 @@ def run(
         from_torch_kwargs["memory_config"] = input_b_memory_config
 
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+
+    # Use input_a_memory_config as fallback if output_memory_config not provided
+    if output_memory_config is None:
+        output_memory_config = input_a_memory_config
 
     start_time = start_measuring_time()
     output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

@@ -24,6 +24,14 @@ The following models have been traced and their configurations are available in 
 | meta-llama/Llama-3.2-1B-Instruct | Small instruction-tuned model | `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
 
+**T3K Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| google/gemma-3-27b-it | Instruction-tuned model | `HF_MODEL=google/gemma-3-27b-it python model_tracer/generic_ops_tracer.py models/demos/gemma3/demo/vision_demo.py` |
+
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
 
 *Last updated: December 10, 2025*
