@@ -21,21 +21,22 @@ SPECIAL_VALUES = [
     0.0,
 ]
 
-# Names for special values (for CSV readability)
-SPECIAL_VALUE_NAMES = {
-    float("inf"): "inf",
-    float("-inf"): "-inf",
-    -0.0: "minus 0.0",
-    1.0: "1.0",
-    0.0: "0.0",
-}
-
 
 def get_value_name(val):
     """Get readable name for a special value."""
     if math.isnan(val):
         return "nan"
-    return SPECIAL_VALUE_NAMES.get(val, str(val))
+    elif math.isinf(val):
+        return "inf" if val > 0 else "-inf"
+    elif val == 0.0:
+        # Check for negative zero using copysign
+        # Note: -0.0 == 0.0 is True in Python, so we need copysign to distinguish
+        if math.copysign(1.0, val) < 0:
+            return "minus 0.0"
+        return "0.0"
+    elif val == 1.0:
+        return "1.0"
+    return str(val)
 
 
 def format_result(val):
