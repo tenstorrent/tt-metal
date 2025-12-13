@@ -64,24 +64,27 @@ int main(int argc, char** argv) {
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 
+        ttnn::operations::matmul::operation_attributes_t attributes;
+        attributes.user_run_batched = true;
+        attributes = ttnn::operations::matmul::create_matmul_attributes(a, b, attributes, {});
         auto mm = ttnn::prim::matmul(
                       a,
                       b,
                       /*bias=*/std::nullopt,
                       /*output_tensor*/ std::nullopt,
-                      /*program_config=*/std::nullopt,
-                      /*bcast_batch=*/std::nullopt,
-                      tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-                      /*output_dtype=*/std::nullopt,
-                      /*compute_kernel_config=*/std::nullopt,
-                      /*untilize_out=*/false,
-                      /*user_core_coord=*/std::nullopt,
-                      /*user_fused_activation=*/std::nullopt,
-                      /*user_run_batched=*/true)
+                      attributes)
                       .at(0)
                       .cpu();
 
-        Tensor mm1 = ttnn::prim::matmul(a, b1).at(0).cpu();
+        Tensor mm1 = ttnn::prim::matmul(
+                         a,
+                         b1,
+                         /*bias=*/std::nullopt,
+                         /*output_tensor*/ std::nullopt,
+                         ttnn::operations::matmul::create_matmul_attributes(
+                             a, b1, ttnn::operations::matmul::operation_attributes_t{}, {}))
+                         .at(0)
+                         .cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

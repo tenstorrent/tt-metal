@@ -290,24 +290,26 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     ttnn::Tensor output_tensor;
     // Warmup iterations
+    ttnn::operations::matmul::operation_attributes_t attributes{
+        .program_config = program_config,
+        .bcast_batch = std::nullopt,
+        .output_mem_config = out_mem_config,
+        .output_dtype = dtype,
+        .compute_kernel_config = compute_kernel_config,
+        .untilize_out = false,
+        .user_core_coord = std::nullopt,
+        .user_fused_activation = std::nullopt,
+        .user_run_batched = false,
+        .transpose_a = false,
+        .transpose_b = false,
+        .output_tile = output_tile};
     for (int iter = 0; iter < num_warmup_iterations; ++iter) {
         output_tensor = ttnn::prim::matmul(
                             input_tensor_0,
                             input_tensor_1,
                             /*bias=*/std::nullopt,
                             /*output_tensor*/ std::nullopt,
-                            program_config,
-                            /*bcast_batch=*/std::nullopt,
-                            out_mem_config,
-                            dtype,
-                            compute_kernel_config,
-                            /*untilize_out=*/false,
-                            /*user_core_coord=*/std::nullopt,
-                            /*user_fused_activation=*/std::nullopt,
-                            /*user_run_batched=*/false,
-                            /*transpose_a=*/false,
-                            /*transpose_b=*/false,
-                            output_tile)
+                            attributes)
                             .at(0);
         tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         output_tensor.deallocate();
@@ -326,18 +328,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                                 input_tensor_1,
                                 /*bias=*/std::nullopt,
                                 /*output_tensor*/ std::nullopt,
-                                program_config,
-                                /*bcast_batch=*/std::nullopt,
-                                out_mem_config,
-                                dtype,
-                                compute_kernel_config,
-                                /*untilize_out=*/false,
-                                /*user_core_coord=*/std::nullopt,
-                                /*user_fused_activation=*/std::nullopt,
-                                /*user_run_batched=*/false,
-                                /*transpose_a=*/false,
-                                /*transpose_b=*/false,
-                                output_tile)
+                                attributes)
                                 .at(0);
             output_tensor.deallocate();
         }
@@ -364,18 +355,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                                     input_tensor_1,
                                     /*bias=*/std::nullopt,
                                     /*output_tensor*/ std::nullopt,
-                                    program_config,
-                                    /*bcast_batch=*/std::nullopt,
-                                    out_mem_config,
-                                    dtype,
-                                    compute_kernel_config,
-                                    /*untilize_out=*/false,
-                                    /*user_core_coord=*/std::nullopt,
-                                    /*user_fused_activation=*/std::nullopt,
-                                    /*user_run_batched=*/false,
-                                    /*transpose_a=*/false,
-                                    /*transpose_b=*/false,
-                                    output_tile)
+                                    attributes)
                                     .at(0);
                 tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
                 auto end_time = std::chrono::high_resolution_clock::now();

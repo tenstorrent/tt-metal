@@ -138,11 +138,11 @@ static bool get_post_process_bias(
     return post_process_bias;
 }
 
-ttnn::Tensor bound_matmul(
+static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters,
+    const ttnn::operations::matmul::operation_attributes_t& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -198,29 +198,15 @@ ttnn::Tensor bound_matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted);
 
-    // TODO: create parameters struct
-    auto matmul_params =
-        create_matmul_struct(input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+    auto attributes = ttnn::operations::matmul::create_matmul_attributes(
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
 
     auto output_tensor = ttnn::prim::matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
                              optional_output_tensor,
-                             matmul_params.program_config,
-                             matmul_params.bcast_batch,
-                             matmul_params.output_mem_config,
-                             matmul_params.output_dtype,
-                             matmul_params.compute_kernel_config,
-                             matmul_params.untilize_out,
-                             matmul_params.user_core_coord,
-                             matmul_params.user_fused_activation,
-                             matmul_params.user_run_batched,
-                             matmul_params.transpose_a,
-                             matmul_params.transpose_b,
-                             matmul_params.output_tile,
-                             matmul_params.global_cb,
-                             matmul_params.sub_device_id)
+                             attributes)
                              .at(0);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
@@ -278,7 +264,7 @@ Tensor MatmulOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
-        Matmul{
+        ttnn::operations::matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
@@ -323,7 +309,7 @@ Tensor LinearOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         bias,
-        Matmul{
+        ttnn::operations::matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
@@ -445,7 +431,7 @@ Tensor AddmmOperation::invoke(
         mat1_tensor,
         mat2_tensor,
         std::nullopt,
-        Matmul{
+        ttnn::operations::matmul::operation_attributes_t{
             program_config,
             std::nullopt,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,

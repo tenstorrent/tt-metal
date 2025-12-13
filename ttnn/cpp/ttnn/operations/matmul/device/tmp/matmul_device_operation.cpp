@@ -1149,68 +1149,24 @@ MatmulDeviceOperation::invoke(
     const Tensor& input_tensor_b,
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<ttnn::operations::matmul::MatmulProgramConfig>& program_config,
-    const std::optional<bool>& bcast_batch,
-    const std::optional<const MemoryConfig>& optional_memory_config,
-    const std::optional<DataType>& output_dtype,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    const bool untilize_out,
-    const std::optional<CoreCoord>& user_core_coord,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& user_fused_activation,
-    bool user_run_batched,
-    bool transpose_a,
-    bool transpose_b,
-    const std::optional<tt::tt_metal::Tile>& output_tile,
-    const std::optional<GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    auto memory_config = optional_memory_config.has_value() ? optional_memory_config.value()
-                                                            : tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
-    MatmulProgramConfig determined_config;
-    if (program_config.has_value()) {
-        determined_config = program_config.value();
-    } else {
-        operation_attributes_t attributes{
-            std::nullopt,
-            bcast_batch,
-            memory_config,
-            output_dtype,
-            compute_kernel_config,
-            untilize_out,
-            user_core_coord,
-            user_fused_activation,
-            user_run_batched,
-            transpose_a,
-            transpose_b,
-            output_tile,
-            global_cb,
-            sub_device_id};
-
+    const matmul::operation_attributes_t& attributes) {
+    if (!attributes.program_config.has_value()) {
         uint32_t bias_single_tile_size = 0;
         if (bias.has_value()) {
             auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
             bias_single_tile_size = tt::tile_size(bias_data_format);
         }
 
-        determined_config = get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, attributes);
+        matmul::operation_attributes_t attributes_with_program_config = attributes;
+        attributes_with_program_config.program_config =
+            get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, attributes);
+
+        return {
+            attributes_with_program_config,
+            tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
     }
 
-    return {
-        operation_attributes_t{
-            determined_config,
-            bcast_batch,
-            memory_config,
-            output_dtype,
-            compute_kernel_config,
-            untilize_out,
-            user_core_coord,
-            user_fused_activation,
-            user_run_batched,
-            transpose_a,
-            transpose_b,
-            output_tile,
-            global_cb,
-            sub_device_id},
-        tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
+    return {attributes, tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>

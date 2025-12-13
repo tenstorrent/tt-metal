@@ -54,20 +54,7 @@ struct MatmulDeviceOperation {
         const Tensor& input_tensor_b,
         const std::optional<Tensor>& bias = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<ttnn::operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
-        const std::optional<bool>& bcast_batch = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType>& output_dtype = std::nullopt,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-        bool untilize_out = false,
-        const std::optional<CoreCoord>& user_core_coord = std::nullopt,
-        const std::optional<ttnn::operations::unary::UnaryWithParam>& user_fused_activation = std::nullopt,
-        bool user_run_batched = false,
-        bool transpose_a = false,
-        bool transpose_b = false,
-        const std::optional<tt::tt_metal::Tile>& output_tile = std::nullopt,
-        const std::optional<GlobalCircularBuffer>& global_cb = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+        const matmul::operation_attributes_t& attributes = matmul::operation_attributes_t());
 };
 
 MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
