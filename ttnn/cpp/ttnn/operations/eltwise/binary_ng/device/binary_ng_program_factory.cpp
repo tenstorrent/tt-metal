@@ -37,8 +37,8 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(cons
         shape.rank() >= 5 ? shape[-5] : 1,
         shape[-4],
         shape[-3],
-        shape[-2] / tile.get_height(),
-        shape[-1] / tile.get_width()};
+        tt::div_up(shape[-2], tile.get_height()),
+        tt::div_up(shape[-1], tile.get_width())};
 }
 
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
@@ -294,9 +294,9 @@ void set_or_update_runtime_arguments(
     auto cND = extract_nD_dims(c, out_rank);
     Buffer* c_buffer = c.buffer();
     const auto aHt_r = a.padded_shape()[-2];  // Height in rows
-    const auto bHt_r = b->padded_shape()[-2];
+    const auto bHt_r = b.has_value() ? b->padded_shape()[-2] : 0;
     const auto aWt_r = a.padded_shape()[-1];
-    const auto bWt_r = b->padded_shape()[-1];
+    const auto bWt_r = b.has_value() ? b->padded_shape()[-1] : 0;
 
     const auto [aD, aN, aC, aHt, aWt] = get_shape_dims(a);
     const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
@@ -358,13 +358,6 @@ void set_or_update_runtime_arguments(
     }
 
     uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
-
-    if (row_major_inputs) {
-        TT_FATAL(aHt > 0, "Row-major binary_ng requires a to have positive tile height");
-        TT_FATAL(aWt > 0, "Row-major binary_ng requires a to have positive tile width");
-        TT_FATAL(bHt > 0, "Row-major binary_ng requires b to have positive tile height");
-        TT_FATAL(bWt > 0, "Row-major binary_ng requires b to have positive tile width");
-    }
 
     ShardShapeGenerator a_shard_shape_generator;
     ShardShapeGenerator b_shard_shape_generator;

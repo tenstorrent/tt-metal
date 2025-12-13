@@ -437,8 +437,10 @@ inline auto invoke_binary_ng(
                 std::nullopt,
                 sub_core_grids);
 
-            if (input_a_rm or input_b_rm) {
-                // if one argument was row major do we return row major or tile?
+            // if both inputs are in row major, convert the output to row major
+            // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+            // since it leads to better perf
+            if (input_a_rm and input_b_rm) {
                 return detail::to_layout(result, Layout::ROW_MAJOR);
             }
             return result;

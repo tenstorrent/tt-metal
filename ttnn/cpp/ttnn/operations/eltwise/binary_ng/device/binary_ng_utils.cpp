@@ -571,6 +571,7 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
