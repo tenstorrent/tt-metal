@@ -160,7 +160,7 @@ jobs:
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
             core.info(`Selected previous run id: ${selectedId || 'none'}`);
-            core.setOutput('run_id', 20195041598);
+            core.setOutput('run_id', selectedId);
       - name: Install analyze-workflow-data dependencies
         shell: bash
         working-directory: .github/actions/analyze-workflow-data
@@ -283,6 +283,6 @@ jobs:
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
-          slack_channel_id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
+          slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
