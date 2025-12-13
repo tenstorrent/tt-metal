@@ -459,6 +459,7 @@ private:
         resolved_test.performance_test_mode = parsed_test.performance_test_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
+        resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
