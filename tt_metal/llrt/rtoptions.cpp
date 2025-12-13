@@ -115,6 +115,7 @@ enum class EnvVarID {
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
     TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
+    TT_METAL_PROFILER_BLOCK_ON_FULL_BUFFER,        // Block/wait for buffer space instead of dropping packets
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
@@ -825,6 +826,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only disable pushing to Tracy GUI if device profiler is also enabled
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_BLOCK_ON_FULL_BUFFER
+        // Enables blocking/waiting for buffer space instead of dropping packets when buffers are full.
+        // Default: false (drop packets when buffers are full)
+        // Usage: export TT_METAL_PROFILER_BLOCK_ON_FULL_BUFFER=1
+        case EnvVarID::TT_METAL_PROFILER_BLOCK_ON_FULL_BUFFER: {
+            // Only enable blocking mode if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_block_on_full_buffer = true;
             }
             break;
         }

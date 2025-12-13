@@ -468,6 +468,7 @@ auto coalesceFabricEvents(
                     fabric_event_markers.fabric_write_markers.push_back(markers[i]);
                 }
 
+                // First trailer is fabric routing fields
                 if (i + 2 >= markers.size() ||
                     (!std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(markers[i + 1].data).getContents()) &&
                      !std::holds_alternative<EMD::FabricRoutingFields2D>(EMD(markers[i + 1].data).getContents())) ||
@@ -621,7 +622,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
     // Convert to json
     std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> json_events_by_op;
     for (auto& [program_execution_uid, markers] : coalesced_events_by_op) {
-        for (auto marker : markers) {
+        for (int i = 0; i < markers.size(); ++i) {
+            auto& marker = markers[i];
             if (std::holds_alternative<tracy::TTDeviceMarker>(marker)) {
                 auto device_marker = std::get<tracy::TTDeviceMarker>(marker);
 
@@ -642,21 +644,48 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         {"timestamp", device_marker.timestamp},
                     });
                 } else {
-                    auto local_noc_event = std::get<EMD::LocalNocEvent>(EMD(device_marker.data).getContents());
+                    // If we see a trailer then it must belong to the previous batch of json events but it wasn't pushed
+                    // in the last batch
+                    if (std::holds_alternative<EMD::LocalNocEventTrailer>(EMD(device_marker.data).getContents())) {
+                        auto trailer = std::get<EMD::LocalNocEventTrailer>(EMD(device_marker.data).getContents());
+                        if (json_events_by_op[program_execution_uid].empty()) {
+                            log_error(
+                                tt::LogMetal,
+                                "[profiler noc tracing] Saw trailer for NOC write but no previous events found!");
+                            continue;
+                        }
+                        json_events_by_op[program_execution_uid].back()["dst_addr"] = trailer.dst_addr;
+                        continue;
+                    }
 
+                    // Default fields
                     nlohmann::ordered_json data = {
                         {"run_host_id", device_marker.runtime_host_id},
                         {"op_name", device_marker.op_name},
                         {"proc", enchantum::to_string(device_marker.risc)},
-                        {"noc", enchantum::to_string(local_noc_event.noc_type)},
-                        {"vc", int(local_noc_event.noc_vc)},
                         {"src_device_id", device_marker.chip_id},
                         {"sx", device_marker.core_x},
                         {"sy", device_marker.core_y},
-                        {"num_bytes", local_noc_event.getNumBytes()},
-                        {"type", enchantum::to_string(local_noc_event.noc_xfer_type)},
                         {"timestamp", device_marker.timestamp},
                     };
+
+                    // Scoped lock events
+                    if (std::holds_alternative<EMD::ScopedLockEvent>(EMD(device_marker.data).getContents())) {
+                        auto scoped_lock_event = std::get<EMD::ScopedLockEvent>(EMD(device_marker.data).getContents());
+                        data["locked_address_base"] = scoped_lock_event.locked_address_base;
+                        data["bytes_locked"] = scoped_lock_event.chunk_size * scoped_lock_event.num_chunks;
+                        data["type"] = enchantum::to_string(scoped_lock_event.noc_xfer_type);
+                        json_events_by_op[program_execution_uid].push_back(data);
+                        continue;
+                    }
+
+                    // Local NOC events
+                    auto local_noc_event = std::get<EMD::LocalNocEvent>(EMD(device_marker.data).getContents());
+
+                    data["noc"] = enchantum::to_string(local_noc_event.noc_type);
+                    data["vc"] = int(local_noc_event.noc_vc);
+                    data["num_bytes"] = local_noc_event.getNumBytes();
+                    data["type"] = enchantum::to_string(local_noc_event.noc_xfer_type);
 
                     // handle dst coordinates correctly for different NocEventType
                     if (local_noc_event.dst_x == -1 || local_noc_event.dst_y == -1 ||
@@ -684,6 +713,17 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                             local_noc_event.noc_type);
                         data["dx"] = phys_coord.x;
                         data["dy"] = phys_coord.y;
+                    }
+
+                    // Trailer for NOC writes
+                    if (local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_ && i + 1 < markers.size() &&
+                        std::holds_alternative<tracy::TTDeviceMarker>(markers[i + 1])) {
+                        auto& next_marker = std::get<tracy::TTDeviceMarker>(markers[i + 1]);
+                        if (std::holds_alternative<EMD::LocalNocEventTrailer>(EMD(next_marker.data).getContents())) {
+                            auto trailer = std::get<EMD::LocalNocEventTrailer>(EMD(next_marker.data).getContents());
+                            data["dst_addr"] = trailer.dst_addr;
+                        }
+                        i++;
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
