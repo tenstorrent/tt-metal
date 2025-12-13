@@ -60,12 +60,12 @@ inline void _mul_int_(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
 
         // lo = rnd(lo)
-        TTI_SFP_STOCH_RND(2, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
 
         // hi1 = rnd(hi1)
-        TTI_SFP_STOCH_RND(2, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, 6);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, 6);
         // hi0 = rnd(hi0)
-        TTI_SFP_STOCH_RND(2, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, 6);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, 6);
 
         // hi = hi0 + hi1
         TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_CC_NONE);
