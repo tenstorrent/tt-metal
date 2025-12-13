@@ -1194,7 +1194,10 @@ MatmulDeviceOperation::invoke(
         determined_config = get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, attributes);
     }
 
-    return {
+    // we need to init attributes here, otherwise we will get a runtime errors with uninitialized optional fields
+    auto attributes = create_matmul_attributes(
+        input_tensor_a,
+        input_tensor_b,
         operation_attributes_t{
             determined_config,
             bcast_batch,
@@ -1210,7 +1213,8 @@ MatmulDeviceOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
+        {optional_output_tensor});
+    return {attributes, tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
