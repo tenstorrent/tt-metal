@@ -1387,9 +1387,7 @@ Matmul create_matmul_struct(
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
          (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
-    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-    bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
-    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
+    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi3 : MathFidelity::LoFi;
 
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
@@ -1397,9 +1395,9 @@ Matmul create_matmul_struct(
 
     const bool is_optional_output_tensor =
         !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
-    std::optional<DataType> output_dtype = parameters.output_dtype;
     MemoryConfig output_mem_config = parameters.output_mem_config;
 
+    std::optional<DataType> output_dtype = parameters.output_dtype;
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor = optional_output_tensors.at(0);
         if (output_mem_config == tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
@@ -1427,14 +1425,16 @@ Matmul create_matmul_struct(
             output_dtype = input_tensor_a.dtype();
         }
     }
-    bool is_float_32 = output_dtype == DataType::FLOAT32;
+    bool is_float_32 = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32) ||
+                       (output_dtype == DataType::FLOAT32);
+    math_fidelity = is_float_32 ? MathFidelity::HiFi4 : math_fidelity;
     auto kernel_config_val = init_device_compute_kernel_config(
         arch,
         parameters.compute_kernel_config,
         math_fidelity,
         /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/is_float_32,
-        /*default_l1_acc=*/!is_float_32);
+        /*default_fp32_acc=*/is_float_32 || increase_fidelity,
+        /*default_l1_acc=*/true);
     auto in0_tile = input_tensor_a.tensor_spec().tile();
     auto in1_tile = input_tensor_b.tensor_spec().tile();
 
