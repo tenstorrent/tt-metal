@@ -27,6 +27,7 @@ target_sources(
         test_bit_utils.cpp
         test_buffer_region.cpp
         test_compile_time_args.cpp
+        test_compile_defines.cpp
         test_direct.cpp
         test_dram_to_l1_multicast.cpp
         test_dram.cpp
