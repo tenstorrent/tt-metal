@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "tt_metal/include/compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -15,6 +16,7 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
+    // state_configure<Operation::UNARY>(icb, ocb);
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
@@ -36,6 +38,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
  */
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
+    // state_configure<Operation::UNARY>(icb);
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
