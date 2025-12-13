@@ -42,6 +42,10 @@ void py_module(py::module& module) {
     });
     py_config.def_property_readonly("report_path", &ttnn::Config::get<"report_path">);
 
+    py::class_<ScopeGuard>(module, "ScopeGuard")
+        .def(py::init<std::function<void()>>())
+        .def("release", &ScopeGuard::release);
+
     py::class_<lightmetal::LightMetalBinary>(module, "LightMetalBinary")
         .def(py::init<>())
         .def(py::init<std::vector<uint8_t>>())

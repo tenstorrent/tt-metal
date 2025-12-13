@@ -251,6 +251,19 @@ void py_module(py::module& module) {
                CoreCoord: The compute grid size of the first device in the device mesh.
        )doc")
         .def(
+            "set_current_sub_device",
+            &MeshDevice::set_current_sub_device,
+            py::arg("sub_device_id"),
+            R"doc(
+           Set the current sub device. Operations are executed on cores of the specified sub device.
+
+           Args:
+               sub_device_id (SubDeviceId): The ID of the sub device to set as current.
+
+           Returns:
+               ScopeGuard: A scope guard that can be used to reset the current sub device. Call `release` on the returned ScopeGuard to reset the current sub device to the previous sub device.
+           )doc")
+        .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,
             R"doc(

@@ -4,13 +4,10 @@
 
 #pragma once
 
-#include <optional>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::examples {
@@ -66,8 +63,9 @@ struct ExampleDeviceOperation {
     struct SingleCore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::CoreCoord core{};
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -86,10 +84,11 @@ struct ExampleDeviceOperation {
     struct MultiCore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            std::size_t num_cores{};
+            tt::tt_metal::CoreRangeSet all_cores;
+            bool row_wise = false;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

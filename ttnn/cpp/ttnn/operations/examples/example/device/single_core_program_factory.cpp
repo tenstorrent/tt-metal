@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "example_device_operation.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -29,10 +30,21 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
-    CoreCoord compute_with_storage_grid_size = {1, 1};
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto* device = input_tensor.device();
+
+    auto compute_cores = device->get_compute_cores();
+    log_info(tt::LogOp, "Available compute cores: {}", compute_cores.num_cores());
+
+    // Single-core factory must not assume a (0,0)-based contiguous grid. Pick the first available compute core.
+    const CoreCoord core = compute_cores.ranges().front().start_coord;
+    log_debug(tt::LogOp, "Used compute core: {}", core);
+    const CoreRangeSet all_cores(std::vector{CoreRange(core, core)});
+
+    // Single-core work split: everything runs on the chosen `core`.
+    const CoreRangeSet& core_group_1 = all_cores;
+    const CoreRangeSet core_group_2 = CoreRangeSet{};
+    const uint32_t num_tiles_per_core_group_1 = num_tiles;
+    const uint32_t num_tiles_per_core_group_2 = 0;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
@@ -97,28 +109,14 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
                 .compile_args = compute_kernel_args_group_2});
     }
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
-        }
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
-        num_tiles_written += num_tiles_per_core;
-    }
+    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles, 0});
+    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .core = core}};
 }
 
 void ExampleDeviceOperation::SingleCore::override_runtime_arguments(
@@ -129,6 +127,7 @@ void ExampleDeviceOperation::SingleCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    const auto& core = cached_program.shared_variables.core;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -137,12 +136,12 @@ void ExampleDeviceOperation::SingleCore::override_runtime_arguments(
     auto* dst_buffer = output_tensor.buffer();
 
     {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
     }
 
     {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args[0] = dst_buffer->address();
     }
 }
