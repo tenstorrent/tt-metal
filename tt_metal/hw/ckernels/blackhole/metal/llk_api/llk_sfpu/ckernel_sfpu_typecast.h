@@ -80,5 +80,10 @@ inline void calculate_typecast_int32_to_uint16() {
     _calculate_typecast_int32_to_uint16_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_fp32_to_fp16b() {
+    _init_typecast_fp32_to_fp16b_<APPROXIMATION_MODE>();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

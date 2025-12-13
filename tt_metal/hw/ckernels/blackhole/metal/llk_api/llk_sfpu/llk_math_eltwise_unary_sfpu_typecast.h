@@ -128,9 +128,17 @@ inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode
     }
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
 inline void llk_math_eltwise_unary_sfpu_typecast_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    constexpr DataFormat in_format = static_cast<DataFormat>(IN_DTYPE);
+    constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
+
+    if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_fp32_to_fp16b<APPROXIMATE>);
+    } else {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    }
 }
 
 }  // namespace ckernel

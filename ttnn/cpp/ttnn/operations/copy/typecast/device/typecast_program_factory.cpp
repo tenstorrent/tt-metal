@@ -87,6 +87,10 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
+    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
+        "typecast_tile_init<{0}u, {1}u>",
+        (uint32_t)datatype_to_dataformat_converter(input_dtype),
+        (uint32_t)datatype_to_dataformat_converter(output_dtype));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
