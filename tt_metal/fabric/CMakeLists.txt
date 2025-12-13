@@ -1,9 +1,6 @@
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
-# Enable unity builds for faster compilation
-TT_ENABLE_UNITY_BUILD(fabric)
-
 # These headers are for the device, not host; will require cross compiling to lint them (future work).
 set_target_properties(
     fabric
@@ -53,8 +50,6 @@ target_sources(
         builder/fabric_router_recipe.cpp
         builder/channel_to_pool_mapping.cpp
         builder/multi_pool_channel_allocator.cpp
-        builder/connection_registry.cpp
-        builder/router_connection_mapping.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
@@ -75,6 +70,7 @@ target_sources(
         physical_system_descriptor.cpp
         topology_mapper.cpp
         topology_mapper_utils.cpp
+        topology_solver.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
@@ -93,14 +89,6 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
-
-# Exclude protobuf generated files from unity builds (they have conflicting static symbols)
-set_source_files_properties(
-    ${GENERATED_PROTO_SRCS}
-    PROPERTIES
-        SKIP_UNITY_BUILD_INCLUSION
-            TRUE
-)
 
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
