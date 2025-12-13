@@ -109,10 +109,16 @@ static StateTrackerTestInterface reconfigure_tester;
 template <bool to_from_int8 = false>
 ALWI void reconfigure_single_operand(uint32_t cb, bool is_srcA = true) {
     if (is_srcA) {
+        if (g_state_tracker.srca_cb == cb) {
+            return;
+        }
         reconfig_data_format_srca<to_from_int8>(g_state_tracker.srca_cb, cb);
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCA);
         return;
     } else {
+        if (g_state_tracker.srcb_cb == cb) {
+            return;
+        }
         reconfig_data_format_srcb<to_from_int8>(g_state_tracker.srcb_cb, cb);
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCB);
     }
@@ -128,12 +134,8 @@ ALWI void reconfigure_dual_operand(uint32_t cb_a, uint32_t cb_b) {
         SET_CALLED_RECONFIG(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB);
         return;
     }
-    if (srcAChanged) {
-        reconfigure_single_operand<to_from_int8>(cb_a);
-    }
-    if (srcBChanged) {
-        reconfigure_single_operand<to_from_int8>(cb_b, false);
-    }
+    reconfigure_single_operand<to_from_int8>(cb_a);
+    reconfigure_single_operand<to_from_int8>(cb_b, false);
 }
 
 ALWI void reconfigure_pack_operand(uint32_t cb_out) {
