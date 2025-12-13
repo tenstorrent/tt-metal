@@ -1,1 +1,1 @@
-../../../../models/demos/wormhole/stable_diffusion/tests/test_upblock_2d.py
+../../../../models/demos/vision/generative/stable_diffusion/wormhole/tests/test_upblock_2d.py

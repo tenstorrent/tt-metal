@@ -64,14 +64,14 @@ run_ds_r1_qwen_func() {
 }
 
 run_gemma3_func() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "ci-token-matching"
   echo "LOG_METAL: Gemma3 4B accuracy tests completed (text only)"
 }
 
 run_gemma3_perf() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
@@ -81,10 +81,10 @@ run_phi4_func() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py
+  pytest models/demos/vision/segmentation/segformer/demo/demo_for_semantic_segmentation.py
 
   #Segformer Classification Demo
-  pytest models/demos/segformer/demo/demo_for_image_classification.py
+  pytest models/demos/vision/segmentation/segformer/demo/demo_for_image_classification.py
 
 }
 
@@ -137,13 +137,13 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2 demo
-  pytest models/demos/wormhole/ufld_v2/demo/demo.py
+  pytest models/demos/vision/segmentation/ufld_v2/wormhole/demo/demo.py
 }
 
 run_vgg_func() {
 
   #VGG11/VGG16
-  pytest models/demos/vgg/demo/demo.py
+  pytest models/demos/vision/classification/vgg/demo/demo.py
 
 }
 
@@ -174,13 +174,13 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  pytest models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  pytest models/demos/wormhole/resnet50/demo/demo.py
+  pytest models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 
 }
 
@@ -206,7 +206,7 @@ run_distilbert_func() {
 
 run_mnist_func() {
 
-  pytest models/demos/mnist/demo/demo.py
+  pytest models/demos/vision/classification/mnist/demo/demo.py
 
 }
 
@@ -224,7 +224,7 @@ run_efficientnet_b0_func(){
 
 run_stable_diffusion_func() {
 
-  pytest --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
+  pytest --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
 
 }
 
@@ -288,7 +288,7 @@ run_mamba_perf() {
 run_whisper_perf() {
 
   # Whisper conditional generation
-  pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 
@@ -308,7 +308,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- pytest models/demos/mobilenetv2/demo/demo.py
+ pytest models/demos/vision/classification/mobilenetv2/demo/demo.py
 
 }
 
@@ -322,7 +322,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest models/demos/vanilla_unet/demo/demo.py
+ pytest models/demos/vision/segmentation/vanilla_unet/demo/demo.py
 }
 
 run_swin_s_demo() {
@@ -372,7 +372,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  pytest models/demos/wormhole/vgg_unet/demo/demo.py
+  pytest models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py
 }
 
 
@@ -391,7 +391,7 @@ run_vovnet_demo(){
 
 run_vit_demo(){
 
- pytest models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+ pytest models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 
