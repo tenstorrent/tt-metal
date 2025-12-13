@@ -14,8 +14,8 @@ void kernel_main() {
     constexpr auto c_args = make_compile_time_struct_from_args<CompileTimeReaderKernelArgs>();
 
     constexpr auto condition_args = TensorAccessorArgs<3>();
-    constexpr auto true_args = TensorAccessorArgs<condition_args.next_compile_time_args_offset()>();
-    constexpr auto false_args = TensorAccessorArgs<true_args.next_compile_time_args_offset()>();
+    constexpr auto true_args = TensorAccessorArgs<4>();
+    constexpr auto false_args = TensorAccessorArgs<5>();
 
     const auto condition_tensor =
         TensorAccessor(condition_args, args.condition_tensor_base_addr, get_tile_size(c_args.condition_cb));
