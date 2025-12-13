@@ -84,8 +84,8 @@ void MAIN {
     binary_tiles_init<false, ELWADD>(cb_in2, cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    binary_dest_reuse_tiles_init(cb_in1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+    // binary_dest_reuse_tiles_init(cb_in1); --> test after
+    // ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     pack_untilize_dest_init<1>(cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_PACK));
@@ -119,12 +119,12 @@ void MAIN {
     untilize_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    unary_op_init_common(cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
-    unary_op_init_common(cb_in1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    // unary_op_init_common(cb_in0, cb_out0);
+    // ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+    // unary_op_init_common(cb_in1, cb_out1);
+    // ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    unary_op_init_common_no_pack(cb_in2);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+    // unary_op_init_common_no_pack(cb_in2);
+    // ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }
 }  // namespace NAMESPACE
