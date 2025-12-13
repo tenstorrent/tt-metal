@@ -825,7 +825,7 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
 
       // Get current failing jobs (already extracted in enrichStayedFailing)
       const currentFailingJobs = new Set(item.failing_jobs || []);
-      
+
       // Fetch error snippets for the previous run
       const previousErrorSnippets = errorSnippetsCache.get(item.previous_run_id) || await fetchErrorSnippetsForRun(
         item.previous_run_id,
@@ -840,9 +840,9 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
       // Infer job names from previous error snippets
       for (const sn of (previousErrorSnippets || [])) {
         const inferred = inferJobAndTestFromSnippet(sn);
-        if (inferred) { 
-          sn.job = inferred.job; 
-          sn.test = inferred.test; 
+        if (inferred) {
+          sn.job = inferred.job;
+          sn.test = inferred.test;
         }
       }
 
@@ -858,7 +858,7 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
 
       if (newFailingJobs.length > 0) {
         core.info(`Found ${newFailingJobs.length} new failing job(s) in ${item.name}: ${newFailingJobs.join(', ')}`);
-        
+
         // Create a regression entry for this pipeline with only the new failing jobs
         // This will be treated as a regression and sent to auto-triage
         const jobLevelRegression = {
@@ -936,10 +936,10 @@ function buildRegressionsSection(regressedDetails, context) {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
     const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
-    
+
     // Add a note if this is a job-level regression (pipeline was already failing)
-    const jobLevelNote = it.is_job_level_regression 
-      ? ' <strong>(New failing jobs in already-failing pipeline)</strong>' 
+    const jobLevelNote = it.is_job_level_regression
+      ? ' <strong>(New failing jobs in already-failing pipeline)</strong>'
       : '';
 
     if (it.first_failed_run_url) {
