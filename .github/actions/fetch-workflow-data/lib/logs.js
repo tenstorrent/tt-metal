@@ -110,7 +110,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
         // Any other conclusion at this point is considered failing for log fetching purposes
         if (!targetRun) {
           targetRun = run;
-        } else if (!previousFailingRun) {
+        } else {
           previousFailingRun = run;
           break; // We have both consecutive failing runs we need
         }
