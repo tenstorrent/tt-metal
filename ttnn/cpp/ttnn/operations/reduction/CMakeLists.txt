@@ -1,7 +1,7 @@
 add_library(ttnn_op_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 
-target_precompile_headers(ttnn_op_reduction REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_reduction REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_reduction)
 set_target_properties(
     ttnn_op_reduction
