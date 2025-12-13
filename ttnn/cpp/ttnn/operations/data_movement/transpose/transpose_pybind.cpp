@@ -47,7 +47,7 @@ void bind_transpose(py::module& module) {
                const int64_t& dim2,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<float>& pad_value) {
-                return self(input_tensor, dim1, dim2, memory_config, pad_value.value_or(0.0f));  // TODO(#34353)
+                return self(input_tensor, dim1, dim2, memory_config, pad_value);  // TODO(#34353)
             },
             py::arg("input_tensor"),
             py::arg("dim1"),

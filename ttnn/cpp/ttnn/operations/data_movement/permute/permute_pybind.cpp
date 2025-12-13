@@ -40,9 +40,7 @@ void bind_permute(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int64_t>& dims,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<float>& pad_value) {
-                return self(input_tensor, dims, memory_config, pad_value.value_or(0.0f));
-            },
+               const std::optional<float>& pad_value) { return self(input_tensor, dims, memory_config, pad_value); },
             py::arg("input_tensor").noconvert(),
             py::arg("dims"),
             py::kw_only(),
