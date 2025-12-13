@@ -58,7 +58,11 @@ protected:
         device_ = device_holder_.get();
     }
 
-    void TearDown() override { device_->close(); }
+    void TearDown() override {
+        if (device_holder_) {
+            device_holder_->close();
+        }
+    }
 
     TTNNFixtureWithDevice() = default;
 
@@ -86,7 +90,11 @@ protected:
         device_ = device_holder_.get();
     }
 
-    void TearDown() override { device_->close(); }
+    void TearDown() override {
+        if (device_holder_) {
+            device_holder_->close();
+        }
+    }
 };
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
@@ -112,8 +120,11 @@ protected:
     }
 
     void TearDown() override {
-        for (auto& [_, dev] : devs) {
-            dev->close();
+        if (!devs.empty()) {
+            for (auto& [_, dev] : devs) {
+                dev->close();
+            }
+            devs.clear();
         }
     }
 };
