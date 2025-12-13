@@ -41,9 +41,6 @@ inline void _llk_math_welfords_sfpu_done_()
     math::clear_dst_reg_addr();
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0); // Equivalent to clear_addr_mod_base(): sets address modifier base for group 2 (addr mods 0..3) to 0.
-                                                         // Parameter '2' selects the address modifier group, and '0' resets the base. This direct hardware
-                                                         // instruction is used instead of the higher-level function for efficiency and explicit control.
 }
 
 inline void _llk_math_welfords_sfpu_inc_dst_face_addr_()
