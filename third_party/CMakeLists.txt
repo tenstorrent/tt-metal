@@ -54,55 +54,118 @@ ensureboosttarget(interprocess)
 ############################################################################################################################
 # protobuf
 ############################################################################################################################
+# When building telemetry, gRPC bundles its own protobuf (v21.12).
+# When not building telemetry, we fetch protobuf separately for tt-metal's use.
+# This conditional fetch prevents duplicate target errors.
 
-CPMAddPackage(
-    NAME protobuf
-    GITHUB_REPOSITORY protocolbuffers/protobuf
-    GIT_TAG
-        v21.12 # Using 21.12 to avoid using abseil and utf8_range
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "protobuf_BUILD_TESTS OFF"
-        "protobuf_INSTALL OFF"
-        "BUILD_TESTING OFF"
-        "protobuf_BUILD_EXAMPLES OFF"
-        "BUILD_SHARED_LIBS OFF"
-        "CMAKE_POSITION_INDEPENDENT_CODE ON"
-    PATCHES
-        protobuf_noreturn.patch
-)
-
-if(CMAKE_VERSION VERSION_LESS 3.25)
-    # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
-    # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
-    get_target_property(PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
-    set_target_properties(
-        libprotobuf
-        PROPERTIES
-            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
-                "${PROTOBUF_INCLUDES}"
+if(NOT BUILD_TELEMETRY)
+    CPMAddPackage(
+        NAME protobuf
+        GITHUB_REPOSITORY protocolbuffers/protobuf
+        GIT_TAG
+            v21.12 # Using 21.12 to avoid using abseil and utf8_range
+        OPTIONS
+            "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+            "protobuf_BUILD_TESTS OFF"
+            "protobuf_INSTALL OFF"
+            "BUILD_TESTING OFF"
+            "protobuf_BUILD_EXAMPLES OFF"
+            "BUILD_SHARED_LIBS OFF"
+            "CMAKE_POSITION_INDEPENDENT_CODE ON"
+        PATCHES
+            protobuf_noreturn.patch
     )
 endif()
 
-# Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
-set_target_properties(
-    libprotobuf
-    PROPERTIES
-        CXX_VISIBILITY_PRESET
-            "hidden"
-        VISIBILITY_INLINES_HIDDEN
-            TRUE
+if(NOT BUILD_TELEMETRY)
+    if(CMAKE_VERSION VERSION_LESS 3.25)
+        # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
+        # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
+        get_target_property(PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+        set_target_properties(
+            libprotobuf
+            PROPERTIES
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                    "${PROTOBUF_INCLUDES}"
+        )
+    endif()
+
+    # Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
+    set_target_properties(
+        libprotobuf
+        PROPERTIES
+            CXX_VISIBILITY_PRESET
+                "hidden"
+            VISIBILITY_INLINES_HIDDEN
+                TRUE
+    )
+
+    # Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
+    # Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
+    target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
+    target_compile_options(
+        libprotobuf
+        PRIVATE
+            -fno-semantic-interposition
+            -Wno-deprecated-declarations
+    )
+endif()
+
+############################################################################################################################
+# gRPC : https://github.com/grpc/grpc
+############################################################################################################################
+# Note: gRPC bundles its own dependencies (protobuf, abseil, c-ares, re2, BoringSSL, zlib).
+# This is intentional to keep gRPC's dependencies isolated from tt-metal's protobuf.
+# We use BoringSSL (bundled) instead of system OpenSSL since we only need it for UNIX sockets with InsecureServerCredentials.
+
+# Force static libraries for gRPC and its dependencies (overrides tt-metal's BUILD_SHARED_LIBS=ON)
+# Save current setting and temporarily override as normal variable (not cache)
+set(_BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+
+CPMAddPackage(
+    NAME gRPC
+    GITHUB_REPOSITORY grpc/grpc
+    GIT_TAG v1.54.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "gRPC_BUILD_TESTS OFF"
+        "gRPC_BUILD_CODEGEN ON"
+        "gRPC_BUILD_CSHARP_EXT OFF"
+        "gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_NODE_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_PHP_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_RUBY_PLUGIN OFF"
+        "gRPC_INSTALL OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "gRPC_ZLIB_PROVIDER package"
+        "gRPC_SSL_PROVIDER module"
+        "gRPC_BUILD_GRPC_CPP_PLUGIN ON"
+        "gRPC_BUILD_GRPC_REFLECTION OFF"
+        "gRPC_BUILD_GRPCPP_CHANNELZ OFF"
+    PATCHES
+        grpc_tools_target.patch
+        grpc_cmake_minimum_required.patch
 )
 
-# Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
-# Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
-target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
-target_compile_options(
-    libprotobuf
-    PRIVATE
-        -fno-semantic-interposition
-        -Wno-deprecated-declarations
-)
+# Restore BUILD_SHARED_LIBS setting after gRPC is configured
+set(BUILD_SHARED_LIBS ${_BUILD_SHARED_LIBS_SAVED})
+
+# When building telemetry, gRPC provides protobuf. Create protobuf:: namespace aliases
+# so tt-metal code can reference protobuf consistently regardless of source.
+if(BUILD_TELEMETRY AND gRPC_ADDED)
+    if(NOT TARGET protobuf::libprotobuf)
+        add_library(protobuf::libprotobuf ALIAS libprotobuf)
+    endif()
+    if(NOT TARGET protobuf::protoc)
+        add_executable(protobuf::protoc ALIAS protoc)
+    endif()
+    if(NOT TARGET protobuf::libprotoc)
+        add_library(protobuf::libprotoc ALIAS libprotoc)
+    endif()
+endif()
 
 ############################################################################################################################
 # yaml-cpp
