@@ -51,9 +51,37 @@ template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode> build_graph_index_data(
     const AdjacencyGraph<TargetNode>& target_graph, const AdjacencyGraph<GlobalNode>& global_graph);
 
-// Forward declarations
+/**
+ * @brief Indexed constraint representation for efficient lookups
+ *
+ * Converts MappingConstraints into index-based representation for O(1) constraint checks.
+ * Stores restricted and preferred mappings as index vectors.
+ */
 template <typename TargetNode, typename GlobalNode>
-struct ConstraintIndexData;
+struct ConstraintIndexData {
+    // Restricted mappings: target_idx -> vector of valid global_indices
+    // If empty for a target_idx, that target can map to any global node
+    std::vector<std::vector<size_t>> restricted_global_indices;
+
+    // Preferred mappings: target_idx -> vector of preferred global_indices
+    // Used for optimization, doesn't restrict valid mappings
+    std::vector<std::vector<size_t>> preferred_global_indices;
+
+    // Helper: check if mapping is valid
+    bool is_valid_mapping(size_t target_idx, size_t global_idx) const;
+
+    // Helper: get candidates for target node
+    // Returns restricted candidates if available, otherwise returns empty vector (meaning all are valid)
+    const std::vector<size_t>& get_candidates(size_t target_idx) const;
+};
+
+/**
+ * @brief Build ConstraintIndexData from MappingConstraints and GraphIndexData
+ */
+template <typename TargetNode, typename GlobalNode>
+ConstraintIndexData<TargetNode, GlobalNode> build_constraint_index_data(
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data);
 
 template <typename TargetNode, typename GlobalNode>
 struct NodeSelector;

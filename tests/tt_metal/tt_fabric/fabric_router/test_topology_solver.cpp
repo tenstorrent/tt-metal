@@ -416,4 +416,113 @@ TEST_F(TopologySolverTest, GraphIndexDataSelfConnections) {
     EXPECT_EQ(graph_data.target_conn_count[0].count(0), 0u);
 }
 
+TEST_F(TopologySolverTest, ConstraintIndexDataBasic) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 12};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    auto graph_data = build_graph_index_data(target_graph, global_graph);
+
+    // Create constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);   // Target 1 must map to Global 10
+    constraints.add_preferred_constraint(2, 11);  // Target 2 prefers Global 11
+
+    auto constraint_data = build_constraint_index_data(constraints, graph_data);
+
+    // Verify restricted mappings
+    // Target 1 (index 0) should be restricted to Global 10 (index 0)
+    EXPECT_EQ(constraint_data.restricted_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][0], 0u);  // Index of Global 10
+
+    // Target 2 (index 1) should have no restrictions (empty = all valid)
+    EXPECT_TRUE(constraint_data.restricted_global_indices[1].empty());
+
+    // Verify preferred mappings
+    // Target 2 (index 1) should prefer Global 11 (index 1)
+    EXPECT_EQ(constraint_data.preferred_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.preferred_global_indices[1][0], 1u);  // Index of Global 11
+
+    // Verify is_valid_mapping
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 0));   // Target 1 -> Global 10: valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 1));  // Target 1 -> Global 11: invalid
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 0));   // Target 2 -> Global 10: valid (no restrictions)
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));   // Target 2 -> Global 11: valid (no restrictions)
+
+    // Verify get_candidates
+    const auto& candidates_0 = constraint_data.get_candidates(0);
+    EXPECT_EQ(candidates_0.size(), 1u);
+    EXPECT_EQ(candidates_0[0], 0u);
+
+    const auto& candidates_1 = constraint_data.get_candidates(1);
+    EXPECT_TRUE(candidates_1.empty());  // Empty means all are valid
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[20] = {};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    auto graph_data = build_graph_index_data(target_graph, global_graph);
+
+    // Create trait constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host1"}};
+    std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    auto constraint_data = build_constraint_index_data(constraints, graph_data);
+
+    // Target 1 (index 0) should be restricted to Global 10, 11 (indices 0, 1)
+    EXPECT_EQ(constraint_data.restricted_global_indices[0].size(), 2u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][0], 0u);  // Global 10
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][1], 1u);  // Global 11
+
+    // Target 2 (index 1) should be restricted to Global 20 (index 2)
+    EXPECT_EQ(constraint_data.restricted_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[1][0], 2u);  // Global 20
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataEmpty) {
+    using namespace tt::tt_fabric::detail;
+
+    // Empty graphs
+    AdjacencyGraph<TestTargetNode> target_graph;
+    AdjacencyGraph<TestGlobalNode> global_graph;
+
+    auto graph_data = build_graph_index_data(target_graph, global_graph);
+
+    // Empty constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto constraint_data = build_constraint_index_data(constraints, graph_data);
+
+    EXPECT_TRUE(constraint_data.restricted_global_indices.empty());
+    EXPECT_TRUE(constraint_data.preferred_global_indices.empty());
+}
+
 }  // namespace tt::tt_fabric
