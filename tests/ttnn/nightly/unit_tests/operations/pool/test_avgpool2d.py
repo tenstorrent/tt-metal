@@ -6,6 +6,8 @@ import ttnn
 import pytest
 import math
 
+from ttnn.operations.pool import golden_avg_pool2d
+
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     COMPUTE_KERNEL_CONFIG_HIFI4,
@@ -236,15 +238,24 @@ def run_avg_pool2d(
     else:
         torch_input_padded = torch_input
         torch_padding = padding
-    # run torch avg_pool2d
-    torch_output = torch.nn.AvgPool2d(
+
+    torch_input_formatted = torch_input_padded.permute(0, 2, 3, 1).reshape(
+        1, 1, in_n * torch_input_padded.shape[2] * torch_input_padded.shape[3], in_c
+    )
+    torch_output = golden_avg_pool2d(
+        input_tensor=torch_input_formatted,
+        batch_size=in_n,
+        input_h=torch_input_padded.shape[2],
+        input_w=torch_input_padded.shape[3],
+        channels=in_c,
         kernel_size=kernel_size,
         stride=stride,
         padding=torch_padding,
         ceil_mode=ceil_mode,
         count_include_pad=count_include_pad,
         divisor_override=divisor_override,
-    )(torch_input_padded)
+    )
+    torch_output = torch_output.reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
 
     # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)

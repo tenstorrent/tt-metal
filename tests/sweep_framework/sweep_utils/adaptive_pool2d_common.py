@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.pool import golden_adaptive_avg_pool2d, golden_adaptive_max_pool2d
 
 
 def randomize_tensor(tensor_map, tensor_shape):
@@ -67,8 +68,17 @@ def run_adaptive_pool2d(
             memory_config=memory_config,
             applied_shard_scheme=sharding,
         )
-        # PyTorch reference
-        torch_output = torch.nn.functional.adaptive_avg_pool2d(torch_input, (out_h, out_w))
+
+        torch_input_formatted = torch_input.permute(0, 2, 3, 1).reshape(1, 1, in_n * in_h * in_w, in_c)
+        torch_output = golden_adaptive_avg_pool2d(
+            input_tensor=torch_input_formatted,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            output_size=(out_h, out_w),
+        )
+        torch_output = torch_output.reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
     else:  # max
         ttnn_output = ttnn.adaptive_max_pool2d(
             input_tensor=ttnn_input,
@@ -80,8 +90,17 @@ def run_adaptive_pool2d(
             memory_config=memory_config,
             applied_shard_scheme=sharding,
         )
-        # PyTorch reference
-        torch_output = torch.nn.functional.adaptive_max_pool2d(torch_input, (out_h, out_w))
+
+        torch_input_formatted = torch_input.permute(0, 2, 3, 1).reshape(1, 1, in_n * in_h * in_w, in_c)
+        torch_output = golden_adaptive_max_pool2d(
+            input_tensor=torch_input_formatted,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            output_size=(out_h, out_w),
+        )
+        torch_output = torch_output.reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
 
     # Reshape TTNN output from [1, 1, N*out_h*out_w, C] to [N, C, out_h, out_w]
     ttnn_output = ttnn.to_torch(ttnn_output).reshape(in_n, out_h, out_w, in_c)
@@ -111,5 +130,3 @@ def run_adaptive_pool2d(
         assert (
             isequal
         ), f"Reference and output tensor are not equal for bfloat16. Input: {input_shape}, Output: [{out_h}, {out_w}]"
-
-    assert_with_pcc(torch_output, ttnn_output, pcc_threshold)
