@@ -153,11 +153,11 @@ protected:
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
-    uint32_t common_runtime_args_count_;
+    uint32_t common_runtime_args_count_{0};
     std::vector<uint32_t> common_runtime_args_;
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
-    std::size_t max_runtime_args_per_core_;  // For validation
+    std::size_t max_runtime_args_per_core_{0};  // For validation
     CoreCoord core_with_max_runtime_args_;   // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
