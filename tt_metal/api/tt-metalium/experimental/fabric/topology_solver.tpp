@@ -10,9 +10,11 @@
 #define TOPOLOGY_SOLVER_TPP
 
 #include <sstream>
+#include <chrono>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include "tt_metal/fabric/topology_solver_internal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -251,6 +253,83 @@ std::set<GlobalNode> MappingConstraints<TargetNode, GlobalNode>::intersect_sets(
     std::set<GlobalNode> result;
     std::set_intersection(set1.begin(), set1.end(), set2.begin(), set2.end(), std::inserter(result, result.begin()));
     return result;
+}
+
+// solve_topology_mapping template implementation
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode) {
+    using namespace tt::tt_fabric::detail;
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // Build indexed graph representation
+    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
+
+    // Build indexed constraint representation
+    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
+
+    // Run DFS search (state is now internal to the engine)
+    DFSSearchEngine<TargetNode, GlobalNode> search_engine;
+    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode);
+
+    // Calculate elapsed time
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+    // Get state from engine and build result using validator
+    const auto& state = search_engine.get_state();
+    auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
+        state.mapping, graph_data, state, constraints, connection_validation_mode);
+
+    // Set elapsed time
+    result.stats.elapsed_time = elapsed_ms;
+
+    return result;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingResult<TargetNode, GlobalNode>::print(const AdjacencyGraph<TargetNode>& target_graph) const {
+    std::stringstream ss;
+    ss << "\n=== Mapping Result ===" << std::endl;
+    ss << "Success: " << (success ? "true" : "false") << std::endl;
+    if (!error_message.empty()) {
+        ss << "Error: " << error_message << std::endl;
+    }
+
+    ss << "\nMappings:" << std::endl;
+    const auto& target_nodes = target_graph.get_nodes();
+    size_t mapped_count = 0;
+    for (const auto& target_node : target_nodes) {
+        auto it = target_to_global.find(target_node);
+        if (it != target_to_global.end()) {
+            ss << "  Target node " << target_node << " -> Global node " << it->second << std::endl;
+            mapped_count++;
+        } else {
+            ss << "  Target node " << target_node << " -> UNMAPPED" << std::endl;
+        }
+    }
+    ss << "Total mapped: " << mapped_count << " of " << target_nodes.size() << " target nodes" << std::endl;
+
+    if (!warnings.empty()) {
+        ss << "\nWarnings (" << warnings.size() << "):" << std::endl;
+        for (const auto& warning : warnings) {
+            ss << "  - " << warning << std::endl;
+        }
+    }
+
+    ss << "\nStatistics:" << std::endl;
+    ss << "  DFS calls: " << stats.dfs_calls << std::endl;
+    ss << "  Backtracks: " << stats.backtrack_count << std::endl;
+    ss << "  Required constraints satisfied: " << constraint_stats.required_satisfied << std::endl;
+    ss << "  Preferred constraints satisfied: " << constraint_stats.preferred_satisfied << "/"
+       << constraint_stats.preferred_total << std::endl;
+
+    ss << "======================" << std::endl;
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 
 }  // namespace tt::tt_fabric

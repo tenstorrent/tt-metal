@@ -101,4 +101,7 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physi
     return adjacency_map;
 }
 
+// All MappingConstraints method implementations are now in topology_solver.tpp
+// to allow implicit instantiation without explicit instantiations
+
 }  // namespace tt::tt_fabric
