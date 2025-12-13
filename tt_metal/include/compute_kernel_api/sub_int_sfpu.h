@@ -44,14 +44,21 @@ ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1, odst)));
 }
 
+ALWI void rsub_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1, odst)));
+}
+
+ALWI void rsub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, InstrModLoadStore::LO16>(idst0, idst1, odst)));
+}
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void sub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_sub_int_init<APPROX>())); }
 
-ALWI void rsub_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int32_init<APPROX>())); }
+ALWI void rsub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int32_init<APPROX>())); }
 
 }  // namespace ckernel
