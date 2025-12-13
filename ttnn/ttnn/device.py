@@ -202,6 +202,7 @@ def ReadDeviceProfiler(device):
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
 EnablePersistentKernelCache = ttnn._ttnn.device.EnablePersistentKernelCache
 DisablePersistentKernelCache = ttnn._ttnn.device.DisablePersistentKernelCache
+ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
