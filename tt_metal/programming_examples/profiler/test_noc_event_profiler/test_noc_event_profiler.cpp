@@ -6,7 +6,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt::tt_metal;
