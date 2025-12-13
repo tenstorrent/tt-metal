@@ -15,6 +15,7 @@ from models.tt_cnn.tt.executor import (
     MultiCQTracedModelOverlappedInputExecutor,
     MultiCQTracedModelPipelinedIOExecutor,
     TracedModelExecutor,
+    TransferOnlyExecutor,
 )
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
@@ -84,7 +85,7 @@ def create_multi_output_test_model(input_shape, should_deallocate_input_tensor=T
         ), "Model expects input tensor to be in L1"
         assert input_shape == l1_input_tensor.shape, "Unexpected input shape"
 
-        identity_output = ttnn.to(l1_input_tensor, memory_config=l1_input_tensor.memory_config())
+        identity_output = ttnn.identity(l1_input_tensor)
         relu_output = ttnn.relu(l1_input_tensor)
 
         if should_deallocate_input_tensor:
@@ -393,3 +394,148 @@ def test_get_dram_sharded_memory_config_for_tensor_invalid_grid_size():
     shape = (1, 1, 64, 64)
     with pytest.raises(ValueError):
         get_memory_config_for_persistent_dram_tensor(shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, dram_grid_size)
+
+
+def test_pipeline_config_transfer_only_mode_field():
+    """Test that PipelineConfig properly handles transfer_only_mode field"""
+    # Test default value
+    default_config = PipelineConfig()
+    assert default_config.transfer_only_mode == False, "transfer_only_mode should default to False"
+
+    # Test explicit value
+    transfer_config = PipelineConfig(transfer_only_mode=True)
+    assert transfer_config.transfer_only_mode == True, "transfer_only_mode should be True when explicitly set"
+
+    # Test string representation includes transfer_only_mode
+    config_str = str(transfer_config)
+    assert "transfer_only_mode: True" in config_str, "String representation should include transfer_only_mode field"
+
+
+@pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
+@pytest.mark.parametrize(
+    "create_model", [create_test_model, create_identity_test_model], ids=["relu_model", "identity_model"]
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_transfer_only_mode_executor(device, shape_config: TestShapeConfig, create_model: Callable):
+    """Test TransferOnlyExecutor for throughput testing"""
+    input_shape = shape_config.input_shape
+    dram_cores = shape_config.dram_cores
+    l1_cores = shape_config.l1_cores
+    model, _ = create_model(input_shape)
+
+    # Create pipeline config with transfer_only_mode enabled
+    config = PipelineConfig(transfer_only_mode=True)
+
+    dram_memory_config, l1_memory_config = create_memory_configs(input_shape, dram_cores, l1_cores)
+    pipeline_args = {
+        "config": config,
+        "model": model,
+        "device": device,
+        "dram_input_memory_config": dram_memory_config,
+        "l1_input_memory_config": l1_memory_config,
+        "dram_output_memory_config": dram_memory_config,
+    }
+
+    pipe = create_pipeline_from_config(**pipeline_args)
+    executor = pipe.executor
+
+    # Verify the executor is TransferOnlyExecutor
+    assert isinstance(executor, TransferOnlyExecutor), f"Expected TransferOnlyExecutor, got {type(executor).__name__}"
+
+    # Test compilation works
+    sample_input, _ = create_input_tensors(input_shape, device=None, memory_config=None)
+    pipe.compile(sample_input)
+
+    # Verify output schema is available
+    assert executor.output_schema is not None, f"Output schema should be available after compilation"
+
+    # Test execution in skip mode
+    num_inputs = 4
+    host_inputs = []
+    for _ in range(num_inputs):
+        input_tensor, _ = create_input_tensors(input_shape, device=None, memory_config=None)
+        host_inputs.append(input_tensor)
+
+    outputs = pipe.enqueue(host_inputs).pop_all()
+    pipe.cleanup()
+
+    # Verify we get outputs with correct shapes and types
+    assert len(outputs) == len(host_inputs), f"Expected {len(host_inputs)} outputs"
+    for i, output in enumerate(outputs):
+        assert output.storage_type() == ttnn.StorageType.HOST, f"Output {i} should be on host"
+
+        # For transfer-only mode, outputs should have the correct shape but content doesn't need to match model
+        expected_shape, expected_dtype, _, _ = executor.output_schema
+        # Convert shapes to lists for comparison
+        if hasattr(output.shape, "__iter__"):
+            output_shape_list = list(output.shape)
+        else:
+            output_shape_list = [output.shape]
+
+        if isinstance(expected_shape, ttnn.Shape):
+            expected_shape_list = list(expected_shape)
+        else:
+            expected_shape_list = list(expected_shape)
+
+        assert (
+            output_shape_list == expected_shape_list
+        ), f"Output {i} shape mismatch: expected {expected_shape_list}, got {output_shape_list}"
+        assert (
+            output.dtype == expected_dtype
+        ), f"Output {i} dtype mismatch: expected {expected_dtype}, got {output.dtype}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_transfer_only_mode_with_multi_output_model(device):
+    """Test TransferOnlyExecutor with models that have multiple outputs"""
+    input_shape = (1, 1, 32, 32)
+    dram_cores = 1
+    l1_cores = 1
+    model, _ = create_multi_output_test_model(input_shape)
+
+    # Create pipeline config with transfer_only_mode enabled
+    config = PipelineConfig(transfer_only_mode=True)
+
+    dram_memory_config, l1_memory_config = create_memory_configs(input_shape, dram_cores, l1_cores)
+    pipeline_args = {
+        "config": config,
+        "model": model,
+        "device": device,
+        "dram_input_memory_config": dram_memory_config,
+        "l1_input_memory_config": l1_memory_config,
+        "dram_output_memory_config": dram_memory_config,
+    }
+
+    pipe = create_pipeline_from_config(**pipeline_args)
+    executor = pipe.executor
+
+    # Test compilation and execution
+    sample_input, _ = create_input_tensors(input_shape, device=None, memory_config=None)
+    pipe.compile(sample_input)
+
+    # Test execution with multiple outputs
+    num_inputs = 2
+    host_inputs = []
+    for _ in range(num_inputs):
+        input_tensor, _ = create_input_tensors(input_shape, device=None, memory_config=None)
+        host_inputs.append(input_tensor)
+
+    outputs = pipe.enqueue(host_inputs).pop_all()
+    pipe.cleanup()
+
+    # Verify outputs
+    assert len(outputs) == len(host_inputs), f"Expected {len(host_inputs)} outputs"
+    for i, output_list in enumerate(outputs):
+        assert isinstance(output_list, list), f"Output {i} should be a list for multi-output model"
+        assert len(output_list) == 2, f"Expected 2 outputs in list {i}"
+
+        for j, output in enumerate(output_list):
+            assert output.storage_type() == ttnn.StorageType.HOST, f"Output {i}[{j}] should be on host"
