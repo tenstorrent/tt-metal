@@ -131,7 +131,6 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Compute actual per-VC channel counts for this router
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc{};
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_receiver_channels_per_vc{};
-
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         actual_sender_channels_per_vc[vc] = channel_mapping.get_num_sender_channels_for_vc(vc);
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
@@ -184,162 +183,6 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     return router_builder;
 }
-
-// void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(ComputeMeshRouterBuilder& other, uint32_t vc) {
-//     auto connect_vc = [&](uint32_t upstream_vc_index,
-//                           uint32_t downstream_vc_index,
-//                           FabricDatamoverBuilderBase* downstream_builder,
-//                           uint32_t logical_sender_channel_idx) {
-//         log_debug(
-//             tt::LogTest,
-//             "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} to downstream router VC{} at x={}, "
-//             "y={}, Direction={}",
-//             get_noc_x(),
-//             get_noc_y(),
-//             get_eth_direction(),
-//             local_node_,
-//             upstream_vc_index,
-//             downstream_vc_index,
-//             downstream_builder->get_noc_x(),
-//             downstream_builder->get_noc_y(),
-//             downstream_builder->get_direction());
-
-//         // auto send_chan = get_sender_channel(is_2D_routing, this->get_direction(), vc_index);
-//         auto downstream_mapping =
-//             other.channel_mapping_.get_sender_mapping(downstream_vc_index, logical_sender_channel_idx);
-//         uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
-
-//         // Need to call the templated method with the correct derived type
-//         // NOTE: erisc_builder_ is hardcoded here because there is currently no scenario where tensix forwards to tensix
-//         //       however when that is enabled, this code should be updated to point to the src builder dynamically
-//         if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-//             erisc_builder_->setup_downstream_vc_connection(
-//                 downstream_erisc_builder, upstream_vc_index, downstream_vc_index, internal_channel_id);
-//         } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
-//             erisc_builder_->setup_downstream_vc_connection(
-//                 downstream_tensix_builder, upstream_vc_index, downstream_vc_index, internal_channel_id);
-//         }
-//     };
-
-//     auto get_downstream_builder_for_vc = [&](uint32_t vc_index,
-//                                              uint32_t sender_channel_idx) -> FabricDatamoverBuilderBase* {
-//         auto mapping = other.channel_mapping_.get_sender_mapping(vc_index, sender_channel_idx);
-
-//         if (mapping.builder_type == BuilderType::TENSIX) {
-//             TT_FATAL(
-//                 other.tensix_builder_.has_value(),
-//                 "Channel mapping requires TENSIX builder for VC{} channel {}, but tensix builder not present",
-//                 vc_index,
-//                 sender_channel_idx);
-//             return &other.tensix_builder_.value();
-//         } else {
-//             return other.erisc_builder_.get();
-//         }
-//     };
-
-//     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-//     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
-
-//     if (vc == 0) {
-//         TT_FATAL(
-//             !erisc_builder_->build_in_worker_connection_mode,
-//             "Tried to connect router to downstream in worker connection mode");
-
-//         // Helper to get the downstream builder for a specific VC based on channel mapping
-//         uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_eth_direction());
-
-//         // Special case: Inter-mesh router VC0 crosses over to downstream intra-mesh router VC1
-//         // This routes inter-mesh traffic into the appropriate VC on the intra-mesh side
-//         bool is_inter_to_intra_crossover = erisc_builder_->isInterMesh && !other.erisc_builder_->isInterMesh;
-
-//         if (is_inter_to_intra_crossover && is_2D_routing) {
-//             // Inter-mesh VC0 receiver → Intra-mesh VC1 sender
-//             // Map VC0 sender channels 1-3 to VC1 logical channels 0-2
-//             TT_FATAL(
-//                 sender_channel_idx >= 1 && sender_channel_idx <= 3,
-//                 "Inter-mesh router VC0 sender channel {} invalid for crossover to intra-mesh VC1. Expected 1-3.",
-//                 sender_channel_idx);
-//             uint32_t vc1_logical_channel_idx = sender_channel_idx - 1;
-//             log_info(
-//                 tt::LogFabric,
-//                 "Inter-mesh to intra-mesh crossover: upstream VC0 → downstream VC1 (VC0 ch{} → VC1 ch{})",
-//                 sender_channel_idx,
-//                 vc1_logical_channel_idx);
-//             // Pass upstream_vc=0, downstream_vc=1 for crossover
-//             connect_vc(0, 1, get_downstream_builder_for_vc(1, vc1_logical_channel_idx), vc1_logical_channel_idx);
-//         } else {
-//             // Normal VC0 → VC0 connection
-//             connect_vc(0, 0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
-//         }
-//     } else if (vc == 1) {
-//         // VC1 is only needed for 2D routing
-//         if (!is_2D_routing) {
-//             log_debug(tt::LogFabric, "VC1 not needed (1D routing), skipping VC1 connection setup");
-//             return;
-//         }
-
-//         // Inter-mesh routers don't have VC1 (they only have VC0)
-//         if (erisc_builder_->isInterMesh) {
-//             log_debug(tt::LogFabric, "VC1 not needed (inter-mesh router has no VC1), skipping VC1 connection setup");
-//             return;
-//         }
-
-//         // Intra-mesh VC1 does not connect to inter-mesh routers (inter-mesh uses VC0 only)
-//         if (other.erisc_builder_->isInterMesh) {
-//             log_debug(
-//                 tt::LogFabric,
-//                 "VC1 not needed (downstream is inter-mesh router, no VC1 on inter-mesh), skipping VC1 connection "
-//                 "setup");
-//             return;
-//         }
-
-//         // Check if VC1 is actually configured (multi-mesh topology)
-//         bool needs_vc1 = erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0;
-//         if (!needs_vc1) {
-//             log_debug(tt::LogFabric, "VC1 not configured (single-mesh topology), skipping VC1 connection setup");
-//             return;
-//         }
-
-//         TT_FATAL(
-//             !erisc_builder_->build_in_worker_connection_mode,
-//             "Tried to connect router to downstream in worker connection mode");
-
-//         // For VC1, use the same logical channel mapping as VC0
-//         // VC1 uses logical channels 0-2 (which map to physical channels 4-6) for inter-mesh routing
-//         // The channel mapping uses logical indices within each VC, so we use the same relative index
-//         // as VC0 (1-3) but map to VC1 logical channels (0-2)
-//         // VC0 channel 1-3 correspond to VC1 channels 0-2 for inter-mesh
-//         uint32_t vc0_sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_eth_direction());
-//         // VC0 channels 1-3 map to VC1 logical channels 0-2 (subtract 1)
-//         // VC0 channel 0 (worker) doesn't exist in VC1
-//         TT_FATAL(
-//             vc0_sender_channel_idx >= 1 && vc0_sender_channel_idx <= 3,
-//             "VC0 sender channel {} is invalid for VC1 mapping. VC1 only supports channels 1-3 from VC0 (mapped to VC1 "
-//             "logical channels 0-2).",
-//             vc0_sender_channel_idx);
-//         uint32_t vc1_logical_channel_idx = vc0_sender_channel_idx - 1;  // Map VC0 [1-3] to VC1 [0-2]
-
-//         // Connect VC1 → VC1 (normal intra-mesh connection)
-//         connect_vc(1, 1, get_downstream_builder_for_vc(1, vc1_logical_channel_idx), vc1_logical_channel_idx);
-//     }
-// }
-
-// SenderWorkerAdapterSpec ComputeMeshRouterBuilder::build_connection_to_fabric_channel(
-//     uint32_t vc, uint32_t sender_channel_idx) {
-//     // This method returns connection info for a sender channel, which can be used by
-//     // downstream routers to connect to this sender channel
-//     auto sender_mapping = channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
-
-//     if (sender_mapping.builder_type == BuilderType::ERISC) {
-//         // Pass VC and VC-relative channel ID to translate to absolute sender channel index
-//         return erisc_builder_->build_connection_to_fabric_channel(vc, sender_mapping.internal_sender_channel_id);
-//     } else if (sender_mapping.builder_type == BuilderType::TENSIX) {
-//         TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available but mapping requires it");
-//         return tensix_builder_->build_connection_to_fabric_channel(sender_mapping.internal_sender_channel_id);
-//     } else {
-//         TT_FATAL(false, "Unknown builder type");
-//     }
-// }
 
 uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     const bool is_2D_routing, const eth_chan_directions downstream_direction) const {
@@ -548,22 +391,9 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
         }
 
         uint32_t num_senders = channel_mapping_.get_num_sender_channels_for_vc(vc);
-        log_info(
-            tt::LogFabric,
-            "Router NodeId={} VC={} has {} sender channels",
-            local_node_,
-            vc,
-            num_senders);
 
         for (uint32_t sender_ch = 0; sender_ch < num_senders; ++sender_ch) {
             auto targets = connection_mapping_.get_downstream_targets(vc, sender_ch);
-            log_info(
-                tt::LogFabric,
-                "Router NodeId={} VC={} sender_ch={} has {} targets",
-                local_node_,
-                vc,
-                sender_ch,
-                targets.size());
 
             for (const auto& target : targets) {
                 // Apply connection type filter
@@ -598,12 +428,6 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                         "VC0 sender channel {} is invalid for VC1 mapping. Expected 1-3.",
                         actual_target_sender_channel);
                     actual_target_sender_channel -= 1;  // Map VC0 [1-3] to VC1 [0-2]
-                    log_info(
-                        tt::LogFabric,
-                        "Adjusted sender channel for VC1: upstream VC={} → downstream VC={} ch={}",
-                        upstream_vc,
-                        downstream_vc,
-                        actual_target_sender_channel);
                 }
 
                 // Get target builder using the adjusted sender channel
@@ -617,15 +441,10 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
 
                 // Setup producer → consumer connection
                 if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-                    // log_info(
-                    //     tt::LogFabric,
-                    //     "Setting up downstream VC connection: upstream VC={} → downstream VC={} → internal channel={}",
-                    //     upstream_vc,
-                    //     downstream_vc,
-                    //     internal_channel_id);
                     erisc_builder_->setup_downstream_vc_connection(
                         downstream_erisc_builder, upstream_vc, downstream_vc, internal_channel_id);
-                } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
+                } else if (
+                    auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
                     erisc_builder_->setup_downstream_vc_connection(
                         downstream_tensix_builder, upstream_vc, downstream_vc, internal_channel_id);
                 }
@@ -649,7 +468,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                     connection_registry_->record_connection(record);
                 }
 
-                log_info(
+                log_debug(
                     tt::LogTest,
                     "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} sender_ch={} to downstream "
                     "router at x={}, y={}, Direction={}, VC{}, internal_ch={}",
