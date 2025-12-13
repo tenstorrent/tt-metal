@@ -91,8 +91,8 @@ def test_pipeline_performance(
         cfg_parallel=None,
     )
     vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
     )
 
     # Test prompts
@@ -240,9 +240,9 @@ def test_pipeline_performance(
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
             "encoder": 14.8,
-            "denoising": 909.0,
-            "vae": 64.6,
-            "total": 990.0,
+            "denoising": 800.0,
+            "vae": 9.0,
+            "total": 823.8,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
@@ -255,16 +255,16 @@ def test_pipeline_performance(
         if is_blackhole():
             expected_metrics = {
                 "encoder": 15.0,
-                "denoising": 290.0,
-                "vae": 36.0,
-                "total": 341.0,
+                "denoising": 260.0,
+                "vae": 8.0,
+                "total": 283.0,
             }
         else:
             expected_metrics = {
                 "encoder": 15.0,
                 "denoising": 440.0,
-                "vae": 42.0,
-                "total": 497.0,
+                "vae": 8.0,
+                "total": 463.0,
             }
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
