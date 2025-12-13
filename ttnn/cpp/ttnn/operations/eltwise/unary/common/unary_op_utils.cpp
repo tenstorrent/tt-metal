@@ -432,12 +432,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::SOFTPLUS: {
-            TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
+            TT_ASSERT(params.size() == 3, "Expected softplus to take 3 parameters");
             float param1 = params[1];
+            uint32_t approx_mode = static_cast<uint32_t>(params[2]);
             op_init_and_name = {
-                "softplus_tile_init();",
+                fmt::format("softplus_tile_init<{}>();", approx_mode),
                 fmt::format(
-                    "softplus_tile({}, {:#x}u, {:#x}u, {:#x}u);",
+                    "softplus_tile<{}>({}, {:#x}u, {:#x}u, {:#x}u);",
+                    approx_mode,
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0),  // Pass reciprocal to avoid doing it on device
@@ -905,7 +907,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "square") {
         return UnaryWithParam(UnaryOpType::SQUARE);
     } else if (name == "softplus") {
-        return UnaryWithParam(UnaryOpType::SOFTPLUS);
+        return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f, 0.0f});  // beta=1, threshold=20, approx_mode=0
     } else if (name == "selu") {
         return UnaryWithParam(UnaryOpType::SELU);
     } else if (name == "alt_complex_rotate90") {
