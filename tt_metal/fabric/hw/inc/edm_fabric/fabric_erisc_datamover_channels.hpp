@@ -658,7 +658,7 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
     }
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE void cache_producer_noc_addr() {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         const auto& worker_info = *worker_location_info_ptr;
