@@ -15,6 +15,7 @@ from models.common.utility_functions import nearest_32
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 WHISPER_L1_SMALL_SIZE = 1024
+WHISPER_TRACE_REGION_SIZE = 100000000
 
 
 def gelu(tensor):
@@ -32,7 +33,7 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
     Returns:
         tuple: (kv_cache, cross_attn_cache)
             - kv_cache: List of [K, V] tensors per layer for self-attention
-            - cross_attn_cache: List of [None, None] per layer for cross-attention (populated on first use)
+            - cross_attn_cache: List of [K, V] tensors per layer for cross-attention (pre-allocated)
     """
 
     logger.info(f"Initializing KV cache with max batch size: {max_batch_size} and max sequence length: {max_seq_len}")
@@ -41,6 +42,13 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
     cross_attn_cache = []
     if n_layers is None:
         n_layers = config.decoder_layers
+
+    # Cross-attention cache dimensions
+    # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
+    encoder_seq_len = 1500
+    num_heads = config.encoder_attention_heads
+    head_dim = config.d_model // config.encoder_attention_heads
+
     for i in range(n_layers):
         # Self-attention cache
         kv_cache_layer = []
@@ -64,7 +72,31 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
             )
             kv_cache_layer.append(cache_k_or_v)
         kv_cache.append(kv_cache_layer)
-        cross_attn_cache.append([None, None])
+
+        # Pre-allocate cross-attention cache for tracing
+        # bfloat16 to match calculate_key_values output dtype
+        cross_k = torch.zeros((max_batch_size, num_heads, head_dim, encoder_seq_len))
+        cross_k = ttnn.as_tensor(
+            cross_k,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=weights_mesh_mapper,
+            cache_file_name=None,
+        )
+
+        cross_v = torch.zeros((max_batch_size, num_heads, encoder_seq_len, head_dim))
+        cross_v = ttnn.as_tensor(
+            cross_v,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=weights_mesh_mapper,
+            cache_file_name=None,
+        )
+        cross_attn_cache.append([cross_k, cross_v])
 
     return kv_cache, cross_attn_cache
 
@@ -262,6 +294,7 @@ def whisper_attention(
     encoder_hidden_states=None,
     kv_cache=None,
     cross_attn_cache=None,
+    cross_attn_cache_valid=False,
     current_decode_pos=None,
     *,
     parameters,
@@ -287,16 +320,18 @@ def whisper_attention(
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
-        # Use cached cross-attention K/V if available, otherwise compute and cache
-        if cross_attn_cache is not None and cross_attn_cache[0] is not None:
-            # Use cached K/V from previous decoder step
+        # Use cached cross-attention K/V if cache is valid, otherwise compute and copy to pre-allocated cache
+        if cross_attn_cache is not None and cross_attn_cache_valid:
             key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
         else:
-            # First pass: compute K/V and store references in cache
+            # Compute K/V and copy to pre-allocated cache
             key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
             if cross_attn_cache is not None:
-                cross_attn_cache[0] = key_states
-                cross_attn_cache[1] = value_states
+                # Copy to pre-allocated tensors
+                ttnn.copy(key_states, cross_attn_cache[0])
+                ttnn.copy(value_states, cross_attn_cache[1])
+                # Use cache references for attention
+                key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
         attn_output = functional_sdpa(
             query_states,
             key_states,
@@ -483,6 +518,7 @@ def decoder_layer(
     kv_cache=None,
     current_decode_pos=None,
     cross_attn_cache=None,
+    cross_attn_cache_valid=False,
     *,
     parameters,
 ):
@@ -523,6 +559,7 @@ def decoder_layer(
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
         cross_attn_cache=cross_attn_cache,
+        cross_attn_cache_valid=cross_attn_cache_valid,
         current_decode_pos=current_decode_pos,
         parameters=parameters.encoder_attn,
     )
@@ -572,6 +609,7 @@ def decoder(
     encoder_hidden_states,
     kv_cache=None,
     cross_attn_cache=None,
+    cross_attn_cache_valid=False,
     current_decode_pos=None,
     *,
     parameters,
@@ -589,6 +627,7 @@ def decoder(
             encoder_hidden_states,
             kv_cache=kv_cache[i] if kv_cache is not None else None,
             cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
+            cross_attn_cache_valid=cross_attn_cache_valid,
             current_decode_pos=current_decode_pos,
             parameters=decoder_layer_parameter,
         )
