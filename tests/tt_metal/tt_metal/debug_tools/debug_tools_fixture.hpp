@@ -5,6 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <filesystem>
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 #include "debug_tools_test_utils.hpp"
@@ -126,7 +127,8 @@ public:
             if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
                 continue;
             }
-            auto filename = fmt::format("generated/dprint/device-0_worker-core-0-0_{}.txt", suffixes[i]);
+            auto filename = (std::filesystem::temp_directory_path() / "tt-metalium" /
+                fmt::format("generated/dprint/device-0_worker-core-0-0_{}.txt", suffixes[i])).string();
             EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
         }
     }

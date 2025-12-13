@@ -27,7 +27,7 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
     export TT_METAL_DPRINT_RISCVS=BR                    # optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*
     export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
-    export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
+    export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under /tmp/tt-metalium/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
 
 To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
