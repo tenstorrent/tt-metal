@@ -9,6 +9,7 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -134,7 +135,10 @@ CoreRangeSet Device::worker_cores(HalProgrammableCoreType core_type, SubDeviceId
 }
 
 uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()
+        ->sub_device(sub_device_id)
+        .impl()
+        ->num_cores(core_type);
 }
 
 void Device::initialize_default_sub_device_state(
