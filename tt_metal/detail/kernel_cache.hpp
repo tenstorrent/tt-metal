@@ -64,5 +64,5 @@ private:
  *
  * Return value: void
  */
-void ClearKernelCache();
+inline void ClearKernelCache() { detail::HashLookup::inst().clear(); }
 }  // namespace tt::tt_metal::detail
