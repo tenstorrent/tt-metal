@@ -4,7 +4,12 @@
 
 """Factory for creating transformer models from configuration."""
 import ttml
-from ttml.common.config import DeviceConfig, TransformerConfig, MultiHostConfig
+from ttml.common.config import (
+    load_config,
+    DeviceConfig,
+    TransformerConfig,
+    MultiHostConfig,
+)
 from ttml.common.utils import round_up_to_tile
 
 
@@ -49,8 +54,13 @@ class TransformerModelFactory:
             yaml_config: Dictionary containing configuration
         """
         self.device_config = DeviceConfig(yaml_config)
-        self.multihost_config = MultiHostConfig(yaml_config)
-        self.transformer_config = TransformerConfig(yaml_config)
+
+        tc = yaml_config["training_config"]
+
+        self.transformer_config = TransformerConfig(load_config(tc["model_config"]))
+
+        if "multihost_config" in tc:
+            self.multihost_config = MultiHostConfig(load_config(tc["multihost_config"]))
         self.model_type = self.transformer_config.model_type
 
     def _create_gpt2(self):
