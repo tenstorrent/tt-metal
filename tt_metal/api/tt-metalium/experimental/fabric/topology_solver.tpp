@@ -285,70 +285,16 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Build indexed constraint representation
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
-    // Initialize search state
-    typename DFSSearchEngine<TargetNode, GlobalNode>::SearchState state;
-    state.mapping.resize(graph_data.n_target, -1);
-    state.used.resize(graph_data.n_global, false);
-
-    // Pre-assign nodes from required constraints (pinnings)
-    size_t assigned_count = 0;
-    const auto& valid_mappings = constraints.get_valid_mappings();
-    for (size_t i = 0; i < graph_data.n_target; ++i) {
-        const auto& target_node = graph_data.target_nodes[i];
-        auto it = valid_mappings.find(target_node);
-        if (it != valid_mappings.end() && it->second.size() == 1) {
-            // This target node has exactly one required constraint (pinning)
-            const GlobalNode& required_global = *it->second.begin();
-            auto global_it = graph_data.global_to_idx.find(required_global);
-            if (global_it != graph_data.global_to_idx.end()) {
-                size_t global_idx = global_it->second;
-
-                // Validate that this pre-assignment is consistent with already-assigned neighbors
-                for (size_t neighbor : graph_data.target_adj_idx[i]) {
-                    if (state.mapping[neighbor] != -1) {
-                        size_t neighbor_global_idx = static_cast<size_t>(state.mapping[neighbor]);
-                        // Check if edge exists between global_idx and neighbor_global_idx
-                        bool edge_exists = std::binary_search(
-                            graph_data.global_adj_idx[global_idx].begin(),
-                            graph_data.global_adj_idx[global_idx].end(),
-                            neighbor_global_idx);
-                        if (!edge_exists) {
-                            std::string error_msg = fmt::format(
-                                "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
-                                "but target node {} (adjacent to {}) is already mapped to global node {}, "
-                                "and global nodes {} and {} are not adjacent. This violates graph isomorphism requirements.",
-                                target_node,
-                                required_global,
-                                graph_data.target_nodes[neighbor],
-                                target_node,
-                                graph_data.global_nodes[neighbor_global_idx],
-                                required_global,
-                                graph_data.global_nodes[neighbor_global_idx]);
-                            log_error(tt::LogFabric, "{}", error_msg);
-                            MappingResult<TargetNode, GlobalNode> result;
-                            result.success = false;
-                            result.error_message = error_msg;
-                            return result;
-                        }
-                    }
-                }
-
-                state.mapping[i] = static_cast<int>(global_idx);
-                state.used[global_idx] = true;
-                assigned_count++;
-            }
-        }
-    }
-
-    // Run DFS search
+    // Run DFS search (state is now internal to the engine)
     DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(assigned_count, graph_data, constraint_data, state, connection_validation_mode);
+    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode);
 
     // Calculate elapsed time
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-    // Build result using validator
+    // Get state from engine and build result using validator
+    const auto& state = search_engine.get_state();
     auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
         state.mapping, graph_data, state, constraints, connection_validation_mode);
 
