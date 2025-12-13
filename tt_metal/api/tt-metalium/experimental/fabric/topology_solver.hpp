@@ -76,6 +76,12 @@ private:
     std::vector<NodeId> nodes_cache_;
 };
 
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const MeshGraph& mesh_graph);
+
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
 /**
  * @brief Unified constraint system for topology mapping
  *
@@ -209,12 +215,6 @@ private:
     // Internal validation - throws if invalid
     void validate_and_throw() const;
 };
-
-std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const MeshGraph& mesh_graph);
-
-std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 }  // namespace tt::tt_fabric
 
