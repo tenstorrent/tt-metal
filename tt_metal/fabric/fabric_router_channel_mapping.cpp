@@ -14,11 +14,13 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     Topology topology,
     bool downstream_is_tensix_builder,
     RouterVariant variant,
-    const IntermeshVCConfig* intermesh_config) :
+    const IntermeshVCConfig* intermesh_config,
+    bool is_inter_mesh_router) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     variant_(variant),
-    intermesh_vc_config_(intermesh_config) {
+    intermesh_vc_config_(intermesh_config),
+    is_inter_mesh_router_(is_inter_mesh_router) {
     initialize_mappings();
 }
 
@@ -146,17 +148,17 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
 }
 
 uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
-    // Z routers always have 2 VCs: VC0 (mesh traffic) and VC1 (Z traffic)
-    if (is_z_router()) {
-        return 2;
+    // Inter-mesh routers only have VC0 (no VC1 if not a pass through mode)
+    if (is_inter_mesh_router_ && intermesh_vc_config_ && intermesh_vc_config_->mode == IntermeshVCMode::FULL_MESH) {
+        return 1;  // Only VC0 for inter-mesh
     }
 
-    // Standard mesh routers: expose VC1 if intermesh VC is required
-    if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
-        return 2;  // VC0 + VC1 for intermesh
+    // Intra-mesh routers: expose VC1 if intermesh VC is required
+    if (intermesh_vc_config_ && intermesh_vc_config_->mode == IntermeshVCMode::FULL_MESH) {
+        return 2;  // VC0 + VC1 for intra-mesh in multi-mesh topology
     }
 
-    return 1;  // VC0 only
+    return 1;  // VC0 only (single-mesh or 1D)
 }
 
 uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc) const {

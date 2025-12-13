@@ -71,7 +71,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Create channel mapping EARLY (needed for computing injection flags)
     RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto channel_mapping = FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config);
+    bool is_inter_mesh_router = (local_node.mesh_id != location.remote_node.mesh_id);
+    auto channel_mapping = FabricRouterChannelMapping(
+        topology, downstream_is_tensix_builder, variant, &intermesh_config, is_inter_mesh_router);
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;
@@ -130,20 +132,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc{};
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_receiver_channels_per_vc{};
 
-    // Check if this will be an inter-mesh router (different mesh IDs)
-    bool is_inter_mesh = (local_node.mesh_id != location.remote_node.mesh_id);
-
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         actual_sender_channels_per_vc[vc] = channel_mapping.get_num_sender_channels_for_vc(vc);
-
-        // VC1 receiver only for intra-mesh routers
-        // Inter-mesh routers only have VC0
-        if (vc == 1 && is_inter_mesh) {
-            actual_receiver_channels_per_vc[vc] = 0;  // No VC1 for inter-mesh
-            log_debug(tt::LogFabric, "Inter-mesh router: skipping VC1 receiver channel");
-        } else {
-            actual_receiver_channels_per_vc[vc] = 1;  // 1 receiver per VC
-        }
+        actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
     // NOW create erisc builder with computed injection flags and actual channel counts
