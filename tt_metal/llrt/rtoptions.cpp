@@ -140,6 +140,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
     TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
+    TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_MULTICAST,           // Enable NoC multicast num_dests sanitization
 
     // ========================================
     // INSPECTOR
@@ -1000,6 +1001,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_settings.noc_sanitize_linked_transaction = true;
             break;
 
+        // TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_MULTICAST
+        // Enables NoC sanitization for multicast num_dests validation.
+        // Checks that num_dests matches the actual rectangle grid size.
+        // Default: false (multicast sanitization disabled)
+        // Usage: export TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_MULTICAST=1
+        case EnvVarID::TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_MULTICAST:
+            this->watcher_settings.noc_sanitize_multicast = true;
+            break;
+
         // ========================================
         // INSPECTOR
         // ========================================
@@ -1286,6 +1296,11 @@ void RunTimeOptions::ParseWatcherEnv() {
         TT_ASSERT(
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
             "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
+    }
+    if (watcher_settings.noc_sanitize_multicast) {
+        TT_ASSERT(
+            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_MULTICAST requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
 }
 
@@ -1575,6 +1590,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
+    hash_str += std::to_string(get_watcher_noc_sanitize_multicast());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
     std::hash<std::string> hash_fn;

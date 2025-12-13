@@ -174,6 +174,8 @@ protected:
     bool watcher_previous_append{};
     bool watcher_previous_auto_unpause{};
     bool watcher_previous_noinline{};
+    bool watcher_previous_noc_sanitize_linked_transaction{};
+    bool watcher_previous_noc_sanitize_multicast{};
     bool test_mode_previous{};
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
@@ -183,6 +185,10 @@ protected:
         watcher_previous_append = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_append();
         watcher_previous_auto_unpause = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause();
         watcher_previous_noinline = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline();
+        watcher_previous_noc_sanitize_linked_transaction =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noc_sanitize_linked_transaction();
+        watcher_previous_noc_sanitize_multicast =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noc_sanitize_multicast();
         test_mode_previous = tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(interval_ms);
@@ -192,6 +198,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_multicast(true);
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
@@ -208,6 +215,10 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_append(watcher_previous_append);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(watcher_previous_auto_unpause);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(watcher_previous_noinline);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
+            watcher_previous_noc_sanitize_linked_transaction);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_multicast(
+            watcher_previous_noc_sanitize_multicast);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
     }
