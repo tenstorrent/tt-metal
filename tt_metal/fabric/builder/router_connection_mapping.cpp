@@ -104,22 +104,26 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
             }
         }
 
-        // Map sender channels 1-3 to outbound directions
+        // Map sender channels 1-3 to outbound directions on VC0
+        // Map sender channels 0-2 to outbound directions on VC1
         //
         // IMPORTANT: INTRA_MESH connections are hardcoded to use VC0 only.
         // This is the intended behavior for the following reasons:
         //
-        // 1. VC0 is reserved for intra-mesh traffic (mesh-to-mesh communication within a single mesh)
-        // 2. VC1 is reserved for inter-mesh traffic (mesh-to-Z, Z-to-mesh, or mesh-to-mesh across different meshes)
+        // 1. VC0 is reserved for intra-mesh traffic (chip-to-chip communication within a single mesh)
+        //    All locally generated traffic in a mesh whether destined for another chip in the mesh or exiting the mesh
+        //    is transported over VC0. If traffic exits the mesh, the inter-mesh receiver router in the receiving mesh
+        //    crosses over the traffic to VC1. In other words ALL traffic generated locally on a mesh is considered
+        //    intra-mesh until it exits the mesh. If traffic exits the mesh, it is considered inter-mesh traffic (by the
+        //    receiving mesh/router) and is transported over VC1.
+        // 2. VC1 is reserved for inter-mesh traffic (Z-to-mesh, or mesh-to-mesh across different meshes)
         // 3. This separation ensures proper traffic isolation and prevents deadlocks in multi-mesh systems
         // 4. Even when VC1 is enabled on mesh routers (via IntermeshVCConfig), INTRA_MESH connections
         //    continue to use VC0, while inter-mesh connections use VC1
         // 5. The VC assignment is determined by the connection type, not the router capabilities
-        // VC0: For intra-mesh traffic (mesh-to-mesh communication within a single mesh)
-        // VC1: For intra-mesh routers in multi-mesh, forward inter-mesh traffic received on VC1
         //
         TT_FATAL(outbound_directions.size() <= builder_config::num_downstream_edms_2d_vc0, "Outbound directions size must be less than or equal to num_downstream_edms_2d_vc0");
-        
+
         // Add VC0 targets for intra-mesh traffic
         for (size_t i = 0; i < outbound_directions.size(); ++i) {
             mapping.add_target(
@@ -131,7 +135,7 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
                     i + 1,  // Target sender channel
                     outbound_directions[i]));
         }
-        
+
         // Add VC1 targets for intra-mesh routers (to forward inter-mesh traffic)
         // VC1 connections are only for intra-mesh routers in multi-mesh topologies
         // They forward inter-mesh traffic that was received via VC1

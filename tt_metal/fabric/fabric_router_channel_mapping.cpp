@@ -149,13 +149,19 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
 
 uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
     // Inter-mesh routers only have VC0 (no VC1 if not a pass through mode)
-    if (is_inter_mesh_router_ && intermesh_vc_config_ && intermesh_vc_config_->mode == IntermeshVCMode::FULL_MESH) {
-        return 1;  // Only VC0 for inter-mesh
+    if (intermesh_vc_config_ && intermesh_vc_config_->mode == IntermeshVCMode::FULL_MESH) {
+        if (is_inter_mesh_router_) {
+            // Inter-mesh routers only have VC0 (no VC1 if not a pass through mode)
+            return 1;
+        } else {
+            // Intra-mesh routers have VC0 and VC1
+            return 2;
+        }
     }
 
-    // Intra-mesh routers: expose VC1 if intermesh VC is required
-    if (intermesh_vc_config_ && intermesh_vc_config_->mode == IntermeshVCMode::FULL_MESH) {
-        return 2;  // VC0 + VC1 for intra-mesh in multi-mesh topology
+    // In pass through mode, all routers have VC0 and VC1
+    if (intermesh_vc_config_ && intermesh_vc_config_->mode == IntermeshVCMode::FULL_MESH_WITH_PASS_THROUGH) {
+        return 2;
     }
 
     return 1;  // VC0 only (single-mesh or 1D)

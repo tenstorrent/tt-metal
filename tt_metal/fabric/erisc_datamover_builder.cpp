@@ -1268,24 +1268,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     auto remote_multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
         std::move(remote_pool_allocators), std::move(remote_pool_types));
 
-    if (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id) {
-        log_info(
-            tt::LogFabric,
-            "INTRAMESH: M={},D={} eth=(x={},y={})",
-            local_fabric_node_id.mesh_id.get(),
-            local_fabric_node_id.chip_id,
-            ethernet_core.x,
-            ethernet_core.y);
-    } else {
-        log_info(
-            tt::LogFabric,
-            "INTERMESH: M={},D={} eth=(x={},y={})",
-            local_fabric_node_id.mesh_id.get(),
-            local_fabric_node_id.chip_id,
-            ethernet_core.x,
-            ethernet_core.y);
-    }
-
     log_debug(
         tt::LogFabric,
         "FABRIC NODE ID: M={},D={} eth=(x={},y={})\n"
@@ -1387,7 +1369,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     // NOTE: ds_edm is an ABSOLUTE sender channel index (flattened across VCs)
     // It comes from internal_sender_channel_id in the mapping, which stores absolute indices
     uint32_t absolute_sender_channel_index = ds_edm;
-    
+
     // Validate absolute index
     TT_FATAL(
         absolute_sender_channel_index < builder_config::num_max_sender_channels,
@@ -1399,7 +1381,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     // Convert to VC-relative for allocator calls (which expect VC-relative indices)
     uint32_t vc0_sender_count = is_2D_routing ? 4 : 2;
     uint32_t vc_relative_channel_id = 0;
-    
+
     if (vc == 0) {
         vc_relative_channel_id = ds_edm;  // VC0: absolute == VC-relative
         TT_FATAL(
