@@ -235,6 +235,57 @@ enum class ConnectionValidationMode {
     RELAXED  ///< Relaxed mode: prefer correct channel counts, but allow mismatches with warnings (default)
 };
 
+/**
+ * @brief Result of topology mapping operation
+ *
+ * Contains the mapping result, success status, error messages, and statistics
+ * about the constraint satisfaction process.
+ *
+ * @tparam TargetNode The type used to identify nodes in the target graph
+ * @tparam GlobalNode The type used to identify nodes in the global graph
+ */
+template <typename TargetNode, typename GlobalNode>
+struct MappingResult {
+    /// Whether the mapping was successful
+    bool success = false;
+
+    /// Error message if mapping failed
+    std::string error_message;
+
+    /// Warning messages (e.g., relaxed mode connection count mismatches)
+    std::vector<std::string> warnings;
+
+    /// Mapping from target nodes to global nodes
+    std::map<TargetNode, GlobalNode> target_to_global;
+
+    /// Reverse mapping from global nodes to target nodes
+    std::map<GlobalNode, TargetNode> global_to_target;
+
+    /// Statistics about constraint satisfaction
+    struct {
+        size_t required_satisfied = 0;   ///< Number of required constraints satisfied
+        size_t preferred_satisfied = 0;  ///< Number of preferred constraints satisfied
+        size_t preferred_total = 0;      ///< Total number of preferred constraints
+    } constraint_stats;
+
+    /// Statistics about the solving process
+    struct {
+        size_t dfs_calls = 0;                      ///< Number of DFS calls made
+        size_t backtrack_count = 0;                ///< Number of backtracks performed
+        std::chrono::milliseconds elapsed_time{};  ///< Time taken to solve
+    } stats;
+
+    /**
+     * @brief Print mapping result for debugging
+     *
+     * Prints the mapping showing which target nodes map to which global nodes,
+     * along with warnings, statistics, and other diagnostic information.
+     *
+     * @param target_graph The target graph (for showing unmapped nodes)
+     */
+    void print(const AdjacencyGraph<TargetNode>& target_graph) const;
+};
+
 }  // namespace tt::tt_fabric
 
 // Include template implementations
