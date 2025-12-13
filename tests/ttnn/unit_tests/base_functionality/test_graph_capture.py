@@ -291,7 +291,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert arg2_item1["buffer_type"] == "BufferType::L1"
     assert arg2_item1["shard_spec"] == "std::nullopt"
     assert item1["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]"
-    assert item1["arguments"][4]["arg4"] == "nullopt"
+    assert item1["arguments"][4]["arg4"] == "0"
 
     # Content item 2
     item2 = data["content"][2]
