@@ -98,7 +98,6 @@ runs:
               + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
               + (if .run_url then " — <" + .run_url + "|run>" else "" end)
               + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
-              + " " + mentionOwners(.owners) + origOwnerNote(.)
               + (if (.failing_jobs | type) == "array" and (.failing_jobs | length) > 0 then
                   "\n" + formatFailingJobs(.failing_jobs)
                 else "" end)
