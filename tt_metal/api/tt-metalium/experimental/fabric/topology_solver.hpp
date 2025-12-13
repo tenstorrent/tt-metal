@@ -71,10 +71,26 @@ public:
      */
     void print_adjacency_map(const std::string& graph_name = "Graph") const;
 
+    /**
+     * @brief Print adjacency map for debugging
+     *
+     * Prints the graph structure showing each node and its neighbors.
+     * Useful for debugging mapping failures.
+     *
+     * @param graph_name Name to identify this graph in the output
+     */
+    void print_adjacency_map(const std::string& graph_name = "Graph") const;
+
 private:
     AdjacencyMap adj_map_;
     std::vector<NodeId> nodes_cache_;
 };
+
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const MeshGraph& mesh_graph);
+
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
  * @brief Unified constraint system for topology mapping
