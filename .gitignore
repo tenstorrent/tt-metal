@@ -141,3 +141,4 @@ Testing
 .auto_triage/logs
 .auto_triage/data
 .auto_triage/output
+.github/actions/*/node_modules/
