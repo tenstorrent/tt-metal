@@ -130,13 +130,14 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
 }  // namespace
 
 MeshDevice::ScopedDevices::ScopedDevices(
-    const std::vector<MaybeRemote<int>>& device_ids,
+    const std::vector<MaybeRemote<int>>& all_device_ids,
+    const std::vector<MaybeRemote<int>>& active_device_ids,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
-    auto local_devices = extract_locals(device_ids);
+    auto local_devices = extract_locals(all_device_ids);
     opened_local_devices_ = tt_metal::detail::CreateDevices(
         local_devices,
         num_command_queues,
@@ -149,7 +150,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         /* ignored */ true,
         /* initialize_fabric_and_dispatch_fw */ false);
 
-    for (auto device_id : device_ids) {
+    for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);
             devices_.push_back(MaybeRemoteDevice::local(device));
@@ -168,6 +169,10 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
         }
         tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
+}
+
+const std::map<ChipId, IDevice*>& MeshDevice::ScopedDevices::opened_local_devices() const {
+    return opened_local_devices_;
 }
 
 const std::vector<MaybeRemote<IDevice*>>& MeshDevice::ScopedDevices::root_devices() const { return devices_; }
@@ -218,6 +223,9 @@ MeshDevice::MeshDevice(
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
+    const auto& mpi_context = MetalContext::instance().global_distributed_context();
+    distributed_context_ =
+        mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
@@ -232,8 +240,14 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
             auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            auto mapped_devices_full_system_device_ids =
+                (*MetalContext::instance().global_distributed_context().size() > 1)
+                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                    : mapped_devices.device_ids;
+
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
+                    mapped_devices_full_system_device_ids,
                     mapped_devices.device_ids,
                     l1_small_size,
                     trace_region_size,
@@ -255,8 +269,13 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
                         supplied_ids[i]);
                 fabric_node_ids.push_back(fabric_node_id);
             }
+            auto mapped_devices_full_system_device_ids =
+                (*MetalContext::instance().global_distributed_context().size() > 1)
+                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                    : wrap_to_maybe_remote(supplied_ids);
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
+                    mapped_devices_full_system_device_ids,
                     wrap_to_maybe_remote(supplied_ids),
                     l1_small_size,
                     trace_region_size,
@@ -277,10 +296,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
+
+    // Wait for all ranks to finish initializing the mesh device before proceeding.
+    mesh_device->distributed_context_->barrier();
+
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
@@ -299,7 +323,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    auto mapped_devices_full_system_device_ids =
+        (*MetalContext::instance().global_distributed_context().size() > 1)
+            ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+            : wrap_to_maybe_remote(device_ids);
     auto scoped_devices = std::make_shared<ScopedDevices>(
+        mapped_devices_full_system_device_ids,
         wrap_to_maybe_remote(device_ids),
         l1_small_size,
         trace_region_size,
@@ -330,6 +359,10 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     for (size_t i = 0; i < device_ids.size(); i++) {
         result[device_ids[i]] = submeshes[i];
     }
+
+    // Wait for all ranks to finish initializing the mesh device before proceeding.
+    mesh_device->distributed_context_->barrier();
+
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
@@ -418,13 +451,19 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto* device : submesh->get_devices()) {
-        dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+    if (!submesh->get_view().get_devices().empty()) {
+        for (auto* device : submesh->get_devices()) {
+            dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+        }
     }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
-    log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
+    if (!submesh->get_view().get_devices().empty()) {
+        log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
+    } else {
+        log_trace(LogMetal, "Submesh {} instantiated with only remote devices", submesh->id());
+    }
     return submesh;
 }
 
@@ -584,10 +623,16 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     ZoneScoped;
+
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
     if (this->is_initialized()) {
         ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
+    }
+
+    if (distributed_context_) {
+        // Wait for all ranks to be ready to close the mesh device before proceeding.
+        distributed_context_->barrier();
     }
 
     // TODO #20966: Remove these calls
@@ -631,6 +676,10 @@ bool MeshDevice::close() {
     scoped_devices_.reset();
     parent_mesh_.reset();
     is_internal_state_initialized = false;
+    if (distributed_context_) {
+        distributed_context_.reset();
+    }
+
     return true;
 }
 
@@ -960,6 +1009,11 @@ bool MeshDevice::initialize(
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
+
+    // If the mesh device has no local devices, do not attempt to initialize it.
+    if (view_->get_devices().empty()) {
+        return false;
+    }
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();

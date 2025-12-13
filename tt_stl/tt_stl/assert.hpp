@@ -73,8 +73,8 @@ static std::string demangle(const char* str) {
     size_t size = 0;
     int status = 0;
     std::string rt(256, '\0');
-    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", &rt[0])) {
-        char* v = abi::__cxa_demangle(&rt[0], nullptr, &size, &status);
+    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", rt.data())) {
+        char* v = abi::__cxa_demangle(rt.data(), nullptr, &size, &status);
         if (v) {
             std::string result(v);
             free(v);
@@ -102,8 +102,11 @@ template <typename... Args>
         trace_message_ss << fmt::format(args...) << std::endl;
         log_critical(tt::LogAlways, "{}: {}", assert_type, fmt::format(args...));
     }
-    trace_message_ss << "backtrace:\n";
-    trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
+    static const bool disable_backtrace = std::getenv("TT_METAL_DISABLE_BACKTRACE") != nullptr;
+    if (!disable_backtrace) {
+        trace_message_ss << "backtrace:\n";
+        trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
+    }
     trace_message_ss << std::flush;
     throw std::runtime_error(trace_message_ss.str());
 }

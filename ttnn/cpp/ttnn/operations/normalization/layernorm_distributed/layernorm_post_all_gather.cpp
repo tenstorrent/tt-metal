@@ -19,7 +19,6 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
-    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<const DataType>& dtype) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
@@ -48,7 +47,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .dtype = dtype,
                        .use_2d_core_grid = std::nullopt,  // LayerNorm doesn't expose this parameter
-                       .program_config = distributed_program_config},
+                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{})},
                    {input_tensor, stats},
                    {weight, bias})
             .at(0);

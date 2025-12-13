@@ -63,6 +63,10 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 
+namespace multihost {
+class DistributedContext;
+}
+
 using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
@@ -83,7 +87,8 @@ private:
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
         ScopedDevices(
-            const std::vector<MaybeRemote<int>>& device_ids,
+            const std::vector<MaybeRemote<int>>& all_device_ids,
+            const std::vector<MaybeRemote<int>>& active_device_ids,
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
@@ -96,7 +101,10 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
+        [[deprecated("This function is deprecated. Use opened_local_devices() instead.")]]
         const std::vector<IDevice*>& local_root_devices() const;
+
+        const std::map<ChipId, IDevice*>& opened_local_devices() const;
 
         const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
@@ -139,6 +147,9 @@ private:
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+
+    // Distributed context used to synchronize operations done by all ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
 public:
     MeshDevice(

@@ -45,7 +45,7 @@ jobs:
             {
               "name": "[WH-T3K] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -73,7 +73,7 @@ jobs:
             {
               "name": "[BH-DB] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "BH-DeskBox",
               "arch": "arch-blackhole",
@@ -159,12 +159,12 @@ jobs:
             {
               "name": "[WH-T3K][v1] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
-              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576}",
+              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 50000000, \"l1_small_size\": 24576}",
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
               "use-vllm-v1": true,
@@ -190,7 +190,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -361,6 +361,8 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          auto-triage: false # We need to disable auto hang detection because it causes vLLM to raise an error if certain processing takes too long instead of letting it finish
+          slow-dispatch-timeout: 15 # If we ever decide to enable auto-triage, we need to increase default timeout
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
