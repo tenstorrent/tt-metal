@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -171,34 +172,12 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     this->router_port_directions_to_num_routing_planes_map_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
-
-    // For TG need to skip the direction on the remote devices directly connected to the MMIO devices as we have only
-    // one outgoing eth chan to the mmio device
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    auto skip_direction = [&](const FabricNodeId& node_id, const RoutingDirection direction) -> bool {
-        const auto& neighbors = this->get_chip_neighbors(node_id, direction);
-        if (neighbors.empty()) {
-            return false;
-        }
-
-        // The remote devices connected directly to the mmio will have both intra-mesh and inter-mesh neighbors
-        if (neighbors.size() > 1 || neighbors.begin()->first != node_id.mesh_id) {
-            return true;
-        }
-
-        return false;
-    };
-
     auto apply_min =
-        [&](FabricNodeId fabric_node_id,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
+        [&](const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
             const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
             size_t& val) {
-            if (skip_direction(fabric_node_id, direction)) {
-                return;
-            }
             if (auto it = port_direction_eth_chans.find(direction); it != port_direction_eth_chans.end()) {
                 val = std::min(val, it->second.size());
             }
@@ -222,9 +201,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     build_golden_link_counts(this->mesh_graph_->get_inter_mesh_connectivity(), golden_link_counts);
 
     auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
-        if (skip_direction(fabric_node_id, direction)) {
-            return;
-        }
         if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
             !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
@@ -259,30 +235,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(fabric_chip_id);
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::E,
-                    golden_counts,
-                    row_min_planes.at(mesh_coord_x));
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::W,
-                    golden_counts,
-                    row_min_planes.at(mesh_coord_x));
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::N,
-                    golden_counts,
-                    col_min_planes.at(mesh_coord_y));
-                apply_min(
-                    fabric_node_id,
-                    port_directions,
-                    RoutingDirection::S,
-                    golden_counts,
-                    col_min_planes.at(mesh_coord_y));
+                apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(mesh_coord_x));
+                apply_min(port_directions, RoutingDirection::W, golden_counts, row_min_planes.at(mesh_coord_x));
+                apply_min(port_directions, RoutingDirection::N, golden_counts, col_min_planes.at(mesh_coord_y));
+                apply_min(port_directions, RoutingDirection::S, golden_counts, col_min_planes.at(mesh_coord_y));
             }
 
             // Collect row and column mins from all hosts in a BigMesh
@@ -2407,6 +2363,17 @@ void ControlPlane::generate_intermesh_connectivity() {
     auto generate_mapping_locally_ = (this->mesh_graph_->get_mesh_ids().size() == 1) &&
                                      (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
 
+    auto get_num_requested_intermesh_connections = [&]() -> size_t {
+        const auto& mesh_graph = *this->mesh_graph_;
+        const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+        const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+        TT_FATAL(
+            requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
+            "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
+        return !requested_intermesh_connections.empty() ? requested_intermesh_connections.size()
+                                                        : requested_intermesh_ports.size();
+    };
+
     if (!generate_mapping_locally_ && *(tt_metal::MetalContext::instance().global_distributed_context().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
@@ -2415,6 +2382,17 @@ void ControlPlane::generate_intermesh_connectivity() {
         // Intermesh Connectivity generation for the single-host case
         intermesh_connections = this->generate_intermesh_connections_on_local_host();
     }
+    // Divide by 2 here, since the intermesh_connections data structure stores connections
+    // bidirectionally.
+    auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
+
+    TT_FATAL(
+        num_assigned_intermesh_connections >= get_num_requested_intermesh_connections(),
+        "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
+        " Found {} intermesh connections, but {} were requested",
+        num_assigned_intermesh_connections,
+        get_num_requested_intermesh_connections());
+
     this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
 }
 
@@ -2616,7 +2594,32 @@ void ControlPlane::forward_descriptors_to_controller(
                 Tag{0});
             auto peer_port_descriptors = deserialize_port_descriptors_from_bytes(serialized_table);
             TT_FATAL(peer_port_descriptors.size() == 1, "Expecting peer port id table to have exactly one mesh");
-            port_descriptors[peer_port_descriptors.begin()->first] = std::move(peer_port_descriptors.begin()->second);
+
+            // Extract the single mesh entry from peer port descriptors
+            const auto& neighbor_mesh_id = peer_port_descriptors.begin()->first;
+            auto& neighbor_connections = peer_port_descriptors.begin()->second;
+
+            // Check if we already have entries for this neighbor mesh
+            auto& neighbor_mesh_descriptors = port_descriptors[neighbor_mesh_id];
+            if (neighbor_mesh_descriptors.empty()) {
+                // First time seeing this neighbor mesh - move all connections
+                neighbor_mesh_descriptors = std::move(neighbor_connections);
+            } else {
+                // Merge connections from this neighbor mesh
+                for (auto&& [dest_mesh_id, dest_port_descriptors] : neighbor_connections) {
+                    auto& dest_descriptors = neighbor_mesh_descriptors[dest_mesh_id];
+                    if (dest_descriptors.empty()) {
+                        // First time seeing this destination on the neighbor mesh - move the descriptors
+                        dest_descriptors = std::move(dest_port_descriptors);
+                    } else {
+                        // Append to existing descriptors for this destination
+                        dest_descriptors.insert(
+                            dest_descriptors.end(),
+                            std::make_move_iterator(dest_port_descriptors.begin()),
+                            std::make_move_iterator(dest_port_descriptors.end()));
+                    }
+                }
+            }
         }
     }
     distributed_context.barrier();
