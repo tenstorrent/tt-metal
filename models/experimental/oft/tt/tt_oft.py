@@ -203,7 +203,7 @@ class OFT:
         # None - no quantization
         # "to_uint32" - quantize to uint32 before integral image, dequantize after
         # "to_float32" - quantize to float32 before integral image, dequantize after
-        self.integral_image_quantization_strategy = "to_uint32"
+        self.integral_image_quantization_strategy = None
         logger.info(f"Integral image quantization strategy: {self.integral_image_quantization_strategy}")
         if self.integral_image_quantization_strategy == "to_uint32":
             self.prescaler = ttnn.from_torch(torch.tensor(1024 * 1024), device=device, dtype=ttnn.bfloat16)
@@ -346,7 +346,7 @@ class OFT:
             features = ttnn.to_layout(features, ttnn.TILE_LAYOUT)
 
         if self.integral_image_quantization_strategy is None:
-            integral_image = ttnn_integral_image_channel_last(features)
+            integral_image = ttnn.experimental.intimg(features)
         elif self.integral_image_quantization_strategy == "to_uint32":
             features = ttnn.mul(features, self.prescaler, dtype=ttnn.bfloat16)
             features = ttnn.typecast(features, ttnn.uint32)

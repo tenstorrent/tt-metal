@@ -34,7 +34,7 @@
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
 // compiler will complain (ODR violation when compiling with LTO).
 // Wrap the definitions in a unique namespace to avoid that.
-namespace HAL_BUILD {
+namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #endif
 
 // TODO: move these to processor specific files
@@ -209,7 +209,7 @@ struct debug_waypoint_msg_t {
 };
 
 // This structure is populated by the device and read by the host
-struct debug_sanitize_noc_addr_msg_t {
+struct debug_sanitize_addr_msg_t {
     volatile uint64_t noc_addr;
     volatile uint32_t l1_addr;
     volatile uint32_t len;
@@ -220,7 +220,7 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_target;
     volatile uint8_t pad;  // CODEGEN:skip
 };
-static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
+static_assert(sizeof(debug_sanitize_addr_msg_t) % sizeof(uint32_t) == 0);
 
 // Host -> device. Populated with the information on where we want to insert delays.
 struct debug_insert_delays_msg_t {
@@ -232,7 +232,7 @@ struct debug_insert_delays_msg_t {
 
 enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
-    DebugSanitizeNocOK = 2,
+    DebugSanitizeOK = 2,
     DebugSanitizeNocAddrUnderflow = 3,
     DebugSanitizeNocAddrOverflow = 4,
     DebugSanitizeNocAddrZeroLength = 5,
@@ -244,6 +244,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeInlineWriteDramUnsupported = 11,
     DebugSanitizeNocAddrMailbox = 12,
     DebugSanitizeNocLinkedTransactionViolation = 13,
+    DebugSanitizeL1AddrOverflow = 14,
 };
 
 struct debug_assert_msg_t {
@@ -302,7 +303,7 @@ constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 struct watcher_msg_t {
     volatile uint32_t enable;
     struct debug_waypoint_msg_t debug_waypoint[MaxProcessorsPerCoreType];
-    struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
+    struct debug_sanitize_addr_msg_t sanitize[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
     uint8_t pad0;  // CODEGEN:skip

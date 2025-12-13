@@ -159,7 +159,7 @@ void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
     // Determine which faces to fill completely (before the window_start_pos_in_tile)
-    int face_start = (window_start_pos_in_tile < 15) ? 0 : 1;  // Last face to fill completely
+    int face_start = (window_start_pos_in_tile < 16) ? 0 : 1;  // Last face to fill completely
 
     // Fill complete faces (faces 0, 2, 4, 6... for faces before face_start)
     if (face_start == 1) {
@@ -424,11 +424,13 @@ void worker_compute(
     constexpr uint32_t ml_write_size = PNHt * tile_bytes;
     uint64_t output_write_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, get_write_ptr(cb_intermed_out)) + worker_offset;
-    noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
-    output_write_addr += o_write_size;
+
+    // send the max logits first then the logits sum then the partial output to the reducer
     noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);
     output_write_addr += ml_write_size;
     noc_async_write(get_read_ptr(cb_out_l), output_write_addr, ml_write_size);
+    output_write_addr += ml_write_size;
+    noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
 
     // increment semaphore
     noc_async_write_barrier();
@@ -456,32 +458,41 @@ uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writ
     return barrier_count;
 }
 
-template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, typename WriterType>
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, uint32_t PNHt, typename WriterType>
 uint32_t write_partial_tiles_to_memory(
-    uint32_t& out_tile_id,
+    uint32_t& out_tile_id,  // base tile index in DRAM for this batch
     const WriterType& out_writer,
     uint32_t& barrier_count,
-    uint32_t cur_head,
-    uint32_t num_heads_to_write,
-    uint32_t out_chunk_tiles) {
+    uint32_t cur_head,            // kv-head group index 0..num_kv_heads-1
+    uint32_t num_heads_to_write,  // q-heads per kv-head group, e.g. 8
+    uint32_t out_chunk_tiles) {   // total tiles = PNHt * vDHt
     constexpr uint32_t FACE_HW = 16;
-    constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;  // 256
+    constexpr uint32_t TILE_HW = 32;
+    constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
+    const uint32_t num_hidden_tiles = out_chunk_tiles / PNHt;
 
-    for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-        uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer);
-        uint32_t l1_read_addr = get_read_ptr(cb_out) + tile * tile_bytes;
+    uint32_t l1_base_addr = get_read_ptr(cb_out);
 
-        // write partial output for each head
+    for (uint32_t hidden_tile = 0; hidden_tile < num_hidden_tiles; ++hidden_tile) {
         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
             uint32_t starting_row = cur_head * num_heads_to_write + head;
-            uint32_t in_tile_offset_by_starting_head =
-                starting_row < FACE_HW
-                    ? starting_row * FACE_LINE_BYTES
-                    : (starting_row + FACE_HW) * FACE_LINE_BYTES;  // Skip the second face which has FACE_HW rows
-            uint64_t out_writer_noc_addr_head = out_writer_noc_addr + in_tile_offset_by_starting_head;
-            uint32_t l1_read_addr_head = l1_read_addr + in_tile_offset_by_starting_head;
+            uint32_t tile_row = starting_row % TILE_HW;
+            uint32_t head_tile = starting_row / TILE_HW;
+
+            uint32_t in_tile_offset = (tile_row < FACE_HW) ? tile_row * FACE_LINE_BYTES
+                                                           : (tile_row + FACE_HW) * FACE_LINE_BYTES;  // skip face
+
+            // 2D -> 1D tile index: [head_tile][hidden_tile]
+            uint32_t tile_index = head_tile * num_hidden_tiles + hidden_tile;
+
+            // L1: cb_out tile layout matches tile_index
+            uint32_t l1_read_addr_head = l1_base_addr + tile_index * tile_bytes + in_tile_offset;
+
+            // DRAM tile: global index = out_tile_id + tile_index
+            uint64_t out_writer_tile_addr = get_noc_addr(out_tile_id + tile_index, out_writer);
+            uint64_t out_writer_noc_addr_head = out_writer_tile_addr + in_tile_offset;
 
             // Write first phase
             noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, FACE_LINE_BYTES);
@@ -497,9 +508,10 @@ uint32_t write_partial_tiles_to_memory(
                 barrier_count = 0;
             }
         }
-
-        ++out_tile_id;
     }
+
+    // We've consumed/written out_chunk_tiles tiles worth of data
+    out_tile_id += out_chunk_tiles;
     return barrier_count;
 }
 

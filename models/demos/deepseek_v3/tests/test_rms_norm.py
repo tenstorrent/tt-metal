@@ -54,7 +54,6 @@ def test_forward_pass(
     reference_layernorm_path,
     model_path,
     hf_config,
-    tmp_path,
     cache_path,
     mesh_device,
     ccl,
@@ -79,9 +78,6 @@ def test_forward_pass(
         reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
     else:
         state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(

@@ -7,11 +7,10 @@
 #include <array>
 #include <vector>
 
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct SenderMetadataFields {
     SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
@@ -180,16 +179,19 @@ struct NocUnicastWriteAtomicIncFields {
 
 struct NocUnicastScatterWriteFields {
     static constexpr uint32_t MAX_CHUNKS = 2;
+    static constexpr uint32_t DEFAULT_CHUNK_COUNT = MAX_CHUNKS;
 
     NocUnicastScatterWriteFields(
         uint32_t payload_size_bytes,
         const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
         const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
-        std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        std::optional<uint32_t> dst_noc_encoding = std::nullopt,
+        uint32_t chunk_count = DEFAULT_CHUNK_COUNT) :
         payload_size_bytes(payload_size_bytes),
         dst_addresses(dst_addresses),
         chunk_sizes(chunk_sizes),
-        dst_noc_encoding(dst_noc_encoding) {}
+        dst_noc_encoding(dst_noc_encoding),
+        chunk_count(chunk_count) {}
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
@@ -202,14 +204,15 @@ struct NocUnicastScatterWriteFields {
 
         std::vector<uint32_t> args;
         args.push_back(payload_size_bytes);
-        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+        args.push_back(chunk_count);
+        for (uint32_t i = 0; i < chunk_count; i++) {
             args.push_back(dst_addresses[i]);
         }
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
         // Add chunk sizes (only MAX_CHUNKS-1 since last is implicit)
-        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
+        for (uint32_t i = 0; i < (chunk_count - 1); i++) {
             args.push_back(static_cast<uint32_t>(chunk_sizes[i]));
         }
 
@@ -220,6 +223,7 @@ struct NocUnicastScatterWriteFields {
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     std::optional<uint32_t> dst_noc_encoding;
+    uint32_t chunk_count;
 };
 
 // create memory maps
@@ -239,7 +243,6 @@ struct TrafficParameters {
     // Global context
     uint32_t seed;
     bool is_2D_routing_enabled;
-    bool is_dynamic_routing_enabled;
     tt::tt_metal::distributed::MeshShape mesh_shape;
     tt::tt_fabric::Topology topology;
 };
@@ -295,6 +298,11 @@ struct TestTrafficSenderConfig {
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
 
+struct TestTrafficSyncConfig {
+    uint32_t sync_val;
+    TestTrafficSenderConfig sender_config;
+};
+
 struct TestTrafficReceiverConfig {
     TrafficParameters parameters;
     uint32_t sender_id;
@@ -342,29 +350,6 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             const auto& dst_node_id =
                 this->mcast_start_node_id.value_or(this->dst_node_ids[0]);  // Representative destination
             auto adjusted_hops = *(this->hops);
-
-            // Handle dynamic routing by adjusting hops
-            if (this->parameters.is_dynamic_routing_enabled) {
-                auto north_hops = hops->count(RoutingDirection::N) > 0 ? hops->at(RoutingDirection::N) : 0;
-                auto south_hops = hops->count(RoutingDirection::S) > 0 ? hops->at(RoutingDirection::S) : 0;
-                auto east_hops = hops->count(RoutingDirection::E) > 0 ? hops->at(RoutingDirection::E) : 0;
-                auto west_hops = hops->count(RoutingDirection::W) > 0 ? hops->at(RoutingDirection::W) : 0;
-                // for dynamic routing, decrement north/south hops by 1, since the start dst node is accounted as one
-                // hop.
-                if (north_hops > 0) {
-                    adjusted_hops[RoutingDirection::N] -= 1;
-                }
-                if (south_hops > 0) {
-                    adjusted_hops[RoutingDirection::S] -= 1;
-                }
-                // for dynamic routing, decrement east/west hops by 1, since the start dst node is accounted as one hop.
-                if (north_hops == 0 && south_hops == 0 && east_hops > 0) {
-                    adjusted_hops[RoutingDirection::E] -= 1;
-                }
-                if (north_hops == 0 && south_hops == 0 && west_hops > 0) {
-                    adjusted_hops[RoutingDirection::W] -= 1;
-                }
-            }
 
             // chip_id and mesh_id is unused for low latency 2d mesh mcast
             const auto mcast_fields = ChipMulticastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id, adjusted_hops);
@@ -584,5 +569,4 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     return args;
 }
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

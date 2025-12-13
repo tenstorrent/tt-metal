@@ -1,20 +1,24 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_program_factory.hpp"
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include "nlp_create_qkv_heads_segformer_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::program {
 
 using namespace tt::constants;
 using namespace tt;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_segformer(
-    const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
+NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegformerProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input_tensor;
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -41,6 +45,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     uint32_t q_out_CHtWt = q_out_c * q_out_HtWt;
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
 
+    auto* device = a.device();
+    CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of per_tensor_tiles per core
     uint32_t num_blocks = ashape[0] * ashape[1] * ashape[2] / TILE_HEIGHT;
@@ -48,11 +54,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
+    //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Tensor& q = output[0];
-    tt_metal::Tensor& k = output[1];
-    tt_metal::Tensor& v = output[2];
+    tt_metal::Tensor& q = std::get<0>(output);
+    tt_metal::Tensor& k = std::get<1>(output);
+    tt_metal::Tensor& v = std::get<2>(output);
 
     tt_metal::Buffer* q_buffer = q.buffer();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
@@ -141,32 +147,43 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
         num_blocks_written += num_blocks_per_core;
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, num_cores_y](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_dram_buffer = input_tensors.at(0).buffer();
-
-        auto dst_dram_buffer_query = output_tensors.at(0).buffer();
-
-        for (uint32_t i = 0; i < num_cores; i++) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-            }
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer_query->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        {/* reader_kernel_id = */ reader_kernel_id,
+         /* writer_kernel_id = */ writer_kernel_id,
+         /* num_cores        = */ num_cores,
+         /* num_cores_y      = */ num_cores_y}};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+void NlpCreateQkvHeadsSegformerProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& shared_vars = cached_program.shared_variables;
+    auto& reader_kernel_id = shared_vars.reader_kernel_id;
+    auto& writer_kernel_id = shared_vars.writer_kernel_id;
+    auto& program = cached_program.program;
+
+    uint32_t num_cores = shared_vars.num_cores;
+    uint32_t num_cores_y = shared_vars.num_cores_y;
+
+    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_dram_buffer_query = std::get<0>(output).buffer();
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_dram_buffer->address();
+        }
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = dst_dram_buffer_query->address();
+        }
+    }
+}
+
+}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::program

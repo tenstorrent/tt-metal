@@ -44,6 +44,7 @@
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -93,20 +94,20 @@ struct TestInfo {
     bool use_left_cores{false};
 };
 
+// Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case harvesting, for consistency.
 std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
 
     std::string arch_name = tt::tt_metal::hal::get_arch_name();
-    if (arch_name == "grayskull") {
-        core_x = 11;
-        core_y = 8;
-    } else if (arch_name == "wormhole_b0") {
+    if (arch_name == "wormhole_b0") {
+        // Three rows harvested.
         core_x = 7;
         core_y = 6;
     } else if (arch_name == "blackhole") {
-        core_x = 12;
-        core_y = 9;
+        // Two columns and one row harvested.
+        core_x = 11;
+        core_y = 8;
     } else {
         log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
         exit(0);
@@ -227,7 +228,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
 
 void set_runtime_args(
     tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, const CoreRangeSet& kgset) {
-    for (auto& kg : kgset.ranges()) {
+    for (const auto& kg : kgset.ranges()) {
         for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
             for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
                 CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
@@ -687,8 +688,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        size_t trace_region_size = 1'000'000'000;
+        std::string arch_name = tt::tt_metal::hal::get_arch_name();
+        if (arch_name == std::string("blackhole")) {
+            // Blackhole has more cores, so we need more room to store RTAs.
+            trace_region_size = 2'500'000'000;
+        }
         mesh_device = MeshDevice::create_unit_mesh(
-            device_id, DEFAULT_L1_SMALL_SIZE, 1000 * 1024 * 1024, 1, DispatchCoreConfig{dispatch_core_type});
+            device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
         std::vector<tt_metal::SubDevice> sub_devices;
@@ -1105,37 +1112,12 @@ int main(int argc, char** argv) {
             BM_pgm_dispatch,
             TestInfo{
                 .warmup_iterations = 5000,
-                .brisc_enabled = false,
+                .brisc_enabled = true,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
-                .erisc_enabled = true,
-                .use_trace = true})
-            ->Apply(Max8192Args)
-            ->UseManualTime();
-        benchmark::RegisterBenchmark(
-            "BM_pgm_dispatch/tensix_eth_2",
-            BM_pgm_dispatch,
-            TestInfo{
-                .warmup_iterations = 5000,
-                .n_args = 16,
-                .n_kgs = std::get<0>(core_count),
-                .erisc_enabled = true,
+                .erisc_enabled = false,
                 .use_trace = true,
-                .use_all_cores = true})
-            ->Apply(Max8192Args)
-            ->UseManualTime();
-        benchmark::RegisterBenchmark(
-            "BM_pgm_dispatch/tensix_eth_2_4_shadow",
-            BM_pgm_dispatch,
-            TestInfo{
-                .warmup_iterations = 5000,
-                .slow_kernel_cycles = 40000,
-                .nfast_kernels = 4,
-                .n_args = 16,
-                .n_kgs = std::get<0>(core_count),
-                .erisc_enabled = true,
-                .use_trace = true,
-                .use_all_cores = true})
+                .dispatch_from_eth = true})
             ->Apply(Max8192Args)
             ->UseManualTime();
     }

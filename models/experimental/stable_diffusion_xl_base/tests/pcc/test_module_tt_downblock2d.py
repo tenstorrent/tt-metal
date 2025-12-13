@@ -35,7 +35,9 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
     torch_downblock = unet.down_blocks[0]
 
     model_config = ModelOptimisations()
-    tt_downblock = TtDownBlock2D(device, state_dict, f"down_blocks.0", model_config=model_config, debug_mode=debug_mode)
+    tt_downblock = TtDownBlock2D(
+        device, state_dict, f"down_blocks.0", model_config=model_config, has_downsample=True, debug_mode=debug_mode
+    )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -54,6 +56,7 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

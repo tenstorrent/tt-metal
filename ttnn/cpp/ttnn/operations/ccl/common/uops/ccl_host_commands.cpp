@@ -9,13 +9,12 @@
 #include <tt_stl/overloaded.hpp>
 
 #include <variant>
-namespace ttnn::ccl::cmd {
 
 // This file defines commands that are resolved on a per worker level. This is the lowest level of
 // command description (Intermediate Representation if you will) before being lowered directly to
 // Ccl Command Process KernelCommands
 
-namespace uops {
+namespace ttnn::ccl::cmd::uops {
 
 CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(
     ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id) {
@@ -487,6 +486,4 @@ CclHostLowLevelWorkerCommand fabric_multicast_noc_write_burst_from_cb(
     );
 }
 
-}  // namespace uops
-
-}  // namespace ttnn::ccl::cmd
+}  // namespace ttnn::ccl::cmd::uops

@@ -42,12 +42,12 @@
 #include "impl/dispatch/command_queue_common.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
                             }
                         } else {
                             uint32_t* pcie_addr = ((uint32_t*)pcie_base) + offset;
-                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)&blank[0], page_size_g);
+                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)blank.data(), page_size_g);
                         }
                         page++;
                     }

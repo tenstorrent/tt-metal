@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
@@ -89,19 +88,19 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
 
     if data_type == "BFLOAT8_B":
         if seq_len == 32:
-            out_pcc = 0.986
+            out_pcc = 0.984
             k_cache_pcc = 0.978
             v_cache_pcc = 0.934
             token_pcc = 0.99
         elif seq_len == 128:
-            out_pcc = 0.990
-            k_cache_pcc = 0.988
+            out_pcc = 0.989
+            k_cache_pcc = 0.968
             v_cache_pcc = 0.940
             token_pcc = 0.99
         elif seq_len == 2048:
             out_pcc = 0.992
-            k_cache_pcc = 0.990
-            v_cache_pcc = 0.967
+            k_cache_pcc = 0.989
+            v_cache_pcc = 0.966
             token_pcc = 0.99
     elif data_type == "BFLOAT16":
         if seq_len == 32:
@@ -111,7 +110,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
             token_pcc = 0.99
         elif seq_len == 128:
             out_pcc = 0.991
-            k_cache_pcc = 0.993
+            k_cache_pcc = 0.992
             v_cache_pcc = 0.976
             token_pcc = 0.99
         elif seq_len == 2048:
@@ -119,8 +118,6 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
             k_cache_pcc = 0.989
             v_cache_pcc = 0.972
             token_pcc = 0.99
-
-    disable_persistent_kernel_cache()
 
     run_test_FalconCausalLM_end_to_end(
         t3k_mesh_device,

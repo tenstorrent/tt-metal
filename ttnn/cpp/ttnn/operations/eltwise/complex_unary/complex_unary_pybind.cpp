@@ -26,23 +26,14 @@ void bind_complex_unary_tensor(
         R"doc(
         {2}
 
-
         Args:
             input_tensor (ComplexTensor): the input tensor.
-
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
-
-
-        Example:
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(tensor)
-
 
         )doc",
 
@@ -70,24 +61,14 @@ void bind_complex_unary_complextensor(
         R"doc(
         {2}
 
-
         Args:
             input_tensor (ComplexTensor): the input tensor.
-
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory config for the operation. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
-
-
-        Example:
-
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device = device)
-            >>> output = {1}(tensor)
-
 
         )doc",
 

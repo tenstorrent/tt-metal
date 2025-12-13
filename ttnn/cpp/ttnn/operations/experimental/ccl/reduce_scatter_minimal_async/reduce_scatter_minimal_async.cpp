@@ -29,11 +29,12 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "DEBUG: using composite_reduce_scatter");
         return composite_common::composite_reduce_scatter(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, num_links, topology, memory_config, subdevice_id, cluster_axis);
     } else {
         log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
         return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
@@ -45,7 +46,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
             num_links,
             memory_config,
             intermediate_memory_config,
-            topology,
+            topology_,
             subdevice_id,
             cluster_axis,
             chunks_per_sync,

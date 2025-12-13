@@ -10,8 +10,14 @@
  */
 namespace NAMESPACE {
 void MAIN {
+    // Wait for BRISC to signal it is done writing to CB, then call DPRINT
+    UNPACK(mailbox_read(ThreadId::BriscThreadId););
     DPRINT_UNPACK(DPRINT << "Test Debug Print: Unpack" << ENDL(); print_test_data(););
+
+    MATH(mailbox_read(ThreadId::BriscThreadId););
     DPRINT_MATH(DPRINT << "Test Debug Print: Math" << ENDL(); print_test_data(););
+
+    PACK(mailbox_read(ThreadId::BriscThreadId););
     DPRINT_PACK(DPRINT << "Test Debug Print: Pack" << ENDL(); print_test_data(););
 }
 }  // namespace NAMESPACE

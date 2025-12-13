@@ -45,17 +45,13 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 namespace detail {
 static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorMemoryLayout& tensor_memory_layout) {
@@ -794,14 +790,19 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
-TEST_F(Conv2dOpIfTest, Conv2d) {
+class Conv2dOpIfTest
+    : public ttnn::TTNNFixtureWithDevice,
+      public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
+
+TEST_P(Conv2dOpIfTest, Conv2d) {
+    const auto& conv2d_config = GetParam();
+
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+            ttnn::L1_MEMORY_CONFIG));
     const auto weight_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 1568, 64},
         tt::tt_metal::TensorLayout(
@@ -846,21 +847,25 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             groups,
             std::nullopt,
             std::nullopt,
-            std::nullopt,
+            conv2d_config,
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
-        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 10000);
+        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 200000 : 150000;
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
+        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 400000 : 350000;
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+INSTANTIATE_TEST_SUITE_P(
+    Conv2dConfigVariations,
+    Conv2dOpIfTest,
+    ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
+
+}  // namespace ttnn::operations::binary::test

@@ -46,6 +46,35 @@ From within the `ttnn/tutorials` directory, launch the notebooks with:
 jupyter lab --no-browser --port=8888
 ```
 
+## Tools and Instruments
+
+### [TT-Triage](https://github.com/tenstorrent/tt-metal/blob/main/tools/triage/tt-triage.md)
+The TT-Triage tool diagnoses failures by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores. It identifies running kernels and provides callstack data for troubleshooting.
+
+### [TT-NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
+A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
+
+### [TT-Exalens](https://github.com/tenstorrent/tt-exalens)
+The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
+
+### [TT-SMI](https://github.com/tenstorrent/tt-smi)
+The TT-SMI repository describes the Tenstorrent System Management Interface. This command line utility can interact with Tenstorrent devices on host. TT-SMI provides an easy to use interface displaying device, telemetry, and firmware information.
+
+### [Model Explorer](https://github.com/tenstorrent/model-explorer)
+The Model Explorer is an intuitive and hierarchical visualization tool using model graphs. It organizes model operations into nested layers and provides features for model exploration and debugging.
+
+### [Tracy Profiler](https://github.com/tenstorrent/tracy)
+The Tracy Profiler is a real-time nanosecond resolution, remote telemetry, hybrid frame, and sampling tool. Tracy supports profiling CPU, GPU, memory allocation, locks, context switches, and more.
+
+### [Kernel Print Debug](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html)
+DPRINT can print variables, addresses, and circular buffer data from kernels to the host terminal or log file. This feature is useful for debugging issues with kernels.
+
+### [Watcher](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/watcher.rst)
+Watcher monitors firmware and kernels for common programming errors, and overall device status. If an error or hang occurs, Watcher displays log data of that occurrence.
+
+### [Inspector](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/inspector.rst)
+Inspector provides insights into host runtime. It logs necessary data for investigation and allows queries to host runtime data.
+
 ## For Contributors
 
 ### Linking TT-NN with your C++ projects

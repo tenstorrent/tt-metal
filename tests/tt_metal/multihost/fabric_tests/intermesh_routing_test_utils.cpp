@@ -8,10 +8,9 @@
 #include <random>
 #include <stdint.h>
 
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -20,10 +19,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
@@ -550,7 +546,4 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     return physical_chip_ids_mapping;
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost_utils

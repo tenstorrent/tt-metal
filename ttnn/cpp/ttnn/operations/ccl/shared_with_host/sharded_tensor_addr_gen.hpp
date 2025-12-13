@@ -25,14 +25,15 @@
 
 using noc_grid_index_t = std::uint8_t;
 
-namespace tt {
-namespace tt_metal {
-
-namespace address_generators {
-
+namespace tt::tt_metal::address_generators {
 
 template <typename ArchSpecificWorkerToNocLookup>
 struct WorkerToNocCoordLookup {
+private:
+    WorkerToNocCoordLookup() = default;
+    friend ArchSpecificWorkerToNocLookup;
+
+public:
     noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
         return ArchSpecificWorkerToNocLookup::get_noc_x_from_worker_x(worker_x);
     }
@@ -115,6 +116,8 @@ struct test_shard_location_with_contig_t {
  * This is the base class, to be inherited by each shard strategy */
 template <typename shard_type_device_shard_spec_t>
 struct device_shard_spec_t {
+private:
+    friend shard_type_device_shard_spec_t;
     constexpr device_shard_spec_t(
         uint8_t shard_grid_height,
         uint8_t shard_grid_width,
@@ -127,6 +130,7 @@ struct device_shard_spec_t {
         shard_grid_start_x_logical(shard_grid_start_x_logical),
         transposed_grid(transposed_grid) {}
 
+public:
     uint8_t shard_grid_height;
     uint8_t shard_grid_width;
     uint8_t shard_grid_start_y_logical;
@@ -612,7 +616,4 @@ using DefaultVirtualCoordWidthShardedAddressGenerator = WidthShardedAddressGener
 using DefaultVirtualCoordHeightShardedAddressGenerator = HeightShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
 using DefaultVirtualCoordBlockShardedAddressGenerator = BlockShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
 
-
-}  // namespace address_generators
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::address_generators

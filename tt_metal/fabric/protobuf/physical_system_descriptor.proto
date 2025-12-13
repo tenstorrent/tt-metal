@@ -90,6 +90,12 @@ message ExitNodeConnectionTable {
     repeated ExitNodeConnection exit_connections = 2;
 }
 
+message EthernetFirmwareVersion {
+    uint32 major = 1;
+    uint32 minor = 2;
+    uint32 patch = 3;
+}
+
 // Top-level Physical System Descriptor message
 message PhysicalSystemDescriptor {
     PhysicalConnectivityGraph system_graph = 1;
@@ -97,5 +103,6 @@ message PhysicalSystemDescriptor {
     repeated HostToMoboMap host_to_mobo_name = 3;
     repeated HostToRankMap host_to_rank = 4;
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
-    bool mock_cluster = 6;
+    uint32 target_device_type = 6;
+    EthernetFirmwareVersion ethernet_firmware_version = 7;
 }

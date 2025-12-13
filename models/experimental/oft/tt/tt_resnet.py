@@ -131,7 +131,8 @@ class TTResNetFeatures:
                 padding=(conv_pt.maxpool.padding, conv_pt.maxpool.padding),
                 dilation=(conv_pt.maxpool.dilation, conv_pt.maxpool.dilation),
                 deallocate_input=True,
-                in_place=True,
+                output_layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
             ),
             device=device,
         )
@@ -252,6 +253,9 @@ class TTResNetFeatures:
         host_gn = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
         host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2).reshape(1, 64, 192, 640)
 
+        # typecast to bfloat8_b for maxpool to stay in L1
+        # cannot change previous op output, as groupnorm uses bfloat16-only
+        conv1 = ttnn.typecast(conv1, ttnn.bfloat8_b)
         conv_1 = self.maxpool(conv1)
 
         conv_1 = ttnn.to_memory_config(

@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -13,14 +13,17 @@
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace {
 
-constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
 constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
@@ -38,6 +41,48 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
     control_plane->initialize_fabric_context(kFabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
+
+    return control_plane;
+}
+
+constexpr auto kFabricConfig1D = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+
+// Helper struct to keep dependencies alive for RoutingTableGenerator tests
+struct RoutingTableGeneratorTestHelper {
+    std::unique_ptr<tt::tt_fabric::MeshGraph> mesh_graph;
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper;
+    std::unique_ptr<tt::tt_fabric::RoutingTableGenerator> routing_table_generator;
+
+    RoutingTableGeneratorTestHelper(const std::string& mesh_graph_desc_file) {
+        mesh_graph = std::make_unique<tt::tt_fabric::MeshGraph>(mesh_graph_desc_file);
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& driver = cluster.get_driver();
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+            driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+        tt::tt_fabric::LocalMeshBinding local_mesh_binding;
+        local_mesh_binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
+        local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+
+        topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            *mesh_graph, *physical_system_descriptor, local_mesh_binding);
+
+        routing_table_generator = std::make_unique<tt::tt_fabric::RoutingTableGenerator>(*topology_mapper);
+    }
+};
+
+// Helper function to create RoutingTableGenerator for tests
+std::unique_ptr<RoutingTableGeneratorTestHelper> make_routing_table_generator(const std::string& mesh_graph_desc_file) {
+    return std::make_unique<RoutingTableGeneratorTestHelper>(mesh_graph_desc_file);
+}
+
+std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+    control_plane->initialize_fabric_context(kFabricConfig1D);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig1D, kReliabilityMode);
 
     return control_plane;
 }
@@ -78,10 +123,18 @@ TEST(MeshGraphValidation, TestMGDConnections) {
     EXPECT_EQ(rev_count, 1);
 }
 
+TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    tt::tt_metal::MetalContext::instance().get_control_plane();
+}
+
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph_desc(t3k_mesh_graph_desc_path.string());
     EXPECT_EQ(
         mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
@@ -91,14 +144,14 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
 
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
@@ -115,18 +168,46 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestT3k1x8FabricRoutes) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane_1d(t3k_mesh_graph_desc_path);
+
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test that all forwarding directions are valid
+    auto src_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    for (unsigned int x = 1; x < 8; ++x) {
+        auto dst_fabric_node_id = FabricNodeId(MeshId{0}, x);
+        auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        EXPECT_EQ(forwarding_direction.has_value(), true);
+    }
+}
+
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
-    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
-    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
 
     // Test routing from first chip (0) to last chip (31) in the 1x32 topology
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
@@ -142,6 +223,14 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
         EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test that all forwarding directions are valid
+    auto src_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    for (unsigned int x = 1; x < 32; ++x) {
+        auto dst_fabric_node_id = FabricNodeId(MeshId{0}, x);
+        auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        EXPECT_EQ(forwarding_direction.has_value(), true);
     }
 }
 
@@ -227,8 +316,66 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml";
-    [[maybe_unused]] auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
+
+    // Create physical system descriptor to access ASIC information
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+    // Test that fabric node id 0 maps to a valid ASIC location and tray id
+    FabricNodeId fabric_node_id_0(MeshId{0}, 0);
+    auto physical_chip_id_0 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_0);
+    const auto& chip_unique_ids = cluster.get_unique_chip_ids();
+    uint64_t asic_id_0 = 0;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (chip_id == physical_chip_id_0) {
+            asic_id_0 = unique_id;
+            break;
+        }
+    }
+    EXPECT_GT(asic_id_0, 0) << "ASIC ID should be greater than 0 for fabric node id 0";
+    auto tray_id_0 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_0});
+    auto asic_location_0 = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_0});
+    EXPECT_GT(*tray_id_0, 0) << "Tray ID should be greater than 0 for fabric node id 0";
+    EXPECT_GE(*asic_location_0, 0) << "ASIC location should be non-negative for fabric node id 0";
+
+    // Test that fabric node id 1 maps to tray 1, ASIC location 5 (per pinnings)
+    FabricNodeId fabric_node_id_1(MeshId{0}, 1);
+    auto physical_chip_id_1 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_1);
+    uint64_t asic_id_1 = 0;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (chip_id == physical_chip_id_1) {
+            asic_id_1 = unique_id;
+            break;
+        }
+    }
+    EXPECT_GT(asic_id_1, 0) << "ASIC ID should be greater than 0 for fabric node id 1";
+    auto tray_id_1 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_1});
+    auto asic_location_1 = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_1});
+    EXPECT_EQ(*tray_id_1, 1) << "Fabric node id 1 should map to tray ID 1";
+    EXPECT_EQ(*asic_location_1, 5) << "Fabric node id 1 should map to ASIC location 5";
+
+    // Test that fabric node id y_size (4) maps to tray 1, ASIC location 2 (per pinnings)
+    int y_size = control_plane->get_physical_mesh_shape(MeshId{0})[1];
+    FabricNodeId fabric_node_id_y_size(MeshId{0}, y_size);
+    auto physical_chip_id_y_size = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_y_size);
+    uint64_t asic_id_y_size = 0;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (chip_id == physical_chip_id_y_size) {
+            asic_id_y_size = unique_id;
+            break;
+        }
+    }
+    EXPECT_GT(asic_id_y_size, 0) << "ASIC ID should be greater than 0 for fabric node id " << y_size;
+    auto tray_id_y_size = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_y_size});
+    auto asic_location_y_size = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_y_size});
+    EXPECT_EQ(*tray_id_y_size, 1) << "Fabric node id " << y_size << " should map to tray ID 1";
+    EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
@@ -236,13 +383,17 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], MeshId{0});
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(8, 4));
+    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
+    EXPECT_TRUE(
+        mesh_shape == tt::tt_metal::distributed::MeshShape(8, 4) ||
+        mesh_shape == tt::tt_metal::distributed::MeshShape(4, 8))
+        << "Expected mesh shape to be either 8x4 or 4x8, got: (" << mesh_shape[0] << "x" << mesh_shape[1] << ")";
 }
 
 TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
     const std::filesystem::path t3k_dual_host_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
     tt_fabric::MeshGraph mesh_graph(t3k_dual_host_mesh_graph_desc_path.string());
 
     EXPECT_THAT(mesh_graph.get_mesh_ids(), ElementsAre(MeshId{0}));
@@ -279,7 +430,7 @@ TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
 TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
     const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
     tt_fabric::MeshGraph mesh_graph(t3k_2x2_mesh_graph_desc_path.string());
 
     // This configuration has two meshes (id 0 and id 1)
@@ -336,7 +487,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     // Test with dual host T3K configuration
     const std::filesystem::path t3k_dual_host_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
     tt_fabric::MeshGraph mesh_graph(t3k_dual_host_mesh_graph_desc_path.string());
 
     // Test valid chips for mesh 0
@@ -363,7 +514,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     // Test with single host T3K configuration
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
     tt_fabric::MeshGraph mesh_graph_single_host(t3k_mesh_graph_desc_path.string());
 
     // In single host configuration, all chips should belong to host rank 0
@@ -374,7 +525,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     // Test with 2x2 configuration (two separate meshes)
     const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
     tt_fabric::MeshGraph mesh_graph_2x2(t3k_2x2_mesh_graph_desc_path.string());
 
     // Each mesh has only one host rank (0)
@@ -392,7 +543,7 @@ TEST(MeshGraphValidation, TestExplicitShapeValidationNegative) {
     // Test that invalid shapes are properly rejected
     const std::filesystem::path invalid_shape_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_invalid_shape_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_invalid_shape_mesh_graph_descriptor.textproto";
 
     // This should throw an exception due to incompatible shape
     EXPECT_THROW(tt_fabric::MeshGraph(invalid_shape_mesh_graph_desc_path.string()), std::exception);
@@ -412,7 +563,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyMesh) {
     using namespace single_galaxy_constants;
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph(mesh_graph_desc_path.string());
     const auto& intra_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity();
 
@@ -479,9 +630,9 @@ TEST(RoutingTableValidation, TestSingleGalaxyMesh) {
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);
@@ -508,7 +659,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXY) {
     using namespace single_galaxy_constants;
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
     MeshGraph mesh_graph(mesh_graph_desc_path.string());
     const auto& intra_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity();
 
@@ -553,9 +704,9 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusXY) {
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::W);
@@ -582,7 +733,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusX) {
     using namespace single_galaxy_constants;
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto";
     MeshGraph mesh_graph(mesh_graph_desc_path.string());
     const auto& intra_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity();
 
@@ -639,9 +790,9 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusX) {
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.yaml";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto";
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::W);
@@ -668,7 +819,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusY) {
     using namespace single_galaxy_constants;
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.textproto";
     MeshGraph mesh_graph(mesh_graph_desc_path.string());
     const auto& intra_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity();
 
@@ -726,9 +877,9 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
     // Testing XY dimension order routing, if algorithm changes we can remove this test
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.yaml";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.textproto";
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);
@@ -754,7 +905,7 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
 TEST(MeshGraphValidation, TestDualGalaxyMeshGraph) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph_desc(mesh_graph_desc_path.string());
     EXPECT_EQ(
         mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
@@ -767,7 +918,7 @@ TEST(MeshGraphValidation, TestDualGalaxyMeshGraph) {
 TEST(MeshGraphValidation, TestSingleGalaxy1x32MeshGraph) {
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph_desc(galaxy_6u_mesh_graph_desc_path.string());
 
     // Verify the mesh has correct topology for 1x32 Galaxy configuration
@@ -787,7 +938,7 @@ TEST(MeshGraphValidation, TestSingleGalaxy1x32MeshGraph) {
 TEST(MeshGraphValidation, TestP150BlackHoleMeshGraph) {
     const std::filesystem::path p150_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph(p150_mesh_graph_desc_path.string());
 
     EXPECT_THAT(mesh_graph.get_mesh_ids(), ElementsAre(MeshId{0}));
@@ -801,14 +952,14 @@ TEST(MeshGraphValidation, TestP150BlackHoleMeshGraph) {
 TEST_F(ControlPlaneFixture, TestP150BlackHoleControlPlaneInit) {
     const std::filesystem::path p150_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(p150_mesh_graph_desc_path);
 }
 
 TEST(MeshGraphValidation, TestP100BlackHoleMeshGraph) {
     const std::filesystem::path p100_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph(p100_mesh_graph_desc_path.string());
 
     EXPECT_THAT(mesh_graph.get_mesh_ids(), ElementsAre(MeshId{0}));
@@ -822,14 +973,14 @@ TEST(MeshGraphValidation, TestP100BlackHoleMeshGraph) {
 TEST_F(ControlPlaneFixture, TestP100BlackHoleControlPlaneInit) {
     const std::filesystem::path p100_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(p100_mesh_graph_desc_path);
 }
 
 TEST(MeshGraphValidation, TestP150X8BlackHoleMeshGraph) {
     const std::filesystem::path p150_x8_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
     MeshGraph mesh_graph(p150_x8_mesh_graph_desc_path.string());
 
     EXPECT_THAT(mesh_graph.get_mesh_ids(), ElementsAre(MeshId{0}));
@@ -845,14 +996,14 @@ TEST(MeshGraphValidation, TestP150X8BlackHoleMeshGraph) {
 TEST_F(ControlPlaneFixture, TestP150X8BlackHoleControlPlaneInit) {
     const std::filesystem::path p150_x8_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(p150_x8_mesh_graph_desc_path);
 }
 
 TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
     const std::filesystem::path p150_x8_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(p150_x8_mesh_graph_desc_path);
 
     // Test routing between different chips in the 2x4 mesh
@@ -864,4 +1015,50 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
     }
 }
 
+// Test that FabricConfig can restrict torus topology to mesh (ignore wrap-around links)
+TEST(MeshGraphValidation, TestFabricConfigOverrideTorusToMesh) {
+    using namespace single_galaxy_constants;
+    // Use existing torus XY MGD - this MGD has physical wrap-around connections
+    const std::filesystem::path torus_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
+
+    // Test 1: Without FabricConfig - should respect dim_types (RING = torus with wrap-around)
+    {
+        MeshGraph mesh_graph_no_override(torus_mgd_path.string());
+        const auto& connectivity = mesh_graph_no_override.get_intra_mesh_connectivity();
+
+        // In torus, NW corner (chip 0) should have wrap-around connections
+        const auto& nw_connections = connectivity[0][nw_fabric_id];
+        // Should have all 4 directions due to wrap-around
+        EXPECT_GT(nw_connections.size(), 2);  // More than just E and S
+        // Check wrap-around exists (W and N)
+        EXPECT_GT(nw_connections.count(3), 0);  // Has W connection (wrap-around)
+    }
+
+    // Test 2: With FabricConfig=FABRIC_2D - should restrict to mesh (ignore wrap-around links)
+    {
+        MeshGraph mesh_graph_override(torus_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+        const auto& connectivity = mesh_graph_override.get_intra_mesh_connectivity();
+
+        // In mesh mode, NW corner should only have E and S connections (ignore wrap-around)
+        const auto& nw_connections = connectivity[0][nw_fabric_id];
+        EXPECT_EQ(nw_connections.size(), 2);    // Only E and S
+        EXPECT_EQ(nw_connections.count(3), 0);  // No W connection (wrap-around ignored)
+    }
+}
+
+// Test that FabricConfig cannot create topology that doesn't physically exist (mesh→torus)
+TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
+    using namespace single_galaxy_constants;
+    // Use existing mesh MGD - this MGD does NOT have physical wrap-around connections
+    const std::filesystem::path mesh_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+
+    // Attempting to override mesh to torus should throw - cannot create connections that don't exist
+    EXPECT_THROW(
+        { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
+        std::runtime_error);
+}
 }  // namespace tt::tt_fabric::fabric_router_tests

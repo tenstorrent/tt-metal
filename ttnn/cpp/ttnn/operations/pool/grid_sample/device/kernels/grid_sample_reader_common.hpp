@@ -11,7 +11,8 @@
 #define ALWI inline __attribute__((always_inline))
 
 // Constants shared between interleaved and sharded kernels
-constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
+constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;          // For bilinear mode
+constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2;  // For nearest mode
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
 
 // Data type constants (from ttnn/api/ttnn/tensor/types.hpp DataType enum)

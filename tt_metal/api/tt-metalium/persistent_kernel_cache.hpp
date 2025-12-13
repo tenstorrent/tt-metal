@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <atomic>
-
 namespace tt::tt_metal::detail {
 
 /**
@@ -14,6 +12,7 @@ namespace tt::tt_metal::detail {
  *
  * Return value: void
  */
+[[deprecated("Persistent kernel cache is no longer needed as the JIT build system now supports caching by default.  This API will be removed after December 11, 2025.")]]
 void EnablePersistentKernelCache();
 
 /**
@@ -21,6 +20,7 @@ void EnablePersistentKernelCache();
  *
  * Return value: void
  */
+[[deprecated("Persistent kernel cache is no longer needed as the JIT build system now supports caching by default.  This API will be removed after December 11, 2025.")]]
 void DisablePersistentKernelCache();
 
 }  // namespace tt::tt_metal::detail

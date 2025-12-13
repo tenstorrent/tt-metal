@@ -339,9 +339,11 @@ struct NocUnicastScatterWriteFields {
     template <bool IS_SOURCE>
     static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
         uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t chunk_count = get_local_arg_val<uint32_t>(arg_idx++);
+        ASSERT(chunk_count == MAX_CHUNKS, "scatter chunk_count must be equal to 2 for tt_fabric perf microbenchmarks");
 
-        std::array<uint32_t, MAX_CHUNKS> dst_addresses;
-        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+        std::array<uint32_t, MAX_CHUNKS> dst_addresses{};
+        for (uint32_t i = 0; i < chunk_count; i++) {
             dst_addresses[i] = get_local_arg_val<uint32_t>(arg_idx++);
         }
 
@@ -350,25 +352,29 @@ struct NocUnicastScatterWriteFields {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
 
-        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
-        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
-            chunk_sizes[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes{};
+        for (uint32_t i = 0; i < (chunk_count - 1); i++) {
+            chunk_sizes[i] = static_cast<uint16_t>(get_local_arg_val<uint32_t>(arg_idx++));
         }
 
-        return NocUnicastScatterWriteFields(payload_size_bytes, dst_addresses, chunk_sizes, dst_noc_encoding);
+        return NocUnicastScatterWriteFields(
+            payload_size_bytes, static_cast<uint8_t>(chunk_count), dst_addresses, chunk_sizes, dst_noc_encoding);
     }
 
     NocUnicastScatterWriteFields(
         uint32_t payload_size_bytes,
+        uint8_t chunk_count,
         const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
         const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
         uint32_t dst_noc_encoding) :
         payload_size_bytes(payload_size_bytes),
+        chunk_count(chunk_count),
         dst_addresses(dst_addresses),
         chunk_sizes(chunk_sizes),
         dst_noc_encoding(dst_noc_encoding) {}
 
     uint32_t payload_size_bytes;
+    uint8_t chunk_count;
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     uint32_t dst_noc_encoding;
@@ -402,18 +408,17 @@ void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFie
  * Template-based dispatch system for chip send type handling.
  * Specialized for:
  * - 1D vs 2D fabric routing
- * - Dynamic vs static routing modes
  * - Unicast vs multicast transmission
  */
-template <ChipSendType chip_type, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+template <ChipSendType chip_type, bool IS_2D_FABRIC>
 struct ChipSendTypeHandler {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header);
 };
 
 // 1D Unicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
@@ -422,25 +427,19 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTIN
 };
 
 // 2D Unicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
-        if constexpr (USE_DYNAMIC_ROUTING) {
-            setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
-        } else {
-            fabric_set_unicast_route(
-                (HybridMeshPacketHeader*)packet_header_address,
-                unicast_fields.dst_device_id,
-                unicast_fields.dst_mesh_id);
-        }
+        fabric_set_unicast_route(
+            (HybridMeshPacketHeader*)packet_header_address, unicast_fields.dst_device_id, unicast_fields.dst_mesh_id);
     }
 };
 
 // 1D Multicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields1D::build_from_args(arg_idx);
@@ -450,16 +449,12 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUT
 };
 
 // 2D Multicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields2D::build_from_args(arg_idx);
-        if constexpr (USE_DYNAMIC_ROUTING) {
-            setup_2d_mcast_route<MeshPacketHeader>(packet_header_address, mcast_fields);
-        } else {
-            setup_2d_mcast_route<HybridMeshPacketHeader>(packet_header_address, mcast_fields);
-        }
+        setup_2d_mcast_route<HybridMeshPacketHeader>(packet_header_address, mcast_fields);
     }
 };
 
@@ -729,10 +724,10 @@ struct LineSyncConfig {
         }
     }
 
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC, ChipSendType CHIP_SEND_TYPE>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
         // setup header fields. 2 rt args for 1D
-        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+        ChipSendTypeHandler<CHIP_SEND_TYPE, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
         // set up noc fields, 4 rt args
@@ -975,15 +970,15 @@ struct SenderKernelTrafficConfig {
         noc_ops_.update_header = nullptr;
     }
 
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void parse_and_setup_chip_send_type(size_t& arg_idx, uint32_t packet_header_address) {
         ChipSendType chip_send_type = static_cast<ChipSendType>(get_local_arg_val<uint32_t>(arg_idx++));
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
-            ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC>::parse_and_setup(
                 arg_idx, packet_header_address, packet_header);
         } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
-            ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC>::parse_and_setup(
                 arg_idx, packet_header_address, packet_header);
         } else {
             ASSERT(false);
@@ -1206,14 +1201,13 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
 inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
     auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
 
-    // Build the scatter command header
-    NocUnicastScatterCommandHeader scatter_header;
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
-        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[i]);
-    }
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
-    }
+    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
+    const auto scatter_header = NocUnicastScatterCommandHeader(
+        {
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0]),
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1]),
+        },
+        {fields.chunk_sizes[0]});
 
     config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
     config->noc_fields_.scatter_write_fields = fields;
@@ -1223,17 +1217,14 @@ inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTr
 inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
     const auto& fields = config->noc_fields_.scatter_write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
+    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
 
-    // Build the scatter command header with updated addresses
-    NocUnicastScatterCommandHeader scatter_header;
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
-        uint32_t dest_address = fields.dst_addresses[i] + buffer_offset;
-        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
-    }
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
-    }
-
+    const auto scatter_header = NocUnicastScatterCommandHeader(
+        {
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0] + buffer_offset),
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1] + buffer_offset),
+        },
+        {fields.chunk_sizes[0]});
     config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
 }
 
@@ -1503,7 +1494,6 @@ private:
 template <
     uint8_t NUM_TRAFFIC_CONFIGS,
     bool IS_2D_FABRIC,
-    bool USE_DYNAMIC_ROUTING,
     bool LINE_SYNC,
     uint8_t NUM_LOCAL_SYNC_CORES>
 struct SenderKernelConfig {
@@ -1621,7 +1611,7 @@ private:
             // Initialize traffic config with connection array pointer and index
             new (config_ptr) TrafficConfigType(&connections, fabric_connection_idx, metadata, packet_header_address);
 
-            traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+            traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC>(
                 local_args_idx, packet_header_address);
 
             traffic_config_ptrs[i]->parse_and_setup_noc_send_type(local_args_idx);
@@ -1646,9 +1636,9 @@ private:
 struct ReceiverCreditManager {
     ReceiverCreditManager() : credit_fields_(0, 0, 0) {}
 
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+        ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header_);
 
         credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
@@ -1658,7 +1648,7 @@ struct ReceiverCreditManager {
     }
 
     // Initialize with credit info and fabric connection array
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void init(
         size_t& arg_idx, FabricConnectionArray* connections, uint8_t connection_idx, uint32_t credit_header_address) {
         connection_manager_ = connections;
@@ -1674,7 +1664,7 @@ struct ReceiverCreditManager {
         }
 
         packet_header_ = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(credit_header_address);
-        setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(arg_idx, credit_header_address);
+        setup_packet_header<IS_2D_FABRIC>(arg_idx, credit_header_address);
     }
 
     // Called after each packet is processed
@@ -2025,7 +2015,7 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
 2.1. TrafficConfigCommonFields
 2.2. Noc send type fields
 */
-template <uint8_t NUM_TRAFFIC_CONFIGS, uint8_t NUM_CREDIT_CONNECTIONS, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+template <uint8_t NUM_TRAFFIC_CONFIGS, uint8_t NUM_CREDIT_CONNECTIONS, bool IS_2D_FABRIC>
 struct ReceiverKernelConfig {
     static ReceiverKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2125,7 +2115,7 @@ private:
                 // Allocate space for pre-built credit return header using memory map
                 const uint32_t credit_header_address = this->memory_map.get_credit_header_address();
                 const uint8_t connection_idx = traffic_config_to_credit_connection_map[i];
-                credit_managers_[i].template init<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                credit_managers_[i].template init<IS_2D_FABRIC>(
                     local_args_idx, &credit_connections, connection_idx, credit_header_address);
 
                 // Link the credit manager to this traffic config so advance() can call it automatically
@@ -2141,8 +2131,8 @@ private:
 template <
     uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
     bool IS_2D_FABRIC,
-    bool USE_DYNAMIC_ROUTING,
-    uint8_t NUM_LOCAL_SYNC_CORES>
+    uint8_t NUM_LOCAL_SYNC_CORES,
+    bool USE_UNICAST_SYNC_PACKETS>
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2216,7 +2206,9 @@ private:
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+            constexpr ChipSendType CHIP_SEND_TYPE =
+                USE_UNICAST_SYNC_PACKETS ? ChipSendType::CHIP_UNICAST : ChipSendType::CHIP_MULTICAST;
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, CHIP_SEND_TYPE>(
                 local_args_idx, packet_header_address);
         }
 

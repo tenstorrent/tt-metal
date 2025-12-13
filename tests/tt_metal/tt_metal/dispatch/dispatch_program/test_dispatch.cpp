@@ -58,7 +58,7 @@ static void test_sems_across_core_types(
     }
 
     for (const auto& mesh_device : devices) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         if (not device->is_mmio_capable()) {
             continue;
         }
@@ -150,7 +150,7 @@ static void test_sems_across_core_types(
 
 TEST_F(MeshDispatchFixture, EthTestBlank) {
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -224,7 +224,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -290,7 +290,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
 
         CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;

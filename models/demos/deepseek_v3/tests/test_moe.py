@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -11,6 +13,7 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
+from models.demos.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -52,12 +55,12 @@ def reference_model(hf_config):
 def test_forward_pass(
     mode,
     seq_len,
+    set_deterministic_env,
     reference_model,
     hf_config,
-    tmp_path,
+    cache_path,
     mesh_device,
     ccl,
-    set_deterministic_env,
     topk_fallback,
 ):
     """Test forward pass against reference model."""
@@ -78,8 +81,16 @@ def test_forward_pass(
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
+    weight_cache_path = (
+        cache_path
+        / "tests_cache"
+        / os.environ.get("PYTEST_CURRENT_TEST")
+        / f"{hf_config.num_hidden_layers}_layers"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, (state_dict,), weight_cache_path, mesh_device)
+    _check_weights_exist_and_convert(weight_cache_path, weight_config)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)

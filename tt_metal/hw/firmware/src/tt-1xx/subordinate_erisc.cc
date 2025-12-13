@@ -52,7 +52,9 @@ static_assert(
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MAILBOX_ADDR);
 volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = &mailboxes->subordinate_sync.dm1;
 
-uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
+// Note: This is just for the firmware
+// The kernel defines NOC_MODE and NOC_INDEX
+uint8_t noc_index = 0;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -86,6 +88,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 

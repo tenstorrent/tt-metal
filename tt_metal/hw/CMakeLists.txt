@@ -2,7 +2,6 @@
 set(ARCHS
     wormhole
     blackhole
-    quasar
 )
 set(PROCS
     brisc
@@ -15,11 +14,17 @@ set(PROCS
     aerisc
     main_aerisc
     subordinate_aerisc
-    dm=0
 )
 set(TYPES
     firmware
     kernel
+)
+
+set(TLS_ARCH_CPUS quasar:tt-qsr32:tt-qsr64)
+# name:cpu
+set(TLS_PROCS
+    trisc:tt-qsr32
+    dm:tt-qsr64
 )
 
 # for wormhole, we need to generate two different linker scripts
@@ -57,14 +62,14 @@ include(${SFPI_BASE}/sfpi-version.cmake)
 if(TT_USE_SYSTEM_SFPI)
     # we'll use the system's version
     set(SFPI_BASE "/opt/tenstorrent")
-elseif(NOT "${SFPI_md5}" STREQUAL "")
+elseif(NOT "${SFPI_hash}" STREQUAL "")
     # download a toolchain
     include(FetchContent)
     FetchContent_Declare(
         sfpi
         URL
             "${SFPI_url}/${SFPI_filename}"
-        URL_HASH "MD5=${SFPI_md5}"
+        URL_HASH "${SFPI_HASHTYPE}=${SFPI_hash}"
         SOURCE_DIR
         "${SFPI_BASE}/sfpi"
     )
@@ -163,77 +168,126 @@ if(NOT TT_USE_SYSTEM_SFPI)
     endif()
 endif()
 
+# old-style
 foreach(ARCH IN LISTS ARCHS)
-    if(ARCH STREQUAL "quasar")
-        set(HW_VERSION_PATH "tt-2xx")
-    else()
-        set(HW_VERSION_PATH "tt-1xx")
-    endif()
-
-    set(DEV_MEM_MAPS
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/dev_mem_map.h"
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/tensix_dev_map.h"
-    )
-    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}")
-    set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
+    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}")
+    set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
     if(ARCH STREQUAL "wormhole")
         foreach(SCRIPT_TYPE IN LISTS WH_LD_SCRIPTS)
             foreach(IRAM_OPT IN LISTS IRAM_OPTIONS)
                 if(IRAM_OPT)
-                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}_iram.ld")
+                    set(HW_OUTPUT_FILE "erisc-b0-${SCRIPT_TYPE}_iram.ld")
                     set(IRAM_FLAG "-D${IRAM_OPT}")
                     set(IRAM_COMMENT " with IRAM")
                 else()
-                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}.ld")
+                    set(HW_OUTPUT_FILE "erisc-b0-${SCRIPT_TYPE}.ld")
                     set(IRAM_FLAG "")
                     set(IRAM_COMMENT "")
                 endif()
 
                 add_custom_command(
                     OUTPUT
-                        ${OUTPUT_FILE}
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     COMMAND
-                        ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDES} -E -P -x c -o ${OUTPUT_FILE}
+                        ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDE} -E -P -x c -o
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                     DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
-                    COMMENT "Preprocessing toolchain/erisc-b0-${SCRIPT_TYPE}.ld${IRAM_COMMENT}"
+                        ${HW_INCLUDE}/dev_mem_map.h
+                    COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}${IRAM_COMMENT}"
                     VERBATIM
                 )
 
-                list(APPEND LD_FILES ${OUTPUT_FILE})
+                list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
             endforeach()
         endforeach()
     endif()
 
     foreach(PROC IN LISTS PROCS)
+        string(TOUPPER ${PROC} PROC_DEFINE)
         string(REPLACE "=" "" PROC_FILE "${PROC}")
         foreach(TYPE IN LISTS TYPES)
             set(HW_OUTPUT_FILE "${TYPE}_${PROC_FILE}.ld")
-            string(TOUPPER ${PROC} PROC_DEFINE)
             string(TOUPPER ${TYPE} TYPE_DEFINE)
 
             # custom command to preprocess/generate the output file
             add_custom_command(
                 OUTPUT
-                    ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                    ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
                 COMMAND
                     ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
-                    -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                    -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
+                    ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-                    ${DEV_MEM_MAPS}
-                COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
+                    ${HW_INCLUDE}/dev_mem_map.h
+                COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
                 VERBATIM
             )
 
             # add output file to the custom target
-            list(APPEND LD_FILES ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
+            list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
+        endforeach()
+    endforeach()
+endforeach()
+
+# TLS-style
+foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
+    string(REPLACE ":" ";" ARCH_CPU_LIST ${ARCH_CPU})
+    list(GET ARCH_CPU_LIST 0 ARCH)
+    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}")
+    set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
+    string(TOUPPER ${ARCH} ARCH_DEFINE)
+
+    foreach(PROC IN LISTS TLS_PROCS)
+        # PROC is NAME:CPU
+        string(REPLACE ":" ";" PROC_INFO ${PROC})
+        list(GET PROC_INFO 0 NAME)
+        list(GET PROC_INFO 1 CPU)
+
+        foreach(TYPE IN LISTS TYPES)
+            if(TYPE STREQUAL "firmware")
+                set(BOUND 0)
+            else()
+                set(BOUND 1)
+            endif()
+            # bounds are inclusive [0,NUM]
+            foreach(IX RANGE ${BOUND})
+                set(LGC "")
+                if(IX)
+                    set(LGC "_lgc")
+                endif()
+                set(HW_OUTPUT_FILE "${TYPE}_${NAME}${LGC}.ld")
+                string(TOUPPER "${TYPE}=${IX}" TYPE_DEFINE)
+                string(TOUPPER "${NAME}" PROC_DEFINE)
+
+                # custom command to preprocess/generate the output file
+                add_custom_command(
+                    OUTPUT
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                    COMMAND
+                        ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}
+                    COMMAND
+                        ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
+                        -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/script_tng.ld
+                    DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/script_tng.ld
+                    COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
+                    VERBATIM
+                )
+
+                # add output file to the custom target
+                list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
+            endforeach()
         endforeach()
     endforeach()
 endforeach()
@@ -265,17 +319,13 @@ set(GPP_FLAGS_common
 )
 
 # We are going to build 5 or 6 object files foreach ARCH
+# old-style
 foreach(ARCH IN LISTS ARCHS)
-    if(ARCH STREQUAL "quasar")
-        set(HW_VERSION_PATH "tt-2xx")
-    else()
-        set(HW_VERSION_PATH "tt-1xx")
-    endif()
     # These are the set of object files we are to build foreach ARCH
     set(HW_OBJ_SRC_PAIRS
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/noc.c"
+        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
     )
     set(ARCH_ALIAS ${ARCH})
@@ -289,13 +339,6 @@ foreach(ARCH IN LISTS ARCHS)
             "wh-iram-trampoline.o:tt_metal/hw/toolchain/wh-iram-trampoline.S"
         )
     endif()
-
-    # TODO quasar should use crt0.S, missing some header file
-    # if(ARCH STREQUAL "quasar")
-    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/crt0.S")
-    # else()
-    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S")
-    # endif()
 
     # Set GPP_FLAGS based on ARCH
     set(GPP_FLAGS
@@ -318,17 +361,16 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
     )
 
     # Architecture specific include paths
     list(
         APPEND
         GPP_INCLUDES
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/${ARCH_ALIAS}_defines
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/noc
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/overlay
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/${ARCH_ALIAS}_defines
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/overlay
         -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
@@ -347,16 +389,89 @@ foreach(ARCH IN LISTS ARCHS)
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
             COMMAND
-                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}
+                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OUTPUT_FILE}
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
             DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
-                # If the compiler changes, rebuild
-                ../sfpi-version
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
         )
+
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
+    endforeach()
+endforeach()
+
+# TLS-style
+foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
+    string(REPLACE ":" ";" CPUS ${ARCH_CPU})
+    list(GET CPUS 0 ARCH)
+    list(POP_FRONT CPUS)
+
+    # TODO:Review this list
+    set(GPP_INCLUDES
+        -I.
+        -I..
+        -I${PROJECT_SOURCE_DIR}
+        -I${PROJECT_SOURCE_DIR}/tt_metal
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+        -I${PROJECT_SOURCE_DIR}/tt_metal/include
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/common
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/llk_io
+    )
+    set(HW_OBJ_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib/${ARCH})
+    set(HW_OBJ_PATTERNS
+        "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
+        "crt0-tls.o:tt_metal/hw/toolchain/crt0-tls.S"
+        "crt0.o:tt_metal/hw/toolchain/crt0.S"
+        "noc.o:tt_metal/hw/firmware/src/tt-2xx/quasar/noc.c:tt-qsr64"
+    )
+    set(GPP_DEFINES -D${ARCH})
+
+    foreach(HW_PATTERN IN LISTS HW_OBJ_PATTERNS)
+        string(REPLACE ":" ";" HW_LIST ${HW_PATTERN})
+        list(LENGTH HW_LIST HW_LENGTH)
+        list(GET HW_LIST 0 HWOBJ)
+        list(GET HW_LIST 1 HWSRC)
+        if(HW_LENGTH GREATER 2)
+            list(GET HW_LIST 2 HWCPUS)
+            string(REPLACE " " ";" HWCPUS ${HWCPUS})
+        else()
+            set(HWCPUS ${CPUS})
+        endif()
+        foreach(CPU IN LISTS CPUS)
+            list(FIND HWCPUS ${CPU} HWENABLE)
+            if(HWENABLE LESS 0)
+                continue()
+            endif()
+            set(HW_OBJ_FILE "${CPU}-${HWOBJ}")
+
+            set(GPP_FLAGS
+                -mcpu=${CPU}
+                ${GPP_FLAGS_common}
+            )
+            add_custom_command(
+                OUTPUT
+                    ${HW_OBJ_DIR}/${HW_OBJ_FILE}
+                COMMAND
+                    ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
+                COMMAND
+                    ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HW_OBJ_FILE}
+                    ${PROJECT_SOURCE_DIR}/${HWSRC}
+                DEPENDS
+                    ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
+                    ${PROJECT_SOURCE_DIR}/${HWSRC}
+                COMMENT "Building ${ARCH}:${CPU} hw lib ${HW_OBJ_FILE} from ${HWSRC}"
+                VERBATIM
+            )
+            list(APPEND OBJ_FILES ${HW_OBJ_DIR}/${HW_OBJ_FILE})
+        endforeach()
     endforeach()
 endforeach()
 
@@ -421,7 +536,6 @@ target_sources(
             inc/tt-1xx/blackhole/stream_io_map.h
             inc/tt-1xx/blackhole/tdma_xmov.h
             inc/tt-1xx/blackhole/tensix.h
-            inc/tt-1xx/blackhole/tensix_dev_map.h
             inc/tt-1xx/blackhole/tensix_types.h
             inc/circular_buffer.h
             inc/circular_buffer_init.h
@@ -440,11 +554,12 @@ target_sources(
             inc/debug/fw_debug.h
             inc/debug/noc_logging.h
             inc/debug/ring_buffer.h
-            inc/debug/sanitize_noc.h
+            inc/debug/sanitize.h
             inc/debug/stack_usage.h
             inc/debug/watcher_common.h
             inc/debug/waypoint.h
             inc/dev_msgs.h
+            inc/fabric_telemetry_msgs.h
             inc/ethernet/dataflow_api.h
             inc/ethernet/erisc.h
             inc/ethernet/tt_eth_api.h
@@ -467,7 +582,6 @@ target_sources(
             inc/tt-2xx/quasar/stream_io_map.h
             inc/tt-2xx/quasar/tdma_xmov.h
             inc/tt-2xx/quasar/tensix.h
-            inc/tt-2xx/quasar/tensix_dev_map.h
             inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
@@ -492,7 +606,6 @@ target_sources(
             inc/tt-1xx/wormhole/stream_io_map.h
             inc/tt-1xx/wormhole/tdma_xmov.h
             inc/tt-1xx/wormhole/tensix.h
-            inc/tt-1xx/wormhole/tensix_dev_map.h
             inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
             inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
             inc/dataflow_api_addrgen.h

@@ -5,7 +5,7 @@ mesh_descriptors {
   arch: WORMHOLE_B0
   device_topology { dims: [ 8, 4 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
-  channels { count: 4 policy: STRICT }
+  channels { count: 4 policy: RELAXED }
 }
 
 # --- Instantiation ----------------------------------------------------------

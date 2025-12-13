@@ -17,9 +17,6 @@ def ti_cond_skip(condition, reason):
 def validate_test(num_devices, topology, shape, cluster_axis):
     ti_cond_skip((1 == num_devices), "Can't run a CCL test on 1 device")
     ti_cond_skip(
-        ((2 == num_devices) and (topology == ttnn.Topology.Ring)), "Ring configuration requires more than 2 devices"
-    )
-    ti_cond_skip(
         ((shape[cluster_axis] != num_devices) and (topology == ttnn.Topology.Ring)),
         "Ring configuration requires the entire row or column so it loops around",
     )

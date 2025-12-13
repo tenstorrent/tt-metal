@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/integral_image/intimg_pybind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_pybind.hpp"
@@ -30,6 +31,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
@@ -61,10 +63,9 @@ void py_module(py::module& module) {
     transformer::detail::bind_concatenate_heads(module);
     transformer::detail::bind_split_qkv(module);
     transformer::detail::bind_nlp_create_qkv_heads(module);
-    transformer::detail::bind_create_qkv_heads(module);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(module);
-    transformer::detail::bind_nlp_concat_heads(module);
-    transformer::detail::bind_nlp_concat_heads_decode(module);
+    nlp_concat_heads_decode::detail::bind_nlp_concat_heads_decode(module);
+    nlp_concat_heads::detail::bind_nlp_concat_heads(module);
     transformer::detail::bind_nlp_concat_heads_boltz(module);
     transformer::detail::bind_nlp_create_qkv_heads_decode(module);
     transformer::detail::bind_nlp_create_qkv_heads_falcon7b(module);
@@ -74,12 +75,16 @@ void py_module(py::module& module) {
     transformer::detail::bind_nlp_kv_cache_load_slice(module);
     transformer::detail::py_bind_all_reduce_create_qkv_heads(module);
 
+    transformer::py_bind_wan_fused_distributed_rmsnorm(module);
     transformer::py_bind_rotary_embedding(module);
     transformer::py_bind_rotary_embedding_llama(module);
     transformer::py_bind_rotary_embedding_llama_fused_qk(module);
     transformer::py_bind_rotate_half(module);
 
+    create_qkv_heads::detail::bind_create_qkv_heads(module);
+
     reduction::detail::bind_fast_reduce_nc(module);
+    reduction::detail::bind_reduction_intimg_operation(module);
 
     ssm::detail::bind_prefix_scan(module);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(module);

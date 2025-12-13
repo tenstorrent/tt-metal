@@ -13,7 +13,7 @@
 namespace ttnn::operations::transformer {
 
 void py_bind_sdpa_decode(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         A version of scaled dot product attention specifically for decode.
         The implementation is Flash-Decode and it currently only supports MQA on decoding single token.

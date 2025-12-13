@@ -28,14 +28,14 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tmp_pow_sum) {
-    auto& inputs = tensor_args.inputs;
+    const auto& inputs = tensor_args.inputs;
     auto norm_type = operation_attributes.norm_type;
     auto tile_offset_of_tmp_pow_sum = operation_attributes.tile_offset_of_tmp_pow_sum;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = tmp_pow_sum.device();
+    auto* device = tmp_pow_sum.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -110,10 +110,10 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "reader_moreh_clip_grad_norm_step1.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "writer_moreh_clip_grad_norm_step1.cpp";
 
@@ -132,7 +132,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "moreh_clip_grad_norm_step1_kernel.cpp";
 
@@ -195,7 +195,7 @@ void MorehClipGradNormStep1Operation::ProgramFactory::override_runtime_arguments
 
     const auto norm_type = operation_attributes.norm_type;
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);
-    auto output_buffer = tmp_pow_sum.buffer();
+    auto* output_buffer = tmp_pow_sum.buffer();
     const auto output_address = output_buffer->address();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {

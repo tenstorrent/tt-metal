@@ -137,12 +137,95 @@ def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("value", [15.5])
-def test_addcmul(device, h, w, value):
-    run_ternary_test_value(device, h, w, value, ttnn.addcmul)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
 def test_addcdiv(device, h, w, value):
     run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
+
+
+@pytest.mark.parametrize(
+    "tor_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("value", [15.5, 0, 1.0, -5.0])
+@pytest.mark.parametrize(
+    "hc, ht, hf, wc, wt, wf",
+    [
+        [64, 64, 64, 128, 128, 128],  # no bcast
+        # Row / Col bcast cases
+        [64, 64, 64, 128, 128, 1],
+        [64, 64, 64, 128, 1, 128],
+        [64, 64, 64, 1, 128, 128],
+        [64, 64, 1, 128, 128, 128],
+        [64, 1, 64, 128, 128, 128],
+        [1, 64, 64, 128, 128, 128],
+        [64, 64, 1, 128, 128, 1],
+        [64, 1, 64, 128, 1, 128],
+        [1, 64, 64, 1, 128, 128],
+    ],
+)
+def test_addcmul_with_bcast(device, tor_dtype, ttnn_dtype, hc, ht, hf, wc, wt, wf, value):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((hc, wc), dtype=tor_dtype).uniform_(-100, 500)
+    torch_input_tensor1 = torch.rand((ht, wt), dtype=tor_dtype).uniform_(-200, 200)
+    torch_input_tensor2 = torch.rand((hf, wf), dtype=tor_dtype).uniform_(-300, 400)
+
+    golden_fn = ttnn.get_golden_function(ttnn.addcmul)
+    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor1 = ttnn.to_device(input_tensor1, device)
+    input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.to_device(input_tensor2, device)
+    output_tensor = ttnn.addcmul(input_tensor, input_tensor1, input_tensor2, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        1.0,
+        -0.5,
+    ],
+)
+@pytest.mark.parametrize(
+    "a_shape, b_shape, c_shape",
+    [
+        ((1, 2, 1088, 1024), (1, 2, 1, 1024), (1, 2, 1088, 1024)),  # Composite
+        ((1, 2, 1088, 1024), (1, 2, 1, 1), (1, 2, 1088, 1024)),  # Composite
+        ((4, 2, 1088, 1024), (1, 2, 1088, 1024), (1, 1, 1088, 1024)),  # HLK
+    ],
+)
+def test_addcmul_with_bcast_bf8b(device, torch_dtype, ttnn_dtype, a_shape, b_shape, c_shape, value):
+    """
+    Test addcmul: Block format datatype inputs with subtile broadcast use composite Addcmul implementation.
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn(a_shape, dtype=torch_dtype)
+    torch_input_tensor1 = torch.randn(b_shape, dtype=torch_dtype)
+    torch_input_tensor2 = torch.randn(c_shape, dtype=torch_dtype)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.addcmul(input_tensor, input_tensor1, input_tensor2, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_fn = ttnn.get_golden_function(ttnn.addcmul)
+    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

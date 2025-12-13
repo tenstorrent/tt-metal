@@ -12,7 +12,7 @@ from PIL import Image
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
@@ -43,8 +43,6 @@ model_pipeline = None
 def create_model_pipeline(
     device, is_ci_env, is_ci_v2_env, model_location_generator, num_inference_steps, image_size=(256, 256)
 ):
-    disable_persistent_kernel_cache()
-
     # Until di/dt issues are resolved
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "5"

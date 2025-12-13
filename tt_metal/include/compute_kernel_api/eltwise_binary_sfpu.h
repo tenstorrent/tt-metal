@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_binary_pow.h"
 #endif
 
 namespace ckernel {
@@ -51,7 +52,7 @@ ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::POW, DST_ACCUM_MODE>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_binary_pow<APPROX, DST_ACCUM_MODE>(idst0, idst1, odst)));
 }
 
 /**
@@ -69,8 +70,6 @@ ALWI void rsub_binary_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::RSUB>()));
 }
 
-ALWI void power_binary_tile_init() {
-    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::POW>()));
-}
+ALWI void power_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_pow_init<APPROX>())); }
 
 }  // namespace ckernel

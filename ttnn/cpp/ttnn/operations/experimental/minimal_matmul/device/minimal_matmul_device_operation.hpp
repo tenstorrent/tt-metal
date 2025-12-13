@@ -16,6 +16,17 @@
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
+struct minimal_matmul_override_variables_t {
+    uint32_t num_cores;
+    std::vector<CoreCoord> cores;
+    tt::tt_metal::KernelHandle in0_sender_kernels_id;
+    tt::tt_metal::KernelHandle in0_receiver_kernels_id;
+    tt::tt_metal::KernelHandle in1_sender_kernels_id;
+    tt::tt_metal::KernelHandle in1_receiver_kernels_id;
+    bool transpose_core_grid;
+    bool read_local_slice_from_input;
+};
+
 struct MinimalMatmulConfig {
     MinimalMatmulConfig(
         uint32_t M_block_size_ = 1,
@@ -57,6 +68,7 @@ struct MinimalMatmulOp {
     std::optional<const MinimalMatmulConfig> config;
     std::optional<unary::UnaryWithParam> fused_activation;
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
+    std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(
@@ -64,6 +76,7 @@ struct MinimalMatmulOp {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
 
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,

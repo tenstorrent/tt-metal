@@ -22,20 +22,19 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -60,7 +59,7 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
@@ -120,13 +119,13 @@ const std::vector<std::pair<CoreRangeSet, uint32_t>>& SubDeviceManager::get_core
     return core_go_message_mapping_;
 }
 
-const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<AllocatorImpl>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return sub_device_allocators_[sub_device_index];
 }
 
-std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
+std::unique_ptr<AllocatorImpl>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_device_allocators_[sub_device_index];
 }
@@ -256,7 +255,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->allocator()->get_config();
+    const auto& global_allocator_config = device_->allocator_impl()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -284,7 +283,6 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
-             .storage_core_bank_size = std::nullopt,
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later
@@ -295,9 +293,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_alignment = global_allocator_config.l1_alignment,
              .disable_interleaved = true});
         TT_FATAL(
-            config.l1_small_size < (config.storage_core_bank_size.has_value()
-                                        ? config.storage_core_bank_size.value()
-                                        : config.worker_l1_size - config.l1_unreserved_base),
+            config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
             "Reserved size must be less than bank size");
         TT_FATAL(
             config.l1_small_size % config.l1_alignment == 0,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,4 +10,5 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_reduction_moe_operation(py::module& module);
+
 }  // namespace ttnn::operations::reduction::detail

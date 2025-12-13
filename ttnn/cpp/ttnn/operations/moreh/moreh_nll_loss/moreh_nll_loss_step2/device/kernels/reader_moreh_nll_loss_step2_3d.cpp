@@ -6,6 +6,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto input_addr = get_arg_val<uint32_t>(i++);
     auto target_addr = get_arg_val<uint32_t>(i++);

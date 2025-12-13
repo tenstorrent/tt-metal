@@ -33,8 +33,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
         false, false /*transpose within 16x16 face*/, icb)));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 
@@ -82,8 +81,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     }
 
     if (unpacker_dst_format_change || bcast_type_change) {
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, new_bcast_type>(
-            false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, new_bcast_type>(new_icb)));
     }
 #endif
 
@@ -132,27 +130,29 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
 /**
  * Shorthand template instantiation of mul_tiles_bcast.
  */
-ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_tiles_bcast_rows(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1)));
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
 
 /**
  * Please refer to documentation for sub_tiles_bcast
  */
-ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void add_tiles_bcast_rows(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1)));
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
 
 /**
@@ -223,10 +223,11 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 Internal helper function for all broadcast ops
 */
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
-ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void any_tiles_bcast(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
     MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1)));
+    UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
 
 // clang-format off
@@ -271,24 +272,27 @@ ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
  */
 // clang-format on
 template <BroadcastType tBcastDim>
-ALWI void add_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst);
+ALWI void add_tiles_bcast(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
  * Please refer to documentation for *add_tiles_bcast*.
  */
 template <BroadcastType tBcastDim>
-ALWI void sub_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(icb0, icb1, itile0, itile1, idst);
+ALWI void sub_tiles_bcast(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**
  * Please refer to documentation for *add_tiles_bcast*.
  */
 template <BroadcastType tBcastDim>
-ALWI void mul_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(icb0, icb1, itile0, itile1, idst);
+ALWI void mul_tiles_bcast(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(icb0, icb1, itile0, itile1, idst, bcast_row_idx);
 }
 
 /**

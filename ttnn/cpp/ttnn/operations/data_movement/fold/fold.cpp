@@ -18,7 +18,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
-
+#include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 
 #include "fold.hpp"
@@ -38,7 +38,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+        device = ttnn::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = input.device();
@@ -162,7 +162,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+        device = ttnn::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = input.device();
@@ -410,6 +410,7 @@ Tensor FoldOperation::invoke(
     const bool has_c_padding = (pad_c_front | pad_c_back) != 0;
 
     const Tensor& input_tensor = input_tensor_;
+    TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
 
     // Legacy transpose-based fold (TODO: remove when #29514 is solved)
     if (use_transpose_as_fold) {
@@ -453,9 +454,9 @@ Tensor FoldOperation::invoke(
                 ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
-        // Convert to row-major if tiled since fold supports only row-major layout
+        // If processed tensor is tiled, convert to row-major.
         if (processed_tensor.layout() == Layout::TILE) {
-            processed_tensor = ttnn::untilize(processed_tensor, std::nullopt, true, true);
+            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
         // Reshard if needed for optimal fold computation
         processed_tensor = reshard_if_needed(processed_tensor, stride_h, stride_w);

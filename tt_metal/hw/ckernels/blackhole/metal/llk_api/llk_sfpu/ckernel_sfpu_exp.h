@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
@@ -108,7 +109,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         // z = (bias + x * factor * N_m; where:
         // factor = 0x00b8aa3b (computed through log(e))
         // bias = 0x3f800000
-        sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt z = sfpu::_float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
         sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
@@ -133,6 +134,133 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
     return y;
 }
 
+// Utility function to round a float to a 32-bit integer while also calculating the
+// integer part of the rounded value
+sfpi_inline sfpi::vFloat _sfpu_round_nearest_int32_(sfpi::vFloat z, sfpi::vInt& k_int) {
+    // From Hacker's Delight: round-to-nearest-even method
+    // float -> int32 (round to nearest even): n = (x + float(c231)) - int32(c231)
+    // round-to-nearest-even: n = (x + float(c231)) - float(c231)
+    // where c231 = 0x4B400000 (2^23 + 2^22)
+    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);  // 2^23 + 2^22
+
+    sfpi::vFloat tmp = z + c231;
+    sfpi::vFloat k = tmp - c231;
+    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+
+    return k;
+}
+
+/*
+ * This function implements exp(x) using Cody-Waite range reduction for improved accuracy.
+ * Target accuracy: < 1 ULP for float32.
+ *
+ * Algorithm:
+ * 1. Handle special cases (overflow, underflow, NaN)
+ * 2. Convert to base-2: exp(x) = 2^(x/ln2)
+ * 3. Range reduction using Cody-Waite: compute k, then r = x - k*ln2_hi - k*ln2_lo
+ * 4. Compute exp(r) using polynomial approximation (Taylor series)
+ * 5. Scale by 2^k: result = 2^k * exp(r)
+ *
+ * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ * @return sfpi::vFloat Result of exp(val)
+ */
+sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
+    sfpi::vFloat result = sfpi::vConst0;
+
+    // Clamp to prevent overflow/underflow
+    constexpr float OVERFLOW_THRESHOLD = 128.0f;
+    constexpr float UNDERFLOW_THRESHOLD = -128.0f;
+
+    // Step 1: Compute k = round(x / ln(2))
+    // z = x / ln(2) = x * (1/ln(2))
+    constexpr float INV_LN2 = 1.4426950408889634f;  // 1/ln(2)
+    sfpi::vFloat z = val * INV_LN2;
+
+    // Check for special cases
+    sfpi::vInt exp_bits = sfpi::exexp(z);
+
+    v_if(z >= OVERFLOW_THRESHOLD) {
+        // Overflow
+        result = std::numeric_limits<float>::infinity();
+    }
+    v_elseif(z <= UNDERFLOW_THRESHOLD) {
+        // Underflow
+        result = sfpi::vConst0;
+    }
+    v_elseif(exp_bits == 255) {
+        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
+        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
+        // would have been true and their cases have already been handled.
+        // Thus, we know that if exp == 0 here, then man != 0 as well.
+        result = std::numeric_limits<float>::quiet_NaN();
+    }
+    v_else {
+        // Round z to nearest integer using round-to-nearest-even
+        sfpi::vInt k_int;
+        sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+
+        // Step 2: Cody-Waite range reduction
+        // Compute r = x - k*ln(2) in extended precision
+        // r = x - k*LN2_HI - k*LN2_LO
+        // This provides better accuracy than simple r = x - k*ln(2)
+        // Cody-Waite constants: ln(2) split into high and low parts for extended precision.
+        // LN2_HI is chosen so that k*LN2_HI can be computed exactly for integer k in the valid range.
+        // LN2_LO contains the remainder: LN2_HI + LN2_LO ≈ -ln(2)
+
+        // We want to do:
+        // 1) r_hi = val - k * LN2_HI
+        // 2) r = r_hi - k * LN2_LO
+        // On Wormhole, we can only do VD = VA * VB + VC, so we need to transform the expressions to
+        // ensure optimization to a single SFPMAD instruction.
+        // On Blackhole, SFFPMAD has SFPMAD_MOD1_NEGATE_VA and SFPMAD_MOD1_NEGATE_VC for this purpose.
+        // However, negating constants maintains consistency with Wormhole, and ensures higher chance
+        // of optimization to a single SFPMAD instruction.
+        // The transformation is as follows:
+        // 1) r_hi = val + k * (-LN2_HI)
+        // 2) r = r_hi + k * (-LN2_LO)
+        // Where LN2_HI and LN2_LO are negated.
+        // This way, compiler can more easily optimize this expression to a single SFPMAD instruction.
+        constexpr float LN2_HI = -0.6931152343750000f;  // High bits of ln(2)
+        constexpr float LN2_LO = -3.19461832987e-05f;   // Low bits of ln(2)
+
+        // First subtract k * LN2_HI
+        sfpi::vFloat r_hi = k * LN2_HI + val;
+
+        // Then subtract k * LN2_LO
+        sfpi::vFloat r = k * LN2_LO + r_hi;
+
+        // Step 3: Polynomial approximation for exp(r) using Taylor series
+        // exp(r) ~= 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
+        // Use 7th order polynomial (Taylor series coefficients) for < 1 ULP accuracy
+        // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
+        sfpi::vFloat p = PolynomialEvaluator::eval(
+            r,
+            sfpi::vConst1,  // c0 = 1
+            sfpi::vConst1,  // c1 = 1
+            0.5f,           // c2 = 1/2!
+            1.0f / 6.0f,    // c3 = 1/3!
+            1.0f / 24.0f,   // c4 = 1/4!
+            1.0f / 120.0f,  // c5 = 1/5!
+            1.0f / 720.0f,  // c6 = 1/6!
+            1.0f / 5040.0f  // c7 = 1/7!
+        );
+
+        // Step 4: Scale by 2^k using exponent manipulation
+        // ldexp(p, k_int) = p * 2^k
+        // We do this by adding k_int to the exponent of p
+        // Get the current exponent of p (without bias)
+        sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
+        // Add k_int to get the new exponent
+        sfpi::vInt new_exp = p_exp + k_int;
+
+        // Set the new exponent
+        result = sfpi::setexp(p, new_exp);
+    }
+    v_endif;
+
+    return result;
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val);
 
@@ -145,16 +273,16 @@ sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false>(sfpi::vFloat val) {
 // is_fp32_dest_acc_en == true
 template <>
 sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
-    return _sfpu_exp_61f_(val);
+    return _sfpu_exp_f32_accurate_(val);
 }
 
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
+    bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false,
-    bool is_fp32_dest_acc_en = false>
+    bool SKIP_POSITIVE_CHECK = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(

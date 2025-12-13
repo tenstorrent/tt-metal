@@ -11,7 +11,7 @@ from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
@@ -271,7 +271,6 @@ def run_bert_question_and_answering_inference(
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
 
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
@@ -365,7 +364,6 @@ def test_demo(
 ):
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
-    disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",
@@ -390,7 +388,6 @@ def test_demo(
 def test_demo_squadv2(model_location_generator, device, batch, loop_count):
     model_config_str = "BFLOAT8_B-SHARDED"
     skip_unsupported_config(device, model_config_str, batch)
-    disable_persistent_kernel_cache()
 
     return run_bert_question_and_answering_inference_squadv2(
         model_version="phiyodr/bert-large-finetuned-squad2",

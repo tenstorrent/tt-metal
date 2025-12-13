@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "fabric_host_utils.hpp"
 
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/metal_soc_descriptor.h>
@@ -30,15 +30,56 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
-        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::TORUS_XY;
+        // Issue: 32146, Special case for T3k WH devices to use Mesh fabric type instead of Torus_XY
+        // WH T3K currently do not support Torus_XY fabric type, because they do not have wrapping connections.
+        // If you want to use 1D Ring on t3k please use 1x8 MGD.
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+                return FabricType::TORUS_XY;
+            }
+            return FabricType::MESH;
+        }
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return FabricType::TORUS_X;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return FabricType::TORUS_Y;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return FabricType::TORUS_XY;
         default: return FabricType::MESH;
     }
+}
+
+bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape) {
+    // Requesting MESH is always valid (can restrict any topology to MESH)
+    if (requested_type == FabricType::MESH) {
+        return false;
+    }
+
+    // Check if available topology can satisfy the requested topology
+    if (available_type == FabricType::MESH) {
+        // Special case: 2-element dimensions make torus wrap-around equivalent to mesh neighbor connections
+        // E.g., in a 2-row mesh, north/south wrap-around just connects to the adjacent row
+        bool has_two_rows = (mesh_shape[0] == 2);
+        bool has_two_cols = (mesh_shape[1] == 2);
+
+        if (has_flag(requested_type, FabricType::TORUS_Y) && !has_two_rows) {
+            return true;
+        }
+        if (has_flag(requested_type, FabricType::TORUS_X) && !has_two_cols) {
+            return true;
+        }
+        return false;
+    }
+
+    // For non-MESH available types, check if requested features are present
+    if (requested_type == FabricType::TORUS_XY) {
+        return available_type != FabricType::TORUS_XY;
+    }
+    if (requested_type == FabricType::TORUS_X) {
+        return !has_flag(available_type, FabricType::TORUS_X);
+    }
+    if (requested_type == FabricType::TORUS_Y) {
+        return !has_flag(available_type, FabricType::TORUS_Y);
+    }
+
+    return false;
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -78,8 +119,9 @@ void set_routing_mode(uint16_t routing_mode) {
     // Validate topology flags are orthogonal
     TT_FATAL(
         __builtin_popcount(
-            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) == 1,
-        "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
+            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
+                            ROUTING_MODE_TORUS)) == 1,
+        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
 
     // Validate 1D can't be used with MESH or TORUS
     TT_FATAL(
@@ -88,14 +130,15 @@ void set_routing_mode(uint16_t routing_mode) {
 
     // Validate 2D can't be used with LINE or RING
     TT_FATAL(
-        !(routing_mode & ROUTING_MODE_2D) || !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
-        "2D routing mode cannot be combined with LINE or RING topology");
+        !(routing_mode & ROUTING_MODE_2D) ||
+            !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
+        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     control_plane.set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -107,17 +150,15 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
     } else if (topology == Topology::Linear) {
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
+    } else if (topology == Topology::NeighborExchange) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     } else if (topology == Topology::Torus) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
     }
 
-    if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
-        mode |= ROUTING_MODE_DYNAMIC;
-    } else {
-        mode |= ROUTING_MODE_LOW_LATENCY;
-    }
+    mode |= ROUTING_MODE_LOW_LATENCY;
     set_routing_mode(mode);
 }
 

@@ -480,7 +480,18 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
         ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=numeric_stable
     )
 
-    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
     output_torch = ttnn_output.cpu().to_torch()
 
     assert_with_ulp(torch_output, output_torch, expected_ulp)
+
+
+def test_softmax_4096x4096_fp32(device):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)
+    torch_output = torch.ops.aten._softmax.default(torch_input_tensor, dim=3, half_to_float=False)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=3)
+    output_torch = ttnn_output_tensor.cpu().to_torch()
+    assert_with_pcc(torch_output, output_torch, 0.998)

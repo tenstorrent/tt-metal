@@ -13,8 +13,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 #include "impl/context/metal_context.hpp"
 
@@ -35,8 +35,7 @@ const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabr
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct ConnectionKey {
     RoutingDirection direction;
@@ -243,12 +242,12 @@ public:
 struct TestSync : TestWorker {
 public:
     TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
-    void add_config(TestTrafficSenderConfig config);
+    void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
     // stores traffic config and the corresponding fabric connection key
     // Managed by TestDevice::sync_connection_manager_
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSyncConfig, ConnectionKey>> configs_;
 };
 
 struct TestMux : TestWorker {
@@ -262,6 +261,8 @@ public:
 };
 
 struct TestDevice {
+    static constexpr uint32_t MAX_LATENCY_SAMPLES = 1024;
+
     // Friend declarations for tight coupling with worker structs
     friend struct TestSender;
     friend struct TestReceiver;
@@ -278,15 +279,40 @@ public:
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id() const;
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
-    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config);
+    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
     void create_kernels();
+
+    // Latency test kernel creation (called directly by TestContext)
+    // Uses static memory map addresses for semaphores (same as bandwidth tests)
+    void create_latency_sender_kernel(
+        CoreCoord core,
+        FabricNodeId dest_node,
+        uint32_t payload_size,
+        uint32_t num_samples,
+        NocSendType noc_send_type,
+        CoreCoord responder_virtual_core);
+
+    void create_latency_responder_kernel(
+        CoreCoord core,
+        FabricNodeId sender_node,
+        uint32_t payload_size,
+        uint32_t num_samples,
+        NocSendType noc_send_type,
+        uint32_t sender_send_buffer_address,
+        uint32_t sender_receive_buffer_address,
+        CoreCoord sender_virtual_core);
+
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
-    void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
     void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
+
+    // Set kernel source for specific workers (used by latency tests to override default kernels)
+    void set_sender_kernel_src(CoreCoord core, const std::string& kernel_src);
+    void set_receiver_kernel_src(CoreCoord core, const std::string& kernel_src);
+
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
@@ -317,8 +343,9 @@ public:
         use_unified_connection_manager_ = use_unified_connection_manager;
     }
 
-    // Method to access sender configurations for traffic analysis
+    // Method to access sender and receiver configurations for traffic analysis
     const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
+    const std::unordered_map<CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
 
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
         return connection_manager_.get_used_fabric_links();
@@ -346,6 +373,10 @@ public:
     FabricConnectionManager sync_connection_manager_;
 
     std::shared_ptr<IDeviceInfoProvider> get_device_info_provider() const { return device_info_provider_; }
+
+    // Latency buffer address getters (public so TestContext can query them)
+    size_t get_latency_send_buffer_address() const;
+    size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
@@ -382,7 +413,6 @@ private:
 
     bool benchmark_mode_ = false;
     bool global_sync_ = false;
-    uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
     bool progress_monitoring_enabled_ = false;
 
@@ -392,5 +422,4 @@ private:
     bool use_unified_connection_manager_ = false;
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

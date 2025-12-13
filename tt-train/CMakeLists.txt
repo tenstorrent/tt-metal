@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18..3.30)
+cmake_minimum_required(VERSION 3.18...3.30)
 include(cmake/compilers.cmake)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
@@ -51,6 +51,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
 endif()
 
 message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
+
+# Add cmake directory to module path for flatbuffers helper
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(cmake/dependencies.cmake)
 

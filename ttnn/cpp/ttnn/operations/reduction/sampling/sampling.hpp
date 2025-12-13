@@ -4,27 +4,32 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include <cstdint>
+#include <optional>
+
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/decorators.hpp"
 
-namespace ttnn {
-namespace operations::reduction {
+namespace ttnn::operations::reduction::sampling {
 
-struct SamplingOperation {
-    static ttnn::Tensor invoke(
+struct ExecuteSampling {
+    static Tensor invoke(
         const Tensor& input_values_tensor,
         const Tensor& input_indices_tensor,
         const Tensor& k,
         const Tensor& p,
         const Tensor& temp,
         const std::optional<uint32_t>& seed = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
+        const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 };
 
-}  // namespace operations::reduction
+}  // namespace ttnn::operations::reduction::sampling
 
-constexpr auto sampling = ttnn::register_operation<"ttnn::sampling", ttnn::operations::reduction::SamplingOperation>();
+namespace ttnn {
+
+constexpr auto sampling =
+    ttnn::register_operation<"ttnn::sampling", ttnn::operations::reduction::sampling::ExecuteSampling>();
 
 }  // namespace ttnn

@@ -34,11 +34,19 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    extern uint32_t __kernel_data_lma[];
-    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
+    // TODO: initilaize globals and bss
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    extern uint32_t __tdata_lma[];
+    if (hartid == 0) {
+        extern uint32_t __ldm_tdata_start[];
+        extern uint32_t __ldm_tdata_end[];
+        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+    }
+    do_thread_crt1(__tdata_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        noc_local_state_init(NOC_INDEX);
+        // noc_local_state_init(NOC_INDEX); //TODO revisit this
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS

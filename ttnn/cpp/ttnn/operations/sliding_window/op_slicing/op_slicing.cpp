@@ -11,7 +11,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 namespace ttnn::operations::op_slicing {
 
 void run_sliced_op(
@@ -32,7 +31,6 @@ void run_sliced_op(
 
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
-    bool first_run = true;
     const uint32_t min_output_slice_size =
         tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
     const uint32_t output_slice_rem =
@@ -147,7 +145,6 @@ void run_sliced_op(
             sliced_input_tensor,
             {output_slice_height_start, output_slice_width_start},
             {output_slice_height_end, output_slice_width_end});
-
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
         // supported.
         if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -173,7 +170,6 @@ void run_sliced_op(
             ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
             ttnn::SmallVector<uint32_t>{batch_size, output_slice_height_end, output_slice_width_end, output_channels},
             ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
-        first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
     }

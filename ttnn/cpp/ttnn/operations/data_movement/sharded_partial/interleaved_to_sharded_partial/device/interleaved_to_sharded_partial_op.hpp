@@ -1,40 +1,54 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "interleaved_to_sharded_partial_op_types.hpp"
+#include "interleaved_to_sharded_partial_program_factory.hpp"
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
 namespace ttnn::operations::data_movement {
 
 struct InterleavedToShardedPartialDeviceOperation {
-    const CoreCoord grid_size;
-    const tt::tt_metal::ShardSpec shard_spec;
-    const uint32_t num_slices;
-    const uint32_t slice_index;
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const tt::tt_metal::DataType output_dtype;
+    using operation_attributes_t = interleaved_to_sharded_partial::operation_attributes_t;
+    using tensor_args_t = interleaved_to_sharded_partial::tensor_args_t;
+    using spec_return_value_t = interleaved_to_sharded_partial::spec_return_value_t;
+    using tensor_return_value_t = interleaved_to_sharded_partial::tensor_return_value_t;
+    using program_factory_t = std::variant<detail::InterleavedToShardedPartialProgramFactory>;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    static constexpr auto attribute_names =
-        std::make_tuple("grid_size", "shard_spec", "output_mem_config", "output_dtype");
-    auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->grid_size),
-            std::cref(this->shard_spec),
-            std::cref(this->output_mem_config),
-            std::cref(this->output_dtype));
-    }
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const CoreCoord& grid_size,
+        const tt::tt_metal::ShardSpec& shard_spec,
+        uint32_t num_slices,
+        uint32_t slice_index,
+        const tt::tt_metal::MemoryConfig& output_mem_config,
+        const tt::tt_metal::DataType& output_dtype);
 };
+
 }  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+constexpr auto interleaved_to_sharded_partial = ttnn::register_operation<
+    "ttnn::prim::interleaved_to_sharded_partial",
+    ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation>();
+}  // namespace ttnn::prim

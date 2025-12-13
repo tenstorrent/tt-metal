@@ -10,8 +10,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal {
-namespace host_buffer {
+namespace tt::tt_metal::host_buffer {
 
 template <typename T>
 void validate_datatype(const Tensor& tensor) {
@@ -63,5 +62,4 @@ tt::stl::Span<T> get_as(Tensor& tensor) {
     return buffer.template view_as<T>();
 }
 
-}  // namespace host_buffer
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::host_buffer

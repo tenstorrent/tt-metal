@@ -13,7 +13,6 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.generation_utils import get_logits_processor
-from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
 from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 
 
@@ -55,7 +54,6 @@ def run_generate(input_ids, model, config, parameters, device, max_tokens, batch
         )
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
         tt_output = ttnn.from_device(tt_output)
         next_token_logits = ttnn.to_torch(tt_output)
@@ -128,6 +126,4 @@ def run_summarization_inference(device, batch_size, sequence_length, max_tokens,
     ((8, 128, 2, "t5-small"),),
 )
 def test_t5_demo_for_summarize(device, batch_size, sequence_length, max_tokens, model_name):
-    disable_persistent_kernel_cache()
-
     return run_summarization_inference(device, batch_size, sequence_length, max_tokens, model_name)

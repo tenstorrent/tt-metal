@@ -739,7 +739,9 @@ class CrossAttentionTransformer(torch.nn.Module):
             cross_page_table=cross_page_table,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
-        return tt_out
+
+        # Return logits and None for log-probs for compatibility with generator interface
+        return tt_out, None
 
 
 def _stack_images(

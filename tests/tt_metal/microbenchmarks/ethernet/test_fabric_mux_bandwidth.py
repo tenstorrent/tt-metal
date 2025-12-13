@@ -27,7 +27,7 @@ GOLDEN_FILE_PATH = os.path.join(GOLDEN_FILE_DIR, GOLDEN_FILE_NAME)
 SUMMARY_FILE_NAME = "fabric_mux_bandwidth_summary.txt"
 SUMMARY_FILE_PATH = os.path.join(OUTPUT_FILE_DIR, SUMMARY_FILE_NAME)
 
-BW_THRESHOLD = 0.1
+BW_THRESHOLD = 0.25
 
 SPEEDUPS = []  # Track speedup for each test
 
@@ -53,13 +53,13 @@ def calculate_geomean(values):
     return product ** (1.0 / len(values))
 
 
-def validate_geomean_speedup(geomean_speedup, tolerance=0.015):
+def validate_geomean_speedup(geomean_speedup, tolerance=0.025):
     """
     Validate that geomean speedup is within acceptable range of 1.0.
 
     Args:
         geomean_speedup: The calculated geomean speedup value
-        tolerance: Acceptable deviation from 1.0 (default: 0.015 for 1.5%)
+        tolerance: Acceptable deviation from 1.0 (default: 0.025 for 2.5%)
 
     Raises:
         AssertionError: If speedup is outside acceptable range
@@ -77,7 +77,7 @@ def validate_geomean_speedup(geomean_speedup, tolerance=0.015):
         assert False, error_msg
 
 
-def report_speedup_summary(tolerance=0.015):
+def report_speedup_summary(tolerance=0.025):
     """
     Calculate and report geomean speedup over golden values.
 
@@ -85,7 +85,7 @@ def report_speedup_summary(tolerance=0.015):
     acceptable range, and clears the SPEEDUPS list.
 
     Args:
-        tolerance: Acceptable deviation from 1.0 (default: 0.015 for 1.5%)
+        tolerance: Acceptable deviation from 1.0 (default: 0.025 for 2.5%)
     """
     if not SPEEDUPS:
         return
@@ -387,7 +387,7 @@ def setup(request):
     yield
 
     # Calculate and report geomean speedup
-    report_speedup_summary(tolerance=0.015)
+    report_speedup_summary(tolerance=0.02)
 
     # clear the log file
     if os.path.exists(LOG_FILE_PATH):

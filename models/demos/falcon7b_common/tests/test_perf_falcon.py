@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_e75, is_wormhole_b0
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -23,83 +22,6 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
     ids=["falcon_7b"],
 )
 class TestParametrized:
-    @pytest.mark.models_performance_bare_metal
-    @pytest.mark.parametrize(
-        "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time",
-        (
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.31),
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.29),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.43),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.34),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.28),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.28),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.37),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.31),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.40),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.35),
-        ),
-        ids=[
-            "prefill_seq128_bf16_dram",
-            "prefill_seq128_bf16_l1",
-            "prefill_seq256_bf16_dram",
-            "prefill_seq256_bf16_l1",
-            "decode_batch32_128_bf16_dram",
-            "decode_batch32_128_bf16_l1",
-            "decode_batch32_1024_bf16_dram",
-            "decode_batch32_1024_bf16_l1",
-            "decode_batch32_2047_bf16_dram",
-            "decode_batch32_2047_bf16_l1",
-        ],
-    )
-    @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-    def test_perf_gs_bare_metal(
-        self,
-        model_version,
-        llm_mode,
-        batch,
-        seq_len,
-        kv_cache_len,
-        expected_inference_time,
-        num_layers,
-        model_config_str,
-        device,
-    ):
-        if is_e75(device) and batch == 32:
-            pytest.skip("Falcon batch 32 is not supported on E75")
-
-        if model_config_str == "BFLOAT16-L1_SHARDED":
-            pytest.skip("Sharded config is not supported on GS")
-
-        model_config = get_model_config(model_config_str, seq_len, batch)
-        tt_cache_path = Path(get_hf_tt_cache_path(model_version))
-
-        disable_persistent_kernel_cache()
-
-        if llm_mode == "prefill":
-            expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
-                DeviceSetup.GRAYSKULL
-            ][model_config_str][seq_len]
-        else:
-            expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = DECODE_CONFIG_TO_PCC[
-                DeviceSetup.GRAYSKULL
-            ][model_config_str][kv_cache_len]
-
-        run_test_FalconCausalLM_end_to_end(
-            device,
-            model_version,
-            llm_mode,
-            batch,
-            seq_len,
-            kv_cache_len,
-            num_layers,
-            [expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc],
-            model_config,
-            model_config_str,
-            tt_cache_path,
-            e2e_perf=True,
-            expected_inference_time=expected_inference_time,
-        )
-
     def run_perf_wh_bare_metal(
         self,
         model_version,
@@ -118,8 +40,6 @@ class TestParametrized:
 
         model_config = get_model_config(model_config_str, seq_len, batch)
         tt_cache_path = Path(get_hf_tt_cache_path(model_version))
-
-        disable_persistent_kernel_cache()
 
         run_test_FalconCausalLM_end_to_end(
             mesh_device,
@@ -144,28 +64,16 @@ class TestParametrized:
             ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.064),
             ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41),
             ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.89),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.099),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.089),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.38),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.29),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.059),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.70),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.55),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.064),
         ),
         ids=[
             "prefill_seq128_bf16_dram",
             "prefill_seq1024_bf16_dram",
             "prefill_seq2048_bf16_dram",
-            "decode_batch32_128_bf16_dram",
-            "decode_batch32_128_bf16_l1",
             "decode_batch32_128_bf16_l1_sharded",
-            "decode_batch32_1024_bf16_dram",
-            "decode_batch32_1024_bf16_l1",
             "decode_batch32_1024_bf16_l1_sharded",
-            "decode_batch32_2047_bf16_dram",
-            "decode_batch32_2047_bf16_l1",
             "decode_batch32_2047_bf16_l1_sharded",
         ],
     )

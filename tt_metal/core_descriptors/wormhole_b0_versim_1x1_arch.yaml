@@ -12,8 +12,6 @@ galaxy:
         start: [1, 1]
         end: [1, 1]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []
@@ -25,8 +23,6 @@ galaxy:
         start: [1, 1]
         end: [1, 1]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []
@@ -41,8 +37,6 @@ nebula_x1:
         start: [0, 0]
         end: [0, 0]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []
@@ -54,8 +48,6 @@ nebula_x1:
         start: [1, 1]
         end: [1, 1]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []
@@ -70,8 +62,6 @@ nebula_x2:
         start: [0, 0]
         end: [0, 0]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []
@@ -83,8 +73,6 @@ nebula_x2:
         start: [1, 1]
         end: [1, 1]
 
-      storage_cores:
-        []
 
       dispatch_cores:
         []

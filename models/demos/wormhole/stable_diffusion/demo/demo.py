@@ -17,7 +17,7 @@ from torchvision.transforms import ToTensor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import enable_persistent_kernel_cache, is_wormhole_b0, profiler
+from models.common.utility_functions import is_wormhole_b0, profiler
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
@@ -78,7 +78,6 @@ def run_demo_inference(
     num_inference_steps,
     image_size=(256, 256),
 ):
-    enable_persistent_kernel_cache()
     profiler.clear()
 
     # Until di/dt issues are resolved
@@ -236,8 +235,6 @@ def run_demo_inference(
 def run_interactive_demo_inference(
     device, is_ci_env, is_ci_v2_env, model_location_generator, num_inference_steps, image_size=(256, 256)
 ):
-    enable_persistent_kernel_cache()
-
     # Until di/dt issues are resolved
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
@@ -381,8 +378,6 @@ def run_demo_inference_diffusiondb(
     num_inference_steps,
     image_size=(256, 256),
 ):
-    enable_persistent_kernel_cache()
-
     # Until di/dt issues are resolved
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "5"

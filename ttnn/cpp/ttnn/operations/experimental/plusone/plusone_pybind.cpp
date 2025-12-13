@@ -10,7 +10,7 @@
 namespace ttnn::operations::experimental::plusone::detail {
 namespace py = pybind11;
 void bind_experimental_plusone_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns input tensor elements increased by 1.
             Input tensor must have UINT32 data type, ROW_MAJOR layout, and 1-D shape.

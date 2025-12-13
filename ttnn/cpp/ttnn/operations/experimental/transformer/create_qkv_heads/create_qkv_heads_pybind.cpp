@@ -7,7 +7,7 @@
 #include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads_pybind.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::create_qkv_heads::detail {
 
 template <typename transformer_operation_t>
 void bind_create_qkv_heads_template(pybind11::module& module, const transformer_operation_t& operation) {
@@ -40,4 +40,4 @@ void bind_create_qkv_heads_template(pybind11::module& module, const transformer_
 void bind_create_qkv_heads(pybind11::module& module) {
     bind_create_qkv_heads_template(module, ttnn::experimental::create_qkv_heads);
 }
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::create_qkv_heads::detail

@@ -10,7 +10,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/distributed/api.hpp"
-
+#include "ttnn/device.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer {
@@ -124,7 +124,7 @@ void WindowedScaledDotProductAttention::validate(const std::vector<Tensor>& inpu
 
 std::vector<TensorSpec> WindowedScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input = input_tensors.at(0);
+    const auto& input = input_tensors.at(0);
     return {
         TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
@@ -139,10 +139,10 @@ std::uint32_t WindowedScaledDotProductAttention::get_k_chunk_size() const {
 
 operation::ProgramWithCallbacks WindowedScaledDotProductAttention::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
-    auto& cu_window_seqlens = input_tensors.at(3);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = input_tensors.at(2);
+    const auto& cu_window_seqlens = input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
     auto scale = this->scale;
@@ -177,9 +177,8 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
 
     // calculate arch specific parameters
     MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
-    auto arch = output_tensor.storage_type() == StorageType::DEVICE
-                    ? output_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "Windowed SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);

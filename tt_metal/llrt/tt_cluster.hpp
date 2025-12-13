@@ -5,14 +5,13 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -131,6 +130,7 @@ public:
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
+    bool verify_eth_fw_capability() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
@@ -211,6 +211,12 @@ public:
         const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
     void read_sysmem(
         void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
+
+    // System memory buffer allocation methods
+    std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
+        ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+    std::unique_ptr<tt::umd::SysmemBuffer> map_sysmem_buffer(
+        ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 
@@ -308,6 +314,11 @@ public:
     // Returns Wormhole chip board type.
     BoardType get_board_type(ChipId chip_id) const;
 
+    // Returns whether IOMMU is enabled on the system (cached at init time)
+    bool is_iommu_enabled() const;
+    // Returns whether NOC mapping is enabled on the system (cached at init time)
+    bool is_noc_mapping_enabled() const;
+
     tt::tt_metal::ClusterType get_cluster_type() const;
 
     tt::TargetDevice get_target_device_type() const { return this->target_type_; }
@@ -372,13 +383,16 @@ private:
 
     bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
 
-    void verify_eth_fw_capability() const;
-
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
+
+    // Cached system IOMMU status to avoid slow queries at MeshDevice construction
+    bool iommu_enabled_ = false;
+    // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
+    bool noc_mapping_enabled_ = false;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped

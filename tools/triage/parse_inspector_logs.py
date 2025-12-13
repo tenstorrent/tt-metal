@@ -66,7 +66,7 @@ BinaryStatus: TypeAlias = Literal["notSent", "inFlight", "committed"]
 
 @dataclass
 class DeviceBinaryStatus:
-    deviceId: int
+    metalDeviceId: int
     status: BinaryStatus
 
 
@@ -458,8 +458,8 @@ class InspectorLogsData:
 
     @cached_property
     def devices_in_use(self):
-        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["deviceIds"])
-        return GetDevicesInUseResults(deviceIds=list(get_devices_in_use(self.getPrograms().programs)))
+        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["metalDeviceIds"])
+        return GetDevicesInUseResults(metalDeviceIds=list(get_devices_in_use(self.getPrograms().programs)))
 
     def getDevicesInUse(self):
         return self.devices_in_use

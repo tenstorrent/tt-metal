@@ -19,7 +19,7 @@ namespace ttnn::operations::normalization {
 
 void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
-    auto& tensor = input_tensors.at(0);
+    const auto& tensor = input_tensors.at(0);
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
@@ -51,8 +51,32 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
     const auto& a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    return layernorm_pre_allgather_multi_core(
-        a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid, this->program_config);
+    return std::visit(
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                if (program_config.use_welford == true) {
+                    return layernorm_pre_allgather_welford_multi_core(
+                        a,
+                        output_tensor,
+                        this->norm_type,
+                        this->compute_kernel_config,
+                        this->use_2d_core_grid,
+                        program_config);
+                } else {
+                    return layernorm_pre_allgather_multi_core(
+                        a,
+                        output_tensor,
+                        this->norm_type,
+                        this->compute_kernel_config,
+                        this->use_2d_core_grid,
+                        program_config);
+                }
+            } else {
+                TT_THROW("Unsupported program config");
+            }
+        },
+        this->program_config);
 }
 
 }  // namespace ttnn::operations::normalization

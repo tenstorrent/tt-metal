@@ -8,11 +8,9 @@
 
 #define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
 #define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
+#define PROFILER_OPT_DO_SUM (1 << 3)
 
 namespace kernel_profiler {
-
-constexpr static uint32_t PADDING_MARKER = ((1 << 16) - 1);
-constexpr static uint32_t NOC_ALIGNMENT_FACTOR = 4;
 
 static constexpr int SUM_COUNT = 2;
 
@@ -53,7 +51,7 @@ enum ControlBuffer {
     CORE_COUNT_PER_DRAM,
     DROPPED_ZONES,
     PROFILER_DONE,
-    CURRENT_TRACE_ID
+    TRACE_REPLAY_STATUS
 };
 
 enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };
@@ -65,21 +63,9 @@ constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
 constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
-constexpr static std::uint32_t PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT = 2;
 constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE =
     (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) *
     PROFILER_L1_MARKER_UINT32_SIZE;
 constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE * sizeof(uint32_t);
 
 }  // namespace kernel_profiler
-
-constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
-constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC =
-    kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
-    (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
-     kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) *
-    PROFILER_OP_SUPPORT_COUNT;
-constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC =
-    PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
-
-static_assert(PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > kernel_profiler::PROFILER_L1_BUFFER_SIZE);

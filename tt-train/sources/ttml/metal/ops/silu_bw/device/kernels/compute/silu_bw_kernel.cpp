@@ -11,7 +11,7 @@
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/reg_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "tt-train/sources/ttml/metal/ops/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 namespace NAMESPACE {
 

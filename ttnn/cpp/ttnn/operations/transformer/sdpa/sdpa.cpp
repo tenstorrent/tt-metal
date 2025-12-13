@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
-#include <utility>
-
-#include "device/sdpa_op.hpp"
-#include "device/joint_sdpa_op.hpp"
-#include "device/ring_joint_sdpa_op.hpp"
-#include "device/ring_distributed_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
-
+#include "ttnn/device.hpp"
+#include <utility>
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
@@ -25,29 +24,30 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& attention_sink) {
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = is_causal,
-                   .chunk_start_idx = std::nullopt,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = false,
-                   .head_dim_v = std::nullopt,
-                   .sliding_window_size = sliding_window_size},
-               {input_tensor_q, input_tensor_k, input_tensor_v},
-               {attn_mask},
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        attn_mask,
+        std::nullopt,  // page_table
+        attention_sink,
+        is_causal,
+        scale,
+        sliding_window_size,
+        std::nullopt,  // chunk_start_idx
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
@@ -60,28 +60,28 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = true,  // Always causal for chunked version
-                   .chunk_start_idx = chunk_start_idx,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = false,
-                   .head_dim_v = std::nullopt,
-                   .sliding_window_size = std::nullopt},  // Chunked version doesn't support sliding window yet
-               {input_tensor_q, input_tensor_k, input_tensor_v},
-               {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,        // attn_mask
+        page_table_tensor,   // page_table
+        std::nullopt,        // attention_sink
+        /*is_causal=*/true,  // Always causal for chunked version
+        scale,
+        std::nullopt,  // sliding_window_size (not supported yet)
+        chunk_start_idx,
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
@@ -95,10 +95,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
     SDPAProgramConfig program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
@@ -138,10 +137,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     const CoreCoord ccl_core_grid_offset,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
@@ -214,28 +212,28 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = is_causal,
-                   .chunk_start_idx = std::nullopt,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = true,
-                   .head_dim_v = head_dim_v,
-                   .sliding_window_size = std::nullopt},  // MLA version doesn't support sliding window yet
-               {input_tensor_q, input_tensor_k},
-               {attn_mask},
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        std::nullopt,  // V is implied by K in MLA mode
+        attn_mask,
+        std::nullopt,  // page_table
+        std::nullopt,  // attention_sink
+        is_causal,
+        scale,
+        std::nullopt,  // sliding_window_size (not supported yet)
+        std::nullopt,  // chunk_start_idx
+        true,          // use_mla
+        head_dim_v,
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
@@ -248,28 +246,28 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = true,  // Always causal for chunked version
-                   .chunk_start_idx = chunk_start_idx,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = true,
-                   .head_dim_v = head_dim_v,
-                   .sliding_window_size = std::nullopt},  // Chunked MLA version doesn't support sliding window yet
-               {input_tensor_q, input_tensor_k},
-               {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        std::nullopt,       // V is implied by K in MLA mode
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        std::nullopt,       // attention_sink
+        /*is_causal=*/true,
+        scale,
+        std::nullopt,  // sliding_window_size (not supported yet)
+        chunk_start_idx,
+        true,  // use_mla
+        head_dim_v,
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
@@ -283,25 +281,22 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               RingDistributedScaledDotProductAttention{
-                   .ring_size = ring_size,
-                   .ring_id = ring_id,  // Pass through the ring_id parameter (can be used or ignored)
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor_q, input_tensor_k, input_tensor_v},
-               {},
-               {})
-        .at(0);
+    return ttnn::prim::ring_distributed_sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        ring_size,
+        ring_id,  // Pass through the ring_id parameter (can be used or ignored)
+        scale,
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::transformer

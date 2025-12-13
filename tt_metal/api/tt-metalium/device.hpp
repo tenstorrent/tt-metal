@@ -27,9 +27,7 @@
 
 #include <tt_stl/span.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -44,6 +42,7 @@ using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string
 enum class BufferType;
 
 class Allocator;
+class AllocatorImpl;
 class Buffer;
 class Program;
 class SubDevice;
@@ -66,7 +65,7 @@ public:
     IDevice& operator=(const IDevice& other) = delete;
 
     IDevice(IDevice&& other) = default;
-    IDevice& operator=(IDevice&& other) = default;
+    IDevice& operator=(IDevice&& /*other*/) = default;
 
     virtual tt::ARCH arch() const = 0;
 
@@ -134,6 +133,10 @@ public:
     virtual const std::unique_ptr<Allocator>& allocator() const = 0;
     virtual const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const = 0;
 
+    // Internal use only, AllocatorImpl is not exposed out
+    virtual const std::unique_ptr<AllocatorImpl>& allocator_impl() const = 0;
+    virtual const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const = 0;
+
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
     virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
@@ -146,7 +149,9 @@ public:
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
     virtual const std::set<CoreCoord>& ethernet_cores() const = 0;
-    virtual const std::set<CoreCoord>& storage_only_cores() const = 0;
+    [[deprecated(
+        "Storage-only cores do not exist. Cleanup code that calls this API.")]] virtual const std::set<CoreCoord>&
+    storage_only_cores() const = 0;
 
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
@@ -222,6 +227,4 @@ public:
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

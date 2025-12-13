@@ -15,7 +15,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -29,8 +30,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::conv {
+namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
@@ -102,6 +102,38 @@ uint32_t get_input_channels_alignment(
         }
     }
     return tt::constants::TILE_WIDTH;
+}
+
+CoreCoord get_output_compute_grid_size(
+    const CoreCoord& device_compute_grid_size,
+    const Conv2dConfig& conv_config,
+    const ParallelConfig& input_parallel_config) {
+    CoreCoord output_compute_grid_size = device_compute_grid_size;
+    if (conv_config.override_output_sharding_config) {
+        TT_FATAL(
+            conv_config.core_grid.has_value(),
+            "When override_output_sharding_config is set to true, core_grid must have a value.");
+        TT_FATAL(
+            input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED,
+            "Output sharding config override is only supported for BLOCK_SHARDED layout.");
+        auto override_compute_grid_size = conv_config.core_grid.value().bounding_box().grid_size();
+        TT_FATAL(
+            device_compute_grid_size.x >= override_compute_grid_size.x &&
+                device_compute_grid_size.y >= override_compute_grid_size.y,
+            "Invalid core grid override: {}x{} for device compute grid size: {}x{}",
+            override_compute_grid_size.x,
+            override_compute_grid_size.y,
+            device_compute_grid_size.x,
+            device_compute_grid_size.y);
+        TT_FATAL(
+            (input_parallel_config.shard_orientation == ShardOrientation::ROW_MAJOR
+                 ? override_compute_grid_size.y
+                 : override_compute_grid_size.x) == get_num_cores_nhw_from_parallel_config(input_parallel_config),
+            "NHW cores must match for input and output when overriding the grid size.");
+        output_compute_grid_size = override_compute_grid_size;
+    }
+
+    return output_compute_grid_size;
 }
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
@@ -232,6 +264,21 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
                                     (padding[2] + padding[3])) /
                                    stride[1]) +
                                   1;
+    return {output_height, output_width};
+}
+
+std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation) {
+    uint32_t output_height = ((input_image_size[0] - 1) * stride[0]) - (padding[0] + padding[1]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+
+    uint32_t output_width = ((input_image_size[1] - 1) * stride[1]) - (padding[2] + padding[3]) +
+                            (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
     return {output_height, output_width};
 }
 
@@ -610,6 +657,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 }
             }
 
+            // Additional check for mm convs to ensure shard height is multiple of TILE_HEIGHT since tiling requires
+            // that
+            if (is_mm_conv && (input_shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0)) {
+                needs_shard_or_reshard = true;
+            }
             if (conv_config.override_sharding_config) {
                 TT_FATAL(
                     conv_config.core_grid.has_value(),
@@ -716,8 +768,9 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
+    auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, parallel_config);
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
+        parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
@@ -748,7 +801,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
                 // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout
                 Tensor input_tensor_tilized = ttnn::to_layout(input_tensor, Layout::TILE);
-                if (conv_config.deallocate_activation) {
+                if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
                     input_tensor.deallocate(/*force*/ true);
                     input_tensor_tilized = ttnn::move(input_tensor_tilized);
                 }
@@ -777,7 +830,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                     input_tensor.device());
                 ttnn::to_memory_config(
                     input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt, resharded_input_tensor);
-                if (conv_config.deallocate_activation) {
+                if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
                     input_tensor.deallocate(/*force*/ true);
                     resharded_input_tensor = ttnn::move(resharded_input_tensor);
                 }
@@ -895,12 +948,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
-        // Set act_block_h_override to min value to be conservative with L1 memory usage;
-        // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
-        // and the bigger the act block height the better the reuse since we apply optimization within single act block
-        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
-            conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-        }
 
         const uint32_t input_channels_alignment =
             get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -926,9 +973,11 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             true,
             conv_config.act_block_h_override);
 
+        auto output_compute_grid_size =
+            get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
         const ParallelConfig output_parallel_config = determine_output_parallel_config(
             input_parallel_config,
-            compute_grid_size,
+            output_compute_grid_size,
             out_channels,
             shard_orientation,
             is_mm_conv /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/);
@@ -948,13 +997,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             kernel_size,
             compute_grid_size);
 
-        if (conv_config.act_block_w_div == 1 && conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t width_sharded_num_cores = input_parallel_config.grid.num_cores();
-            // Set act_block_w_div to max value to
-            // be conservative with L1 memory usage.
-            // act_block_w_div == 1 is currently the default value.
-            conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * tt::constants::TILE_WIDTH);
-        }
         SlidingWindowConfig sliding_window_config{
             .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
         conv_op_l1_usage l1_usage = calculate_L1_usage(
@@ -1285,7 +1327,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
 
     uint32_t max_memory_consumed = 0;
     uint32_t old_max_memory_consumed = 0;
-    uint32_t max_memory_index = 0;
+    [[maybe_unused]] uint32_t max_memory_index = 0;
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
@@ -1389,26 +1431,11 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
 
         output_slice_dim_start += output_slice_size;
         slice_index++;
-        if (conv_config.in_place) {
-            if (params.stride[0] > params.kernel_size[0] || params.stride[1] > params.kernel_size[1]) {
-                log_warning(
-                    tt::LogOp,
-                    "conv_config has in-place halo enabled, but it may be disabled as the halo output is smaller than "
-                    "the "
-                    "input. This may lead to OOM errors with auto-slicing. If so, please disable in-place halo in the "
-                    "Conv2dConfig.");
-            }
-            max_memory_consumed = std::max(
-                max_memory_consumed,
-                this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
-                    this_slice_l1_usage.CB_allocation_size);
-        } else {
-            max_memory_consumed = std::max(
-                {max_memory_consumed,
-                 this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
-                     this_slice_l1_usage.CB_allocation_size,
-                 this_slice_input_size + this_slice_approx_max_halo_size});
-        }
+        max_memory_consumed = std::max(
+            {max_memory_consumed,
+             this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
+                 this_slice_l1_usage.CB_allocation_size,
+             this_slice_input_size + this_slice_approx_max_halo_size});
         if (max_memory_consumed > old_max_memory_consumed) {
             old_max_memory_consumed = max_memory_consumed;
             max_memory_index = slice_index;
@@ -1543,22 +1570,36 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
 }
 
 bool auto_enable_kernel_folding(
+    const ttnn::MemoryConfig& input_memory_config,
+    Layout input_layout,
+    const DataType& input_dtype,
     std::optional<bool> enable_folding_,
-    bool is_dram,
     uint32_t input_height,
     uint32_t input_width,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4) {
     if (!enable_folding_.has_value()) {
-        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] && (input_height % stride[0] == 0) &&
-            (input_width % stride[1] == 0) &&
-            (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
-            log_debug(tt::LogOp, "Auto enabling kernel folding");
-            return true;
-        } else {
+        if (stride[0] != kernel_size[0] || stride[1] != kernel_size[1]) {
             return false;
         }
+        if (stride[0] == 1 && stride[1] == 1) {
+            return false;
+        }
+        if (dilation[0] != 1 || dilation[1] != 1) {
+            return false;
+        }
+        auto input_padded_height = input_height + padding_n4[0] + padding_n4[1];
+        auto input_padded_width = input_width + padding_n4[2] + padding_n4[3];
+
+        if (input_padded_height % stride[0] != 0 || input_padded_width % stride[1] != 0) {
+            return false;
+        }
+        auto is_zero_padding = padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0;
+        return (
+            (input_memory_config.is_dram() && (input_layout == Layout::ROW_MAJOR || is_zero_padding)) ||
+            (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
     } else {
         return enable_folding_.value();
     }
@@ -1566,30 +1607,36 @@ bool auto_enable_kernel_folding(
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
     MeshDevice* device,
+    uint32_t& batch_size,
     uint32_t& input_height,
     uint32_t& input_width,
     uint32_t& in_channels,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 2>& dilation,
     std::array<uint32_t, 4>& padding_n4,
     bool& mm_conv,
     Conv2dConfig& conv_config) {
     // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
     // also need to be folded.
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        input_tensor.memory_config(),
+        input_tensor.layout(),
+        input_tensor.dtype(),
         conv_config.enable_kernel_stride_folding,
-        input_tensor.memory_config().is_dram(),
         input_height,
         input_width,
         kernel_size,
         stride,
+        dilation,
         padding_n4);
 
     if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
-        auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
-        if (conv_config.deallocate_activation) {
+        auto folded_input_tensor = fold_tensor(
+            input_tensor, device, stride, kernel_size, padding_n4, batch_size, input_height, input_width, in_channels);
+        if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
             auto tensor_to_deallocate = input_tensor;
             tensor_to_deallocate.deallocate(true);
         }
@@ -1613,14 +1660,12 @@ ttnn::Tensor fold_tensor(
     MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4) {
+    std::array<uint32_t, 4> padding_n4,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels) {
     // Validation checks
-    TT_FATAL(
-        !tensor.memory_config().is_l1(),
-        "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
-    TT_FATAL(
-        tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
-        "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
     TT_FATAL(
         stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
         "Conv2D kernel stride folding: Stride must be less than or equal to kernel size");
@@ -1629,6 +1674,16 @@ ttnn::Tensor fold_tensor(
     ttnn::Tensor tensor_on_device = tensor;
     if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    // Reshape tensor from flattened 4D shape (e.g., [1, 1, N*H*W, C]) back to original 4D shape [N, H, W, C] before
+    // folding
+    const auto& current_shape = tensor_on_device.logical_shape();
+    bool needs_reshape =
+        (current_shape.rank() == 4 && (current_shape[1] != input_height || current_shape[2] != input_width));
+    if (needs_reshape) {
+        const auto unflattened_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
+        tensor_on_device = ttnn::reshape(tensor_on_device, unflattened_shape, unflattened_shape);
     }
 
     // Core folding operation
@@ -1693,5 +1748,4 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
     }
 }
 
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv

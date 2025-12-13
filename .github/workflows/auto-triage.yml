@@ -1,0 +1,51 @@
+name: Auto Triage
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: "Workflow file name to inspect (e.g., galaxy-quick)"
+        required: true
+        type: string
+      job_name:
+        description: "Job/subjob name within the workflow"
+        required: true
+        type: string
+      slack_ts:
+        description: "Slack message timestamp for threading replies"
+        required: false
+        default: ""
+        type: string
+      send-slack-message:
+        description: "Send slack message"
+        required: false
+        default: false
+        type: boolean
+
+
+jobs:
+  auto-triage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run auto triage
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
+        with:
+          workflow-name: ${{ inputs.workflow_name }}
+          job-name: ${{ inputs.job_name }}
+          copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+          slack_ts: ${{ inputs.slack_ts }}
+          allow-pings: true
+          send-slack-message: ${{ inputs.send-slack-message }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}

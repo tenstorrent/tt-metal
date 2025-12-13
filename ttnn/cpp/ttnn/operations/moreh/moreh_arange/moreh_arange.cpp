@@ -11,11 +11,11 @@ Tensor MorehArange::invoke(
     float start,
     float end,
     float step,
-    const Tensor& any,
+    ttnn::MeshDevice* mesh_device,
     const std::optional<Tensor>& output,
     bool untilize_out,
-    const std::optional<DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prim::moreh_arange(start, end, step, any, output, untilize_out, dtype, memory_config);
+    const DataType& dtype,
+    const MemoryConfig& memory_config) {
+    return ttnn::prim::moreh_arange(start, end, step, mesh_device, output, untilize_out, dtype, memory_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_arange

@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
 namespace operations::ccl {

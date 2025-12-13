@@ -4,11 +4,8 @@
 
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     GROUPNORM_DECODER_NUM_BLOCKS,
-    MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
-    UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
-    UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_decoder import ConvBlock, VaeDecoder
 
@@ -39,12 +36,9 @@ class Vae:
             output_height=output_height,
             output_width=output_width,
             midblock_norm_blocks=MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
-            midblock_conv_channel_split_factors=MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
             upblock_out_channels=[512, 512, 256, 128],
             upblock_out_dimensions=[128, 256, 512, 512],
             upblock_norm_blocks=UPBLOCK_RESNET_NORM_NUM_BLOCKS,
-            upblock_resnet_conv_channel_split_factors=UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
-            upblock_upsample_conv_channel_split_factors=UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
             norm_num_blocks=GROUPNORM_DECODER_NUM_BLOCKS,
         )
 

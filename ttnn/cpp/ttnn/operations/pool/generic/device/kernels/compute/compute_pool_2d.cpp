@@ -74,7 +74,6 @@ void MAIN {
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;
     constexpr uint32_t inc_dst_idx = 4;
-    constexpr uint32_t index_scratch_in_dst_idx = 5;
     constexpr uint32_t index_scratch_out_dst_idx = 6;
 
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
@@ -114,6 +113,7 @@ void MAIN {
     } else {
         unary_op_init_common(in_cb_id_0, in_cb_id_0);
         copy_tile_to_dst_init_short(in_cb_id_0);
+        max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -183,25 +183,10 @@ void MAIN {
                     }
                     reconfig_data_format_srca(in_idx_cb_id);
                     copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                    copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_scratch_in_dst_idx);
                     if (last_c_block) {
                         cb_pop_front(in_idx_cb_id, 1);
-                    }
 
-                    if (first_c_block) {
-                        max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
-                    }
-                    // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
-                    // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
-                    // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
-                    // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
-                    // smaller than 9 as the excess sticks are just filled with padding values
-                    constexpr uint32_t max_mpwi_kernel_size = 9;
-                    max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
-                        data_dst_idx, index_dst_idx);
-
-                    // update the current index column
-                    if (last_c_block) {
+                        // update the current index column
                         if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
                             // we reached the right edge, wrap down and to the left
                             current_idx_col = 0;
@@ -221,8 +206,19 @@ void MAIN {
 
                         // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
-                        add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+
+                        max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                     }
+
+                    // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
+                    // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
+                    // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
+                    // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
+                    // smaller than 9 as the excess sticks are just filled with padding values
+                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
+                        data_dst_idx, index_dst_idx);
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -255,6 +251,7 @@ void MAIN {
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
+                        cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
@@ -272,6 +269,8 @@ void MAIN {
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                         cb_push_back(out_cb_id, in_ntiles_c);
+                        cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
                         if constexpr (is_output_block_format) {
                             pack_reconfig_data_format(pre_tilize_cb_id);

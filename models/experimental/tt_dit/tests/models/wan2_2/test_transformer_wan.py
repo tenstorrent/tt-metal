@@ -22,25 +22,20 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
-        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
+        [(1, 4), (1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
-        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
-        # "1x1sp0tp1",
-        # "1x2sp0tp1",
-        # "1x2sp1tp0",
-        # "2x1sp0tp1",
-        # "2x1sp1tp0",
-        # "2x2sp0tp1",
-        # "2x2sp1tp0",
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
         "wh_4x8sp0tp1",
@@ -59,7 +54,6 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
     ],
     ids=["5b-720p", "14b-480p", "14b-720p"],
 )
-@pytest.mark.parametrize("is_fsdp", [True], ids=["yes_fsdp"])
 def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
@@ -209,32 +203,20 @@ def test_wan_transformer_block(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
-        # [(1, 1), (1, 1), 0, 1, 1],
-        # [(1, 2), (1, 2), 0, 1, 1],
-        # [(1, 2), (1, 2), 1, 0, 1],
-        # [(2, 1), (2, 1), 0, 1, 1],
-        # [(2, 1), (2, 1), 1, 0, 1],
-        # [(2, 2), (2, 2), 0, 1, 1],
-        # [(2, 2), (2, 2), 1, 0, 1],
-        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
-        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
+        [(1, 4), (1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
-        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
-        # "1x1sp0tp1",
-        # "1x2sp0tp1",
-        # "1x2sp1tp0",
-        # "2x1sp0tp1",
-        # "2x1sp1tp0",
-        # "2x2sp0tp1",
-        # "2x2sp1tp0",
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
         "wh_4x8sp0tp1",
@@ -268,6 +250,7 @@ def test_wan_transformer_model(
     prompt_seq_len: int,
     load_cache: bool,
     topology: ttnn.Topology,
+    is_fsdp: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -332,7 +315,7 @@ def test_wan_transformer_model(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        is_fsdp=True,
+        is_fsdp=is_fsdp,
     )
 
     if load_cache:
@@ -386,15 +369,17 @@ def test_wan_transformer_model(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology",
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
-        [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
+        [(1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
+        [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
@@ -409,6 +394,7 @@ def test_wan_transformer_model_caching(
     num_links: int,
     subfolder: str,
     topology: ttnn.Topology,
+    is_fsdp: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -475,7 +461,7 @@ def test_wan_transformer_model_caching(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        is_fsdp=True,
+        is_fsdp=is_fsdp,
     )
     start = time.time()
     tt_model.load_state_dict(torch_model.state_dict())
@@ -506,7 +492,7 @@ def test_wan_transformer_model_caching(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        is_fsdp=True,
+        is_fsdp=is_fsdp,
     )
     loaded_cache_dict = load_cache_dict(cache_path)
     cache_model.from_cached_state_dict(loaded_cache_dict)

@@ -5,9 +5,9 @@ on:
     inputs:
       model:
         description: 'Select model to test'
-        required: false
-        default: 'all'
+        required: true
         type: choice
+        default: all
         options:
           - all
           - falcon7b
@@ -15,6 +15,11 @@ on:
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large
+          - mochi
+          - wan22
+          - flux1-dev
+          - motif
+          - gemma-3-27b-it
   schedule:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 

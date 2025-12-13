@@ -220,6 +220,7 @@ Open the visualizer by running the following command:
 
     python ttnn/visualizer/app.py
 
+See `TT-NN Visualizer <https://docs.tenstorrent.com/ttnn-visualizer/>`_ for additional information on installing and using the visualizer.
 
 
 12. Register pre- and/or post-operation hooks

@@ -19,6 +19,7 @@
 #include "ttnn/operations/reduction/prod/prod_pybind.hpp"
 #include "ttnn/operations/reduction/sampling/sampling_pybind.hpp"
 #include "ttnn/operations/reduction/topk/topk_pybind.hpp"
+#include "ttnn/operations/reduction/manual_seed/manual_seed_pybind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -42,6 +43,7 @@ void py_module(py::module& module) {
     detail::bind_reduction_prod_operation(module, ttnn::prod);
     detail::bind_reduction_sampling_operation(module);
     detail::bind_reduction_topk_operation(module);
+    detail::bind_manual_seed_operation(module);
 }
 
 }  // namespace ttnn::operations::reduction

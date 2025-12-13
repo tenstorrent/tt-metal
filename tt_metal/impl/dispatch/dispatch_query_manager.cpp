@@ -15,6 +15,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace {
 
@@ -83,11 +84,6 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     return current_cores;
 }
 
-std::vector<CoreCoord> populate_all_logical_storage_cores(
-    uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    return get_consistent_logical_cores(num_hw_cqs, dispatch_core_config, tt::get_logical_storage_cores);
-}
-
 std::vector<CoreCoord> populate_all_logical_dispatch_cores(
     uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     return get_consistent_logical_cores(num_hw_cqs, dispatch_core_config, tt::get_logical_dispatch_cores);
@@ -113,21 +109,12 @@ void DispatchQueryManager::reset(uint8_t num_hw_cqs) {
     go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
-    // Populate dispatch and storage
+    // Populate dispatch
     logical_dispatch_cores_on_user_chips_ = populate_all_logical_dispatch_cores(num_hw_cqs_, dispatch_core_config());
-    logical_storage_cores_on_user_chips_ = populate_all_logical_storage_cores(num_hw_cqs_, dispatch_core_config());
-}
-
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_storage_cores(uint32_t device_id) const {
-    return tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config());
 }
 
 const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
     return tt::get_logical_dispatch_cores(device_id, num_hw_cqs_, dispatch_core_config());
-}
-
-const std::vector<CoreCoord>& DispatchQueryManager::get_logical_storage_cores_on_user_chips() const {
-    return logical_storage_cores_on_user_chips_;
 }
 
 const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {

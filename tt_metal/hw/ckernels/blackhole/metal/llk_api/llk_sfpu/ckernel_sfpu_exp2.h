@@ -19,7 +19,7 @@ template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = 0.0f;
     v_if(val > -127.f) {
-        sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00800000) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt z = sfpu::_float_to_int32_exp21f_(val * sfpi::vFloat(0x00800000) + sfpi::vFloat(0x3f800000));
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
@@ -27,7 +27,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
         sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vConstIntPrgm1 + zif, 0);
         sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vConstIntPrgm2 + zif, 0);
         d2 = d1 * d2;
-        zif = sfpu::_float_to_int32_(d2 * d3);
+        zif = sfpu::_float_to_int32_exp21f_(d2 * d3);
 
         zii = sfpi::reinterpret<sfpi::vInt>(
             sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent

@@ -13,6 +13,7 @@
 #define MEM_SYSENG_ETH_MSG_TYPE_MASK 0x0000FFFF
 #define MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK 0x0001
 #define MEM_SYSENG_ETH_MSG_RELEASE_CORE 0x0002
+#define MEM_SYSENG_ETH_MSG_DYNAMIC_NOC_INIT 0x000F
 #define MEM_SYSENG_ETH_MAILBOX_ADDR 0x7D000
 #define MEM_SYSENG_ETH_MAILBOX_NUM_ARGS 3
 #define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
@@ -174,7 +175,7 @@ struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
     uint32_t* eth_link_status_check_ptr;  // Pointer to the eth link status check function
-    uint32_t* eth_flush_icache_ptr;       // Pointer to the eth flush icache function
+    uint32_t* eth_dynamic_noc_init_ptr;   // Pointer to the dynamic noc init function
     uint32_t spare[16 - 4];
 };
 
@@ -224,14 +225,14 @@ uint64_t get_next_link_status_check_timestamp() {
 }
 
 void update_next_link_status_check_timestamp() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
 #endif
 }
 
 void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
         ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
     *reg_ptr = mode_val;
@@ -239,7 +240,7 @@ void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
 }
 
 void disable_interrupts() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
         eth_set_interrupt_mode(i, 0);
     }
@@ -247,7 +248,7 @@ void disable_interrupts() {
 }
 
 FORCE_INLINE bool is_link_up() {
-#if defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0) && !defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
     // Collect current link states
     // TODO: Until erisc0 is enabled, use MAILBOX_RISC1 for link status check. When both riscs are enabled, assign one
     // to use MAILBOX_OTHER Sending msgs to mailbox described in:
@@ -291,20 +292,49 @@ FORCE_INLINE bool is_link_up() {
 #endif
 }
 
+FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
+    // Reinitialize the dynamic NOC counters in base firmware
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
+    constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
+
+    volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
+    uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+
+    // Make sure mailbox is free to accept a new message
+    do {
+        invalidate_l1_cache();
+        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    } while (((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) != MEM_SYSENG_ETH_MSG_DONE) &&
+             risc1_mailbox_val != 0);
+
+    *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_DYNAMIC_NOC_INIT;
+
+    do {
+        invalidate_l1_cache();
+        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
+#else
+    // Directly call the function on ERISC0. No need to switch to base firmware.
+    reinterpret_cast<void (*)()>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_dynamic_noc_init_ptr))();
+#endif
+}
+
 FORCE_INLINE bool is_port_up() {
     invalidate_l1_cache();
     return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
 }
 
 static void service_eth_msg() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
 static void update_boot_results_eth_link_status_check() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     uint64_t curr_timestamp = eth_read_wall_clock();
     uint64_t next_timestamp = get_next_link_status_check_timestamp();
     // Debounce to only be called at every interval

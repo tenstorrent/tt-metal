@@ -286,7 +286,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    auto src_buffer_a = input_tensor_a.buffer();
+    auto* src_buffer_a = input_tensor_a.buffer();
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = input_tensor_a.memory_config().is_sharded();
     bool out_sharded = output_tensor.memory_config().is_sharded();
@@ -297,7 +297,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         shard_spec = output_tensor.shard_spec().value();
     }
 
-    auto dst_buffer = output_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     const auto ashape = input_tensor_a.padded_shape();
     const auto bshape = input_tensor_b.has_value() ? input_tensor_b->padded_shape() : ttnn::Shape({1, 1});

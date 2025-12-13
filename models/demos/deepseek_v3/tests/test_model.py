@@ -265,7 +265,9 @@ def run_test_forward_pass_dpmodel(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
         )
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
+    )
     assert (
         tt_output_torch.shape[-1] == hf_config_short.vocab_size
     ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
@@ -300,7 +302,6 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     hf_config_short,
-    tmp_path,
     cache_path,
     mesh_device,
     model_path,
@@ -312,10 +313,6 @@ def test_forward_pass(
 ):
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
-
-    if not use_real_weights:  # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
 
     test_closure(
         use_real_weights,
