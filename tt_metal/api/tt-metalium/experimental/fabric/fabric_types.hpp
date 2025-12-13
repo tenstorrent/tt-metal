@@ -5,20 +5,25 @@
 #pragma once
 
 #include <stdint.h>
+#include <functional>
+#include <ostream>
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/reflection.hpp>
+
+// Forward declaration for fmt
+#include <fmt/format.h>
 
 namespace tt::tt_fabric {
 
 enum class FabricConfig : uint32_t {
     DISABLED = 0,
-    FABRIC_1D_NEIGHBOR_EXCHANGE = 1,  // 1D topology with no forwarding between non-adjacent devices
-    FABRIC_1D = 2,                    // 1D routing and no deadlock avoidance
-    FABRIC_1D_RING = 3,               // 1D routing and deadlock avoidance using datelines
-    FABRIC_2D = 4,                    // 2D routing
-    FABRIC_2D_TORUS_X = 5,            // 2D routing and deadlock avoidance along X axis
-    FABRIC_2D_TORUS_Y = 6,            // 2D routing and deadlock avoidance along Y axis
-    FABRIC_2D_TORUS_XY = 7,           // 2D routing and deadlock avoidance along XY axes
-    CUSTOM = 8
+    FABRIC_1D = 1,           // 1D routing and no deadlock avoidance
+    FABRIC_1D_RING = 2,      // 1D routing and deadlock avoidance using bubble flow control
+    FABRIC_2D = 3,           // 2D routing
+    FABRIC_2D_TORUS_X = 4,   // 2D routing and deadlock avoidance along X axis
+    FABRIC_2D_TORUS_Y = 5,   // 2D routing and deadlock avoidance along Y axis
+    FABRIC_2D_TORUS_XY = 6,  // 2D routing and deadlock avoidance along XY axes
+    CUSTOM = 7
 };
 
 // tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router
@@ -69,7 +74,39 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
+/**
+ * @brief Represents a fabric node identifier combining mesh ID and chip ID
+ */
+class FabricNodeId {
+public:
+    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
+    MeshId mesh_id{0};
+    std::uint32_t chip_id = 0;
+};
+
+bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
+
 }  // namespace tt::tt_fabric
+
+namespace std {
+template <>
+struct hash<tt::tt_fabric::FabricNodeId> {
+    size_t operator()(const tt::tt_fabric::FabricNodeId& fabric_node_id) const noexcept;
+};
+}  // namespace std
+
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
+};
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
