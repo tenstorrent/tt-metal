@@ -682,15 +682,16 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
           }
           item.owners = owners;
           item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
-          const failingJobNames = (() => {
-            const jobs = new Set();
-            for (const sn of (item.error_snippets || [])) {
-              const jobName = (sn && sn.job) ? String(sn.job) : '';
-              if (jobName) jobs.add(jobName);
+          // Extract failing jobs with their URLs (deduplicated by job name)
+          const failingJobsMap = new Map();
+          for (const sn of (item.error_snippets || [])) {
+            const jobName = (sn && sn.job) ? String(sn.job) : '';
+            const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
+            if (jobName && !failingJobsMap.has(jobName)) {
+              failingJobsMap.set(jobName, { name: jobName, url: jobUrl });
             }
-            return Array.from(jobs);
-          })();
-          item.failing_jobs = failingJobNames;
+          }
+          item.failing_jobs = Array.from(failingJobsMap.values());
         } catch (_) { /* ignore */ }
 
         item.repeated_errors = [];
@@ -769,16 +770,16 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
             if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
             resolveOwnersForSnippet(sn, item.name);
           }
-          // Extract failing job names (same logic as in enrichRegressions)
-          const failingJobNames = (() => {
-            const jobs = new Set();
-            for (const sn of (item.error_snippets || [])) {
-              const jobName = (sn && sn.job) ? String(sn.job) : '';
-              if (jobName) jobs.add(jobName);
+          // Extract failing jobs with their URLs (same logic as in enrichRegressions)
+          const failingJobsMap = new Map();
+          for (const sn of (item.error_snippets || [])) {
+            const jobName = (sn && sn.job) ? String(sn.job) : '';
+            const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
+            if (jobName && !failingJobsMap.has(jobName)) {
+              failingJobsMap.set(jobName, { name: jobName, url: jobUrl });
             }
-            return Array.from(jobs);
-          })();
-          item.failing_jobs = failingJobNames;
+          }
+          item.failing_jobs = Array.from(failingJobsMap.values());
         } catch (_) { /* ignore */ }
         item.repeated_errors = [];
       }
@@ -824,8 +825,13 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
       }
 
       // Get current failing jobs (already extracted in enrichStayedFailing)
-      // Normalize job names for comparison (trim whitespace)
-      const currentFailingJobs = new Set((item.failing_jobs || []).map(job => String(job).trim()));
+      // item.failing_jobs is now an array of {name, url} objects
+      const currentFailingJobsMap = new Map();
+      for (const job of (item.failing_jobs || [])) {
+        const jobName = (job && job.name) ? String(job.name).trim() : '';
+        if (jobName) currentFailingJobsMap.set(jobName, job);
+      }
+      const currentFailingJobNames = new Set(currentFailingJobsMap.keys());
 
       // Fetch error snippets for the previous run
       const previousAnnotationsDir = getAnnotationsDirForRunId(item.previous_run_id);
@@ -852,23 +858,26 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
       }
 
       // Extract previous failing jobs (normalize for comparison)
-      const previousFailingJobs = new Set();
+      const previousFailingJobNames = new Set();
       for (const sn of (previousErrorSnippets || [])) {
         const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
-        if (jobName) previousFailingJobs.add(jobName);
+        if (jobName) previousFailingJobNames.add(jobName);
       }
 
       // Log job comparison details
-      core.info(`[JOB-REGRESSION] ${item.name}: currentJobs=[${Array.from(currentFailingJobs).join(', ')}], previousJobs=[${Array.from(previousFailingJobs).join(', ')}]`);
+      core.info(`[JOB-REGRESSION] ${item.name}: currentJobs=[${Array.from(currentFailingJobNames).join(', ')}], previousJobs=[${Array.from(previousFailingJobNames).join(', ')}]`);
 
-      // Find NEW failing jobs (in current but not in previous)
-      const newFailingJobs = Array.from(currentFailingJobs).filter(job => !previousFailingJobs.has(job.trim()));
+      // Find NEW failing jobs (in current but not in previous) - preserve the {name, url} objects
+      const newFailingJobs = Array.from(currentFailingJobNames)
+        .filter(jobName => !previousFailingJobNames.has(jobName))
+        .map(jobName => currentFailingJobsMap.get(jobName));
 
       if (newFailingJobs.length > 0) {
-        core.info(`Found ${newFailingJobs.length} new failing job(s) in ${item.name}: ${newFailingJobs.join(', ')}`);
+        const newJobNames = newFailingJobs.map(j => j.name);
+        core.info(`Found ${newFailingJobs.length} new failing job(s) in ${item.name}: ${newJobNames.join(', ')}`);
 
         // Create a normalized set for fast lookup
-        const newFailingJobsSet = new Set(newFailingJobs.map(job => job.trim()));
+        const newFailingJobsSet = new Set(newJobNames.map(name => name.trim()));
 
         // Create a regression entry for this pipeline with only the new failing jobs
         // This will be treated as a regression and sent to auto-triage
@@ -884,7 +893,7 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
           commit_short: item.commit_short,
           commit_url: item.commit_url,
           owners: item.owners || [],
-          failing_jobs: newFailingJobs, // Only the NEW failing jobs
+          failing_jobs: newFailingJobs, // Only the NEW failing jobs (array of {name, url})
           error_snippets: (item.error_snippets || []).filter(sn => {
             // Filter error snippets to only include those from new failing jobs
             const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
@@ -906,7 +915,7 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
 
         // Add to regressedDetails so it goes through auto-triage
         regressedDetails.push(jobLevelRegression);
-        core.info(`Added job-level regression for ${item.name} with jobs: ${newFailingJobs.join(', ')}`);
+        core.info(`Added job-level regression for ${item.name} with jobs: ${newJobNames.join(', ')}`);
       } else {
         core.info(`No new failing jobs detected for ${item.name}`);
       }
