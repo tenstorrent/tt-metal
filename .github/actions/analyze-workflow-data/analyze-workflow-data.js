@@ -77,6 +77,7 @@ const {
   computeStatusChanges,
   enrichRegressions,
   enrichStayedFailing,
+  detectJobLevelRegressions,
   buildRegressionsSection,
   buildStayedFailingSection,
 } = reporting;
@@ -187,6 +188,10 @@ async function run() {
 
     // Enrich stayed failing with first failing run within the window
     await enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
+
+    // Detect job-level regressions in stayed_failing workflows
+    // This identifies NEW failing jobs in pipelines that were already failing
+    await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
     // upload the changes json to the artifact space
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
