@@ -104,6 +104,7 @@ public:
         return this->cluster_desc_->get_chip_unique_ids();
     }
 
+    // Returns map of logical chip ID to PCIe device ID
     const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
         return this->cluster_desc_->get_chips_with_mmio();
     }
