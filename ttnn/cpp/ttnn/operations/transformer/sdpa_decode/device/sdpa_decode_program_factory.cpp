@@ -863,16 +863,29 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             mul_bcast_granularity,
             log2_mul_bcast_granularity);
 
+        // Reduce ops can use granularity of dst_size/2
+        const uint32_t reduce_granularity = std::min(PNHt, dst_size / 2);
+        const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+        TT_FATAL(
+            reduce_granularity == (1 << log2_reduce_granularity),
+            "Reduce granularity ({}) must be a power of 2 (2^{})",
+            reduce_granularity,
+            log2_reduce_granularity);
+
         compute_defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
         compute_defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
         compute_defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
         compute_defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
+        compute_defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+        compute_defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
 
         // Log these
         log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
         log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
         log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
         log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
+        log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+        log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
     } else {
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
