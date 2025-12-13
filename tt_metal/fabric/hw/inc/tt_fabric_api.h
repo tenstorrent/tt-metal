@@ -202,7 +202,7 @@ bool fabric_set_unicast_route(
         auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
         dst_dev_id = exit_node_table[dst_mesh_id];
         dst_mesh_id = routing_table->my_mesh_id;
-        }
+    }
     bool ok = false;
     if constexpr (called_from_router) {
         // This is to prepend additional one step, which is not needed for worker sender.
@@ -231,7 +231,6 @@ bool fabric_set_unicast_route(
             DPRINT << "FSR: Not exit chip, routing to it" << ENDL();
             ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
         } else {
-
             if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
                 // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done
                 DPRINT << "FSR: At dest mesh, drain local" << ENDL();
@@ -264,7 +263,7 @@ bool fabric_set_unicast_route(
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
         }
-    } else if(ns_hops > 0) {
+    } else if (ns_hops > 0) {
         packet_header->routing_fields.branch_east_offset = turn_point;
         packet_header->routing_fields.branch_west_offset = turn_point;
     } else if (ns_hops == 0 && ew_hops > 0) {
