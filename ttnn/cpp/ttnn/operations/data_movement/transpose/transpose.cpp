@@ -26,6 +26,9 @@ inline Tensor transpose_(
     TransposeOpDim transpose_dim,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
+    // TODO(#34353)
+    TT_FATAL(pad_value.has_value(), "transpose_ called with nullopt pad_value!");
+
     auto prim_permute = [&](const ttnn::Tensor& input, ttnn::SmallVector<uint32_t> dims) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
@@ -67,6 +70,10 @@ ttnn::Tensor transpose_nd(
     uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
+    // TODO(#34353)
+    TT_FATAL(pad_value.has_value(), "transpose_nd called with nullopt pad_value!");
+    // pad_value = pad_value.value_or(0.0f);
+
     const auto rank = input_tensor.logical_shape().rank();
     ttnn::SmallVector<int64_t> permutation;
     permutation.reserve(rank);
@@ -164,6 +171,9 @@ ttnn::Tensor transpose_impl(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
+    // TODO(#34353)
+    TT_FATAL(pad_value.has_value(), "transpose_impl called with nullopt pad_value!");
+
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
@@ -240,12 +250,16 @@ ttnn::Tensor ExecuteTranspose::invoke(
                              const std::optional<float>& pad_value) {
         return transpose_impl(input_tensor, dim1, dim2, memory_config, pad_value);
     };
+    // TODO(#34353)
+    TT_FATAL(pad_value.has_value(), "ExecuteTranspose::invoke called with nullopt pad_value!");
 
     return build_memory_config_transpose(base_transpose)(input_tensor, dim1, dim2, memory_config, pad_value);
 }
 
 ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, const std::optional<float>& pad_value) {
+    // TODO(#34353)
+    TT_FATAL(pad_value.has_value(), "ExecuteTranspose::invoke called with nullopt pad_value!");
     return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
