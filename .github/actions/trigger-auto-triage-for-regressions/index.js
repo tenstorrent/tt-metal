@@ -118,7 +118,9 @@ async function run() {
         continue;
       }
 
-      for (const jobName of failingJobs) {
+      for (const job of failingJobs) {
+        // Handle both old format (string) and new format ({name, url} object)
+        const jobName = (typeof job === 'object' && job !== null && job.name) ? job.name : String(job);
         core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
 
         try {
