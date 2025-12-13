@@ -17,31 +17,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
-auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
-    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
-    return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
-}
-
 namespace tt::tt_fabric {
-
-FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
-    mesh_id(mesh_id_val), chip_id(chip_id_val) {}
-
-bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs) {
-    return lhs.mesh_id == rhs.mesh_id && lhs.chip_id == rhs.chip_id;
-}
-bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs == rhs); }
-bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs) {
-    return lhs.mesh_id < rhs.mesh_id || (lhs.mesh_id == rhs.mesh_id && lhs.chip_id < rhs.chip_id);
-}
-bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs) { return rhs < lhs; }
-bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs > lhs); }
-bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs < rhs); }
-std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
-    using ::operator<<;  // Enable ADL for StrongType operator<<
-    os << "M" << fabric_node_id.mesh_id << "D" << fabric_node_id.chip_id;
-    return os;
-}
 
 RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapper) :
     topology_mapper_(topology_mapper) {
