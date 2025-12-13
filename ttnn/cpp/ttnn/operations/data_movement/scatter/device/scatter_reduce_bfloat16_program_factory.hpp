@@ -16,7 +16,7 @@ namespace ttnn::operations::data_movement::scatter {
 using namespace tt;
 using namespace tt::tt_metal;
 
-struct ScatterProgramFactory {
+struct ScatterReduceBfloat16ProgramFactory {
     struct shared_variables_t {
         KernelHandle reader_kernel_id{};
         KernelHandle writer_kernel_id{};

@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "../scatter_common.hpp"
+#include "../scatter_bf16_reduction_common.hpp"
 
 void kernel_main() {
     constexpr auto ctas{get_ctas()};
