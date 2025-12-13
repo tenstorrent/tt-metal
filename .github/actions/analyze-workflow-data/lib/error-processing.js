@@ -488,6 +488,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             const seen = new Set();
             for (const a of arr) {
               const job = a.job_name || '';
+              const jobUrl = a.job_url || '';
               const title = a.title || '';
               const level = a.annotation_level || '';
               const message = a.message || '';
@@ -498,7 +499,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               const dedupeKey = `${job}|${title}|${levelLc}|${msgTrim}`;
               if (seen.has(dedupeKey)) continue;
               seen.add(dedupeKey);
-              snippets.push({ label, job, snippet: message });
+              snippets.push({ label, job, job_url: jobUrl, snippet: message });
               if (snippets.length >= maxSnippets) break;
             }
           }

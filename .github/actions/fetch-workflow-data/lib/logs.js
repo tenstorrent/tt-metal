@@ -209,7 +209,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
       let annotationsFetchFailed = false;
       const gtestJobNames = new Set();
       try {
-        // List jobs and extract check_run_ids
+        // List jobs and extract check_run_ids along with job URLs
         const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
         const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
         const checkRunIds = [];
@@ -218,13 +218,13 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           if (typeof cru === 'string' && cru.includes('/check-runs/')) {
             const idStr = cru.split('/check-runs/')[1];
             const id = idStr ? parseInt(idStr, 10) : NaN;
-            if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name });
+            if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name, job_url: j.html_url || '' });
           }
         }
         const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
         if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
         const allAnnotations = [];
-        for (const { id: checkRunId, job_name } of checkRunIds) {
+        for (const { id: checkRunId, job_name, job_url } of checkRunIds) {
           let page = 1;
           const budget = 500; // safety cap per run
           while (allAnnotations.length < budget) {
@@ -235,6 +235,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
             for (const a of arr) {
               allAnnotations.push({
                 job_name,
+                job_url,
                 path: a.path,
                 start_line: a.start_line,
                 end_line: a.end_line,
