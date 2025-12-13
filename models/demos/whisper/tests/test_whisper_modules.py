@@ -154,6 +154,9 @@ def test_whisper_attention(
             parameters=ttnn_parameters,
         )
         output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+        # 4D to 3D
+        if len(output.shape) == 4:
+            output = output.squeeze(1)
 
         pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
         logger.info(f"[pos={i}] Output PCC: {output_pcc}")
@@ -220,6 +223,11 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D and unpadding
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+    output = output[:, :sequence_size, :]
+
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
 
@@ -259,6 +267,12 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
     )
     output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+
+    # 4D to 3D and unpadding
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+    sequence_size = torch_output.shape[-2]
+    output = output[:, :sequence_size, :]
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.998)
     logger.info(f"Output PCC: {pcc_message}")
@@ -356,6 +370,9 @@ def test_decoder_layer(
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    # 4D to 3D
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -452,6 +469,10 @@ def test_decoder(
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
 
@@ -530,6 +551,10 @@ def test_ttnn_whisper(
         parameters=ttnn_parameters,
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
+
+    # 4D to 3D
+    if len(last_hidden_state.shape) == 4:
+        last_hidden_state = last_hidden_state.squeeze(1)
 
     if is_blackhole():
         expec_out_pcc = 0.990
