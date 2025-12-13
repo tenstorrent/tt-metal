@@ -81,6 +81,7 @@ public:
         MeshCoordinate shard_coord;
         void* host_data = nullptr;
         std::optional<BufferRegion> region;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr;
     };
 
     // MeshBuffer Write APIs
