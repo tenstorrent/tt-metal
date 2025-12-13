@@ -824,7 +824,8 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
       }
 
       // Get current failing jobs (already extracted in enrichStayedFailing)
-      const currentFailingJobs = new Set(item.failing_jobs || []);
+      // Normalize job names for comparison (trim whitespace)
+      const currentFailingJobs = new Set((item.failing_jobs || []).map(job => String(job).trim()));
 
       // Fetch error snippets for the previous run
       const previousErrorSnippets = errorSnippetsCache.get(item.previous_run_id) || await fetchErrorSnippetsForRun(
@@ -846,18 +847,21 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
         }
       }
 
-      // Extract previous failing jobs
+      // Extract previous failing jobs (normalize for comparison)
       const previousFailingJobs = new Set();
       for (const sn of (previousErrorSnippets || [])) {
-        const jobName = (sn && sn.job) ? String(sn.job) : '';
+        const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
         if (jobName) previousFailingJobs.add(jobName);
       }
 
       // Find NEW failing jobs (in current but not in previous)
-      const newFailingJobs = Array.from(currentFailingJobs).filter(job => !previousFailingJobs.has(job));
+      const newFailingJobs = Array.from(currentFailingJobs).filter(job => !previousFailingJobs.has(job.trim()));
 
       if (newFailingJobs.length > 0) {
         core.info(`Found ${newFailingJobs.length} new failing job(s) in ${item.name}: ${newFailingJobs.join(', ')}`);
+
+        // Create a normalized set for fast lookup
+        const newFailingJobsSet = new Set(newFailingJobs.map(job => job.trim()));
 
         // Create a regression entry for this pipeline with only the new failing jobs
         // This will be treated as a regression and sent to auto-triage
@@ -876,8 +880,8 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
           failing_jobs: newFailingJobs, // Only the NEW failing jobs
           error_snippets: (item.error_snippets || []).filter(sn => {
             // Filter error snippets to only include those from new failing jobs
-            const jobName = (sn && sn.job) ? String(sn.job) : '';
-            return newFailingJobs.includes(jobName);
+            const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
+            return jobName && newFailingJobsSet.has(jobName);
           }),
           first_failed_run_id: item.first_failed_run_id,
           first_failed_run_url: item.first_failed_run_url,
