@@ -162,10 +162,6 @@ std::vector<std::uint32_t> create_random_vector_of_bfloat16_1_1(size_t num_bytes
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, -1.0f);  // -1.0..1.0
 }
 
-std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(size_t num_bytes, int seed) {
-    return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed);  // 0.0f..2.0f
-}
-
 /*
  * rk: Still won't handle the case where the number of elements is odd, except
  * if it's 1. Whatever, for now.
@@ -190,26 +186,6 @@ std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones) {
     std::vector<bfloat16> vec(rows * cols, (float)0);
     for (int i = 0; i < num_ones; i++) {
         vec.at((i * cols) + i) = bfloat16((float)1);
-    }
-    return vec;
-}
-
-// TODO(AP): duplication with above
-std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed) {
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, 1), std::mt19937(seed));
-
-    std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (unsigned int& elem : vec) {
-        float num_1_float = rand_float();
-        float num_2_float = rand_float();
-
-        num_1_float = (num_1_float > 0.5);
-        num_2_float = (num_2_float > 0.5);
-
-        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
-
-        elem = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
     return vec;
 }
@@ -272,21 +248,6 @@ void print_vec_of_bfloat16(
     }
 }
 
-void print_vec(const std::vector<uint32_t>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
-    int idx = 0;
-    for (int i = 0; i < num_tiles; i++) {
-        std::cout << name << " tile " << i + tile_print_offset << std::endl;
-        for (int j = 0; j < 32; j++) {
-            for (int k = 0; k < 32; k++) {
-                std::cout << vec.at(idx) << ", ";
-                idx++;
-            }
-            std::cout << std::endl;
-        }
-        std::cout << std::endl;
-    }
-}
-
 std::vector<uint32_t> pack_bfloat16_vec_into_uint32_vec(const std::vector<bfloat16>& data) {
     ZoneScoped;
     TT_ASSERT(data.size() % 2 == 0);
@@ -307,41 +268,6 @@ std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     }
     return result;
 }
-
-// Equality functions
-bool equal_within_n_sig_figs(float a, float b, int n) {
-    std::string str_a = std::to_string(a);
-    std::string str_b = std::to_string(b);
-
-    // Iterate until no more zeroes
-    int i = 0;
-    while (i < std::min(str_a.size(), str_b.size()) and (str_a.at(i) == '0' or str_a.at(i) == '.')) {
-        i++;
-    }
-
-    // Compare sig figs
-    int num_correct_sig_figs = 0;
-    for (; i < std::min(str_a.size(), str_b.size()); i++) {
-        char cur_char = str_a.at(i);
-
-        if (cur_char == str_b.at(i)) {
-            if (cur_char != '.') {  // Ignore decimal point
-                num_correct_sig_figs++;
-            }
-        } else {
-            std::cout << "Floats being compared: A: " << a << ", B: " << b << std::endl;
-            return false;
-        }
-
-        if (num_correct_sig_figs == n) {
-            break;
-        }
-    }
-
-    return true;
-};
-
-bool equal_within_absolute_tolerance(float a, float b, float tol) { return std::abs(a - b) < tol; }
 
 // this follows the implementation of numpy's is_close
 bool is_close(float a, float b, float rtol, float atol) {
