@@ -56,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -71,26 +71,6 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-      # - name: Save environment data
-      #   id: save-environment-data
-      #   if: ${{ !cancelled() }}
-      #   run: |
-      #     if [ -d "generated/benchmark_data" ]; then
-      #       echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-      #       python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-      #     else
-      #       echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
-      #       echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-      #     fi
-      # - name: Upload benchmark data
-      #   if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-      #   uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-      #   with:
-      #     ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-      #     sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
-      #     username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-      #     hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      #     path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
