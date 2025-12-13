@@ -19,14 +19,12 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const
         auto adjacent_map = mesh_graph.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
 
         std::vector<FabricNodeId> adjacents;
-        bool relaxed = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id);
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
             // Skip self-connections
             if (neighbor_chip_id == fabric_node_id.chip_id) {
                 continue;
             }
-            size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
-            for (size_t i = 0; i < repeat_count; ++i) {
+            for (size_t i = 0; i < edge.connected_chip_ids.size(); ++i) {
                 adjacents.push_back(FabricNodeId(mesh_id, neighbor_chip_id));
             }
         }
