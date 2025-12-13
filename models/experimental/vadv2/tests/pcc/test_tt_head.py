@@ -583,6 +583,56 @@ def test_vadv2_head(
     mlvl_feats.append(c)
     ttnn_outputs = tt_model(mlvl_feats, img_metas)
 
+    # Print PCC comparison results
+    print("\n" + "=" * 80)
+    print("VADv2 Head PCC Comparison Results")
+    print("=" * 80)
+
+    from models.common.utility_functions import comp_pcc
+
+    pcc_results = {}
+    tensor_comparisons = [
+        ("bev_embed", 0.99),
+        ("all_cls_scores", 0.99),
+        ("all_bbox_preds", 0.99),
+        ("all_traj_preds", 0.98),
+        ("all_traj_cls_scores", 0.99),
+        ("map_all_cls_scores", 0.99),
+        ("map_all_bbox_preds", 0.99),
+        ("map_all_pts_preds", 0.99),
+        ("ego_fut_preds", 0.99),
+    ]
+
+    all_passed = True
+    for tensor_name, threshold in tensor_comparisons:
+        torch_tensor = model_outputs[tensor_name]
+        ttnn_tensor = ttnn.to_torch(ttnn_outputs[tensor_name]).float()
+
+        # Compute PCC
+        passed, pcc_value = comp_pcc(torch_tensor, ttnn_tensor, pcc=threshold)
+        pcc_results[tensor_name] = pcc_value
+
+        # Print result
+        status = "✓ PASS" if passed else "✗ FAIL"
+        print(f"  {tensor_name:<25} PCC: {pcc_value:.6f}  (threshold: {threshold:.2f})  {status}")
+
+        if not passed:
+            all_passed = False
+
+    # Print summary
+    print("=" * 80)
+    avg_pcc = sum(pcc_results.values()) / len(pcc_results)
+    min_pcc = min(pcc_results.values())
+    max_pcc = max(pcc_results.values())
+
+    print(f"Summary:")
+    print(f"  Average PCC: {avg_pcc:.6f}")
+    print(f"  Min PCC:     {min_pcc:.6f} ({min(pcc_results, key=pcc_results.get)})")
+    print(f"  Max PCC:     {max_pcc:.6f} ({max(pcc_results, key=pcc_results.get)})")
+    print(f"  Overall:     {'✓ ALL PASSED' if all_passed else '✗ SOME FAILED'}")
+    print("=" * 80 + "\n")
+
+    # Now run the assertions (will fail if any PCC is below threshold)
     assert_with_pcc(model_outputs["bev_embed"], ttnn.to_torch(ttnn_outputs["bev_embed"]).float(), 0.99)
     assert_with_pcc(model_outputs["all_cls_scores"], ttnn.to_torch(ttnn_outputs["all_cls_scores"]).float(), 0.99)
     assert_with_pcc(model_outputs["all_bbox_preds"], ttnn.to_torch(ttnn_outputs["all_bbox_preds"]).float(), 0.99)
