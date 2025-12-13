@@ -115,6 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
 
+    uint32_t num_tiles_per_block_in0 = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t num_tiles_per_block_in1 = K * per_core_N;
     uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
@@ -156,7 +157,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
     const auto in0_tensor_stride_h = transpose_a ? 1 : K;
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
-    const auto in0_tensor_start_tile_id_stride = per_core_M_per_batch * in0_tensor_stride_h;
 
     const auto in1_tensor_stride_w = transpose_b ? K : 1;
     const auto in1_tensor_stride_h = transpose_b ? 1 : N;
@@ -169,7 +169,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         (std::uint32_t)in0_tensor_next_block_stride,
         (std::uint32_t)in0_block_w,
         (std::uint32_t)per_core_M_per_batch,  // in0_block_h
-        (std::uint32_t)in0_block_num_tiles,   // in0_block_num_tiles
+        (std::uint32_t)in0_block_num_tiles,
         (std::uint32_t)in0_last_ktile_w,
         (std::uint32_t)num_blocks,
         (std::uint32_t)bcast_batch,
@@ -464,11 +464,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
         // Write runtime args to device
-        mm_reader_args[1] = num_blocks_written * in0_tensor_start_tile_id_stride;  // in0_tensor_start_tile_id
+        mm_reader_args[1] = num_blocks_written * num_tiles_per_block_in0;          // in0_tensor_start_tile_id
         mm_reader_args[2] = num_output_blocks_per_core;                            // batch
 
-        mm_writer_args[1] = (num_blocks_written * per_core_M_per_batch / M) * num_tiles_per_block_in1 *
-                            in1_tensor_stride_w;                           // in1_tensor_start_tile_id
+        mm_writer_args[1] =
+            (num_blocks_written * per_core_M_per_batch / M) * num_tiles_per_block_in1;  // in1_tensor_start_tile_id
         mm_writer_args[2] = num_output_blocks_per_core;                    // batch
         mm_writer_args[4] = num_blocks_written * num_tiles_per_block_out;  // out_tensor_start_tile_id
 
