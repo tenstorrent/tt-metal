@@ -54,7 +54,7 @@
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>

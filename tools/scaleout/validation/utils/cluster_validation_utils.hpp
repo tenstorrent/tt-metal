@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <memory>
 #include <filesystem>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics.hpp"
 #include <board/board.hpp>

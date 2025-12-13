@@ -15,7 +15,7 @@
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 
 namespace tt::tt_metal {

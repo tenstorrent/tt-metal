@@ -13,7 +13,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"

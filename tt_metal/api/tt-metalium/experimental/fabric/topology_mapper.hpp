@@ -314,18 +314,6 @@ private:
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> build_asic_id_to_mesh_rank_mapping();
 
     /**
-     * @brief Build the mapping between fabric node IDs and host ranks
-     *
-     * This method iterates through all fabric node IDs in the mesh graph and creates mappings
-     * based on the fabric node IDs and host ranks from the local mesh binding, mapping them
-     * to the host ranks of the physical descriptor.
-     *
-     * @return std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> Map from mesh ID to
-     * fabric node ID to mesh host rank (ordered for deterministic iteration)
-     */
-    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
-
-    /**
      * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs
      *
      * This function performs the core topology mapping by creating bidirectional mappings between logical fabric nodes

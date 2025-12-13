@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -1016,6 +1016,19 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     }
 
     return adjacency_map;
+}
+
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping(
+    const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            auto host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
+            mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
+        }
+    }
+    return mapping;
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

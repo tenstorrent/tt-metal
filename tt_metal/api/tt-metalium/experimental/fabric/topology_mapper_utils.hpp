@@ -157,4 +157,17 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
+/**
+ * @brief Build mapping between fabric node IDs and mesh host ranks
+ *
+ * Creates a mapping between fabric node IDs and mesh host ranks based on the mesh graph.
+ * For each fabric node in a mesh, this function identifies its mesh host rank by examining
+ * the mesh graph and creates a mapping of FabricNodeId to its mesh host rank.
+ *
+ * @param mesh_graph Reference to the mesh graph object containing fabric topology
+ * @return std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> Map from mesh ID to fabric node ID to mesh host rank
+ */
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping(
+    const ::tt::tt_fabric::MeshGraph& mesh_graph);
+
 }  // namespace tt::tt_metal::experimental::tt_fabric

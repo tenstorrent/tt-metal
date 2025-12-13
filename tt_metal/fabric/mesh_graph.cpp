@@ -23,7 +23,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include "physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "impl/context/metal_context.hpp"
 #include <numeric>
@@ -119,6 +119,10 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
             "File provided: {}",
             mesh_graph_desc_file_path);
     }
+}
+
+MeshGraph::MeshGraph(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config) {
+    this->initialize_from_mgd(mgd, fabric_config);
 }
 
 void MeshGraph::add_to_connectivity(
