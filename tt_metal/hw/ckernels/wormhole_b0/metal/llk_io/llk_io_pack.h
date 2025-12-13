@@ -35,7 +35,10 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     do {
         std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
         // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
-        std::uint16_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
+        uint32_t mask = (uint32_t)(tiles_received < get_local_cb_interface(output).tiles_acked) *
+                        get_local_cb_interface(output).fifo_size;
+        std::uint16_t free_tiles_wrap =
+            get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked + mask);
         free_tiles = (std::int32_t)free_tiles_wrap;
     } while (free_tiles < num_tiles);
 }

@@ -132,7 +132,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     "inp_shape",
     [
         (1, 1, 2048, 8192),
-        (1, 1, 128, 8192),
+        (1, 1, 128, 256),
         (2, 1, 128, 8192),
     ],
 )

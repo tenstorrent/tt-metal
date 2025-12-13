@@ -75,6 +75,9 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     do {
         tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
+        uint32_t mask = (uint32_t)(tiles_received < get_local_cb_interface(input).tiles_acked) *
+                        get_local_cb_interface(input).fifo_size;
+        num_tiles_recv += mask;
     } while (num_tiles_recv < num_tiles_u);
 
     apply_mm_stagger(operand);

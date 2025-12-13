@@ -386,8 +386,9 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         invalidate_l1_cache();
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint32_t mask = (uint32_t)(pages_received < pages_acked) * get_local_cb_interface(operand).fifo_size;
         uint16_t free_space_pages_wrap =
-            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
+            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked + mask);
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");
@@ -457,9 +458,12 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     uint16_t pages_received;
 
+    DPRINT << "pages_received_ptr: " << pages_received_ptr << ENDL();
     WAYPOINT("CWFW");
     do {
-        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        pages_received = (uint16_t)reg_read(pages_received_ptr);
+        uint32_t mask = (uint32_t)(pages_received_ptr < pages_acked) * get_local_cb_interface(operand).fifo_size;
+        pages_received = pages_received - pages_acked + mask;
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
 }
