@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <tt-metalium/blockfloat_common.hpp>
+#include "impl/data_format/blockfloat_common.hpp"
 #include <bit>
 #include <memory>
 
