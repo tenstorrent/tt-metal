@@ -64,22 +64,33 @@ inline void print_u16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t n
 
 namespace tt::compute::common {
 
-inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id = 0, bool untilize = false) {
-    for (uint16_t r = 0; r < rows; ++r) {
-        DPRINT << (uint)r << " :: "
+void print_tile_rows(
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = false,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = start_row; r < end_row; ++r) {
+        DPRINT << (uint)r << " : "
                << TileSlice(
-                      cb_id,
-                      tile_id,
+                      cb_idx,
+                      tile_idx,
                       SliceRange{
                           .h0 = (uint8_t)r,
                           .h1 = (uint8_t)(r + 1),
                           .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
                           .ws = (uint8_t)1},
                       true,
-                      untilize);
+                      untilize)
+               << ENDL();
     }
+    DPRINT << "++++++" << ENDL();
 }
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
