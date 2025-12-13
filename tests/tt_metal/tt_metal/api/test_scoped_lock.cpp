@@ -98,7 +98,14 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
         SetRuntimeArgs(program, writer_kernel, writer_core, writer_args);
 
         workload.add_program(device_range, std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+
+        // Use non-blocking mode - finish() will automatically poll and read profiler results
+        // to prevent deadlock when profiler buffers fill up and kernels block waiting for space
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        // Final profiler read after completion
+        ReadMeshDeviceProfilerResults(*mesh_device);
 
         auto* device = mesh_device->get_devices()[0];
         std::vector<uint32_t> final_data(num_elements, 0);

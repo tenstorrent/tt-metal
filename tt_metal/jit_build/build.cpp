@@ -34,6 +34,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.hpp>
@@ -179,6 +180,9 @@ void JitBuildEnv::init(
         }
         if (rtoptions.get_profiler_sum()) {
             profiler_options |= PROFILER_OPT_DO_SUM;
+        }
+        if (rtoptions.get_profiler_block_on_full_buffer()) {
+            profiler_options |= PROFILER_OPT_BLOCK_ON_FULL;
         }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 

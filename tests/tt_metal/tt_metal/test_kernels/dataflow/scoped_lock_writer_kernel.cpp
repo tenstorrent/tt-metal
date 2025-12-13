@@ -41,7 +41,7 @@ void kernel_main() {
         }
     }
 
-    for (uint32_t i = 0; i < 50; ++i) {
+    for (uint32_t i = 0; i < 500; ++i) {
         uint64_t target_noc_addr = get_noc_addr(target_noc_x, target_noc_y, target_addr);
         noc_async_write(local_buffer_addr, target_noc_addr, num_elements * sizeof(uint32_t));
         noc_async_write_barrier();
@@ -51,7 +51,7 @@ void kernel_main() {
     my_sem.wait(2);
 
     // Unlocked period
-    for (uint32_t i = 0; i < 25; ++i) {
+    for (uint32_t i = 0; i < 500; ++i) {
         uint64_t target_noc_addr = get_noc_addr(target_noc_x, target_noc_y, target_addr);
         noc_async_write(local_buffer_addr, target_noc_addr, num_elements * sizeof(uint32_t));
         noc_async_write_barrier();

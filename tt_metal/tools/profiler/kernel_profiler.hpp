@@ -61,6 +61,11 @@ constexpr bool DO_SUM = true;
 #else
 constexpr bool DO_SUM = false;
 #endif
+#if (PROFILE_KERNEL & PROFILER_OPT_BLOCK_ON_FULL)
+constexpr bool BLOCK_ON_FULL = true;
+#else
+constexpr bool BLOCK_ON_FULL = false;
+#endif
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
 constexpr uint32_t TRACE_MARK_ALL_ENDS = (1 << 29);
@@ -278,6 +283,82 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPD");
 }
 
+// Wait for buffer space to become available by polling until host has read/reset the buffer
+inline __attribute__((always_inline)) void wait_for_buffer_space(
+    uint32_t hostIndex, uint32_t deviceIndex, uint32_t requiredSize) {
+    while (true) {
+        // Invalidate L1 cache to ensure we read fresh values from control buffer
+        // The control buffer is in mailbox memory which may be cached
+        invalidate_l1_cache();
+        uint32_t currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
+        if (currEndIndex + requiredSize <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+            break;
+        }
+    }
+}
+
+// Helper template to handle buffer full condition with compile-time optimization
+template <bool BlockOnFull>
+inline __attribute__((always_inline)) void handle_buffer_full_finish_profiler(
+    uint32_t hostIndex,
+    uint32_t deviceIndex,
+    uint32_t currEndIndex,
+    uint32_t core_flat_id,
+    uint32_t profiler_core_count_per_dram,
+    bool& do_noc,
+    uint32_t& dram_offset,
+    uint32_t& send_size) {
+    if constexpr (BlockOnFull) {
+        // Wait for space to become available
+        wait_for_buffer_space(hostIndex, deviceIndex, profiler_control_buffer[deviceIndex]);
+        // Recalculate after waiting
+        currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
+        if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+            dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                              PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                          hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                          profiler_control_buffer[hostIndex] * sizeof(uint32_t);
+            send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
+            profiler_control_buffer[hostIndex] = currEndIndex;
+        } else {
+            do_noc = false;
+            mark_dropped_timestamps(hostIndex);
+        }
+    } else {
+        do_noc = false;
+        mark_dropped_timestamps(hostIndex);
+    }
+}
+
+template <bool BlockOnFull>
+inline __attribute__((always_inline)) void handle_buffer_full_quick_push(
+    uint32_t hostIndex,
+    uint32_t deviceIndex,
+    uint32_t wIndex,
+    uint64_t dram_bank_dst_noc_addr,
+    uint32_t& currEndIndex) {
+    if constexpr (BlockOnFull) {
+        // Wait for space to become available
+        wait_for_buffer_space(hostIndex, deviceIndex, wIndex);
+        // Recalculate after waiting
+        currEndIndex = profiler_control_buffer[hostIndex] + wIndex;
+        if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+            NocRegisterStateSave noc_state;
+            profiler_noc_async_write_posted(
+                reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
+                dram_bank_dst_noc_addr,
+                wIndex * sizeof(uint32_t));
+
+            profiler_noc_async_flush_posted_write();
+            profiler_control_buffer[hostIndex] = currEndIndex;
+        } else {
+            mark_dropped_timestamps(hostIndex);
+        }
+    } else {
+        mark_dropped_timestamps(hostIndex);
+    }
+}
+
 #endif
 
 __attribute__((noinline)) void finish_profiler() {
@@ -331,8 +412,15 @@ __attribute__((noinline)) void finish_profiler() {
 
                 mark_dropped_timestamps(hostIndex);
             } else {
-                do_noc = false;
-                mark_dropped_timestamps(hostIndex);
+                handle_buffer_full_finish_profiler<BLOCK_ON_FULL>(
+                    hostIndex,
+                    deviceIndex,
+                    currEndIndex,
+                    core_flat_id,
+                    profiler_core_count_per_dram,
+                    do_noc,
+                    dram_offset,
+                    send_size);
             }
 
             if (do_noc) {
@@ -418,7 +506,10 @@ __attribute__((noinline)) void quick_push() {
         profiler_noc_async_flush_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
     } else {
-        mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
+        uint32_t hostIndex = HOST_BUFFER_END_INDEX_BR_ER + myRiscID;
+        uint32_t deviceIndex = DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID;
+        handle_buffer_full_quick_push<BLOCK_ON_FULL>(
+            hostIndex, deviceIndex, wIndex, dram_bank_dst_noc_addr, currEndIndex);
     }
 
     wIndex = CUSTOM_MARKERS;
