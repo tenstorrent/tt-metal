@@ -67,16 +67,23 @@ runs:
             else "" end;
 
           def formatFailingJobs(jobs):
-            # Format failing jobs with individual links
-            # Jobs can be either strings (legacy) or objects with {name, url}
+            # Format failing jobs with individual links and owner mentions
+            # Jobs can be either strings (legacy) or objects with {name, url, owners}
             if (jobs | type) == "array" and (jobs | length) > 0 then
               (jobs | map(
                 if (. | type) == "object" and .name then
-                  if .url and (.url | length) > 0 then
+                  (if .url and (.url | length) > 0 then
                     "    • <" + .url + "|" + .name + ">"
                   else
                     "    • " + .name
-                  end
+                  end) + (if (.owners | type) == "array" and (.owners | length) > 0 then
+                    " " + (.owners | map(
+                      if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
+                      elif (.id // "") != "" then "<@" + .id + ">"
+                      elif (.name // "") != "" then .name
+                      else null end
+                    ) | map(select(. != null)) | join(" "))
+                  else "" end)
                 elif (. | type) == "string" then
                   "    • " + .
                 else

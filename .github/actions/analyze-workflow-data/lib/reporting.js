@@ -682,14 +682,39 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
           }
           item.owners = owners;
           item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
-          // Extract failing jobs with their URLs (deduplicated by job name)
+          // Extract failing jobs with their URLs and owners (deduplicated by job name)
           const failingJobsMap = new Map();
           for (const sn of (item.error_snippets || [])) {
             const jobName = (sn && sn.job) ? String(sn.job) : '';
             const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
-            if (jobName && !failingJobsMap.has(jobName)) {
-              failingJobsMap.set(jobName, { name: jobName, url: jobUrl });
+            if (jobName) {
+              if (!failingJobsMap.has(jobName)) {
+                failingJobsMap.set(jobName, { name: jobName, url: jobUrl, owners: [] });
+              }
+              // Merge owners from all snippets for this job (dedupe by id)
+              const job = failingJobsMap.get(jobName);
+              const snippetOwners = Array.isArray(sn.owner) ? sn.owner : [];
+              for (const owner of snippetOwners) {
+                if (owner && owner.id && !job.owners.some(o => o.id === owner.id)) {
+                  job.owners.push(owner);
+                }
+              }
             }
+          }
+          // For each job: if there are non-infra owners, remove infra; if no owners, add infra as default
+          const infraId = DEFAULT_INFRA_OWNER.id;
+          for (const job of failingJobsMap.values()) {
+            const nonInfraOwners = job.owners.filter(o => o.id !== infraId);
+            if (nonInfraOwners.length > 0) {
+              // Has specific owners - use only those (no infra)
+              job.owners = nonInfraOwners;
+            } else if (job.owners.length === 0) {
+              // No owners from snippets - try findOwnerForLabel as fallback
+              const labelOwners = findOwnerForLabel(job.name) || findOwnerForLabel(`${item.name} / ${job.name}`) || [];
+              const nonInfraLabelOwners = labelOwners.filter(o => o.id !== infraId);
+              job.owners = nonInfraLabelOwners.length > 0 ? nonInfraLabelOwners : [DEFAULT_INFRA_OWNER];
+            }
+            // else: job.owners only has infra, which is fine as the default
           }
           item.failing_jobs = Array.from(failingJobsMap.values());
         } catch (_) { /* ignore */ }
@@ -770,14 +795,39 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
             if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
             resolveOwnersForSnippet(sn, item.name);
           }
-          // Extract failing jobs with their URLs (same logic as in enrichRegressions)
+          // Extract failing jobs with their URLs and owners (same logic as in enrichRegressions)
           const failingJobsMap = new Map();
           for (const sn of (item.error_snippets || [])) {
             const jobName = (sn && sn.job) ? String(sn.job) : '';
             const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
-            if (jobName && !failingJobsMap.has(jobName)) {
-              failingJobsMap.set(jobName, { name: jobName, url: jobUrl });
+            if (jobName) {
+              if (!failingJobsMap.has(jobName)) {
+                failingJobsMap.set(jobName, { name: jobName, url: jobUrl, owners: [] });
+              }
+              // Merge owners from all snippets for this job (dedupe by id)
+              const job = failingJobsMap.get(jobName);
+              const snippetOwners = Array.isArray(sn.owner) ? sn.owner : [];
+              for (const owner of snippetOwners) {
+                if (owner && owner.id && !job.owners.some(o => o.id === owner.id)) {
+                  job.owners.push(owner);
+                }
+              }
             }
+          }
+          // For each job: if there are non-infra owners, remove infra; if no owners, add infra as default
+          const infraId = DEFAULT_INFRA_OWNER.id;
+          for (const job of failingJobsMap.values()) {
+            const nonInfraOwners = job.owners.filter(o => o.id !== infraId);
+            if (nonInfraOwners.length > 0) {
+              // Has specific owners - use only those (no infra)
+              job.owners = nonInfraOwners;
+            } else if (job.owners.length === 0) {
+              // No owners from snippets - try findOwnerForLabel as fallback
+              const labelOwners = findOwnerForLabel(job.name) || findOwnerForLabel(`${item.name} / ${job.name}`) || [];
+              const nonInfraLabelOwners = labelOwners.filter(o => o.id !== infraId);
+              job.owners = nonInfraLabelOwners.length > 0 ? nonInfraLabelOwners : [DEFAULT_INFRA_OWNER];
+            }
+            // else: job.owners only has infra, which is fine as the default
           }
           item.failing_jobs = Array.from(failingJobsMap.values());
         } catch (_) { /* ignore */ }
