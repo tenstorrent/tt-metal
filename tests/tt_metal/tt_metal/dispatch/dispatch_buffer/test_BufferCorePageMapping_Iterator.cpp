@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/buffers/dispatch.hpp"
-#include "gtest/gtest.h"
 #include "tt_metal/api/tt-metalium/buffer_page_mapping.hpp"
+#include "gtest/gtest.h"
 #include <vector>
 
 namespace tt::tt_metal {
@@ -62,6 +62,16 @@ void test_BufferCorePageMapping_Iterator(const std::vector<uint32_t>& page_mappi
     const auto core_page_mapping = core_page_mapping_from_page_mapping(page_mapping);
 
     auto core_it = BufferCorePageMapping::Iterator(&core_page_mapping, 0, 0);
+    uint32_t last_non_padding_idx = static_cast<uint32_t>(-1);
+    for (uint32_t i = 0; i < page_mapping.size(); i++) {
+        if (page_mapping[i] != PADDING) {
+            last_non_padding_idx = i;
+        }
+    }
+    if (last_non_padding_idx == static_cast<uint32_t>(-1)) {
+        GTEST_SKIP() << "no non-padding pages found, invalid testcase";
+    }
+
     uint32_t page_size_to_write = 1024;
     uint32_t end_device_page_offset = 0;
     std::vector<uint32_t> src_offsets_buffer_core_mapping;
@@ -69,11 +79,12 @@ void test_BufferCorePageMapping_Iterator(const std::vector<uint32_t>& page_mappi
     std::vector<uint32_t> src_offsets_golden;
     std::vector<uint32_t> dst_offsets_golden;
     uint32_t dst_offset = 0;
+    uint32_t start_device_page_offset = core_it.device_page_offset();
 
     // Path for BufferCorePageMapping::Iterator
-    while (core_it.range_index() < core_page_mapping.host_ranges.size()) {
+    while (start_device_page_offset <= last_non_padding_idx) {
         pages_per_txn = std::min(pages_per_txn, core_page_mapping.num_pages - end_device_page_offset);
-        uint32_t start_device_page_offset = core_it.device_page_offset();
+        start_device_page_offset = core_it.device_page_offset();
         end_device_page_offset = start_device_page_offset + pages_per_txn;
 
         while (true) {
