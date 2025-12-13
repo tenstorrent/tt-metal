@@ -31,8 +31,8 @@ inline void calculate_typecast_int32_to_fp16b() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_typecast_fp16b_to_int32() {
-    _calculate_typecast_fp16b_to_int32_<APPROXIMATION_MODE, ITERATIONS>();
+inline void calculate_typecast_fp32_to_int32() {
+    _calculate_typecast_fp32_to_int32_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -51,8 +51,8 @@ inline void calculate_typecast_int32_to_fp32() {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_typecast_fp16b_to_uint32() {
-    _calculate_typecast_fp16b_to_uint32_<APPROXIMATION_MODE, ITERATIONS>();
+inline void calculate_typecast_fp32_to_uint32() {
+    _calculate_typecast_fp32_to_uint32_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
