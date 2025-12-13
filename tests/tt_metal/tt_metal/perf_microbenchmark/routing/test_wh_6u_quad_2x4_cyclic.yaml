@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+# Run this with the following command:
+# tt-run --rank-binding tests/tt_metal/distributed/config/wh_galaxy_2x4_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_cyclic.yaml
+#
+Tests:
+  # ======================================================================================
+  # Inter Mesh Cycle Hang: Inter-Mesh Directed Traffic
+  # ======================================================================================
+  - name: InterMeshCrossTraffic
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [0, 5]
+        patterns:
+          - destination:
+              device: [2, 4]
+      - device: [2, 5]
+        patterns:
+          - destination:
+              device: [0, 4]
+      - device: [3, 6]
+        patterns:
+          - destination:
+              device: [1, 7]
+      - device: [1, 6]
+        patterns:
+          - destination:
+              device: [3, 7]
