@@ -160,7 +160,7 @@ jobs:
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
             core.info(`Selected previous run id: ${selectedId || 'none'}`);
-            core.setOutput('run_id', selectedId);
+            core.setOutput('run_id', 20195041598);
       - name: Install analyze-workflow-data dependencies
         shell: bash
         working-directory: .github/actions/analyze-workflow-data
