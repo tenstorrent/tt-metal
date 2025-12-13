@@ -398,7 +398,7 @@ static void print_config_reg(
     fixture->RunProgram(mesh_device, workload);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 }
 
 TEST_F(DPrintMeshFixture, ConfigRegAluTestPrint) {
