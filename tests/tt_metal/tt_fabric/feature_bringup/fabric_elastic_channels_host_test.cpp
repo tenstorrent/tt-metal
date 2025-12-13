@@ -66,7 +66,7 @@ struct WorkerTimingStats {
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
@@ -101,7 +101,7 @@ public:
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct TestConfig {

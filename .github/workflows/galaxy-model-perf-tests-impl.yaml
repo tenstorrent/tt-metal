@@ -65,7 +65,17 @@ jobs:
               "timeout": 60,
               "cmd": "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device --timeout=1000",
               "owner_id": "U03PUAKE719"
-            } # Miguel Tairum
+            }, # Miguel Tairum
+            {
+              "name": "Galaxy Sentence Bert tests",
+              "arch": "wormhole_b0",
+              "model-type": "sentence_bert",
+              "model-name": "sentence_bert",
+              "save-perf-data": false,
+              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
+              "timeout": 30,
+              "owner_id": "U088413NP0Q"
+            } # Ashai Reddy
           ]' --compact-output)
 
           ACTIVE_MODELS=$(jq -n '[
@@ -108,16 +118,6 @@ jobs:
               "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/motif/test_performance_motif.py -k \"4x8cfg1sp0tp1\"",
               "owner_id": "U08TED0JM9D"
             }, # Samuel Adesoye
-            {
-              "name": "Galaxy Sentence Bert tests",
-              "arch": "wormhole_b0",
-              "model-type": "sentence_bert",
-              "model-name": "sentence_bert",
-              "save-perf-data": false,
-              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
-              "timeout": 30,
-              "owner_id": "U088413NP0Q"
-            }, # Ashai Reddy
             {
               "name": "Galaxy DiT Wan2.2 model perf tests",
               "model-type": "Wan2.2",

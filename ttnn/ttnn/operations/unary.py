@@ -101,7 +101,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
             "softsign": torch.nn.functional.softsign,
-            "swish": torch.nn.functional.hardswish,
+            "swish": torch.nn.functional.silu,
             "tril": torch.tril,
             "triu": torch.triu,
         }
@@ -557,15 +557,10 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_logit(input_tensor_a, *args, eps=None, device, **kwargs):
+def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.special.logit(input_tensor_a, eps=eps),
-        nan=device.sfpu_nan(),
-        posinf=device.sfpu_inf(),
-        neginf=-device.sfpu_inf(),
-    )
+    return torch.special.logit(input_tensor_a, eps=eps)
 
 
 ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)

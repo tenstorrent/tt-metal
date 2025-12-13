@@ -221,6 +221,7 @@ public:
             // patterns.
             this->set_global_sync(config.global_sync);
             this->set_performance_test_mode(config.performance_test_mode);
+            this->set_skip_packet_validation(config.skip_packet_validation);
 
             // Convert sync configs to traffic configs recognized by the test devuces
             this->add_sync_traffic_to_devices(config);
@@ -304,7 +305,9 @@ public:
         fixture_->setup_workload();
         // TODO: should we be taking const ref?
         for (auto& [coord, test_device] : test_devices_) {
-            test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+            bool enable_kernel_benchmark =
+                skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+            test_device.set_benchmark_mode(enable_kernel_benchmark);
             test_device.set_global_sync(global_sync_);
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
 
@@ -507,6 +510,10 @@ public:
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
 
+    void set_skip_packet_validation(bool skip_packet_validation) { skip_packet_validation_ = skip_packet_validation; }
+
+    bool get_skip_packet_validation() { return skip_packet_validation_; }
+
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
     void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
@@ -610,6 +617,7 @@ public:
 private:
     void reset_local_variables() {
         performance_test_mode_ = PerformanceTestMode::NONE;
+        skip_packet_validation_ = false;
         global_sync_ = false;
         outgoing_traffic_.clear();
         device_direction_cycles_.clear();
@@ -1768,6 +1776,7 @@ private:
 
     PerformanceTestMode performance_test_mode_ = PerformanceTestMode::NONE;  // Performance test mode for current test
     bool telemetry_enabled_ = false;                                         // Telemetry enabled for current test
+    bool skip_packet_validation_ = false;  // Enable benchmark mode in kernels only (skips validation)
     bool global_sync_ = false;        // Line sync for current test
 
     // Performance profiling data

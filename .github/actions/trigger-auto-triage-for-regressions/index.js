@@ -71,6 +71,13 @@ async function run() {
     const slackTs = core.getInput('slack_ts') || '';
     const slackChannelId = core.getInput('slack_channel_id') || '';
     const slackBotToken = core.getInput('slack_bot_token') || '';
+    // Whether downstream auto-triage workflows should send their own Slack message.
+    const sendSlackMessageFlag = core.getInput('send-slack-message') || 'true';
+
+    // Use the same ref as the workflow that is invoking this action so that
+    // auto-triage.yml runs on the same branch (and picks up any in-branch changes),
+    // while still defaulting to main when invoked from main.
+    const dispatchRef = github.context.ref || 'refs/heads/main';
 
     const regressedWorkflows = JSON.parse(regressedWorkflowsJson);
     const octokit = github.getOctokit(githubToken);
@@ -116,11 +123,12 @@ async function run() {
             owner: github.context.repo.owner,
             repo: github.context.repo.repo,
             workflow_id: 'auto-triage.yml',
-            ref: 'main',
+            ref: dispatchRef,
             inputs: {
               workflow_name: workflowFileName,
               job_name: jobName,
-              slack_ts: slackTs
+              slack_ts: slackTs,
+              'send-slack-message': sendSlackMessageFlag
             }
           });
 

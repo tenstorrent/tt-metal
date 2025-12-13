@@ -20,7 +20,7 @@ namespace tt::tt_metal {
 
 template <bool hugepage_write>
 DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB) :
-    cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region), cmd_write_offsetB(0) {
+    cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region) {
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
         "Command sequence size B={} is not {}-byte aligned",
@@ -30,8 +30,7 @@ DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequ
 
 template <bool hugepage_write>
 template <bool hp_w, typename std::enable_if_t<!hp_w, int>>
-DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) :
-    cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_write_offsetB(0) {
+DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_sequence_sizeB(cmd_sequence_sizeB) {
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
         "Command sequence size B={} is not {}-byte aligned",

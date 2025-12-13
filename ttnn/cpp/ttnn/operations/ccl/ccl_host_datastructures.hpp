@@ -58,7 +58,7 @@ public:
     std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
-    uint32_t page_size;
+    uint32_t page_size{0};
     Topology topology;
     bool input_sharded;
     bool output_sharded;
@@ -124,13 +124,13 @@ private:
     uint32_t const num_channel_buffers;
     ccl::EriscDataMoverBufferSharingMode const buffer_sharing_mode;
     ccl::EriscDataMoverTerminationMode const termination_mode;
-    uint32_t num_senders;
-    uint32_t num_receivers;
+    uint32_t num_senders{0};
+    uint32_t num_receivers{0};
     std::size_t num_buffers_per_channel;
     tt::ChipId chip_id;
 
-    bool enable_sender;
-    bool enable_receiver;
+    bool enable_sender{false};
+    bool enable_receiver{false};
 
 public:
     struct ChannelBufferInterface {
@@ -155,12 +155,9 @@ public:
         num_channel_buffers(local_buffer_addresses.size()),
         buffer_sharing_mode(buffer_sharing_mode),
         termination_mode(termination_mode),
-        num_senders(0),
-        num_receivers(0),
+
         num_buffers_per_channel(num_buffers_per_channel),
-        chip_id(chip_id),
-        enable_sender(false),
-        enable_receiver(false) {
+        chip_id(chip_id) {
         TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
         active_channels.reserve(num_channel_buffers);

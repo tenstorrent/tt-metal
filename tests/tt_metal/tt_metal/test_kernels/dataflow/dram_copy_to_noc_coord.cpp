@@ -55,7 +55,8 @@ void kernel_main() {
 #endif
 
     if (l1_overflow_addr) {
-        debug_sanitize_l1_access(l1_overflow_addr, 1);
+        experimental::CoreLocalMem<std::uint32_t> l1_overflow_buffer(l1_overflow_addr);
+        l1_overflow_buffer[0] = 0xDEADBEEF;
     }
 
     // NOC src address

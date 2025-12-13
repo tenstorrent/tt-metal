@@ -19,13 +19,13 @@ namespace tt::tt_metal {
 // Static circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {
     this->set_config(data_format_spec);
 }
 
 // User is expected to use the builder here.
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {}
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {}
 
 // Dynamic circular buffer spec
 CircularBufferConfig::CircularBufferConfig(

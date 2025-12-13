@@ -149,7 +149,10 @@ struct Attribute final {
     std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
     nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
-    template <typename Type, typename BaseType = std::decay_t<Type>>
+    template <
+        typename Type,
+        typename BaseType = std::decay_t<Type>,
+        std::enable_if_t<!std::is_same_v<BaseType, Attribute>, int> = 0>
     Attribute(Type&& object) :
         pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
         delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},

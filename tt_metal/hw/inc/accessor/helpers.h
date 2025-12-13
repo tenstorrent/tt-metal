@@ -7,6 +7,7 @@
 #include <utility>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #include "compile_time_args.h"
 
@@ -24,11 +25,11 @@ template <bool Enable, typename T = void>
 struct ConditionalField {
     T value;
     // Constructor that forwards a single argument
-    template <typename T_>
+    template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
     ConditionalField(T_&& val) : value(std::forward<T_>(val)) {}
 
     // Variadic constructor that forwards multiple arguments to T's constructor
-    template <typename... Args>
+    template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
     ConditionalField(Args&&... args) : value(std::forward<Args>(args)...) {}
 
     ConditionalField() = default;
@@ -38,11 +39,11 @@ struct ConditionalField {
 template <typename T>
 struct ConditionalField<false, T> {
     // Constructor that ignores a single argument
-    template <typename T_>
+    template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
     ConditionalField(T_&& val) {}  // Ignore value if passed to constructor
 
     // Variadic constructor that ignores all arguments
-    template <typename... Args>
+    template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
     ConditionalField(Args&&... args) {}  // Ignore all arguments if passed to constructor
 
     ConditionalField() = default;

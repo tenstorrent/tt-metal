@@ -1559,8 +1559,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
         input_grad = ttnn::empty_like(grad);
     }
 
-    auto output_memory_config =
-        input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
+    auto output_memory_config = output_mem_config.value_or(
+        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'None', 'tanh')");
 
     if (approximate == "tanh") {

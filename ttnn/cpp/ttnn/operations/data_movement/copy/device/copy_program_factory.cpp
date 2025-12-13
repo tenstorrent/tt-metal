@@ -23,7 +23,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
-    const bool backwards = false;
+    const bool backwards = operation_attributes.backwards;
     Program program{};
 
     const bool tilized = output.layout() == Layout::TILE;
