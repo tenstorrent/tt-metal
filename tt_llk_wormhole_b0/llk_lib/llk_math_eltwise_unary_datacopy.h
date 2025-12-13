@@ -30,6 +30,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
+            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
+            TTI_NOP;
+            TTI_NOP;
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
@@ -69,9 +72,13 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             // restore fp32 mode
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             TTI_CLEARDVALID(0b10, 0);
+            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
+            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
+            TTI_NOP;
+            TTI_NOP;
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
@@ -109,9 +116,13 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             // restore fp32 mode
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             TTI_CLEARDVALID(0b10, 0);
+            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
+            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
+            TTI_NOP;
+            TTI_NOP;
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
@@ -140,8 +151,10 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             }
 
             // restore fp32 mode
+
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             TTI_CLEARDVALID(0b10, 0);
+            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         }
     }
     else
@@ -366,6 +379,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
         eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
     }
 
+    TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -464,6 +478,7 @@ inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, c
 
     // everything else is quite standard math init
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -586,6 +601,5 @@ inline void _llk_math_fast_tilize_block_(
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
         }
     }
-
     math::clear_dst_reg_addr();
 }
