@@ -51,6 +51,7 @@ jobs:
             {"model":"sentence_bert"},
             {"model":"swin_s"},
             {"model":"swin_v2"},
+            {"model":"phi3"},
             {"model":"mobilenetv2"},
             {"model":"segformer"},
             {"model":"vgg_unet"},
