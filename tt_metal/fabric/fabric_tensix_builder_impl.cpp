@@ -480,16 +480,16 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     uint32_t num_channel_types = static_cast<uint32_t>(channel_configs_.size());
 
     std::vector<uint32_t> ct_args = {
-        num_total_channels_,                               // 0: total number of channels across all types
-        status_region_.get_address(),                      // 1
-        termination_signal_region_.get_address(),          // 2
-        local_fabric_router_status_region_.get_address(),  // 3
-        fabric_endpoint_status_address_,                   // 4
-        fabric_endpoint_channel_num_buffers_,              // 5
-        num_full_size_channel_iters_,                      // 6
-        num_iters_between_teardown_checks_,                // 7
-        core_type_index_,                                  // 8
-        (uint32_t)wait_for_fabric_endpoint_ready_,         // 9
+        static_cast<uint32_t>(num_total_channels_),           // 0: total number of channels across all types
+        static_cast<uint32_t>(status_region_.get_address()),  // 1
+        static_cast<uint32_t>(termination_signal_region_.get_address()),          // 2
+        static_cast<uint32_t>(local_fabric_router_status_region_.get_address()),  // 3
+        static_cast<uint32_t>(fabric_endpoint_status_address_),                   // 4
+        static_cast<uint32_t>(fabric_endpoint_channel_num_buffers_),              // 5
+        static_cast<uint32_t>(num_full_size_channel_iters_),                      // 6
+        static_cast<uint32_t>(num_iters_between_teardown_checks_),                // 7
+        static_cast<uint32_t>(core_type_index_),                                  // 8
+        (uint32_t)wait_for_fabric_endpoint_ready_,                                // 9
         static_cast<uint32_t>(mux_infos.size()),  // 10: number of downstream mux connections (0 for legacy, 3 for UDM)
         num_channel_types                         // 11: number of channel types
     };
@@ -743,15 +743,16 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     auto channel_type = tt::tt_fabric::ChannelTypes::RELAY_TO_MUX_CHANNEL;
 
     std::vector<uint32_t> ct_args = {
-        status_region_.get_address(),                                            // 0: status_address
-        termination_signal_region_.get_address(),                                // 1: termination_signal_address
-        router_to_relay_channel_stream_id,                                       // 2: channel_stream_id
-        num_iters_between_teardown_checks_,                                      // 3: NUM_ITERS_BETWEEN_TEARDOWN_CHECKS
-        mux_config->get_num_buffers(channel_type),                               // 4: mux_num_buffers
+        static_cast<uint32_t>(status_region_.get_address()),                     // 0: status_address
+        static_cast<uint32_t>(termination_signal_region_.get_address()),         // 1: termination_signal_address
+        static_cast<uint32_t>(router_to_relay_channel_stream_id),                // 2: channel_stream_id
+        static_cast<uint32_t>(num_iters_between_teardown_checks_),               // 3: NUM_ITERS_BETWEEN_TEARDOWN_CHECKS
+        static_cast<uint32_t>(mux_config->get_num_buffers(channel_type)),        // 4: mux_num_buffers
         static_cast<uint32_t>(mux_config->get_buffer_size_bytes(channel_type)),  // 5: mux_buffer_size_bytes
-        local_fabric_router_status_region_.get_address(),  // 6: downstream_mux_status_readback_address
-        NUM_MUX_CONNECTIONS,                               // 7: NUM_MUX_CONNECTIONS
-        num_channel_types                                  // 8: number of channel types
+        static_cast<uint32_t>(
+            local_fabric_router_status_region_.get_address()),  // 6: downstream_mux_status_readback_address
+        NUM_MUX_CONNECTIONS,                                    // 7: NUM_MUX_CONNECTIONS
+        num_channel_types                                       // 8: number of channel types
     };
 
     constexpr uint32_t base_channel_id = 0;

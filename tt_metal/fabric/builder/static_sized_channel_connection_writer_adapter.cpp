@@ -150,9 +150,9 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
             buffer_addr,
             this->pack_downstream_noc_x_rt_arg(vc_idx),
             this->pack_downstream_noc_y_rt_arg(vc_idx),
-            this->downstream_edm_worker_registration_addresses[vc_idx][0].value_or(0),
-            this->downstream_edm_worker_location_info_addresses[vc_idx][0].value_or(0),
-            this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][0].value_or(0),
+            static_cast<uint32_t>(this->downstream_edm_worker_registration_addresses[vc_idx][0].value_or(0)),
+            static_cast<uint32_t>(this->downstream_edm_worker_location_info_addresses[vc_idx][0].value_or(0)),
+            static_cast<uint32_t>(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][0].value_or(0)),
         };
 
         args_out.reserve(args_out.size() + rt_args.size());
@@ -173,15 +173,18 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
         // Pack full relay connection info
         // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)
         auto relay_rt_args = std::initializer_list<uint32_t>{
-            1u,                                                            // has_local_tensix_relay_connection = true
-            this->relay_connection_info.buffer_base_address,               // relay_buffer_base_addr
-            this->relay_connection_info.noc_xy.x,                          // relay_noc_x
-            this->relay_connection_info.noc_xy.y,                          // relay_noc_y
-            this->relay_connection_info.worker_registration_address,       // relay_connection_handshake_addr
-            this->relay_connection_info.worker_location_info_address,      // relay_worker_location_info_addr
-            this->relay_connection_info.free_slots_stream_id,              // relay_free_slots_stream_id
-            fabric_router_config.tensix_relay_connection_buffer_index_id,  // relay_connection_buffer_index_id (queried
-                                                                           // from fabric context)
+            1u,  // has_local_tensix_relay_connection = true
+            static_cast<uint32_t>(this->relay_connection_info.buffer_base_address),  // relay_buffer_base_addr
+            static_cast<uint32_t>(this->relay_connection_info.noc_xy.x),             // relay_noc_x
+            static_cast<uint32_t>(this->relay_connection_info.noc_xy.y),             // relay_noc_y
+            static_cast<uint32_t>(
+                this->relay_connection_info.worker_registration_address),  // relay_connection_handshake_addr
+            static_cast<uint32_t>(
+                this->relay_connection_info.worker_location_info_address),            // relay_worker_location_info_addr
+            static_cast<uint32_t>(this->relay_connection_info.free_slots_stream_id),  // relay_free_slots_stream_id
+            static_cast<uint32_t>(
+                fabric_router_config.tensix_relay_connection_buffer_index_id),  // relay_connection_buffer_index_id
+                                                                                // (queried from fabric context)
         };
 
         args_out.reserve(args_out.size() + relay_rt_args.size());

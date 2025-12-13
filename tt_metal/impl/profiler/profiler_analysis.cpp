@@ -228,7 +228,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
             const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
-                .device_id = marker.chip_id,
+                .device_id = static_cast<ChipId>(marker.chip_id),
                 .device_arch = device_arch,
                 .program_name = marker.op_name,
                 .num_fw_cores = 0,
