@@ -452,7 +452,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::TYPECAST:
             TT_ASSERT(params.size() == 2, "Expected eltwise_typecast to take 2 parameters");
             op_init_and_name = {
-                "typecast_tile_init<{1}u, {2}u>();",
+                fmt::format(
+                    "typecast_tile_init<{0}u, {1}u>();",
+                    (uint32_t)datatype_to_dataformat_converter((DataType)params[0]),
+                    (uint32_t)datatype_to_dataformat_converter((DataType)params[1])),
                 fmt::format(
                     "typecast_tile<{1}u, {2}u>({0});",
                     idst,
