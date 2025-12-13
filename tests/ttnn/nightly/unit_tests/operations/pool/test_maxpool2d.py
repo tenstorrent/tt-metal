@@ -590,6 +590,24 @@ def test_run_max_pool_squeeze_net_model(
         ttnn.bfloat8_b,
     ],
 )
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize("out_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+# @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+# @pytest.mark.parametrize(
+#     "input_shape, shard_startegy",
+#     ((([1, 256, 132, 20], BS),)),
+# )
+# @pytest.mark.parametrize(
+#     "kernel_size",
+#     ((3, 3),),
+# )
+# @pytest.mark.parametrize(
+#     "in_dtype",
+#     [
+#         ttnn.bfloat16,
+#         ttnn.bfloat8_b,
+#     ],
+# )
 def test_max_pool2d_output_formats_and_layouts(
     device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
 ):
