@@ -24,7 +24,8 @@ void set_runtime_args_hc_tiled_interleaved(
     KernelHandle writer_kernel_id,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    bool is_create) {
+    bool is_create,
+    const CoreRange& total_cores) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
 
@@ -55,7 +56,8 @@ void set_runtime_args_hc_tiled_interleaved(
 
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
-    for (const auto& core : cores) {
+    // Need to set runtime args for all cores, not just the ones doing work.
+    for (const auto& core : total_cores) {
         uint32_t num_tiles_per_core;
         uint32_t padded_tiles_per_core;
 
@@ -202,7 +204,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         WriterDataMovementConfig(writer_compile_time_args));
 
     set_runtime_args_hc_tiled_interleaved(
-        program, reader_kernel_id, writer_kernel_id, input_tensor, output_tensor, true);
+        program, reader_kernel_id, writer_kernel_id, input_tensor, output_tensor, true, total_cores);
 
     return {std::move(program), {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id}};
 }
@@ -214,6 +216,10 @@ void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
     transpose::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
+    auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     set_runtime_args_hc_tiled_interleaved(
         program,
@@ -221,7 +227,8 @@ void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
         shared_variables.writer_kernel_id,
         tensor_args.input,
         tensor_return_value,
-        false);
+        false,
+        total_cores);
 }
 
 }  // namespace ttnn::operations::data_movement::transpose::program
