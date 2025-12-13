@@ -11,7 +11,7 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, update_for_unsigned_widening
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
@@ -41,6 +41,8 @@ def test_serialization(tmp_path, shape, tt_dtype):
     file_name = tmp_path / pathlib.Path("tensor.tensorbin")
     ttnn.dump_tensor(str(file_name), tt_tensor)
     torch_tensor_from_file = ttnn.load_tensor(str(file_name)).to_torch()
+
+    torch_tensor_from_file = update_for_unsigned_widening(torch_tensor, torch_tensor_from_file)
 
     assert torch_tensor.dtype == torch_tensor_from_file.dtype
     assert torch_tensor.shape == torch_tensor_from_file.shape
