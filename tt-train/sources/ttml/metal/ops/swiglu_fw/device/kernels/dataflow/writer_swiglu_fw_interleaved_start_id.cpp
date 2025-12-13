@@ -24,9 +24,9 @@ constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
 void kernel_main() {
     uint32_t ra = 0;
-    uint32_t y_addr = get_arg_val<uint32_t>(ra++);  // DRAM base for Y
-    uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
-    uint32_t start_row = get_arg_val<uint32_t>(ra++);
+    const uint32_t y_addr = get_arg_val<uint32_t>(ra++);  // DRAM base for Y
+    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
+    const uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
     const uint32_t tile_bytes = get_tile_size(cb_y_idx);
 
