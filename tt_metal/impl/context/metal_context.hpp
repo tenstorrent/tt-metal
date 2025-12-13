@@ -68,7 +68,7 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
-    DeviceManager* device_manager();
+    std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -106,6 +106,7 @@ public:
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
+    tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
@@ -134,6 +135,7 @@ private:
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
+    void construct_control_plane();
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
@@ -203,6 +205,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<DeviceManager> device_manager_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
