@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,15 +21,19 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
 
+// Type alias for the reduce scatter operation attributes used in fusion
+using ReduceScatterMinimalAsyncParams =
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::operation_attributes_t;
+
 struct MatmulReduceScatterAsync {
-    /* All Gather Params */
-    const ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct;
+    /* Reduce Scatter Params */
+    const ReduceScatterMinimalAsyncParams reduce_scatter_params;
 
     /* Matmul Params */
     using matmul_device_t = operations::matmul::MatmulDeviceOperation;
@@ -74,7 +78,7 @@ struct MatmulReduceScatterAsync {
 
 namespace ccl::matmul_reduce_scatter_async_detail {
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
-    const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
+    const ReduceScatterMinimalAsyncParams& reduce_scatter_params_input,
     const operations::matmul::MatmulDeviceOperation::operation_attributes_t& matmul_struct_input,
     CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices);
