@@ -159,7 +159,7 @@ jobs:
             const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule' && r.conclusion === 'success');
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
-            core.info(`Selected previous run id: ${selectedId || 'none'}`);
+            core.info(`Selected previous run id: ${20194531434 || 'none'}`);
             core.setOutput('run_id', 20194531434);
       - name: Install analyze-workflow-data dependencies
         shell: bash
