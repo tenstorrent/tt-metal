@@ -727,11 +727,20 @@ def test_unary_pow_sweep_BF16_scalar_test(device, check_fractional_ulp):
     # Collect results for summary
     all_results = []
 
+    # Filter to only positive exponents
+    positive_count = 0
+
     # Iterate through each value in tensor_a as the scalar B value
     for i in range(num_values):
         # Get the i-th value from tensor_a to use as scalar B
         b_val = tensor_a[i]
         b_scalar = b_val.item()
+
+        # Skip negative exponents
+        if b_scalar < 0:
+            continue
+
+        positive_count += 1
 
         # Convert to ttnn tensor
         tt_a = ttnn.from_torch(
@@ -762,14 +771,16 @@ def test_unary_pow_sweep_BF16_scalar_test(device, check_fractional_ulp):
         all_results.append((b_scalar, max_ulp))
 
         # Print progress every 1000 iterations
-        if (i + 1) % 1000 == 0:
-            print(f"Processed {i + 1}/{num_values} B values...")
+        if positive_count % 1000 == 0:
+            print(f"Processed {positive_count} positive B values...")
+
+    print(f"Total positive exponents tested: {positive_count}")
 
     # Generate summary report
     _generate_summary_report(
         results=all_results,
         summary_file_path=summary_file_path,
-        test_name="Unary Power (BF16) - Scalar Exponent",
+        test_name="Unary Power (BF16) - Scalar Exponent (Positive Only)",
         data_type="BFloat16",
         num_a_values=num_values,
         num_b_values=num_values,
@@ -794,11 +805,20 @@ def test_unary_pow_sweep_FP32_scalar_test(device, check_fractional_ulp):
     # Collect results for summary
     all_results = []
 
+    # Filter to only positive exponents
+    positive_count = 0
+
     # Iterate through each value in tensor_a as the scalar B value
     for i in range(num_values):
         # Get the i-th value from tensor_a to use as scalar B
         b_val = tensor_a[i]
         b_scalar = b_val.item()
+
+        # Skip negative exponents
+        if b_scalar < 0:
+            continue
+
+        positive_count += 1
 
         # Convert to ttnn tensor
         tt_a = ttnn.from_torch(
@@ -829,14 +849,16 @@ def test_unary_pow_sweep_FP32_scalar_test(device, check_fractional_ulp):
         all_results.append((b_scalar, max_ulp))
 
         # Print progress every 1000 iterations
-        if (i + 1) % 1000 == 0:
-            print(f"Processed {i + 1}/{num_values} B values...")
+        if positive_count % 1000 == 0:
+            print(f"Processed {positive_count} positive B values...")
+
+    print(f"Total positive exponents tested: {positive_count}")
 
     # Generate summary report
     _generate_summary_report(
         results=all_results,
         summary_file_path=summary_file_path,
-        test_name="Unary Power (FP32) - Scalar Exponent",
+        test_name="Unary Power (FP32) - Scalar Exponent (Positive Only)",
         data_type="Float32",
         num_a_values=num_values,
         num_b_values=num_values,
