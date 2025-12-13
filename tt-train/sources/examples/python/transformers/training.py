@@ -18,7 +18,7 @@ from ttml.common.utils import set_seed, initialize_device, create_optimizer
 from ttml.common.model_factory import TransformerModelFactory
 import click
 
-from data import prepare_data
+from ttml.common.data import prepare_data
 from trainer import train
 
 
@@ -55,7 +55,13 @@ def main(config: str):
 
     # Execute training
     train_losses, val_losses = train(
-        training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+        training_cfg,
+        model,
+        optimizer,
+        train_ids,
+        val_ids,
+        device_config.enable_ddp,
+        device_config.enable_tp,
     )
 
     # Cleanup
