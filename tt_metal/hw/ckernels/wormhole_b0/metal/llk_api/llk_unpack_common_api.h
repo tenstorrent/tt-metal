@@ -20,6 +20,32 @@
  * LLK UNPACK COMMON
  *************************************************************************/
 
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    // In0 -> unpA
+    // In1 -> unpB
+    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
+    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
+
+    // unpA -> srcA
+    // unpB -> srcB
+    // Note: For matmul with tiny tiles, operands can have different face dimensions
+    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
+    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
+    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
+    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        unpack_src_format[unpA_operand_id],
+        unpack_src_format[unpB_operand_id],
+        unpack_dst_format[unpA_operand_id],
+        unpack_dst_format[unpB_operand_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces);
+}
+
 inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {
     return (unpack_src_format[old_operand] != unpack_src_format[new_operand]) ||
            (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]);

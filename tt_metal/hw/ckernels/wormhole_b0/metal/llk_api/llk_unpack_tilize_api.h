@@ -11,29 +11,6 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t* unpack_tilize_params) {
-    constexpr bool within_face_16x16_transpose = false;
-    constexpr StochRndType stoch_rnd_mode = StochRndType::None;
-
-    const uint32_t unpA_operand_id = get_operand_id(unpack_tilize_params->unpA_operand);
-    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-
-    _llk_unpack_tilize_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpA_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_tilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_A_params_t unpack_tilize_params = {.unpA_operand = unpA_operand};
-    llk_unpack_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
-}
-
 inline void llk_unpack_tilize_mop_config(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
@@ -123,13 +100,12 @@ inline void llk_unpack_tilizeA_B_hw_configure(
 
     const uint32_t face_r_dim = get_operand_face_r_dim(unpA_operand_id);  // face r dim in unpA and unpB are the same
 
-    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpack_dst_format[unpB_operand_id],
         face_r_dim,
-        within_face_16x16_transpose,
         num_faces);
 }
 
@@ -232,21 +208,6 @@ inline void llk_unpack_tilizeA_B_block(
 /*************************************************************************
  * LLK UNPACK FAST TILIZE SRC A
  *************************************************************************/
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_fast_tilize_hw_configure(const llk_unpack_A_params_t* unpack_tilize_params) {
-    const uint32_t unpA_operand_id = get_operand_id(unpack_tilize_params->unpA_operand);
-
-    _llk_unpack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(
-        unpack_src_format[unpA_operand_id], unpack_dst_format[unpA_operand_id]);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_fast_tilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_A_params_t unpack_tilize_params = {.unpA_operand = unpA_operand};
-
-    llk_unpack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
-}
 
 inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
