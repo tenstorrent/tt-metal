@@ -227,6 +227,14 @@ private:
     void validate_and_throw() const;
 };
 
+/**
+ * @brief Mode for connection count validation
+ */
+enum class ConnectionValidationMode {
+    STRICT,  ///< Strict mode: require exact channel counts, fail if not met
+    RELAXED  ///< Relaxed mode: prefer correct channel counts, but allow mismatches with warnings (default)
+};
+
 }  // namespace tt::tt_fabric
 
 // Include template implementations
