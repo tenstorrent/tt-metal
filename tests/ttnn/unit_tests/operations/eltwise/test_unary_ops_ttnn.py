@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
     compare_pcc,
