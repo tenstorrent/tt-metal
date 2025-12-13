@@ -81,27 +81,46 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           return attemptB - attemptA; // Prefer higher attempt number
         });
 
-      // Scan newest→older, skipping skipped/cancelled runs until either:
-      // A) we find a success (stop; no logs), or
-      // B) we find a failing run (download logs), or
-      // C) we run out of runs (stop; no logs).
+      // Scan newest→older to find failing runs for log/annotation processing.
+      // We collect the latest failing run (targetRun) for fetching new annotations,
+      // and also track the 2nd most recent CONSECUTIVE failing run (previousFailingRun)
+      // to support job-level regression detection in "stayed_failing" pipelines.
+      //
+      // Logic:
+      // - Skip skipped/cancelled runs
+      // - If we find a success BEFORE any failure, no logs needed (workflow is passing)
+      // - If we find a failure, that's our targetRun
+      // - If we find a success AFTER targetRun, stop - the workflow recovered, so any
+      //   subsequent failures are new regressions (not job-level regressions)
+      // - If we find another failure before a success, that's previousFailingRun
       let targetRun = undefined;
+      let previousFailingRun = undefined;
       for (const run of branchRuns) {
         const conc = run && run.conclusion;
         if (conc === 'skipped' || conc === 'cancelled') {
           continue; // ignore skipped/cancelled and check next older
         }
         if (conc === 'success') {
-          targetRun = undefined; // found a success → do not fetch logs for this workflow
+          // Found a success - stop scanning
+          // If we don't have a targetRun yet, workflow is passing (no logs needed)
+          // If we do have a targetRun, the workflow recovered before the current failure,
+          // so we don't look for previousFailingRun (all current failures are new regressions)
           break;
         }
         // Any other conclusion at this point is considered failing for log fetching purposes
-        targetRun = run;
-        break;
+        if (!targetRun) {
+          targetRun = run;
+        } else if (!previousFailingRun) {
+          previousFailingRun = run;
+          break; // We have both consecutive failing runs we need
+        }
       }
 
-      // Remove old annotations/logs for this workflow (only keep the latest failing run)
-      const runsToKeep = targetRun ? new Set([String(targetRun.id)]) : new Set();
+      // Remove old annotations/logs for this workflow (keep the 2 most recent failing runs
+      // to support job-level regression detection in stayed_failing pipelines)
+      const runsToKeep = new Set();
+      if (targetRun) runsToKeep.add(String(targetRun.id));
+      if (previousFailingRun) runsToKeep.add(String(previousFailingRun.id));
       let removedAnnotations = 0;
       let removedGtestLogs = 0;
       let removedOtherLogs = 0;
