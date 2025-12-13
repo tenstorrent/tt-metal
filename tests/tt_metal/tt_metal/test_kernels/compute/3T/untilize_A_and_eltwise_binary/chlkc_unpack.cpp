@@ -15,7 +15,6 @@ void unpack_main() {
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 
     llk_unpack_hw_configure<DST_ACCUM_MODE>(0, 1);
-    // llk_unpack_untilize_hw_configure_disaggregated(0);
 
     // llk_unpack_untilize_init(0);
     for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
