@@ -53,6 +53,23 @@ export class StatusBox extends LitElement {
             gap: 8px;
         }
 
+        .status-box.active {
+            background: linear-gradient(135deg, #fbbf24, #f59e0b);
+            color: white;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 0 20px rgba(251, 191, 36, 0.5);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(251, 191, 36, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 30px rgba(251, 191, 36, 0.8);
+            }
+        }
+
         .valued-value {
             font-weight: normal;
             font-size: 0.9em;
@@ -161,6 +178,7 @@ export class StatusBox extends LitElement {
         type: { type: String },
         value: { type: Object },
         isLeaf: { type: Boolean },
+        isActive: { type: Boolean },
         unitDisplayLabel: { type: String },
         unitFullLabel: { type: String }
     };
@@ -172,6 +190,7 @@ export class StatusBox extends LitElement {
         this.type = 'health';
         this.value = null;
         this.isLeaf = false;
+        this.isActive = false;
         this.unitDisplayLabel = null;
         this.unitFullLabel = null;
         this._cachedFittedText = null;
@@ -391,7 +410,23 @@ export class StatusBox extends LitElement {
         this._cachedFittedText = fittedText;
         const { text: displayName, scaleClass } = fittedText;
 
-        if (this.type === 'valued') {
+        // Priority: active > valued > health
+        if (this.isActive) {
+            statusClass = 'active';
+            if (this.type === 'valued') {
+                const valueDisplay = formatValue(this.value);
+                const unitDisplay = (this.value != null && typeof this.value !== 'string' && this.unitDisplayLabel) ? ` ${this.unitDisplayLabel}` : '';
+                content = html`
+                    <div class="valued-name ${scaleClass}">${displayName}</div>
+                    <div class="valued-value">${valueDisplay}${unitDisplay}</div>
+                `;
+            } else {
+                content = html`
+                    ${!this.isLeaf ? html`<div class="status-indicator"></div>` : ''}
+                    <div class="label-text ${scaleClass}">${displayName}</div>
+                `;
+            }
+        } else if (this.type === 'valued') {
             statusClass = 'valued';
             const valueDisplay = formatValue(this.value);
             // Don't show units for string values, null, or undefined

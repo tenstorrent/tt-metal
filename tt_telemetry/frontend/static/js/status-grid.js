@@ -73,6 +73,7 @@ export class StatusGrid extends LitElement {
                         .value="${metric.value}"
                         .clickable="true"
                         .isLeaf="${metric.isLeaf || false}"
+                        .isActive="${metric.isActive || false}"
                         .unitDisplayLabel="${metric.unitDisplayLabel || null}"
                         .unitFullLabel="${metric.unitFullLabel || null}"
                         type="${isBool(metric.value) ? "health" : "valued"}">
