@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/assert.h"
-#include "debug/ring_buffer.h"
+#include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
 
 /*
  * A test for the assert feature.

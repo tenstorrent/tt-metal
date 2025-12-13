@@ -6,9 +6,9 @@
 
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "debug/dprint_tensix.h"
+#include "api/debug/dprint_tensix.h"
 
-// #include "debug/dprint.h"
+// #include "api/debug/dprint.h"
 inline void tilizeA_B_binary_init(
     uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
     UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim)));

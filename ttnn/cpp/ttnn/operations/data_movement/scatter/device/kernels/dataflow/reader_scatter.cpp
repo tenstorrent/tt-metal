@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "../scatter_common.hpp"
-#include "dprint.h"
+#include "api/debug/dprint.h"
 
 #include <array>
 

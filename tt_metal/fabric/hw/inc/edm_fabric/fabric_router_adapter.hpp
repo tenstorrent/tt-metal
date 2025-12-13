@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include "risc_common.h"
 #include "fabric_stream_regs.hpp"
@@ -14,9 +14,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include <cstdint>

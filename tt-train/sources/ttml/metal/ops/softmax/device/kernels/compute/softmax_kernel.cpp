@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <api/debug/dprint.h>
 #include <compute_kernel_api/cb_api.h>
 #include <compute_kernel_api/pack.h>
 #include <compute_kernel_api/reconfig_data_format.h>
 #include <compute_kernel_api/reg_api.h>
-#include <debug/dprint.h>
 #include <hostdevcommon/kernel_structs.h>
 #include <tensix.h>
 

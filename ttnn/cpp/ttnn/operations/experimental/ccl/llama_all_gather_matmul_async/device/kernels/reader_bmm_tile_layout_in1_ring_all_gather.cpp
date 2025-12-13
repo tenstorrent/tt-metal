@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "remote_circular_buffer_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tile.h"
+#include "api/remote_circular_buffer.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 

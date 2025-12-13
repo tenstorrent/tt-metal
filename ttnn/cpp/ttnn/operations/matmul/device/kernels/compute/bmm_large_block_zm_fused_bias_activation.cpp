@@ -7,7 +7,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "mod_div_lib.h"
+#include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"

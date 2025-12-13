@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dprint.h"
-#include "debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 
 // PACK trisc version of cb_wait_front just for this test
 #if defined(UCK_CHLKC_PACK)
