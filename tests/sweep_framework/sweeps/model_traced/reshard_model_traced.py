@@ -4,26 +4,18 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-
-# Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-# Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
-# Load traced configurations from real model tests
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
 model_traced_params = loader.get_suite_parameters("reshard", all_cases=False)
 
-# Parameters provided to the test vector generator are defined here.
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
         "input_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
@@ -34,16 +26,11 @@ parameters = {
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture for reshard operation.
-    Using explicit DispatchCoreConfig to handle sharded memory configs.
-    """
     device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
@@ -63,49 +50,23 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle input_shape - ensure it's always a tuple
-    if input_shape is None:
-        input_shape = (1, 1, 32, 32)
-    elif isinstance(input_shape, dict):
-        if "self" in input_shape:
-            input_shape = input_shape["self"]
-        else:
-            input_shape = tuple(input_shape.values())[0] if input_shape else (1, 1, 32, 32)
-    elif not isinstance(input_shape, (tuple, list)):
-        input_shape = (input_shape,) if isinstance(input_shape, int) else (1, 1, 32, 32)
-    else:
-        input_shape = tuple(input_shape)
+    shape = input_shape if isinstance(input_shape, (tuple, list)) else (1, 1, 32, 32)
 
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
+    # Tensor creation
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+        shape
+    )
+    torch_output = torch_input.clone()
 
-    # For reshard, the output should match the input (just different memory config)
-    torch_output_tensor = torch_input_tensor.clone()
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
+    )
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, **from_torch_kwargs)
-
+    # Op call
     start_time = start_measuring_time()
-    # Reshard operation changes the memory configuration
     output_tensor = ttnn.reshard(input_tensor, output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - resharding shouldn't change values
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-
-    return [pcc, e2e_perf]
+    # Comparison
+    return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]

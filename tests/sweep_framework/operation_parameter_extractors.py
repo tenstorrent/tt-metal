@@ -1890,10 +1890,142 @@ def _extract_where_parameters(config: List) -> Optional[Dict]:
         return None
 
 
+# Add div extractor method
+def _extract_div_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for div operation
+
+    Extracts from JSON:
+    - arg1: scalar value for division (e.g., 2.0)
+    """
+    try:
+        params = {}
+        for arg in config:
+            if not isinstance(arg, dict):
+                continue
+            # Extract scalar value (arg1)
+            if "arg1" in arg:
+                scalar_value = arg["arg1"]
+                if scalar_value != "nullopt" and scalar_value is not None:
+                    # Convert to numeric if possible
+                    if isinstance(scalar_value, (int, float)):
+                        params["scalar"] = float(scalar_value)
+                    elif isinstance(scalar_value, str):
+                        try:
+                            params["scalar"] = float(scalar_value)
+                        except ValueError:
+                            params["scalar"] = scalar_value
+        return params if params else None
+    except Exception as e:
+        return None
+
+
+# Add rms_norm_pre_all_gather extractor method
+def _extract_rms_norm_pre_all_gather_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for rms_norm_pre_all_gather operation"""
+    try:
+        params = {}
+        # Extract tensor config from arg0 (input tensor)
+        tensor_config = None
+        for arg in config:
+            if isinstance(arg, dict) and "arg0" in arg:
+                tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+                break
+
+        if tensor_config:
+            params["input_shape"] = {"input_a": tensor_config.shape}
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+
+            # Weight shape: typically [last_dim] for RMS norm
+            weight_shape = [tensor_config.shape[-1]] if tensor_config.shape else [32]
+            params["input_shape"]["input_b"] = weight_shape
+
+            # Extract output memory config if present
+            output_memory_config = None
+            for arg in config:
+                if isinstance(arg, dict) and "output_memory_config" in arg:
+                    output_memory_config = arg["output_memory_config"]
+                    break
+            params["output_memory_config"] = output_memory_config or tensor_config.memory_config
+
+        return params if params else None
+    except Exception:
+        return None
+
+
+def _transform_rms_norm_pre_all_gather_parameters(
+    configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+) -> List[Dict]:
+    """Transform rms_norm_pre_all_gather traced configs to run function format"""
+    transformed_configs = []
+
+    for config in configs:
+        try:
+            if not isinstance(config, dict):
+                continue
+
+            input_shape_dict = config.get("input_shape", {})
+            if not input_shape_dict or "input_a" not in input_shape_dict:
+                continue
+
+            input_a_shape = input_shape_dict["input_a"]
+            input_b_shape = input_shape_dict.get("input_b", [input_a_shape[-1]])
+
+            # Parse dtypes
+            input_a_dtype_str = config.get("input_a_dtype", "DataType::BFLOAT16")
+            input_b_dtype_str = config.get("input_b_dtype", "DataType::BFLOAT16")
+            input_a_layout_str = config.get("input_a_layout", "Layout::TILE")
+            input_b_layout_str = config.get("input_b_layout", "Layout::ROW_MAJOR")
+
+            # Parse memory configs
+            input_a_mem_config = config.get("input_a_memory_config", {})
+            input_b_mem_config = config.get("input_b_memory_config", {})
+            output_mem_config = config.get("output_memory_config", input_a_mem_config)
+
+            transformed_config = {
+                "input_shape": input_shape_dict,
+                "input_a_dtype": input_a_dtype_str,
+                "input_b_dtype": input_b_dtype_str,
+                "input_a_layout": input_a_layout_str,
+                "input_b_layout": input_b_layout_str,
+                "input_a_memory_config": input_a_mem_config,
+                "input_b_memory_config": input_b_mem_config,
+                "output_memory_config": output_mem_config,
+            }
+
+            # Apply parsers if provided
+            if parse_dtype:
+                transformed_config["input_a_dtype"] = parse_dtype(input_a_dtype_str)
+                transformed_config["input_b_dtype"] = parse_dtype(input_b_dtype_str)
+            if parse_layout:
+                transformed_config["input_a_layout"] = parse_layout(input_a_layout_str)
+                transformed_config["input_b_layout"] = parse_layout(input_b_layout_str)
+            if parse_memory_config:
+                transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, input_a_shape)
+                transformed_config["input_b_memory_config"] = parse_memory_config(input_b_mem_config, input_b_shape)
+                transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, input_a_shape)
+
+            transformed_configs.append(transformed_config)
+
+        except Exception as e:
+            print(f"Error transforming rms_norm_pre_all_gather config: {e}")
+            continue
+
+    return transformed_configs
+
+
 # Add methods to class
 OperationParameterExtractors._extract_gt_parameters = staticmethod(_extract_gt_parameters)
 OperationParameterExtractors._extract_typecast_parameters = staticmethod(_extract_typecast_parameters)
 OperationParameterExtractors._extract_where_parameters = staticmethod(_extract_where_parameters)
+OperationParameterExtractors._extract_div_parameters = staticmethod(_extract_div_parameters)
+OperationParameterExtractors._extract_rms_norm_pre_all_gather_parameters = staticmethod(
+    _extract_rms_norm_pre_all_gather_parameters
+)
+OperationParameterExtractors._transform_rms_norm_pre_all_gather_parameters = staticmethod(
+    _transform_rms_norm_pre_all_gather_parameters
+)
 
 # Register gt extractor
 OperationParameterExtractors.register_extractor(
@@ -1923,6 +2055,52 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "ttnn::where",
     extract_func=OperationParameterExtractors._extract_where_parameters,
+)
+
+# Register div extractor
+OperationParameterExtractors.register_extractor(
+    "div",
+    extract_func=OperationParameterExtractors._extract_div_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::div",
+    extract_func=OperationParameterExtractors._extract_div_parameters,
+)
+
+# Register rms_norm_pre_all_gather extractor
+OperationParameterExtractors.register_extractor(
+    "rms_norm_pre_all_gather",
+    extract_func=OperationParameterExtractors._extract_rms_norm_pre_all_gather_parameters,
+    transform_func=OperationParameterExtractors._transform_rms_norm_pre_all_gather_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::rms_norm_pre_all_gather",
+    extract_func=OperationParameterExtractors._extract_rms_norm_pre_all_gather_parameters,
+    transform_func=OperationParameterExtractors._transform_rms_norm_pre_all_gather_parameters,
+)
+
+# Register rms_norm_post_all_gather extractor (reuse pre_all_gather)
+OperationParameterExtractors.register_extractor(
+    "rms_norm_post_all_gather",
+    extract_func=OperationParameterExtractors._extract_rms_norm_pre_all_gather_parameters,
+    transform_func=OperationParameterExtractors._transform_rms_norm_pre_all_gather_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::rms_norm_post_all_gather",
+    extract_func=OperationParameterExtractors._extract_rms_norm_pre_all_gather_parameters,
+    transform_func=OperationParameterExtractors._transform_rms_norm_pre_all_gather_parameters,
+)
+
+# Register fill_cache, reshard extractors (generic, no special extraction needed)
+OperationParameterExtractors.register_extractor("fill_cache", extract_func=None, transform_func=None)
+OperationParameterExtractors.register_extractor("reshard", extract_func=None, transform_func=None)
+
+# Register attention operation extractors
+OperationParameterExtractors.register_extractor(
+    "transformer::chunked_scaled_dot_product_attention", extract_func=None, transform_func=None
+)
+OperationParameterExtractors.register_extractor(
+    "transformer::scaled_dot_product_attention_decode", extract_func=None, transform_func=None
 )
 
 

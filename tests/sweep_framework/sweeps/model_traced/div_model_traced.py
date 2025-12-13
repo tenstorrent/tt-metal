@@ -4,13 +4,10 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-
-# Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
@@ -52,48 +49,24 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle input_shape format
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
-
-    # Use scalar from traced configs if provided, otherwise use default
+    shape = input_shape if isinstance(input_shape, (tuple, list)) else input_shape
     divisor = scalar if scalar is not None else 2.0
 
-    # Generate random input tensor
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    # Tensor creation
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+        shape
+    )
+    torch_output = ttnn.get_golden_function(ttnn.div)(torch_input, divisor)
 
-    # PyTorch reference: divide by scalar
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    torch_output_tensor = golden_function(torch_input_tensor, divisor)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
+    )
 
-    # Check if storage_type is HOST
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, **from_torch_kwargs)
-
-    # Use input_a_memory_config as fallback if output_memory_config not provided
-    if output_memory_config is None:
-        output_memory_config = input_a_memory_config
-
+    # Op call
     start_time = start_measuring_time()
-    output_tensor = ttnn.div(input_tensor, divisor, memory_config=output_memory_config)
+    output_tensor = ttnn.div(input_tensor, divisor, memory_config=output_memory_config or input_a_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-
-    return [pcc, e2e_perf]
+    # Comparison
+    return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]
