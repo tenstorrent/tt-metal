@@ -51,4 +51,8 @@ ShapeBase::Container::const_iterator ShapeBase::cbegin() const {
 
 ShapeBase::Container::const_iterator ShapeBase::cend() const { return this->value_.cend(); }
 
+ShapeBase::Container::const_iterator ShapeBase::begin() const { return this->cbegin(); }
+
+ShapeBase::Container::const_iterator ShapeBase::end() const { return this->cend(); }
+
 }  // namespace tt::tt_metal
