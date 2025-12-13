@@ -8,7 +8,9 @@ METALIUM_GUIDE.md @davorchap @marty1885 @tenstorrent/codeowner-bypass
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/ttnn-run-sweeps.yaml @stevendae @cmaryanTT @sjameelTT @pavlejosipovic @bbradelTT @ntarafdar @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/galaxy-deepseek-op-unit-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/galaxy-deepseek-module-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-infra
