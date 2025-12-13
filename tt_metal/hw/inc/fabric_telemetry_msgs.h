@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
-enum RouterState : uint8_t { STANDBY = 0, ACTIVE = 1, PAUSED = 2, DRAINING = 3 };
+enum RouterState : uint32_t { INITIALIZED = 0, ACTIVE = 1, PAUSE = 2, PAUSED = 3, DRAINING = 4 };
 
 enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
 
