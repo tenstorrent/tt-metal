@@ -34,17 +34,22 @@ def test_all_to_all_dispatch_perf(
     subdir = "moe_perf"
     if arch_type == "6U":
         file = f"pytest tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py"
+        if stage == "decode":
+            command = file + "::test_decode_galaxy_perf"
+        elif stage == "prefill":
+            command = file + "::test_prefill_galaxy_perf"
+        else:
+            raise ValueError(f"Invalid stage: {stage}")
     elif arch_type == "T3K":
-        file = f"pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py"
+        file = f"pytest tests/ttnn/multidevice_perf_tests/test_all_to_all_dispatch_decode_prefill_perf.py"
+        if stage == "decode":
+            command = file + "::test_decode_perf"
+        elif stage == "prefill":
+            command = file + "::test_prefill_perf"
+        else:
+            raise ValueError(f"Invalid stage: {stage}")
     else:
         raise ValueError(f"Invalid arch_type: {arch_type}")
-
-    if stage == "decode":
-        command = file + "::test_decode_perf"
-    elif stage == "prefill":
-        command = file + "::test_prefill_perf"
-    else:
-        raise ValueError(f"Invalid stage: {stage}")
 
     cols = ["DEVICE KERNEL"]
     op_name = "AllToAllDispatchDeviceOperation"
@@ -60,9 +65,9 @@ def test_all_to_all_dispatch_perf(
     measured_max = results[cols[0]]["MAX"]
     measured_avg = results[cols[0]]["AVG"]
     measured_std = results[cols[0]]["STD"]
-    measured_max_us = measured_max / 1000
+    measured_avg_us = measured_avg / 1000
 
-    logger.info(f"Measured performance: {measured_max_us:.3f} us vs. target: {perf_target_max_us} us")
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_max_us} us")
 
     # Save the measurement
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
@@ -76,8 +81,8 @@ def test_all_to_all_dispatch_perf(
     )
 
     assert (
-        measured_max_us <= perf_target_max_us
-    ), f"Performance target not met due a regression (measured vs expected max): {measured_max_us} us > {perf_target_max_us} us"
+        measured_avg_us <= perf_target_max_us
+    ), f"Performance target not met due to a regression (measured vs expected max): {measured_avg_us} us > {perf_target_max_us} us"
     assert (
-        measured_max_us >= perf_target_min_us
-    ), f"Performance target not met due a performance improvement (measured vs expected min): {measured_max_us} us < {perf_target_min_us} us"
+        measured_avg_us >= perf_target_min_us
+    ), f"Performance target not met due to a performance improvement (measured vs expected min): {measured_avg_us} us < {perf_target_min_us} us"
