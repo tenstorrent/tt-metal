@@ -828,15 +828,19 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
       const currentFailingJobs = new Set((item.failing_jobs || []).map(job => String(job).trim()));
 
       // Fetch error snippets for the previous run
+      const previousAnnotationsDir = getAnnotationsDirForRunId(item.previous_run_id);
       const previousErrorSnippets = errorSnippetsCache.get(item.previous_run_id) || await fetchErrorSnippetsForRun(
         item.previous_run_id,
         Number.POSITIVE_INFINITY,
         undefined,
-        getAnnotationsDirForRunId(item.previous_run_id)
+        previousAnnotationsDir
       );
       if (!errorSnippetsCache.has(item.previous_run_id)) {
         errorSnippetsCache.set(item.previous_run_id, previousErrorSnippets);
       }
+
+      // Log debug info about previous error snippets
+      core.info(`[JOB-REGRESSION] ${item.name}: previous_run_id=${item.previous_run_id}, annotationsDir=${previousAnnotationsDir || 'NOT FOUND'}, snippets=${(previousErrorSnippets || []).length}`);
 
       // Infer job names from previous error snippets
       for (const sn of (previousErrorSnippets || [])) {
@@ -853,6 +857,9 @@ async function detectJobLevelRegressions(stayedFailingDetails, regressedDetails,
         const jobName = (sn && sn.job) ? String(sn.job).trim() : '';
         if (jobName) previousFailingJobs.add(jobName);
       }
+
+      // Log job comparison details
+      core.info(`[JOB-REGRESSION] ${item.name}: currentJobs=[${Array.from(currentFailingJobs).join(', ')}], previousJobs=[${Array.from(previousFailingJobs).join(', ')}]`);
 
       // Find NEW failing jobs (in current but not in previous)
       const newFailingJobs = Array.from(currentFailingJobs).filter(job => !previousFailingJobs.has(job.trim()));
