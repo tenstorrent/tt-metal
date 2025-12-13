@@ -10,11 +10,12 @@ Tests:
   - name: "ClosetBoxWithinSuperpod"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
+    top_level_iterations: 3
 
     parametrization_params:
       size: [64, 128]
-      num_packets: [64, 128, 256]
+      num_packets: [50]
 
     defaults:
       ftype: unicast
@@ -37,11 +38,12 @@ Tests:
   - name: "ClosetBoxAcrossSuperpods"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
+    top_level_iterations: 3
 
     parametrization_params:
       size: [64, 128]
-      num_packets: [64, 128, 256]
+      num_packets: [50]
 
     defaults:
       ftype: unicast
@@ -67,12 +69,11 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
 
     parametrization_params:
       ntype: [unicast_write]
       size: [128]
-      num_packets: [256]
+      num_packets: [250]
 
     patterns:
       - type: sequential_all_to_all
