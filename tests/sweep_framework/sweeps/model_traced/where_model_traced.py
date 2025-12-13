@@ -93,8 +93,14 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
     else:
         # Tensor creation
-        scalar_true = float(scalar_if_true) if scalar_if_true is not None else 1.0
-        scalar_false = float(scalar_if_false) if scalar_if_false is not None else 0.0
+        try:
+            scalar_true = float(scalar_if_true) if scalar_if_true is not None else 1.0
+        except (ValueError, TypeError):
+            scalar_true = 1.0
+        try:
+            scalar_false = float(scalar_if_false) if scalar_if_false is not None else 0.0
+        except (ValueError, TypeError):
+            scalar_false = 0.0
         torch_condition = torch.randint(0, 2, shape_a, dtype=torch.float32)
         torch_output = torch.where(torch_condition > 0, scalar_true, scalar_false)
 

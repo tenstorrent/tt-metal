@@ -41,6 +41,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept any extra parameters the loader might pass
 ) -> list:
     torch.manual_seed(0)
 
