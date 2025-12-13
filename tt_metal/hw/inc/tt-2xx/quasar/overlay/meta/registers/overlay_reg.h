@@ -20,6 +20,7 @@
 #define OVERLAY_REG_H
 
 #include <stdint.h>
+
 #include "overlay_reg_defines_core.h"
 #include "overlay_reg_defines_debug.h"
 
@@ -179,10 +180,9 @@ typedef struct {
     uint32_t context_switch : 1;
     uint32_t llk_intf : 1;
     uint32_t snoop : 1;
-    uint32_t global_cmdbuf : 1;
+    uint32_t rsvd_0 : 1;
     uint32_t l1_flex_client_idma : 1;
     uint32_t l1_flex_client_overlay : 1;
-    uint32_t fds : 1;
 } TT_CLUSTER_CTRL_CLOCK_GATING_reg_t;
 
 typedef union {
@@ -250,6 +250,8 @@ typedef union {
 
 typedef struct {
     uint32_t disable_inline_writes : 1;
+    uint32_t invalidate_flush_dirty_en : 1;
+    uint32_t clean_putdata_en : 1;
 } TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_reg_t;
 
 typedef union {
@@ -257,7 +259,7 @@ typedef union {
     TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_reg_t f;
 } TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_reg_u;
 
-#define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_REG_DEFAULT (0x00000000)
+#define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_REG_DEFAULT (0x00000006)
 
 typedef struct {
     uint32_t data : 32;
@@ -272,7 +274,11 @@ typedef union {
 
 typedef struct {
     uint32_t dcache_prefetcher_ctrl : 8;
+    uint32_t dcache_prefetcher_waitforhit : 1;
+    uint32_t dcache_prefetcher_ahead : 6;
     uint32_t icache_prefetcher_ctrl : 8;
+    uint32_t icache_prefetcher_waitforhit : 1;
+    uint32_t icache_prefetcher_ahead : 6;
 } TT_CLUSTER_CTRL_PREFETCHER_CONTROL_reg_t;
 
 typedef union {
@@ -280,7 +286,7 @@ typedef union {
     TT_CLUSTER_CTRL_PREFETCHER_CONTROL_reg_t f;
 } TT_CLUSTER_CTRL_PREFETCHER_CONTROL_reg_u;
 
-#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_REG_DEFAULT (0x0000FFFF)
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_REG_DEFAULT (0x027F84FF)
 
 typedef struct {
     uint64_t icache_tl_bus_error : 1;
@@ -358,8 +364,8 @@ typedef union {
 #define T6_L1_CSR_GROUP_HASH_FN_CTRL_REG_DEFAULT (0x00000000)
 
 typedef struct {
-    uint32_t rsvd_0 : 12;
-    uint32_t bit_sel : 10;
+    uint32_t rsvd_0 : 10;
+    uint32_t bit_sel : 12;
 } T6_L1_CSR_GROUP_HASH_FN_MASK_reg_t;
 
 typedef union {
@@ -370,8 +376,8 @@ typedef union {
 #define T6_L1_CSR_GROUP_HASH_FN_MASK_REG_DEFAULT (0x00000000)
 
 typedef struct {
-    uint32_t rsvd_0 : 12;
-    uint32_t bit_sel : 10;
+    uint32_t rsvd_0 : 10;
+    uint32_t bit_sel : 12;
 } T6_L1_CSR_GROUP_HASH_FN_MATCH_reg_t;
 
 typedef union {
@@ -379,7 +385,7 @@ typedef union {
     T6_L1_CSR_GROUP_HASH_FN_MATCH_reg_t f;
 } T6_L1_CSR_GROUP_HASH_FN_MATCH_reg_u;
 
-#define T6_L1_CSR_GROUP_HASH_FN_MATCH_REG_DEFAULT (0x003FF000)
+#define T6_L1_CSR_GROUP_HASH_FN_MATCH_REG_DEFAULT (0x003FFC00)
 
 typedef struct {
     uint32_t rsvd_0 : 4;
@@ -405,34 +411,8 @@ typedef union {
 #define T6_L1_CSR_GROUP_HASH_FN_SWAP_REG_DEFAULT (0x00000000)
 
 typedef struct {
-    uint32_t perf_cnt_enable : 1;
-    uint32_t rsvd_0 : 3;
-    uint32_t perf_cnt_subport_sel : 6;
-    uint32_t rsvd_1 : 2;
-    uint32_t perf_cnt_event_sel : 3;
-} T6_L1_CSR_GROUP_PERF_CTRL_reg_t;
-
-typedef union {
-    uint32_t val;
-    T6_L1_CSR_GROUP_PERF_CTRL_reg_t f;
-} T6_L1_CSR_GROUP_PERF_CTRL_reg_u;
-
-#define T6_L1_CSR_GROUP_PERF_CTRL_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t perf_cnt : 32;
-} T6_L1_CSR_GROUP_PERF_CNT_reg_t;
-
-typedef union {
-    uint32_t val;
-    T6_L1_CSR_GROUP_PERF_CNT_reg_t f;
-} T6_L1_CSR_GROUP_PERF_CNT_reg_u;
-
-#define T6_L1_CSR_GROUP_PERF_CNT_REG_DEFAULT (0x00000000)
-
-typedef struct {
     uint32_t rsvd_0 : 4;
-    uint32_t bit_sel : 28;
+    uint32_t bit_sel : 18;
 } T6_L1_CSR_IN_ORDER_MASK_reg_t;
 
 typedef union {
@@ -444,7 +424,7 @@ typedef union {
 
 typedef struct {
     uint32_t rsvd_0 : 4;
-    uint32_t bit_sel : 28;
+    uint32_t bit_sel : 18;
 } T6_L1_CSR_IN_ORDER_MATCH_reg_t;
 
 typedef union {
@@ -452,7 +432,7 @@ typedef union {
     T6_L1_CSR_IN_ORDER_MATCH_reg_t f;
 } T6_L1_CSR_IN_ORDER_MATCH_reg_u;
 
-#define T6_L1_CSR_IN_ORDER_MATCH_REG_DEFAULT (0xFFFFFFF0)
+#define T6_L1_CSR_IN_ORDER_MATCH_REG_DEFAULT (0x003FFFF0)
 
 typedef struct {
     uint32_t all_in_order : 1;
@@ -537,314 +517,40 @@ typedef union {
 #define TT_CLUSTER_CTRL_SBUS_RSINK_RESET_FALLBACK_REG_DEFAULT (0x00000000)
 
 typedef struct {
-    uint64_t data : 64;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_reg_t;
-
-typedef union {
-    uint64_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint64_t data : 64;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_reg_t;
-
-typedef union {
-    uint64_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint64_t data : 64;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_reg_t;
-
-typedef union {
-    uint64_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint64_t data : 64;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_reg_t;
-
-typedef union {
-    uint64_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t src_x : 6;
-    uint32_t src_y : 6;
-    uint32_t rsvd_0 : 4;
-    uint32_t dest_x : 6;
-    uint32_t dest_y : 6;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_reg_t;
+    uint32_t l1_region_en : 1;
+    uint32_t snoop_perf_disable : 1;
+} TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_reg_t;
 
 typedef union {
     uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_reg_u;
+    TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_reg_t f;
+} TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_reg_u;
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_REG_DEFAULT (0x00000000)
+#define TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_REG_DEFAULT (0x00000000)
 
 typedef struct {
-    uint32_t data : 32;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_reg_t;
+    uint32_t start_addr : 16;
+    uint32_t end_addr : 16;
+} TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_reg_t;
 
 typedef union {
     uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_reg_u;
+    TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_reg_t f;
+} TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_reg_u;
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_REG_DEFAULT (0x00000000)
+#define TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_REG_DEFAULT (0xFFFF0000)
 
 typedef struct {
-    uint32_t data : 6;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_reg_t;
+    uint32_t error : 1;
+    uint32_t error_addr : 16;
+} TT_CLUSTER_CTRL_L1_REGION_ERROR_reg_t;
 
 typedef union {
     uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_reg_u;
+    TT_CLUSTER_CTRL_L1_REGION_ERROR_reg_t f;
+} TT_CLUSTER_CTRL_L1_REGION_ERROR_reg_u;
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t data : 6;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t data : 4;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t wr_req : 1;
-    uint32_t rd_req : 1;
-    uint32_t non_posted_write_sent : 1;
-    uint32_t req_head_flit_vld : 1;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t posted : 1;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_reg_t f;
-} TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_reg_u;
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t decouple_aw : 1;
-    uint32_t decouple_rw : 1;
-    uint32_t src_reduce_len : 1;
-    uint32_t dst_reduce_len : 1;
-    uint32_t src_max_llen : 3;
-    uint32_t dst_max_llen : 3;
-    uint32_t enable_nd : 1;
-} TT_IDMA_SIDEBAND_CONF_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_CONF_reg_t f;
-} TT_IDMA_SIDEBAND_CONF_reg_u;
-
-#define TT_IDMA_SIDEBAND_CONF_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t busy : 10;
-} TT_IDMA_SIDEBAND_STATUS_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_STATUS_reg_t f;
-} TT_IDMA_SIDEBAND_STATUS_reg_u;
-
-#define TT_IDMA_SIDEBAND_STATUS_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t next_id : 32;
-} TT_IDMA_SIDEBAND_NEXT_ID_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_NEXT_ID_reg_t f;
-} TT_IDMA_SIDEBAND_NEXT_ID_reg_u;
-
-#define TT_IDMA_SIDEBAND_NEXT_ID_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t done_id : 32;
-} TT_IDMA_SIDEBAND_DONE_ID_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_DONE_ID_reg_t f;
-} TT_IDMA_SIDEBAND_DONE_ID_reg_u;
-
-#define TT_IDMA_SIDEBAND_DONE_ID_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t dst_addr_low : 32;
-} TT_IDMA_SIDEBAND_DST_ADDR_LOW_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_DST_ADDR_LOW_reg_t f;
-} TT_IDMA_SIDEBAND_DST_ADDR_LOW_reg_u;
-
-#define TT_IDMA_SIDEBAND_DST_ADDR_LOW_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t dst_addr_high : 32;
-} TT_IDMA_SIDEBAND_DST_ADDR_HIGH_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_DST_ADDR_HIGH_reg_t f;
-} TT_IDMA_SIDEBAND_DST_ADDR_HIGH_reg_u;
-
-#define TT_IDMA_SIDEBAND_DST_ADDR_HIGH_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t src_addr_low : 32;
-} TT_IDMA_SIDEBAND_SRC_ADDR_LOW_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_SRC_ADDR_LOW_reg_t f;
-} TT_IDMA_SIDEBAND_SRC_ADDR_LOW_reg_u;
-
-#define TT_IDMA_SIDEBAND_SRC_ADDR_LOW_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t src_addr_high : 32;
-} TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_reg_t f;
-} TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_reg_u;
-
-#define TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t length_low : 32;
-} TT_IDMA_SIDEBAND_LENGTH_LOW_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_LENGTH_LOW_reg_t f;
-} TT_IDMA_SIDEBAND_LENGTH_LOW_reg_u;
-
-#define TT_IDMA_SIDEBAND_LENGTH_LOW_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t length_high : 32;
-} TT_IDMA_SIDEBAND_LENGTH_HIGH_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_LENGTH_HIGH_reg_t f;
-} TT_IDMA_SIDEBAND_LENGTH_HIGH_reg_u;
-
-#define TT_IDMA_SIDEBAND_LENGTH_HIGH_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t dst_stride_2_low : 32;
-} TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_reg_t f;
-} TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_reg_u;
-
-#define TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t dst_stride_2_high : 32;
-} TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_reg_t f;
-} TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_reg_u;
-
-#define TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t src_stride_2_low : 32;
-} TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_reg_t f;
-} TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_reg_u;
-
-#define TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t src_stride_2_high : 32;
-} TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_reg_t f;
-} TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_reg_u;
-
-#define TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t reps_2_low : 32;
-} TT_IDMA_SIDEBAND_REPS_2_LOW_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_REPS_2_LOW_reg_t f;
-} TT_IDMA_SIDEBAND_REPS_2_LOW_reg_u;
-
-#define TT_IDMA_SIDEBAND_REPS_2_LOW_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t reps_2_high : 32;
-} TT_IDMA_SIDEBAND_REPS_2_HIGH_reg_t;
-
-typedef union {
-    uint32_t val;
-    TT_IDMA_SIDEBAND_REPS_2_HIGH_reg_t f;
-} TT_IDMA_SIDEBAND_REPS_2_HIGH_reg_u;
-
-#define TT_IDMA_SIDEBAND_REPS_2_HIGH_REG_DEFAULT (0x00000000)
+#define TT_CLUSTER_CTRL_L1_REGION_ERROR_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint32_t reset : 1;
@@ -891,6 +597,39 @@ typedef union {
 #define TILE_COUNTER_BUFFER_CAPACITY_REG_DEFAULT (0x00000000)
 
 typedef struct {
+    uint32_t posted_cnt : 16;
+} TILE_COUNTER_READ_POSTED_reg_t;
+
+typedef union {
+    uint32_t val;
+    TILE_COUNTER_READ_POSTED_reg_t f;
+} TILE_COUNTER_READ_POSTED_reg_u;
+
+#define TILE_COUNTER_READ_POSTED_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t acked_cnt : 16;
+} TILE_COUNTER_READ_ACKED_reg_t;
+
+typedef union {
+    uint32_t val;
+    TILE_COUNTER_READ_ACKED_reg_t f;
+} TILE_COUNTER_READ_ACKED_reg_u;
+
+#define TILE_COUNTER_READ_ACKED_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t error : 1;
+} TILE_COUNTER_ERROR_STATUS_reg_t;
+
+typedef union {
+    uint32_t val;
+    TILE_COUNTER_ERROR_STATUS_reg_t f;
+} TILE_COUNTER_ERROR_STATUS_reg_u;
+
+#define TILE_COUNTER_ERROR_STATUS_REG_DEFAULT (0x00000000)
+
+typedef struct {
     uint32_t threshold : 16;
 } TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_t;
 
@@ -916,6 +655,10 @@ typedef struct {
     uint64_t tr_count_zero_ie : 1;
     uint64_t wr_count_zero_ie : 1;
     uint64_t vc_has_space_ie : 1;
+    uint64_t rsvd_0 : 29;
+    uint64_t per_vc_has_space_ie : 12;
+    uint64_t rsvd_1 : 4;
+    uint64_t per_idma_vc_has_space_ie : 12;
 } TT_ROCC_CMD_BUF_IE_reg_t;
 
 typedef union {
@@ -929,6 +672,10 @@ typedef struct {
     uint64_t tr_count_zero_ip : 1;
     uint64_t wr_count_zero_ip : 1;
     uint64_t vc_has_space_ip : 1;
+    uint64_t rsvd_0 : 29;
+    uint64_t per_vc_has_space_ip : 12;
+    uint64_t rsvd_1 : 4;
+    uint64_t per_idma_vc_has_space_ip : 12;
 } TT_ROCC_CMD_BUF_IP_reg_t;
 
 typedef union {
@@ -1409,6 +1156,78 @@ typedef union {
 #define TT_ROCC_CMD_BUF_MISC_REG_DEFAULT (0x00000020)
 
 typedef struct {
+    uint64_t irq_per_tr_id_zero_ie : 32;
+    uint64_t irq_per_tr_id_wr_count_zero_ie : 32;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_t f;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u;
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_idma_zero_ie : 32;
+    uint64_t irq_per_tr_id_tiles_to_process_ie : 32;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_t f;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u;
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_wr_tiles_to_process_ie : 32;
+    uint64_t irq_per_tr_id_idma_tiles_to_process_ie : 32;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_t f;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u;
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_zero_ip : 32;
+    uint64_t irq_per_tr_id_wr_count_zero_ip : 32;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_t f;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u;
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_idma_zero_ip : 32;
+    uint64_t irq_per_tr_id_tiles_to_process_ip : 32;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_t f;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u;
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_wr_tiles_to_process_ip : 32;
+    uint64_t irq_per_tr_id_idma_tiles_to_process_ip : 32;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_t f;
+} TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u;
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_REG_DEFAULT (0x00000000)
+
+typedef struct {
     uint64_t data : 8;
 } TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_t;
 
@@ -1559,6 +1378,10 @@ typedef struct {
     uint64_t tr_count_zero_ie : 1;
     uint64_t wr_count_zero_ie : 1;
     uint64_t vc_has_space_ie : 1;
+    uint64_t rsvd_0 : 29;
+    uint64_t per_vc_has_space_ie : 12;
+    uint64_t rsvd_1 : 4;
+    uint64_t per_idma_vc_has_space_ie : 12;
 } TT_ROCC_SIMPLE_CMD_BUF_IE_reg_t;
 
 typedef union {
@@ -1572,6 +1395,10 @@ typedef struct {
     uint64_t tr_count_zero_ip : 1;
     uint64_t wr_count_zero_ip : 1;
     uint64_t vc_has_space_ip : 1;
+    uint64_t rsvd_0 : 29;
+    uint64_t per_vc_has_space_ip : 12;
+    uint64_t rsvd_1 : 4;
+    uint64_t per_idma_vc_has_space_ip : 12;
 } TT_ROCC_SIMPLE_CMD_BUF_IP_reg_t;
 
 typedef union {
@@ -1785,6 +1612,78 @@ typedef union {
 } TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u;
 
 #define TT_ROCC_SIMPLE_CMD_BUF_MISC_REG_DEFAULT (0x00000020)
+
+typedef struct {
+    uint64_t irq_per_tr_id_zero_ie : 32;
+    uint64_t irq_per_tr_id_wr_count_zero_ie : 32;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_t f;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u;
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_idma_zero_ie : 32;
+    uint64_t irq_per_tr_id_tiles_to_process_ie : 32;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_t f;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u;
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_wr_tiles_to_process_ie : 32;
+    uint64_t irq_per_tr_id_idma_tiles_to_process_ie : 32;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_t f;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u;
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_zero_ip : 32;
+    uint64_t irq_per_tr_id_wr_count_zero_ip : 32;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_t f;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u;
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_idma_zero_ip : 32;
+    uint64_t irq_per_tr_id_tiles_to_process_ip : 32;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_t f;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u;
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t irq_per_tr_id_wr_tiles_to_process_ip : 32;
+    uint64_t irq_per_tr_id_idma_tiles_to_process_ip : 32;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_t f;
+} TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u;
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint64_t dmi_data_0 : 8;
@@ -2039,13 +1938,15 @@ typedef union {
 
 typedef struct {
     uint64_t queue_flush : 1;
-    uint64_t rsvd_0 : 7;
+    uint64_t rsvd_0 : 3;
+    uint64_t queue_over_underflow_en : 1;
+    uint64_t rsvd_1 : 3;
     uint64_t token_hw_req_en : 1;
-    uint64_t rsvd_1 : 7;
-    uint64_t smn_dbg_en : 1;
     uint64_t rsvd_2 : 7;
-    uint64_t status_clear : 1;
+    uint64_t smn_dbg_en : 1;
     uint64_t rsvd_3 : 7;
+    uint64_t status_clear : 1;
+    uint64_t rsvd_4 : 7;
     uint64_t halt_on_error_en : 1;
 } SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_reg_t;
 
@@ -2107,7 +2008,8 @@ typedef union {
 typedef struct {
     uint64_t full : 1;
     uint64_t empty : 1;
-    uint64_t rsvd_0 : 10;
+    uint64_t overflow : 1;
+    uint64_t rsvd_0 : 9;
     uint64_t count : 4;
 } SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_reg_t;
 
@@ -2121,7 +2023,8 @@ typedef union {
 typedef struct {
     uint64_t full : 1;
     uint64_t empty : 1;
-    uint64_t rsvd_0 : 9;
+    uint64_t overflow : 1;
+    uint64_t rsvd_0 : 8;
     uint64_t count : 5;
 } SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_reg_t;
 
@@ -2135,7 +2038,8 @@ typedef union {
 typedef struct {
     uint64_t full : 1;
     uint64_t empty : 1;
-    uint64_t rsvd_0 : 10;
+    uint64_t underflow : 1;
+    uint64_t rsvd_0 : 9;
     uint64_t count : 4;
 } SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_reg_t;
 
@@ -2149,7 +2053,8 @@ typedef union {
 typedef struct {
     uint64_t full : 1;
     uint64_t empty : 1;
-    uint64_t rsvd_0 : 9;
+    uint64_t underflow : 1;
+    uint64_t rsvd_0 : 8;
     uint64_t count : 5;
 } SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_reg_t;
 
@@ -2323,6 +2228,7 @@ typedef struct {
     uint64_t token_request : 1;
     uint64_t cmd_desc_rdy : 1;
     uint64_t cmd_data_rdy : 1;
+    uint64_t queue_over_underflow : 1;
 } SMN_MST_COMMON_BLOCK_SMN_MST_INT_ENABLE_reg_t;
 
 typedef union {
@@ -2342,6 +2248,7 @@ typedef struct {
     uint64_t token_request : 1;
     uint64_t cmd_desc_rdy : 1;
     uint64_t cmd_data_rdy : 1;
+    uint64_t queue_over_underflow : 1;
 } SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_reg_t;
 
 typedef union {
@@ -2361,6 +2268,7 @@ typedef struct {
     uint64_t token_request : 1;
     uint64_t cmd_desc_rdy : 1;
     uint64_t cmd_data_rdy : 1;
+    uint64_t queue_over_underflow : 1;
 } SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_reg_t;
 
 typedef union {
@@ -2380,6 +2288,7 @@ typedef struct {
     uint64_t token_request : 1;
     uint64_t cmd_desc_rdy : 1;
     uint64_t cmd_data_rdy : 1;
+    uint64_t queue_over_underflow : 1;
 } SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_reg_t;
 
 typedef union {
@@ -2584,6 +2493,18 @@ typedef union {
 } SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_ERR_STS_reg_u;
 
 #define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_ERR_STS_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t posted_write : 1;
+    uint64_t buff_cmd : 1;
+} SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_reg_t;
+
+typedef union {
+    uint64_t val;
+    SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_reg_t f;
+} SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_reg_u;
+
+#define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint64_t addr_mode : 4;
@@ -3207,6 +3128,17 @@ typedef union {
 } SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RA1_UHD_EMC_reg_u;
 
 #define SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RA1_UHD_EMC_REG_DEFAULT (0x000000AA)
+
+typedef struct {
+    uint64_t val : 1;
+} SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_reg_t;
+
+typedef union {
+    uint64_t val;
+    SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_reg_t f;
+} SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_reg_u;
+
+#define SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint64_t local_node_id_x : 6;
@@ -3911,6 +3843,19 @@ typedef union {
 } GLOBAL_EXT_SAFETY_DURATION2_reg_u;
 
 #define GLOBAL_EXT_SAFETY_DURATION2_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint16_t lock_monitor_clear : 3;
+    uint16_t lock_detect : 3;
+    uint16_t droop_interrupt : 5;
+} GLOBAL_LOCK_STATUS_reg_t;
+
+typedef union {
+    uint16_t val;
+    GLOBAL_LOCK_STATUS_reg_t f;
+} GLOBAL_LOCK_STATUS_reg_u;
+
+#define GLOBAL_LOCK_STATUS_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint16_t lock_monitor_0 : 16;
@@ -5649,6 +5594,201 @@ typedef union {
 #define DROOP_PERCENT_DELAY_TH1_REG_DEFAULT (0x00000000)
 
 typedef struct {
+    uint32_t ts_en : 1;
+    uint32_t rsvd_0 : 1;
+    uint32_t raw_adc_en : 1;
+    uint32_t remote_num : 5;
+    uint32_t burst_mode_en : 1;
+} TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_t f;
+} TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_u;
+
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t id_lo : 8;
+    uint32_t oscal_en : 1;
+} TEMP_SENSOR_BYPASS_ID_LO_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_BYPASS_ID_LO_reg_t f;
+} TEMP_SENSOR_BYPASS_ID_LO_reg_u;
+
+#define TEMP_SENSOR_BYPASS_ID_LO_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t id_hi : 8;
+    uint32_t clk_inv : 1;
+} TEMP_SENSOR_BYPASS_ID_HI_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_BYPASS_ID_HI_reg_t f;
+} TEMP_SENSOR_BYPASS_ID_HI_reg_u;
+
+#define TEMP_SENSOR_BYPASS_ID_HI_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t tsr_n_ck1 : 3;
+    uint32_t rsvd_0 : 1;
+    uint32_t tsr_n_ck3 : 3;
+    uint32_t rsvd_1 : 1;
+    uint32_t cdc_stage_en : 1;
+} TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_t f;
+} TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_u;
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t ts_coa0 : 4;
+    uint32_t tsr_n_ck2 : 5;
+} TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_t f;
+} TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_u;
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t ts_cob0 : 7;
+    uint32_t rsvd_0 : 1;
+    uint32_t ts_coc0_hi : 1;
+} TEMP_SENSOR_TEMP_COEFF_B_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEMP_COEFF_B_reg_t f;
+} TEMP_SENSOR_TEMP_COEFF_B_reg_u;
+
+#define TEMP_SENSOR_TEMP_COEFF_B_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t ts_coc0 : 9;
+} TEMP_SENSOR_TEMP_COEFF_C_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEMP_COEFF_C_reg_t f;
+} TEMP_SENSOR_TEMP_COEFF_C_reg_u;
+
+#define TEMP_SENSOR_TEMP_COEFF_C_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t adc_target : 9;
+} TEMP_SENSOR_ADC_TARGET_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_ADC_TARGET_reg_t f;
+} TEMP_SENSOR_ADC_TARGET_reg_u;
+
+#define TEMP_SENSOR_ADC_TARGET_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t conv_avg_sel_num : 2;
+} TEMP_SENSOR_CONV_AVG_SEL_NUM_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_CONV_AVG_SEL_NUM_reg_t f;
+} TEMP_SENSOR_CONV_AVG_SEL_NUM_reg_u;
+
+#define TEMP_SENSOR_CONV_AVG_SEL_NUM_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t adc_cap_select : 6;
+    uint32_t adc_gain_mode : 1;
+    uint32_t fsmp_en : 1;
+    uint32_t fast_mode : 1;
+} TEMP_SENSOR_DAC_GAIN_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_DAC_GAIN_reg_t f;
+} TEMP_SENSOR_DAC_GAIN_reg_u;
+
+#define TEMP_SENSOR_DAC_GAIN_REG_DEFAULT (0x00000008)
+
+typedef struct {
+    uint32_t ts_co : 6;
+} TEMP_SENSOR_REMOTE_CALIBRATION_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_REMOTE_CALIBRATION_reg_t f;
+} TEMP_SENSOR_REMOTE_CALIBRATION_reg_u;
+
+#define TEMP_SENSOR_REMOTE_CALIBRATION_REG_DEFAULT (0x00000020)
+
+typedef struct {
+    uint32_t ate_ro_mux : 3;
+    uint32_t ate_avg_en : 1;
+    uint32_t avg_mux_sel : 4;
+    uint32_t ate_en : 1;
+} TEMP_SENSOR_ATE_CTRL_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_ATE_CTRL_reg_t f;
+} TEMP_SENSOR_ATE_CTRL_reg_u;
+
+#define TEMP_SENSOR_ATE_CTRL_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t test_lmt_max : 9;
+} TEMP_SENSOR_TEST_LMT_MAX_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEST_LMT_MAX_reg_t f;
+} TEMP_SENSOR_TEST_LMT_MAX_reg_u;
+
+#define TEMP_SENSOR_TEST_LMT_MAX_REG_DEFAULT (0x000001FF)
+
+typedef struct {
+    uint32_t test_lmt_min : 9;
+} TEMP_SENSOR_TEST_LMT_MIN_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_TEST_LMT_MIN_reg_t f;
+} TEMP_SENSOR_TEST_LMT_MIN_reg_u;
+
+#define TEMP_SENSOR_TEST_LMT_MIN_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t start_temp_sense : 1;
+} TEMP_SENSOR_START_TEMP_SENSE_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_START_TEMP_SENSE_reg_t f;
+} TEMP_SENSOR_START_TEMP_SENSE_reg_u;
+
+#define TEMP_SENSOR_START_TEMP_SENSE_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t ts_out : 9;
+} TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_t;
+
+typedef union {
+    uint32_t val;
+    TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_t f;
+} TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u;
+
+#define TEMP_SENSOR_REMOTE_SENSOR_DATA_REG_DEFAULT (0x00000100)
+
+typedef struct {
     uint32_t programmable_threshold : 8;
 } TT_PLL_PVT_PROGRAMMABLE_THRESHOLD_reg_t;
 
@@ -5708,6 +5848,7 @@ typedef struct {
     uint32_t moving_average_sel : 1;
     uint32_t read_temp_from_reg_sel : 1;
     uint32_t pll_bypass_on_dfs : 1;
+    uint32_t disable_postdiv_writes : 1;
 } TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_reg_t;
 
 typedef union {
@@ -5763,11 +5904,13 @@ typedef union {
 #define TT_PLL_PVT_REDUCE_FREQ_EVENT_COUNT_REG_DEFAULT (0x00000000)
 
 typedef struct {
+    uint32_t ai_out_freq_select : 4;
     uint32_t current_freq_select : 4;
-    uint32_t hyst_fsm_state : 2;
-    uint32_t rsvd_0 : 2;
-    uint32_t awm3_reg_state : 4;
+    uint32_t hyst_fsm_state : 3;
+    uint32_t awm3_reg_state : 5;
     uint32_t thermal_poll_state : 4;
+    uint32_t dfvs_mode_0_freq_sel : 4;
+    uint32_t dfvs_mode_1_freq_sel : 4;
 } TT_PLL_PVT_THERMAL_CTRL_STATUS_reg_t;
 
 typedef union {
@@ -5776,6 +5919,17 @@ typedef union {
 } TT_PLL_PVT_THERMAL_CTRL_STATUS_reg_u;
 
 #define TT_PLL_PVT_THERMAL_CTRL_STATUS_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t thermal_dfs_unlock_num_cycles : 12;
+} TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_reg_t;
+
+typedef union {
+    uint32_t val;
+    TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_reg_t f;
+} TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_reg_u;
+
+#define TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_REG_DEFAULT (0x00000096)
 
 typedef struct {
     uint32_t lookup_fcw_int_f0 : 8;
@@ -5789,7 +5943,18 @@ typedef union {
     TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_t f;
 } TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u;
 
-#define TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_REG_DEFAULT (0x30303030)
+#define TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_REG_DEFAULT (0x22222222)
+
+typedef struct {
+    uint32_t lookup_postdiv : 3;
+} TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_t;
+
+typedef union {
+    uint32_t val;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_t f;
+} TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u;
+
+#define TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_REG_DEFAULT (0x00000001)
 
 typedef struct {
     uint32_t sf_promise_en : 1;
@@ -5803,6 +5968,42 @@ typedef union {
 } TT_PLL_PVT_PROMISE_SENSOR_CTRL_reg_u;
 
 #define TT_PLL_PVT_PROMISE_SENSOR_CTRL_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t vrhot_psyscrit_en : 1;
+    uint32_t vrhot_psyscrit_wait_for_idle : 1;
+    uint32_t rsvd_0 : 2;
+    uint32_t vrhot_psyscrit_override_index : 4;
+} TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_reg_t;
+
+typedef union {
+    uint32_t val;
+    TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_reg_t f;
+} TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_reg_u;
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t hop_up_delay : 24;
+} TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_reg_t;
+
+typedef union {
+    uint32_t val;
+    TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_reg_t f;
+} TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_reg_u;
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t hop_down_delay : 24;
+} TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_reg_t;
+
+typedef union {
+    uint32_t val;
+    TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_reg_t f;
+} TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_reg_u;
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint32_t thermal_threshold_cat : 8;
@@ -5842,6 +6043,17 @@ typedef union {
 } TT_PLL_PVT_POLL_TEMP_reg_u;
 
 #define TT_PLL_PVT_POLL_TEMP_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint32_t last_read_temp : 9;
+} TT_PLL_PVT_LAST_READ_TEMP_reg_t;
+
+typedef union {
+    uint32_t val;
+    TT_PLL_PVT_LAST_READ_TEMP_reg_t f;
+} TT_PLL_PVT_LAST_READ_TEMP_reg_u;
+
+#define TT_PLL_PVT_LAST_READ_TEMP_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint32_t awm_clk_count_en : 3;
@@ -5915,7 +6127,7 @@ typedef union {
 
 typedef struct {
     uint32_t func_trigger_en : 1;
-    uint32_t input_clk_sel : 3;
+    uint32_t input_clk_sel : 4;
     uint32_t use_div_clk : 1;
     uint32_t down_ctr_use_tck : 1;
     uint32_t clk_div_factor : 7;
@@ -5953,122 +6165,6 @@ typedef union {
 } PLL_PVT_CLK_OBSERVE_CLK_CTR_FUNCTIONAL_reg_u;
 
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_FUNCTIONAL_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t ts_en : 1;
-    uint32_t rsvd_0 : 2;
-    uint32_t remote_num : 5;
-    uint32_t alt_mode : 1;
-} TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_t f;
-} TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_u;
-
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t id_lo : 8;
-} TEMP_SENSOR_BYPASS_ID_LO_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_BYPASS_ID_LO_reg_t f;
-} TEMP_SENSOR_BYPASS_ID_LO_reg_u;
-
-#define TEMP_SENSOR_BYPASS_ID_LO_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t id_hi : 8;
-} TEMP_SENSOR_BYPASS_ID_HI_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_BYPASS_ID_HI_reg_t f;
-} TEMP_SENSOR_BYPASS_ID_HI_reg_u;
-
-#define TEMP_SENSOR_BYPASS_ID_HI_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t tsr_n_ck2 : 5;
-    uint32_t tsr_n_ck3 : 3;
-} TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_t f;
-} TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_u;
-
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t ts_coa0 : 4;
-    uint32_t rsvd_0 : 1;
-    uint32_t tsr_n_ck1 : 3;
-} TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_t f;
-} TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_u;
-
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t ts_cob0 : 7;
-} TEMP_SENSOR_TEMP_COEFF_B_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_TEMP_COEFF_B_reg_t f;
-} TEMP_SENSOR_TEMP_COEFF_B_reg_u;
-
-#define TEMP_SENSOR_TEMP_COEFF_B_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t ts_coc0 : 8;
-} TEMP_SENSOR_TEMP_COEFF_C_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_TEMP_COEFF_C_reg_t f;
-} TEMP_SENSOR_TEMP_COEFF_C_reg_u;
-
-#define TEMP_SENSOR_TEMP_COEFF_C_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t gain : 8;
-} TEMP_SENSOR_DAC_GAIN_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_DAC_GAIN_reg_t f;
-} TEMP_SENSOR_DAC_GAIN_reg_u;
-
-#define TEMP_SENSOR_DAC_GAIN_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t ts_co : 8;
-} TEMP_SENSOR_REMOTE_CALIBRATION_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_REMOTE_CALIBRATION_reg_t f;
-} TEMP_SENSOR_REMOTE_CALIBRATION_reg_u;
-
-#define TEMP_SENSOR_REMOTE_CALIBRATION_REG_DEFAULT (0x00000000)
-
-typedef struct {
-    uint32_t ts_out : 9;
-} TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_t;
-
-typedef union {
-    uint32_t val;
-    TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_t f;
-} TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u;
-
-#define TEMP_SENSOR_REMOTE_SENSOR_DATA_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint64_t data : 3;
@@ -6309,6 +6405,17 @@ typedef union {
 } TT_CACHE_CONTROLLER_FULLINVALIDATE_reg_u;
 
 #define TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_DEFAULT (0x00000000)
+
+typedef struct {
+    uint64_t invalidate_flush_dirty : 64;
+} TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_reg_t;
+
+typedef union {
+    uint64_t val;
+    TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_reg_t f;
+} TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_reg_u;
+
+#define TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_REG_DEFAULT (0x00000000)
 
 typedef struct {
     uint32_t debug_hart_halted : 10;
@@ -6623,141 +6730,162 @@ typedef struct {
     T6_L1_CSR_GROUP_HASH_FN_SWAP_reg_u t6_l1_csr_group_hash_fn1_swap_addr19;
     T6_L1_CSR_GROUP_HASH_FN_SWAP_reg_u t6_l1_csr_group_hash_fn1_swap_addr20;
     T6_L1_CSR_GROUP_HASH_FN_SWAP_reg_u t6_l1_csr_group_hash_fn1_swap_addr21;
-    T6_L1_CSR_GROUP_PERF_CTRL_reg_u t6_l1_csr_group_perf_ctrl;
-    T6_L1_CSR_GROUP_PERF_CNT_reg_u t6_l1_csr_group_perf_cnt;
     T6_L1_CSR_IN_ORDER_MASK_reg_u t6_l1_csr_in_order_mask;
     T6_L1_CSR_IN_ORDER_MATCH_reg_u t6_l1_csr_in_order_match;
     T6_L1_CSR_PORT_CTRL_reg_u t6_l1_csr_rw_port_ctrl[6];
-    T6_L1_CSR_PORT_STATUS_reg_u t6_l1_csr_rw_port_status[6];
+    T6_L1_CSR_PORT_STATUS_reg_u t6_l1_csr_rw_port_status_noc_atomic;
     T6_L1_CSR_PORT_CTRL_reg_u t6_l1_csr_rd_port_ctrl[8];
-    T6_L1_CSR_PORT_STATUS_reg_u t6_l1_csr_rd_port_status[8];
     T6_L1_CSR_PORT_CTRL_reg_u t6_l1_csr_wr_port_ctrl[8];
     T6_L1_CSR_PORT_STATUS_reg_u t6_l1_csr_wr_port_status[8];
     TT_CLUSTER_CTRL_DEBUG_SNOOP_reg_u tt_cluster_ctrl_debug_snoop;
     TT_CLUSTER_CTRL_OVERLAY_INFO_reg_u tt_cluster_ctrl_overlay_info;
     TT_CLUSTER_CTRL_SW_RAS_reg_u tt_cluster_ctrl_sw_ras;
     TT_CLUSTER_CTRL_SBUS_RSINK_RESET_FALLBACK_reg_u tt_cluster_ctrl_sbus_rsink_reset_fallback;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_read_data;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_write_data;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_src_addr;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_dest_addr;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_coord;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_len_bytes;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_req_vc;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_resp_vc;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_tr_id;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_debug;
-    TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_reg_u tt_global_cmd_buf_cfg_global_cmd_buf_misc;
-    TT_IDMA_SIDEBAND_CONF_reg_u tt_idma_sideband_conf;
-    TT_IDMA_SIDEBAND_STATUS_reg_u tt_idma_sideband_status[16];
-    TT_IDMA_SIDEBAND_NEXT_ID_reg_u tt_idma_sideband_next_id[16];
-    TT_IDMA_SIDEBAND_DONE_ID_reg_u tt_idma_sideband_done_id[16];
-    TT_IDMA_SIDEBAND_DST_ADDR_LOW_reg_u tt_idma_sideband_dst_addr_low;
-    TT_IDMA_SIDEBAND_DST_ADDR_HIGH_reg_u tt_idma_sideband_dst_addr_high;
-    TT_IDMA_SIDEBAND_SRC_ADDR_LOW_reg_u tt_idma_sideband_src_addr_low;
-    TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_reg_u tt_idma_sideband_src_addr_high;
-    TT_IDMA_SIDEBAND_LENGTH_LOW_reg_u tt_idma_sideband_length_low;
-    TT_IDMA_SIDEBAND_LENGTH_HIGH_reg_u tt_idma_sideband_length_high;
-    TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_reg_u tt_idma_sideband_dst_stride_2_low;
-    TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_reg_u tt_idma_sideband_dst_stride_2_high;
-    TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_reg_u tt_idma_sideband_src_stride_2_low;
-    TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_reg_u tt_idma_sideband_src_stride_2_high;
-    TT_IDMA_SIDEBAND_REPS_2_LOW_reg_u tt_idma_sideband_reps_2_low;
-    TT_IDMA_SIDEBAND_REPS_2_HIGH_reg_u tt_idma_sideband_reps_2_high;
+    TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_reg_u tt_cluster_ctrl_overlay_chicken_bits;
+    TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_reg_u tt_cluster_ctrl_l1_accessible_region;
+    TT_CLUSTER_CTRL_L1_REGION_ERROR_reg_u tt_cluster_ctrl_l1_region_error;
     TILE_COUNTER_RESET_reg_u tile_counters_0__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_0__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_0__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_0__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_0__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_0__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_0__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_0__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_0__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_1__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_1__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_1__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_1__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_1__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_1__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_1__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_1__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_1__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_2__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_2__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_2__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_2__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_2__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_2__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_2__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_2__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_2__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_3__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_3__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_3__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_3__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_3__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_3__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_3__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_3__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_3__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_4__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_4__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_4__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_4__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_4__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_4__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_4__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_4__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_4__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_5__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_5__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_5__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_5__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_5__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_5__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_5__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_5__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_5__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_6__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_6__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_6__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_6__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_6__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_6__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_6__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_6__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_6__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_7__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_7__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_7__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_7__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_7__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_7__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_7__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_7__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_7__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_8__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_8__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_8__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_8__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_8__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_8__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_8__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_8__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_8__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_9__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_9__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_9__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_9__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_9__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_9__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_9__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_9__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_9__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_10__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_10__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_10__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_10__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_10__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_10__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_10__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_10__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_10__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_11__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_11__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_11__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_11__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_11__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_11__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_11__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_11__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_11__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_12__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_12__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_12__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_12__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_12__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_12__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_12__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_12__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_12__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_13__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_13__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_13__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_13__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_13__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_13__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_13__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_13__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_13__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_14__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_14__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_14__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_14__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_14__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_14__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_14__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_14__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_14__tiles_free_threshold;
     TILE_COUNTER_RESET_reg_u tile_counters_15__reset;
     TILE_COUNTER_POSTED_reg_u tile_counters_15__posted;
     TILE_COUNTER_ACKED_reg_u tile_counters_15__acked;
     TILE_COUNTER_BUFFER_CAPACITY_reg_u tile_counters_15__buffer_capacity;
+    TILE_COUNTER_READ_POSTED_reg_u tile_counters_15__read_posted;
+    TILE_COUNTER_READ_ACKED_reg_u tile_counters_15__read_acked;
+    TILE_COUNTER_ERROR_STATUS_reg_u tile_counters_15__error_status;
     TILE_COUNTER_TILES_AVAIL_THRESHOLD_reg_u tile_counters_15__tiles_avail_threshold;
     TILE_COUNTER_TILES_FREE_THRESHOLD_reg_u tile_counters_15__tiles_free_threshold;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu0_cmd_buf_r_ie;
@@ -6798,6 +6926,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu0_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu0_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu0_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu0_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu0_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu0_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu0_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu0_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu0_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu0_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu0_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu0_cmd_buf_w_wr_sent_tr_id;
@@ -6836,6 +6970,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu0_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu0_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu0_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu0_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu0_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu0_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu0_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu0_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu0_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu0_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu0_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu0_address_gen_r_src_bank_size;
@@ -6920,6 +7060,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu0_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu0_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu0_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu0_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu0_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu0_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu0_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu0_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu0_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu1_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu1_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu1_cmd_buf_r_wr_sent_tr_id;
@@ -6958,6 +7104,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu1_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu1_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu1_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu1_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu1_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu1_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu1_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu1_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu1_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu1_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu1_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu1_cmd_buf_w_wr_sent_tr_id;
@@ -6996,6 +7148,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu1_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu1_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu1_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu1_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu1_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu1_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu1_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu1_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu1_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu1_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu1_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu1_address_gen_r_src_bank_size;
@@ -7080,6 +7238,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu1_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu1_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu1_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu1_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu1_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu1_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu1_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu1_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu1_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu2_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu2_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu2_cmd_buf_r_wr_sent_tr_id;
@@ -7118,6 +7282,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu2_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu2_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu2_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu2_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu2_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu2_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu2_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu2_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu2_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu2_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu2_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu2_cmd_buf_w_wr_sent_tr_id;
@@ -7156,6 +7326,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu2_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu2_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu2_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu2_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu2_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu2_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu2_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu2_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu2_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu2_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu2_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu2_address_gen_r_src_bank_size;
@@ -7240,6 +7416,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu2_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu2_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu2_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu2_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu2_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu2_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu2_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu2_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu2_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu3_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu3_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu3_cmd_buf_r_wr_sent_tr_id;
@@ -7278,6 +7460,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu3_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu3_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu3_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu3_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu3_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu3_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu3_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu3_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu3_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu3_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu3_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu3_cmd_buf_w_wr_sent_tr_id;
@@ -7316,6 +7504,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu3_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu3_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu3_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu3_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu3_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu3_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu3_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu3_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu3_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu3_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu3_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu3_address_gen_r_src_bank_size;
@@ -7400,6 +7594,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu3_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu3_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu3_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu3_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu3_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu3_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu3_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu3_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu3_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu4_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu4_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu4_cmd_buf_r_wr_sent_tr_id;
@@ -7438,6 +7638,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu4_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu4_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu4_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu4_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu4_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu4_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu4_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu4_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu4_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu4_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu4_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu4_cmd_buf_w_wr_sent_tr_id;
@@ -7476,6 +7682,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu4_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu4_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu4_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu4_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu4_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu4_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu4_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu4_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu4_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu4_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu4_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu4_address_gen_r_src_bank_size;
@@ -7560,6 +7772,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu4_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu4_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu4_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu4_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu4_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu4_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu4_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu4_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu4_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu5_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu5_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu5_cmd_buf_r_wr_sent_tr_id;
@@ -7598,6 +7816,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu5_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu5_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu5_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu5_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu5_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu5_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu5_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu5_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu5_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu5_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu5_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu5_cmd_buf_w_wr_sent_tr_id;
@@ -7636,6 +7860,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu5_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu5_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu5_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu5_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu5_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu5_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu5_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu5_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu5_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu5_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu5_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu5_address_gen_r_src_bank_size;
@@ -7720,6 +7950,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu5_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu5_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu5_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu5_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu5_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu5_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu5_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu5_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu5_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu6_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu6_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu6_cmd_buf_r_wr_sent_tr_id;
@@ -7758,6 +7994,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu6_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu6_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu6_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu6_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu6_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu6_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu6_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu6_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu6_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu6_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu6_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu6_cmd_buf_w_wr_sent_tr_id;
@@ -7796,6 +8038,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu6_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu6_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu6_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu6_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu6_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu6_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu6_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu6_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu6_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu6_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu6_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu6_address_gen_r_src_bank_size;
@@ -7880,6 +8128,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu6_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu6_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu6_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu6_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu6_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu6_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu6_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu6_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu6_simple_cmd_buf_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu7_cmd_buf_r_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu7_cmd_buf_r_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu7_cmd_buf_r_wr_sent_tr_id;
@@ -7918,6 +8172,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu7_cmd_buf_r_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu7_cmd_buf_r_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu7_cmd_buf_r_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu7_cmd_buf_r_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu7_cmd_buf_r_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu7_cmd_buf_r_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu7_cmd_buf_r_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu7_cmd_buf_r_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu7_cmd_buf_r_per_tr_id_ip_2;
     TT_ROCC_CMD_BUF_IE_reg_u tt_rocc_cpu7_cmd_buf_w_ie;
     TT_ROCC_CMD_BUF_IP_reg_u tt_rocc_cpu7_cmd_buf_w_ip;
     TT_ROCC_CMD_BUF_WR_SENT_TR_ID_reg_u tt_rocc_cpu7_cmd_buf_w_wr_sent_tr_id;
@@ -7956,6 +8216,12 @@ typedef struct {
     TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu7_cmd_buf_w_packet_tags;
     TT_ROCC_CMD_BUF_DEBUG_reg_u tt_rocc_cpu7_cmd_buf_w_debug;
     TT_ROCC_CMD_BUF_MISC_reg_u tt_rocc_cpu7_cmd_buf_w_misc;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu7_cmd_buf_w_per_tr_id_ie_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu7_cmd_buf_w_per_tr_id_ie_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu7_cmd_buf_w_per_tr_id_ie_2;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu7_cmd_buf_w_per_tr_id_ip_0;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu7_cmd_buf_w_per_tr_id_ip_1;
+    TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu7_cmd_buf_w_per_tr_id_ip_2;
     TT_ROCC_ADDRESS_GEN_BANK_CURRENT_reg_u tt_rocc_cpu7_address_gen_r_src_bank_current;
     TT_ROCC_ADDRESS_GEN_BANK_BASE_reg_u tt_rocc_cpu7_address_gen_r_src_bank_base;
     TT_ROCC_ADDRESS_GEN_BANK_SIZE_reg_u tt_rocc_cpu7_address_gen_r_src_bank_size;
@@ -8040,6 +8306,12 @@ typedef struct {
     TT_ROCC_SIMPLE_CMD_BUF_PACKET_TAGS_reg_u tt_rocc_cpu7_simple_cmd_buf_packet_tags;
     TT_ROCC_SIMPLE_CMD_BUF_DEBUG_reg_u tt_rocc_cpu7_simple_cmd_buf_debug;
     TT_ROCC_SIMPLE_CMD_BUF_MISC_reg_u tt_rocc_cpu7_simple_cmd_buf_misc;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_reg_u tt_rocc_cpu7_simple_cmd_buf_per_tr_id_ie_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_reg_u tt_rocc_cpu7_simple_cmd_buf_per_tr_id_ie_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_reg_u tt_rocc_cpu7_simple_cmd_buf_per_tr_id_ie_2;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_reg_u tt_rocc_cpu7_simple_cmd_buf_per_tr_id_ip_0;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_reg_u tt_rocc_cpu7_simple_cmd_buf_per_tr_id_ip_1;
+    TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_reg_u tt_rocc_cpu7_simple_cmd_buf_per_tr_id_ip_2;
     TT_DEBUG_MODULE_APB_DATA_reg_u tt_debug_module_apb_data;
     TT_DEBUG_MODULE_APB_DMCONTROL_reg_u tt_debug_module_apb_dmcontrol;
     TT_DEBUG_MODULE_APB_STATUS_reg_u tt_debug_module_apb_status;
@@ -8095,6 +8367,7 @@ typedef struct {
     SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_MASK_TABLE_CFG_reg_u smn_addr_trans_block_smn_addr_trans_mask_table_cfg[16];
     SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_EP_TABLE_CFG_reg_u smn_addr_trans_block_smn_addr_trans_ep_table_cfg[128];
     SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_ERR_STS_reg_u smn_addr_trans_block_smn_addr_trans_err_sts;
+    SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_reg_u smn_addr_trans_block_smn_addr_trans_cfg;
     SMN_MST_CMD_BUF_SMN_MST_CMD_BUF_REG0_reg_u smn_mst_cmd_buf_smn_mst_cmd_buf_reg0;
     SMN_MST_CMD_BUF_SMN_MST_CMD_BUF_REG1_reg_u smn_mst_cmd_buf_smn_mst_cmd_buf_reg1;
     SMN_SLV_MAILBOX_SMN_MBOXW_reg_u smn_slave_mailbox_0_smn_mboxw;
@@ -8174,6 +8447,7 @@ typedef struct {
     SMN_SLV_BLOCK_SMN_SLV_NODE_COORD_OVERRIDE_reg_u smn_slv_block_smn_slv_node_coord_override;
     SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RD2_HS_EMC_reg_u smn_slv_block_smn_slv_tile_mem_cfg_rd2_hs_emc;
     SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RA1_UHD_EMC_reg_u smn_slv_block_smn_slv_tile_mem_cfg_ra1_uhd_emc;
+    SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_reg_u smn_slv_block_smn_slv_fuse_mvmul_reduce;
     SMN_SLV_NOC_SEC_BLOCK_SMN_NOC_SEC_X_Y_reg_u smn_slv_noc_sec_block_smn_noc_sec_x_y;
     SMN_SLV_NOC_SEC_BLOCK_SMN_NOC_SEC_MESH_X_Y_ORIENTATION_reg_u smn_slv_noc_sec_block_smn_noc_sec_mesh_x_y_orientation;
     SMN_SLV_NOC_SEC_BLOCK_SMN_NOC_SEC_ENDPOINT_ID_reg_u smn_slv_noc_sec_block_smn_noc_sec_endpoint_id;
@@ -8249,6 +8523,7 @@ typedef struct {
     GLOBAL_EXT_SAFETY_DURATION0_reg_u global_a_ext_safety_duration0;
     GLOBAL_EXT_SAFETY_DURATION1_reg_u global_a_ext_safety_duration1;
     GLOBAL_EXT_SAFETY_DURATION2_reg_u global_a_ext_safety_duration2;
+    GLOBAL_LOCK_STATUS_reg_u global_a_lock_status;
     GLOBAL_LOCK_MONITOR_0_reg_u global_a_lock_monitor_0;
     GLOBAL_LOCK_MONITOR_1_reg_u global_a_lock_monitor_1;
     GLOBAL_LOCK_MONITOR_2_reg_u global_a_lock_monitor_2;
@@ -8578,52 +8853,6 @@ typedef struct {
     DROOP_CONFIG_SETTING_1415_K2_reg_u droop_3_config_setting_1415_k2;
     DROOP_PERCENT_DELAY_TH0_reg_u droop_3_percent_delay_th0;
     DROOP_PERCENT_DELAY_TH1_reg_u droop_3_percent_delay_th1;
-    TT_PLL_PVT_PROGRAMMABLE_THRESHOLD_reg_u tt_pll_pvt_programmable_threshold;
-    TT_PLL_PVT_DEBUG_TEMP_VAL_reg_u tt_pll_pvt_debug_temp_val;
-    TT_PLL_PVT_DELTA_THRESHOLD_reg_u tt_pll_pvt_delta_threshold_plus;
-    TT_PLL_PVT_DELTA_THRESHOLD_reg_u tt_pll_pvt_delta_threshold_mnus;
-    TT_PLL_PVT_FREQ_SEL_STEP_SIZE_reg_u tt_pll_pvt_freq_sel_step_size;
-    TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_reg_u tt_pll_pvt_thermal_ctrl_loop_cfg;
-    TT_PLL_PVT_RESET_P_STATE_reg_u tt_pll_pvt_reset_p_state;
-    TT_PLL_PVT_HYSTERESIS_COUNTER_reg_u tt_pll_pvt_hysteresis_counter;
-    TT_PLL_PVT_INCREASE_FREQ_EVENT_COUNT_reg_u tt_pll_pvt_increase_freq_event_count;
-    TT_PLL_PVT_REDUCE_FREQ_EVENT_COUNT_reg_u tt_pll_pvt_reduce_freq_event_count;
-    TT_PLL_PVT_THERMAL_CTRL_STATUS_reg_u tt_pll_pvt_thermal_ctrl_status;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq0;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq1;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq2;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq3;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq4;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq5;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq6;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq7;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq8;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq9;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq10;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq11;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq12;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq13;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq14;
-    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq15;
-    TT_PLL_PVT_PROMISE_SENSOR_CTRL_reg_u tt_pll_pvt_promise_sensor_ctrl;
-    TT_PLL_PVT_THERMAL_THRESHOLDS_reg_u tt_pll_pvt_thermal_thresholds;
-    TT_PLL_PVT_THERMAL_THRESHOLDS_REACHED_reg_u tt_pll_pvt_thermal_thresholds_reached;
-    TT_PLL_PVT_POLL_TEMP_reg_u tt_pll_pvt_poll_temp;
-    TT_PLL_PVT_CLOCK_COUNTER_CTRL_reg_u tt_pll_pvt_clock_counter_ctrl;
-    TT_PLL_PVT_REF_CLK_COUNT_PERIOD_LO_reg_u tt_pll_pvt_ref_clk_count_period_lo;
-    TT_PLL_PVT_REF_CLK_COUNT_PERIOD_HI_reg_u tt_pll_pvt_ref_clk_count_period_hi;
-    TT_PLL_PVT_CLOCK_COUNTER_STATUS_reg_u tt_pll_pvt_clock_counter_status;
-    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_awm_0_clock_0_count_lo;
-    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_awm_0_clock_0_count_hi;
-    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_awm_0_clock_2_count_lo;
-    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_awm_0_clock_2_count_hi;
-    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_pm_0_count_lo;
-    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_pm_0_count_hi;
-    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_pm_1_count_lo;
-    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_pm_1_count_hi;
-    PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_reg_u pll_pvt_clk_observe_clk_ctr_config;
-    PLL_PVT_CLK_OBSERVE_CLK_CTR_OUT_reg_u pll_pvt_clk_observe_clk_ctr_out;
-    PLL_PVT_CLK_OBSERVE_CLK_CTR_FUNCTIONAL_reg_u pll_pvt_clk_observe_clk_ctr_functional;
     TEMP_SENSOR_TEMP_SENSOR_CTRL_reg_u temp_sensor_temp_sensor_ctrl;
     TEMP_SENSOR_BYPASS_ID_LO_reg_u temp_sensor_bypass_id_lo;
     TEMP_SENSOR_BYPASS_ID_HI_reg_u temp_sensor_bypass_id_hi;
@@ -8631,8 +8860,14 @@ typedef struct {
     TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_u temp_sensor_temp_sensor_cfg_1;
     TEMP_SENSOR_TEMP_COEFF_B_reg_u temp_sensor_temp_coeff_b;
     TEMP_SENSOR_TEMP_COEFF_C_reg_u temp_sensor_temp_coeff_c;
+    TEMP_SENSOR_ADC_TARGET_reg_u temp_sensor_adc_target;
+    TEMP_SENSOR_CONV_AVG_SEL_NUM_reg_u temp_sensor_conv_avg_sel_num;
     TEMP_SENSOR_DAC_GAIN_reg_u temp_sensor_dac_gain;
     TEMP_SENSOR_REMOTE_CALIBRATION_reg_u temp_sensor_remote_calibration[16];
+    TEMP_SENSOR_ATE_CTRL_reg_u temp_sensor_ate_ctrl;
+    TEMP_SENSOR_TEST_LMT_MAX_reg_u temp_sensor_test_lmt_max;
+    TEMP_SENSOR_TEST_LMT_MIN_reg_u temp_sensor_test_lmt_min;
+    TEMP_SENSOR_START_TEMP_SENSE_reg_u temp_sensor_start_temp_sense;
     TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u temp_sensor_remote_sensor_data_0;
     TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u temp_sensor_remote_sensor_data_1;
     TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u temp_sensor_remote_sensor_data_2;
@@ -8649,6 +8884,73 @@ typedef struct {
     TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u temp_sensor_remote_sensor_data_13;
     TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u temp_sensor_remote_sensor_data_14;
     TEMP_SENSOR_REMOTE_SENSOR_DATA_reg_u temp_sensor_remote_sensor_data_15;
+    TT_PLL_PVT_PROGRAMMABLE_THRESHOLD_reg_u tt_pll_pvt_programmable_threshold;
+    TT_PLL_PVT_DEBUG_TEMP_VAL_reg_u tt_pll_pvt_debug_temp_val;
+    TT_PLL_PVT_DELTA_THRESHOLD_reg_u tt_pll_pvt_delta_threshold_plus;
+    TT_PLL_PVT_DELTA_THRESHOLD_reg_u tt_pll_pvt_delta_threshold_mnus;
+    TT_PLL_PVT_FREQ_SEL_STEP_SIZE_reg_u tt_pll_pvt_freq_sel_step_size;
+    TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_reg_u tt_pll_pvt_thermal_ctrl_loop_cfg;
+    TT_PLL_PVT_RESET_P_STATE_reg_u tt_pll_pvt_reset_p_state;
+    TT_PLL_PVT_HYSTERESIS_COUNTER_reg_u tt_pll_pvt_hysteresis_counter;
+    TT_PLL_PVT_INCREASE_FREQ_EVENT_COUNT_reg_u tt_pll_pvt_increase_freq_event_count;
+    TT_PLL_PVT_REDUCE_FREQ_EVENT_COUNT_reg_u tt_pll_pvt_reduce_freq_event_count;
+    TT_PLL_PVT_THERMAL_CTRL_STATUS_reg_u tt_pll_pvt_thermal_ctrl_status;
+    TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_reg_u tt_pll_pvt_thermal_dfs_unlock_num_cycles;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq0;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq0;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq1;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq1;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq2;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq2;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq3;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq3;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq4;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq4;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq5;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq5;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq6;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq6;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq7;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq7;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq8;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq8;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq9;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq9;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq10;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq10;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq11;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq11;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq12;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq12;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq13;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq13;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq14;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq14;
+    TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_reg_u tt_pll_pvt_lookup_fcw_int_freq15;
+    TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_reg_u tt_pll_pvt_lookup_postdiv_freq15;
+    TT_PLL_PVT_PROMISE_SENSOR_CTRL_reg_u tt_pll_pvt_promise_sensor_ctrl;
+    TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_reg_u tt_pll_pvt_vrhot_psyscrit_cfg;
+    TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_reg_u tt_pll_pvt_vrhot_psyscrit_hop_up_count;
+    TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_reg_u tt_pll_pvt_vrhot_psyscrit_hop_down_count;
+    TT_PLL_PVT_THERMAL_THRESHOLDS_reg_u tt_pll_pvt_thermal_thresholds;
+    TT_PLL_PVT_THERMAL_THRESHOLDS_REACHED_reg_u tt_pll_pvt_thermal_thresholds_reached;
+    TT_PLL_PVT_POLL_TEMP_reg_u tt_pll_pvt_poll_temp;
+    TT_PLL_PVT_LAST_READ_TEMP_reg_u tt_pll_pvt_last_read_temp;
+    TT_PLL_PVT_CLOCK_COUNTER_CTRL_reg_u tt_pll_pvt_clock_counter_ctrl;
+    TT_PLL_PVT_REF_CLK_COUNT_PERIOD_LO_reg_u tt_pll_pvt_ref_clk_count_period_lo;
+    TT_PLL_PVT_REF_CLK_COUNT_PERIOD_HI_reg_u tt_pll_pvt_ref_clk_count_period_hi;
+    TT_PLL_PVT_CLOCK_COUNTER_STATUS_reg_u tt_pll_pvt_clock_counter_status;
+    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_awm_0_clock_0_count_lo;
+    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_awm_0_clock_0_count_hi;
+    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_awm_0_clock_2_count_lo;
+    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_awm_0_clock_2_count_hi;
+    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_pm_0_count_lo;
+    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_pm_0_count_hi;
+    TT_PLL_PVT_CLOCK_COUNTER_LO_reg_u tt_pll_pvt_pm_1_count_lo;
+    TT_PLL_PVT_CLOCK_COUNTER_HI_reg_u tt_pll_pvt_pm_1_count_hi;
+    PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_reg_u pll_pvt_clk_observe_clk_ctr_config;
+    PLL_PVT_CLK_OBSERVE_CLK_CTR_OUT_reg_u pll_pvt_clk_observe_clk_ctr_out;
+    PLL_PVT_CLK_OBSERVE_CLK_CTR_FUNCTIONAL_reg_u pll_pvt_clk_observe_clk_ctr_functional;
     BUS_ERROR_UNIT_CAUSE_reg_u bus_error_unit_0_cause;
     BUS_ERROR_UNIT_PHYS_ADDR_reg_u bus_error_unit_0_phys_addr;
     BUS_ERROR_UNIT_ENABLE_reg_u bus_error_unit_0_enable;
@@ -8751,6 +9053,7 @@ typedef struct {
     TT_CACHE_CONTROLLER_INVALIDATE64_reg_u tt_cache_controller_invalidate64;
     TT_CACHE_CONTROLLER_INVALIDATE32_reg_u tt_cache_controller_invalidate32;
     TT_CACHE_CONTROLLER_FULLINVALIDATE_reg_u tt_cache_controller_fullinvalidate;
+    TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_reg_u tt_cache_controller_invalidateflushdirty;
     TT_DEBUG_MODULE_SBUS_HALTED_reg_u tt_debug_module_sbus_halted;
     TT_DEBUG_MODULE_SBUS_GOING_reg_u tt_debug_module_sbus_going;
     TT_DEBUG_MODULE_SBUS_RESUMING_reg_u tt_debug_module_sbus_resuming;
@@ -8764,16 +9067,16 @@ typedef struct {
     CLINT_MSIP_reg_u tt_cluster_clint_msip[8];
     CLINT_MTIMECMP_reg_u tt_cluster_clint_mtimecmp[8];
     CLINT_MTIME_reg_u tt_cluster_clint_mtime;
-    PLIC_PRIORITY_reg_u tt_cluster_plic_priority[144];
-    PLIC_PENDING_reg_u tt_cluster_plic_pending[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core0_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core1_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core2_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core3_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core4_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core5_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core6_ie[5];
-    PLIC_ENABLE_reg_u tt_cluster_plic_core7_ie[5];
+    PLIC_PRIORITY_reg_u tt_cluster_plic_priority[80];
+    PLIC_PENDING_reg_u tt_cluster_plic_pending[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core0_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core1_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core2_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core3_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core4_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core5_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core6_ie[3];
+    PLIC_ENABLE_reg_u tt_cluster_plic_core7_ie[3];
     PLIC_THRESHOLD_reg_u tt_cluster_plic_core0_threshold;
     PLIC_CLAIM_COMPLETE_reg_u tt_cluster_plic_core0_claim_complete;
     PLIC_THRESHOLD_reg_u tt_cluster_plic_core1_threshold;
@@ -8901,17 +9204,11 @@ typedef struct {
 #define TT_CLUSTER_CTRL_CLOCK_GATING_SNOOP_MASK 0x20
 #define TT_CLUSTER_CTRL_CLOCK_GATING_SNOOP_SHIFT 5
 
-#define TT_CLUSTER_CTRL_CLOCK_GATING_GLOBAL_CMDBUF_MASK 0x40
-#define TT_CLUSTER_CTRL_CLOCK_GATING_GLOBAL_CMDBUF_SHIFT 6
-
 #define TT_CLUSTER_CTRL_CLOCK_GATING_L1_FLEX_CLIENT_IDMA_MASK 0x80
 #define TT_CLUSTER_CTRL_CLOCK_GATING_L1_FLEX_CLIENT_IDMA_SHIFT 7
 
 #define TT_CLUSTER_CTRL_CLOCK_GATING_L1_FLEX_CLIENT_OVERLAY_MASK 0x100
 #define TT_CLUSTER_CTRL_CLOCK_GATING_L1_FLEX_CLIENT_OVERLAY_SHIFT 8
-
-#define TT_CLUSTER_CTRL_CLOCK_GATING_FDS_MASK 0x200
-#define TT_CLUSTER_CTRL_CLOCK_GATING_FDS_SHIFT 9
 
 #define TT_CLUSTER_CTRL_CLOCK_GATING_HYST_HYST_MASK 0x7F
 #define TT_CLUSTER_CTRL_CLOCK_GATING_HYST_HYST_SHIFT 0
@@ -8934,14 +9231,32 @@ typedef struct {
 #define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_DISABLE_INLINE_WRITES_MASK 0x1
 #define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_DISABLE_INLINE_WRITES_SHIFT 0
 
+#define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_INVALIDATE_FLUSH_DIRTY_EN_MASK 0x2
+#define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_INVALIDATE_FLUSH_DIRTY_EN_SHIFT 1
+
+#define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_CLEAN_PUTDATA_EN_MASK 0x4
+#define TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_CLEAN_PUTDATA_EN_SHIFT 2
+
 #define TT_CLUSTER_CTRL_ASSERTS_DATA_MASK 0xFFFFFFFF
 #define TT_CLUSTER_CTRL_ASSERTS_DATA_SHIFT 0
 
 #define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_DCACHE_PREFETCHER_CTRL_MASK 0xFF
 #define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_DCACHE_PREFETCHER_CTRL_SHIFT 0
 
-#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_CTRL_MASK 0xFF00
-#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_CTRL_SHIFT 8
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_DCACHE_PREFETCHER_WAITFORHIT_MASK 0x100
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_DCACHE_PREFETCHER_WAITFORHIT_SHIFT 8
+
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_DCACHE_PREFETCHER_AHEAD_MASK 0x7E00
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_DCACHE_PREFETCHER_AHEAD_SHIFT 9
+
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_CTRL_MASK 0x7F8000
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_CTRL_SHIFT 15
+
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_WAITFORHIT_MASK 0x800000
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_WAITFORHIT_SHIFT 23
+
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_AHEAD_MASK 0x3F000000
+#define TT_CLUSTER_CTRL_PREFETCHER_CONTROL_ICACHE_PREFETCHER_AHEAD_SHIFT 24
 
 #define TT_CLUSTER_CTRL_BUS_ERROR_UNIT_DATA_ICACHE_TL_BUS_ERROR_MASK 0x1
 #define TT_CLUSTER_CTRL_BUS_ERROR_UNIT_DATA_ICACHE_TL_BUS_ERROR_SHIFT 0
@@ -8988,11 +9303,11 @@ typedef struct {
 #define T6_L1_CSR_GROUP_HASH_FN_CTRL_HASH_FN1_EN_MASK 0x2
 #define T6_L1_CSR_GROUP_HASH_FN_CTRL_HASH_FN1_EN_SHIFT 1
 
-#define T6_L1_CSR_GROUP_HASH_FN_MASK_BIT_SEL_MASK 0x3FF000
-#define T6_L1_CSR_GROUP_HASH_FN_MASK_BIT_SEL_SHIFT 12
+#define T6_L1_CSR_GROUP_HASH_FN_MASK_BIT_SEL_MASK 0x3FFC00
+#define T6_L1_CSR_GROUP_HASH_FN_MASK_BIT_SEL_SHIFT 10
 
-#define T6_L1_CSR_GROUP_HASH_FN_MATCH_BIT_SEL_MASK 0x3FF000
-#define T6_L1_CSR_GROUP_HASH_FN_MATCH_BIT_SEL_SHIFT 12
+#define T6_L1_CSR_GROUP_HASH_FN_MATCH_BIT_SEL_MASK 0x3FFC00
+#define T6_L1_CSR_GROUP_HASH_FN_MATCH_BIT_SEL_SHIFT 10
 
 #define T6_L1_CSR_GROUP_HASH_FN_ADDR_BIT_SEL_MASK 0x3FFFF0
 #define T6_L1_CSR_GROUP_HASH_FN_ADDR_BIT_SEL_SHIFT 4
@@ -9000,22 +9315,10 @@ typedef struct {
 #define T6_L1_CSR_GROUP_HASH_FN_SWAP_BIT_SEL_MASK 0x7
 #define T6_L1_CSR_GROUP_HASH_FN_SWAP_BIT_SEL_SHIFT 0
 
-#define T6_L1_CSR_GROUP_PERF_CTRL_PERF_CNT_ENABLE_MASK 0x1
-#define T6_L1_CSR_GROUP_PERF_CTRL_PERF_CNT_ENABLE_SHIFT 0
-
-#define T6_L1_CSR_GROUP_PERF_CTRL_PERF_CNT_SUBPORT_SEL_MASK 0x3F0
-#define T6_L1_CSR_GROUP_PERF_CTRL_PERF_CNT_SUBPORT_SEL_SHIFT 4
-
-#define T6_L1_CSR_GROUP_PERF_CTRL_PERF_CNT_EVENT_SEL_MASK 0x7000
-#define T6_L1_CSR_GROUP_PERF_CTRL_PERF_CNT_EVENT_SEL_SHIFT 12
-
-#define T6_L1_CSR_GROUP_PERF_CNT_PERF_CNT_MASK 0xFFFFFFFF
-#define T6_L1_CSR_GROUP_PERF_CNT_PERF_CNT_SHIFT 0
-
-#define T6_L1_CSR_IN_ORDER_MASK_BIT_SEL_MASK 0xFFFFFFF0
+#define T6_L1_CSR_IN_ORDER_MASK_BIT_SEL_MASK 0x3FFFF0
 #define T6_L1_CSR_IN_ORDER_MASK_BIT_SEL_SHIFT 4
 
-#define T6_L1_CSR_IN_ORDER_MATCH_BIT_SEL_MASK 0xFFFFFFF0
+#define T6_L1_CSR_IN_ORDER_MATCH_BIT_SEL_MASK 0x3FFFF0
 #define T6_L1_CSR_IN_ORDER_MATCH_BIT_SEL_SHIFT 4
 
 #define T6_L1_CSR_PORT_CTRL_ALL_IN_ORDER_MASK 0x1
@@ -9084,122 +9387,23 @@ typedef struct {
 #define TT_CLUSTER_CTRL_SBUS_RSINK_RESET_FALLBACK_DATA_MASK 0x1
 #define TT_CLUSTER_CTRL_SBUS_RSINK_RESET_FALLBACK_DATA_SHIFT 0
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_DATA_MASK 0xFFFFFFFFFFFFFFFF
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_READ_DATA_DATA_SHIFT 0
+#define TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_L1_REGION_EN_MASK 0x1
+#define TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_L1_REGION_EN_SHIFT 0
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_DATA_MASK 0xFFFFFFFFFFFFFFFF
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_WRITE_DATA_DATA_SHIFT 0
+#define TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_SNOOP_PERF_DISABLE_MASK 0x2
+#define TT_CLUSTER_CTRL_OVERLAY_CHICKEN_BITS_SNOOP_PERF_DISABLE_SHIFT 1
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_DATA_MASK 0xFFFFFFFFFFFFFFFF
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_SRC_ADDR_DATA_SHIFT 0
+#define TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_START_ADDR_MASK 0xFFFF
+#define TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_START_ADDR_SHIFT 0
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_DATA_MASK 0xFFFFFFFFFFFFFFFF
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEST_ADDR_DATA_SHIFT 0
+#define TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_END_ADDR_MASK 0xFFFF0000
+#define TT_CLUSTER_CTRL_L1_ACCESSIBLE_REGION_END_ADDR_SHIFT 16
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_SRC_X_MASK 0x3F
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_SRC_X_SHIFT 0
+#define TT_CLUSTER_CTRL_L1_REGION_ERROR_ERROR_MASK 0x1
+#define TT_CLUSTER_CTRL_L1_REGION_ERROR_ERROR_SHIFT 0
 
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_SRC_Y_MASK 0xFC0
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_SRC_Y_SHIFT 6
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_DEST_X_MASK 0x3F0000
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_DEST_X_SHIFT 16
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_DEST_Y_MASK 0xFC00000
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_COORD_DEST_Y_SHIFT 22
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_DATA_MASK 0xFFFFFFFF
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_LEN_BYTES_DATA_SHIFT 0
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_DATA_MASK 0x3F
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_REQ_VC_DATA_SHIFT 0
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_DATA_MASK 0x3F
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_RESP_VC_DATA_SHIFT 0
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_DATA_MASK 0xF
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_TR_ID_DATA_SHIFT 0
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_WR_REQ_MASK 0x1
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_WR_REQ_SHIFT 0
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_RD_REQ_MASK 0x2
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_RD_REQ_SHIFT 1
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_NON_POSTED_WRITE_SENT_MASK 0x4
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_NON_POSTED_WRITE_SENT_SHIFT 2
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_REQ_HEAD_FLIT_VLD_MASK 0x8
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_DEBUG_REQ_HEAD_FLIT_VLD_SHIFT 3
-
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_POSTED_MASK 0x1
-#define TT_GLOBAL_CMD_BUF_CFG_GLOBAL_CMD_BUF_MISC_POSTED_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_CONF_DECOUPLE_AW_MASK 0x1
-#define TT_IDMA_SIDEBAND_CONF_DECOUPLE_AW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_CONF_DECOUPLE_RW_MASK 0x2
-#define TT_IDMA_SIDEBAND_CONF_DECOUPLE_RW_SHIFT 1
-
-#define TT_IDMA_SIDEBAND_CONF_SRC_REDUCE_LEN_MASK 0x4
-#define TT_IDMA_SIDEBAND_CONF_SRC_REDUCE_LEN_SHIFT 2
-
-#define TT_IDMA_SIDEBAND_CONF_DST_REDUCE_LEN_MASK 0x8
-#define TT_IDMA_SIDEBAND_CONF_DST_REDUCE_LEN_SHIFT 3
-
-#define TT_IDMA_SIDEBAND_CONF_SRC_MAX_LLEN_MASK 0x70
-#define TT_IDMA_SIDEBAND_CONF_SRC_MAX_LLEN_SHIFT 4
-
-#define TT_IDMA_SIDEBAND_CONF_DST_MAX_LLEN_MASK 0x380
-#define TT_IDMA_SIDEBAND_CONF_DST_MAX_LLEN_SHIFT 7
-
-#define TT_IDMA_SIDEBAND_CONF_ENABLE_ND_MASK 0x400
-#define TT_IDMA_SIDEBAND_CONF_ENABLE_ND_SHIFT 10
-
-#define TT_IDMA_SIDEBAND_STATUS_BUSY_MASK 0x3FF
-#define TT_IDMA_SIDEBAND_STATUS_BUSY_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_NEXT_ID_NEXT_ID_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_NEXT_ID_NEXT_ID_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_DONE_ID_DONE_ID_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_DONE_ID_DONE_ID_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_DST_ADDR_LOW_DST_ADDR_LOW_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_DST_ADDR_LOW_DST_ADDR_LOW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_DST_ADDR_HIGH_DST_ADDR_HIGH_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_DST_ADDR_HIGH_DST_ADDR_HIGH_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_SRC_ADDR_LOW_SRC_ADDR_LOW_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_SRC_ADDR_LOW_SRC_ADDR_LOW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_SRC_ADDR_HIGH_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_SRC_ADDR_HIGH_SRC_ADDR_HIGH_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_LENGTH_LOW_LENGTH_LOW_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_LENGTH_LOW_LENGTH_LOW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_LENGTH_HIGH_LENGTH_HIGH_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_LENGTH_HIGH_LENGTH_HIGH_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_DST_STRIDE_2_LOW_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_DST_STRIDE_2_LOW_DST_STRIDE_2_LOW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_DST_STRIDE_2_HIGH_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_DST_STRIDE_2_HIGH_DST_STRIDE_2_HIGH_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_SRC_STRIDE_2_LOW_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_SRC_STRIDE_2_LOW_SRC_STRIDE_2_LOW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_SRC_STRIDE_2_HIGH_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_SRC_STRIDE_2_HIGH_SRC_STRIDE_2_HIGH_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_REPS_2_LOW_REPS_2_LOW_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_REPS_2_LOW_REPS_2_LOW_SHIFT 0
-
-#define TT_IDMA_SIDEBAND_REPS_2_HIGH_REPS_2_HIGH_MASK 0xFFFFFFFF
-#define TT_IDMA_SIDEBAND_REPS_2_HIGH_REPS_2_HIGH_SHIFT 0
+#define TT_CLUSTER_CTRL_L1_REGION_ERROR_ERROR_ADDR_MASK 0x1FFFE
+#define TT_CLUSTER_CTRL_L1_REGION_ERROR_ERROR_ADDR_SHIFT 1
 
 #define TILE_COUNTER_RESET_RESET_MASK 0x1
 #define TILE_COUNTER_RESET_RESET_SHIFT 0
@@ -9212,6 +9416,15 @@ typedef struct {
 
 #define TILE_COUNTER_BUFFER_CAPACITY_CAPACITY_MASK 0xFFFF
 #define TILE_COUNTER_BUFFER_CAPACITY_CAPACITY_SHIFT 0
+
+#define TILE_COUNTER_READ_POSTED_POSTED_CNT_MASK 0xFFFF
+#define TILE_COUNTER_READ_POSTED_POSTED_CNT_SHIFT 0
+
+#define TILE_COUNTER_READ_ACKED_ACKED_CNT_MASK 0xFFFF
+#define TILE_COUNTER_READ_ACKED_ACKED_CNT_SHIFT 0
+
+#define TILE_COUNTER_ERROR_STATUS_ERROR_MASK 0x1
+#define TILE_COUNTER_ERROR_STATUS_ERROR_SHIFT 0
 
 #define TILE_COUNTER_TILES_AVAIL_THRESHOLD_THRESHOLD_MASK 0xFFFF
 #define TILE_COUNTER_TILES_AVAIL_THRESHOLD_THRESHOLD_SHIFT 0
@@ -9228,6 +9441,12 @@ typedef struct {
 #define TT_ROCC_CMD_BUF_IE_VC_HAS_SPACE_IE_MASK 0x4
 #define TT_ROCC_CMD_BUF_IE_VC_HAS_SPACE_IE_SHIFT 2
 
+#define TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_MASK 0xFFF00000000
+#define TT_ROCC_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_MASK 0xFFF000000000000
+#define TT_ROCC_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_SHIFT 48
+
 #define TT_ROCC_CMD_BUF_IP_TR_COUNT_ZERO_IP_MASK 0x1
 #define TT_ROCC_CMD_BUF_IP_TR_COUNT_ZERO_IP_SHIFT 0
 
@@ -9236,6 +9455,12 @@ typedef struct {
 
 #define TT_ROCC_CMD_BUF_IP_VC_HAS_SPACE_IP_MASK 0x4
 #define TT_ROCC_CMD_BUF_IP_VC_HAS_SPACE_IP_SHIFT 2
+
+#define TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK 0xFFF00000000
+#define TT_ROCC_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_MASK 0xFFF000000000000
+#define TT_ROCC_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT 48
 
 #define TT_ROCC_CMD_BUF_WR_SENT_TR_ID_DATA_MASK 0xF
 #define TT_ROCC_CMD_BUF_WR_SENT_TR_ID_DATA_SHIFT 0
@@ -9567,6 +9792,42 @@ typedef struct {
 #define TT_ROCC_CMD_BUF_MISC_PATH_RES_DISABLE_MASK 0x40000
 #define TT_ROCC_CMD_BUF_MISC_PATH_RES_DISABLE_SHIFT 18
 
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_ZERO_IE_MASK 0xFFFFFFFF
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_ZERO_IE_SHIFT 0
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IE_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IE_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_IDMA_ZERO_IE_MASK 0xFFFFFFFF
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_IDMA_ZERO_IE_SHIFT 0
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IE_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IE_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IE_MASK 0xFFFFFFFF
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IE_SHIFT 0
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IE_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IE_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_ZERO_IP_MASK 0xFFFFFFFF
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_ZERO_IP_SHIFT 0
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IP_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IP_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_IDMA_ZERO_IP_MASK 0xFFFFFFFF
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_IDMA_ZERO_IP_SHIFT 0
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IP_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IP_SHIFT 32
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IP_MASK 0xFFFFFFFF
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IP_SHIFT 0
+
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IP_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IP_SHIFT 32
+
 #define TT_ROCC_ADDRESS_GEN_BANK_CURRENT_DATA_MASK 0xFF
 #define TT_ROCC_ADDRESS_GEN_BANK_CURRENT_DATA_SHIFT 0
 
@@ -9627,6 +9888,12 @@ typedef struct {
 #define TT_ROCC_SIMPLE_CMD_BUF_IE_VC_HAS_SPACE_IE_MASK 0x4
 #define TT_ROCC_SIMPLE_CMD_BUF_IE_VC_HAS_SPACE_IE_SHIFT 2
 
+#define TT_ROCC_SIMPLE_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_MASK 0xFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_IE_PER_VC_HAS_SPACE_IE_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_MASK 0xFFF000000000000
+#define TT_ROCC_SIMPLE_CMD_BUF_IE_PER_IDMA_VC_HAS_SPACE_IE_SHIFT 48
+
 #define TT_ROCC_SIMPLE_CMD_BUF_IP_TR_COUNT_ZERO_IP_MASK 0x1
 #define TT_ROCC_SIMPLE_CMD_BUF_IP_TR_COUNT_ZERO_IP_SHIFT 0
 
@@ -9635,6 +9902,12 @@ typedef struct {
 
 #define TT_ROCC_SIMPLE_CMD_BUF_IP_VC_HAS_SPACE_IP_MASK 0x4
 #define TT_ROCC_SIMPLE_CMD_BUF_IP_VC_HAS_SPACE_IP_SHIFT 2
+
+#define TT_ROCC_SIMPLE_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_MASK 0xFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_IP_PER_VC_HAS_SPACE_IP_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_MASK 0xFFF000000000000
+#define TT_ROCC_SIMPLE_CMD_BUF_IP_PER_IDMA_VC_HAS_SPACE_IP_SHIFT 48
 
 #define TT_ROCC_SIMPLE_CMD_BUF_RESERVED_RESERVED_MASK 0xFFFFFFFFFFFFFFFF
 #define TT_ROCC_SIMPLE_CMD_BUF_RESERVED_RESERVED_SHIFT 0
@@ -9800,6 +10073,42 @@ typedef struct {
 
 #define TT_ROCC_SIMPLE_CMD_BUF_MISC_PATH_RES_DISABLE_MASK 0x40000
 #define TT_ROCC_SIMPLE_CMD_BUF_MISC_PATH_RES_DISABLE_SHIFT 18
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_ZERO_IE_MASK 0xFFFFFFFF
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_ZERO_IE_SHIFT 0
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IE_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IE_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_IDMA_ZERO_IE_MASK 0xFFFFFFFF
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_IDMA_ZERO_IE_SHIFT 0
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IE_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IE_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IE_MASK 0xFFFFFFFF
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IE_SHIFT 0
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IE_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IE_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IE_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_ZERO_IP_MASK 0xFFFFFFFF
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_ZERO_IP_SHIFT 0
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IP_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_0_IRQ_PER_TR_ID_WR_COUNT_ZERO_IP_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_IDMA_ZERO_IP_MASK 0xFFFFFFFF
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_IDMA_ZERO_IP_SHIFT 0
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IP_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_1_IRQ_PER_TR_ID_TILES_TO_PROCESS_IP_SHIFT 32
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IP_MASK 0xFFFFFFFF
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_WR_TILES_TO_PROCESS_IP_SHIFT 0
+
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IP_MASK 0xFFFFFFFF00000000
+#define TT_ROCC_SIMPLE_CMD_BUF_PER_TR_ID_IP_2_IRQ_PER_TR_ID_IDMA_TILES_TO_PROCESS_IP_SHIFT 32
 
 #define TT_DEBUG_MODULE_APB_DATA_DMI_DATA_0_MASK 0xFF
 #define TT_DEBUG_MODULE_APB_DATA_DMI_DATA_0_SHIFT 0
@@ -10074,6 +10383,9 @@ typedef struct {
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_QUEUE_FLUSH_MASK 0x1
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_QUEUE_FLUSH_SHIFT 0
 
+#define SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_QUEUE_OVER_UNDERFLOW_EN_MASK 0x10
+#define SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_QUEUE_OVER_UNDERFLOW_EN_SHIFT 4
+
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_TOKEN_HW_REQ_EN_MASK 0x100
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CTRL_TOKEN_HW_REQ_EN_SHIFT 8
 
@@ -10113,6 +10425,9 @@ typedef struct {
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_EMPTY_MASK 0x2
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_EMPTY_SHIFT 1
 
+#define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_OVERFLOW_MASK 0x4
+#define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_OVERFLOW_SHIFT 2
+
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_COUNT_MASK 0xF000
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DESC_QUEUE_STATUS_COUNT_SHIFT 12
 
@@ -10121,6 +10436,9 @@ typedef struct {
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_EMPTY_MASK 0x2
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_EMPTY_SHIFT 1
+
+#define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_OVERFLOW_MASK 0x4
+#define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_OVERFLOW_SHIFT 2
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_COUNT_MASK 0xF800
 #define SMN_MST_COMMON_BLOCK_SMN_MST_CMD_DATA_QUEUE_STATUS_COUNT_SHIFT 11
@@ -10131,6 +10449,9 @@ typedef struct {
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_EMPTY_MASK 0x2
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_EMPTY_SHIFT 1
 
+#define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_UNDERFLOW_MASK 0x4
+#define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_UNDERFLOW_SHIFT 2
+
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_COUNT_MASK 0xF000
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DESC_QUEUE_STATUS_COUNT_SHIFT 12
 
@@ -10139,6 +10460,9 @@ typedef struct {
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_EMPTY_MASK 0x2
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_EMPTY_SHIFT 1
+
+#define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_UNDERFLOW_MASK 0x4
+#define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_UNDERFLOW_SHIFT 2
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_COUNT_MASK 0xF800
 #define SMN_MST_COMMON_BLOCK_SMN_MST_RESP_DATA_QUEUE_STATUS_COUNT_SHIFT 11
@@ -10320,6 +10644,9 @@ typedef struct {
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_ENABLE_CMD_DATA_RDY_MASK 0x100
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_ENABLE_CMD_DATA_RDY_SHIFT 8
 
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_ENABLE_QUEUE_OVER_UNDERFLOW_MASK 0x200
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_ENABLE_QUEUE_OVER_UNDERFLOW_SHIFT 9
+
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_SMN_NETWORK_ERR_MASK 0x1
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_SMN_NETWORK_ERR_SHIFT 0
 
@@ -10346,6 +10673,9 @@ typedef struct {
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_CMD_DATA_RDY_MASK 0x100
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_CMD_DATA_RDY_SHIFT 8
+
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_QUEUE_OVER_UNDERFLOW_MASK 0x200
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_QUEUE_OVER_UNDERFLOW_SHIFT 9
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_SMN_NETWORK_ERR_MASK 0x1
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_SMN_NETWORK_ERR_SHIFT 0
@@ -10374,6 +10704,9 @@ typedef struct {
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_CMD_DATA_RDY_MASK 0x100
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_CMD_DATA_RDY_SHIFT 8
 
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_QUEUE_OVER_UNDERFLOW_MASK 0x200
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_STATUS_RAW_QUEUE_OVER_UNDERFLOW_SHIFT 9
+
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_SMN_NETWORK_ERR_MASK 0x1
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_SMN_NETWORK_ERR_SHIFT 0
 
@@ -10400,6 +10733,9 @@ typedef struct {
 
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_CMD_DATA_RDY_MASK 0x100
 #define SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_CMD_DATA_RDY_SHIFT 8
+
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_QUEUE_OVER_UNDERFLOW_MASK 0x200
+#define SMN_MST_COMMON_BLOCK_SMN_MST_INT_CLEAR_QUEUE_OVER_UNDERFLOW_SHIFT 9
 
 #define SMN_MST_COMMON_BLOCK_SMN_FRAME_CNT_SENT_MASK 0xFFFFFFFF
 #define SMN_MST_COMMON_BLOCK_SMN_FRAME_CNT_SENT_SHIFT 0
@@ -10505,6 +10841,12 @@ typedef struct {
 
 #define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_ERR_STS_MULTI_MATCH_MASK 0x20000000000
 #define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_ERR_STS_MULTI_MATCH_SHIFT 41
+
+#define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_POSTED_WRITE_MASK 0x1
+#define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_POSTED_WRITE_SHIFT 0
+
+#define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_BUFF_CMD_MASK 0x2
+#define SMN_ADDR_TRANS_BLOCK_SMN_ADDR_TRANS_CFG_BUFF_CMD_SHIFT 1
 
 #define SMN_MST_CMD_BUF_SMN_MST_CMD_BUF_REG0_ADDR_MODE_MASK 0xF
 #define SMN_MST_CMD_BUF_SMN_MST_CMD_BUF_REG0_ADDR_MODE_SHIFT 0
@@ -10893,6 +11235,9 @@ typedef struct {
 #define SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RA1_UHD_EMC_RETENTION_EN_MASK 0x10000
 #define SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RA1_UHD_EMC_RETENTION_EN_SHIFT 16
 
+#define SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_VAL_MASK 0x1
+#define SMN_SLV_BLOCK_SMN_SLV_FUSE_MVMUL_REDUCE_VAL_SHIFT 0
+
 #define SMN_SLV_NOC_SEC_BLOCK_SMN_NOC_SEC_X_Y_LOCAL_NODE_ID_X_MASK 0x3F
 #define SMN_SLV_NOC_SEC_BLOCK_SMN_NOC_SEC_X_Y_LOCAL_NODE_ID_X_SHIFT 0
 
@@ -11243,6 +11588,15 @@ typedef struct {
 
 #define GLOBAL_EXT_SAFETY_DURATION2_EXT_SAFETY_DURATION2_MASK 0xFFFF
 #define GLOBAL_EXT_SAFETY_DURATION2_EXT_SAFETY_DURATION2_SHIFT 0
+
+#define GLOBAL_LOCK_STATUS_LOCK_MONITOR_CLEAR_MASK 0x7
+#define GLOBAL_LOCK_STATUS_LOCK_MONITOR_CLEAR_SHIFT 0
+
+#define GLOBAL_LOCK_STATUS_LOCK_DETECT_MASK 0x38
+#define GLOBAL_LOCK_STATUS_LOCK_DETECT_SHIFT 3
+
+#define GLOBAL_LOCK_STATUS_DROOP_INTERRUPT_MASK 0x7C0
+#define GLOBAL_LOCK_STATUS_DROOP_INTERRUPT_SHIFT 6
 
 #define GLOBAL_LOCK_MONITOR_0_LOCK_MONITOR_0_MASK 0xFFFF
 #define GLOBAL_LOCK_MONITOR_0_LOCK_MONITOR_0_SHIFT 0
@@ -12027,6 +12381,99 @@ typedef struct {
 #define DROOP_PERCENT_DELAY_TH1_PERCENT_DELAY_TH_VALID_MASK 0x100
 #define DROOP_PERCENT_DELAY_TH1_PERCENT_DELAY_TH_VALID_SHIFT 8
 
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_TS_EN_MASK 0x1
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_TS_EN_SHIFT 0
+
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_RAW_ADC_EN_MASK 0x4
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_RAW_ADC_EN_SHIFT 2
+
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_REMOTE_NUM_MASK 0xF8
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_REMOTE_NUM_SHIFT 3
+
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_BURST_MODE_EN_MASK 0x100
+#define TEMP_SENSOR_TEMP_SENSOR_CTRL_BURST_MODE_EN_SHIFT 8
+
+#define TEMP_SENSOR_BYPASS_ID_LO_ID_LO_MASK 0xFF
+#define TEMP_SENSOR_BYPASS_ID_LO_ID_LO_SHIFT 0
+
+#define TEMP_SENSOR_BYPASS_ID_LO_OSCAL_EN_MASK 0x100
+#define TEMP_SENSOR_BYPASS_ID_LO_OSCAL_EN_SHIFT 8
+
+#define TEMP_SENSOR_BYPASS_ID_HI_ID_HI_MASK 0xFF
+#define TEMP_SENSOR_BYPASS_ID_HI_ID_HI_SHIFT 0
+
+#define TEMP_SENSOR_BYPASS_ID_HI_CLK_INV_MASK 0x100
+#define TEMP_SENSOR_BYPASS_ID_HI_CLK_INV_SHIFT 8
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK1_MASK 0x7
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK1_SHIFT 0
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK3_MASK 0x70
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK3_SHIFT 4
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_CDC_STAGE_EN_MASK 0x100
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_CDC_STAGE_EN_SHIFT 8
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TS_COA0_MASK 0xF
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TS_COA0_SHIFT 0
+
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TSR_N_CK2_MASK 0x1F0
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TSR_N_CK2_SHIFT 4
+
+#define TEMP_SENSOR_TEMP_COEFF_B_TS_COB0_MASK 0x7F
+#define TEMP_SENSOR_TEMP_COEFF_B_TS_COB0_SHIFT 0
+
+#define TEMP_SENSOR_TEMP_COEFF_B_TS_COC0_HI_MASK 0x100
+#define TEMP_SENSOR_TEMP_COEFF_B_TS_COC0_HI_SHIFT 8
+
+#define TEMP_SENSOR_TEMP_COEFF_C_TS_COC0_MASK 0x1FF
+#define TEMP_SENSOR_TEMP_COEFF_C_TS_COC0_SHIFT 0
+
+#define TEMP_SENSOR_ADC_TARGET_ADC_TARGET_MASK 0x1FF
+#define TEMP_SENSOR_ADC_TARGET_ADC_TARGET_SHIFT 0
+
+#define TEMP_SENSOR_CONV_AVG_SEL_NUM_CONV_AVG_SEL_NUM_MASK 0x3
+#define TEMP_SENSOR_CONV_AVG_SEL_NUM_CONV_AVG_SEL_NUM_SHIFT 0
+
+#define TEMP_SENSOR_DAC_GAIN_ADC_CAP_SELECT_MASK 0x3F
+#define TEMP_SENSOR_DAC_GAIN_ADC_CAP_SELECT_SHIFT 0
+
+#define TEMP_SENSOR_DAC_GAIN_ADC_GAIN_MODE_MASK 0x40
+#define TEMP_SENSOR_DAC_GAIN_ADC_GAIN_MODE_SHIFT 6
+
+#define TEMP_SENSOR_DAC_GAIN_FSMP_EN_MASK 0x80
+#define TEMP_SENSOR_DAC_GAIN_FSMP_EN_SHIFT 7
+
+#define TEMP_SENSOR_DAC_GAIN_FAST_MODE_MASK 0x100
+#define TEMP_SENSOR_DAC_GAIN_FAST_MODE_SHIFT 8
+
+#define TEMP_SENSOR_REMOTE_CALIBRATION_TS_CO_MASK 0x3F
+#define TEMP_SENSOR_REMOTE_CALIBRATION_TS_CO_SHIFT 0
+
+#define TEMP_SENSOR_ATE_CTRL_ATE_RO_MUX_MASK 0x7
+#define TEMP_SENSOR_ATE_CTRL_ATE_RO_MUX_SHIFT 0
+
+#define TEMP_SENSOR_ATE_CTRL_ATE_AVG_EN_MASK 0x8
+#define TEMP_SENSOR_ATE_CTRL_ATE_AVG_EN_SHIFT 3
+
+#define TEMP_SENSOR_ATE_CTRL_AVG_MUX_SEL_MASK 0xF0
+#define TEMP_SENSOR_ATE_CTRL_AVG_MUX_SEL_SHIFT 4
+
+#define TEMP_SENSOR_ATE_CTRL_ATE_EN_MASK 0x100
+#define TEMP_SENSOR_ATE_CTRL_ATE_EN_SHIFT 8
+
+#define TEMP_SENSOR_TEST_LMT_MAX_TEST_LMT_MAX_MASK 0x1FF
+#define TEMP_SENSOR_TEST_LMT_MAX_TEST_LMT_MAX_SHIFT 0
+
+#define TEMP_SENSOR_TEST_LMT_MIN_TEST_LMT_MIN_MASK 0x1FF
+#define TEMP_SENSOR_TEST_LMT_MIN_TEST_LMT_MIN_SHIFT 0
+
+#define TEMP_SENSOR_START_TEMP_SENSE_START_TEMP_SENSE_MASK 0x1
+#define TEMP_SENSOR_START_TEMP_SENSE_START_TEMP_SENSE_SHIFT 0
+
+#define TEMP_SENSOR_REMOTE_SENSOR_DATA_TS_OUT_MASK 0x1FF
+#define TEMP_SENSOR_REMOTE_SENSOR_DATA_TS_OUT_SHIFT 0
+
 #define TT_PLL_PVT_PROGRAMMABLE_THRESHOLD_PROGRAMMABLE_THRESHOLD_MASK 0xFF
 #define TT_PLL_PVT_PROGRAMMABLE_THRESHOLD_PROGRAMMABLE_THRESHOLD_SHIFT 0
 
@@ -12084,6 +12531,9 @@ typedef struct {
 #define TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_PLL_BYPASS_ON_DFS_MASK 0x80
 #define TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_PLL_BYPASS_ON_DFS_SHIFT 7
 
+#define TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_DISABLE_POSTDIV_WRITES_MASK 0x100
+#define TT_PLL_PVT_THERMAL_CTRL_LOOP_CFG_DISABLE_POSTDIV_WRITES_SHIFT 8
+
 #define TT_PLL_PVT_RESET_P_STATE_RESET_P_STATE_MASK 0xF
 #define TT_PLL_PVT_RESET_P_STATE_RESET_P_STATE_SHIFT 0
 
@@ -12099,17 +12549,29 @@ typedef struct {
 #define TT_PLL_PVT_REDUCE_FREQ_EVENT_COUNT_REDUCE_FREQ_EVENT_COUNT_MASK 0xFFFFFFFF
 #define TT_PLL_PVT_REDUCE_FREQ_EVENT_COUNT_REDUCE_FREQ_EVENT_COUNT_SHIFT 0
 
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_CURRENT_FREQ_SELECT_MASK 0xF
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_CURRENT_FREQ_SELECT_SHIFT 0
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_AI_OUT_FREQ_SELECT_MASK 0xF
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_AI_OUT_FREQ_SELECT_SHIFT 0
 
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_HYST_FSM_STATE_MASK 0x30
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_HYST_FSM_STATE_SHIFT 4
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_CURRENT_FREQ_SELECT_MASK 0xF0
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_CURRENT_FREQ_SELECT_SHIFT 4
 
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_AWM3_REG_STATE_MASK 0xF00
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_AWM3_REG_STATE_SHIFT 8
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_HYST_FSM_STATE_MASK 0x700
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_HYST_FSM_STATE_SHIFT 8
 
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_THERMAL_POLL_STATE_MASK 0xF000
-#define TT_PLL_PVT_THERMAL_CTRL_STATUS_THERMAL_POLL_STATE_SHIFT 12
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_AWM3_REG_STATE_MASK 0xF800
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_AWM3_REG_STATE_SHIFT 11
+
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_THERMAL_POLL_STATE_MASK 0xF0000
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_THERMAL_POLL_STATE_SHIFT 16
+
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_DFVS_MODE_0_FREQ_SEL_MASK 0xF00000
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_DFVS_MODE_0_FREQ_SEL_SHIFT 20
+
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_DFVS_MODE_1_FREQ_SEL_MASK 0xF000000
+#define TT_PLL_PVT_THERMAL_CTRL_STATUS_DFVS_MODE_1_FREQ_SEL_SHIFT 24
+
+#define TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_THERMAL_DFS_UNLOCK_NUM_CYCLES_MASK 0xFFF
+#define TT_PLL_PVT_THERMAL_DFS_UNLOCK_NUM_CYCLES_THERMAL_DFS_UNLOCK_NUM_CYCLES_SHIFT 0
 
 #define TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_LOOKUP_FCW_INT_F0_MASK 0xFF
 #define TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_LOOKUP_FCW_INT_F0_SHIFT 0
@@ -12123,11 +12585,29 @@ typedef struct {
 #define TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_LOOKUP_FCW_INT_F3_MASK 0xFF000000
 #define TT_PLL_PVT_LOOKUP_FCW_INT_FREQ_LOOKUP_FCW_INT_F3_SHIFT 24
 
+#define TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_LOOKUP_POSTDIV_MASK 0x7
+#define TT_PLL_PVT_LOOKUP_POSTDIV_FREQ_LOOKUP_POSTDIV_SHIFT 0
+
 #define TT_PLL_PVT_PROMISE_SENSOR_CTRL_SF_PROMISE_EN_MASK 0x1
 #define TT_PLL_PVT_PROMISE_SENSOR_CTRL_SF_PROMISE_EN_SHIFT 0
 
 #define TT_PLL_PVT_PROMISE_SENSOR_CTRL_SF_PROMISE_SELECT_MASK 0x3F00
 #define TT_PLL_PVT_PROMISE_SENSOR_CTRL_SF_PROMISE_SELECT_SHIFT 8
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_VRHOT_PSYSCRIT_EN_MASK 0x1
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_VRHOT_PSYSCRIT_EN_SHIFT 0
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_VRHOT_PSYSCRIT_WAIT_FOR_IDLE_MASK 0x2
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_VRHOT_PSYSCRIT_WAIT_FOR_IDLE_SHIFT 1
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_VRHOT_PSYSCRIT_OVERRIDE_INDEX_MASK 0xF0
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_CFG_VRHOT_PSYSCRIT_OVERRIDE_INDEX_SHIFT 4
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_HOP_UP_DELAY_MASK 0xFFFFFF
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_UP_COUNT_HOP_UP_DELAY_SHIFT 0
+
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_HOP_DOWN_DELAY_MASK 0xFFFFFF
+#define TT_PLL_PVT_VRHOT_PSYSCRIT_HOP_DOWN_COUNT_HOP_DOWN_DELAY_SHIFT 0
 
 #define TT_PLL_PVT_THERMAL_THRESHOLDS_THERMAL_THRESHOLD_CAT_MASK 0xFF
 #define TT_PLL_PVT_THERMAL_THRESHOLDS_THERMAL_THRESHOLD_CAT_SHIFT 0
@@ -12156,6 +12636,9 @@ typedef struct {
 #define TT_PLL_PVT_POLL_TEMP_ENABLE_CAT_INTERRUPT_MASK 0x4
 #define TT_PLL_PVT_POLL_TEMP_ENABLE_CAT_INTERRUPT_SHIFT 2
 
+#define TT_PLL_PVT_LAST_READ_TEMP_LAST_READ_TEMP_MASK 0x1FF
+#define TT_PLL_PVT_LAST_READ_TEMP_LAST_READ_TEMP_SHIFT 0
+
 #define TT_PLL_PVT_CLOCK_COUNTER_CTRL_AWM_CLK_COUNT_EN_MASK 0x7
 #define TT_PLL_PVT_CLOCK_COUNTER_CTRL_AWM_CLK_COUNT_EN_SHIFT 0
 
@@ -12183,23 +12666,23 @@ typedef struct {
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_FUNC_TRIGGER_EN_MASK 0x1
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_FUNC_TRIGGER_EN_SHIFT 0
 
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_INPUT_CLK_SEL_MASK 0xE
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_INPUT_CLK_SEL_MASK 0x1E
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_INPUT_CLK_SEL_SHIFT 1
 
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_USE_DIV_CLK_MASK 0x10
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_USE_DIV_CLK_SHIFT 4
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_USE_DIV_CLK_MASK 0x20
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_USE_DIV_CLK_SHIFT 5
 
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_USE_TCK_MASK 0x20
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_USE_TCK_SHIFT 5
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_USE_TCK_MASK 0x40
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_USE_TCK_SHIFT 6
 
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_DIV_FACTOR_MASK 0x1FC0
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_DIV_FACTOR_SHIFT 6
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_DIV_FACTOR_MASK 0x3F80
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_DIV_FACTOR_SHIFT 7
 
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_VAL_MASK 0x1FFE000
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_VAL_SHIFT 13
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_VAL_MASK 0x3FFC000
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_DOWN_CTR_VAL_SHIFT 14
 
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_OBS_MASK 0x2000000
-#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_OBS_SHIFT 25
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_OBS_MASK 0x4000000
+#define PLL_PVT_CLK_OBSERVE_CLK_CTR_CONFIG_CLK_OBS_SHIFT 26
 
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_OUT_CLK_CTR_START_MASK 0x1
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_OUT_CLK_CTR_START_SHIFT 0
@@ -12212,48 +12695,6 @@ typedef struct {
 
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_FUNCTIONAL_RESET_N_MASK 0x1
 #define PLL_PVT_CLK_OBSERVE_CLK_CTR_FUNCTIONAL_RESET_N_SHIFT 0
-
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_TS_EN_MASK 0x1
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_TS_EN_SHIFT 0
-
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_REMOTE_NUM_MASK 0xF8
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_REMOTE_NUM_SHIFT 3
-
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_ALT_MODE_MASK 0x100
-#define TEMP_SENSOR_TEMP_SENSOR_CTRL_ALT_MODE_SHIFT 8
-
-#define TEMP_SENSOR_BYPASS_ID_LO_ID_LO_MASK 0xFF
-#define TEMP_SENSOR_BYPASS_ID_LO_ID_LO_SHIFT 0
-
-#define TEMP_SENSOR_BYPASS_ID_HI_ID_HI_MASK 0xFF
-#define TEMP_SENSOR_BYPASS_ID_HI_ID_HI_SHIFT 0
-
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK2_MASK 0x1F
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK2_SHIFT 0
-
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK3_MASK 0xE0
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_TSR_N_CK3_SHIFT 5
-
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TS_COA0_MASK 0xF
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TS_COA0_SHIFT 0
-
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TSR_N_CK1_MASK 0xE0
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_TSR_N_CK1_SHIFT 5
-
-#define TEMP_SENSOR_TEMP_COEFF_B_TS_COB0_MASK 0x7F
-#define TEMP_SENSOR_TEMP_COEFF_B_TS_COB0_SHIFT 0
-
-#define TEMP_SENSOR_TEMP_COEFF_C_TS_COC0_MASK 0xFF
-#define TEMP_SENSOR_TEMP_COEFF_C_TS_COC0_SHIFT 0
-
-#define TEMP_SENSOR_DAC_GAIN_GAIN_MASK 0xFF
-#define TEMP_SENSOR_DAC_GAIN_GAIN_SHIFT 0
-
-#define TEMP_SENSOR_REMOTE_CALIBRATION_TS_CO_MASK 0xFF
-#define TEMP_SENSOR_REMOTE_CALIBRATION_TS_CO_SHIFT 0
-
-#define TEMP_SENSOR_REMOTE_SENSOR_DATA_TS_OUT_MASK 0x1FF
-#define TEMP_SENSOR_REMOTE_SENSOR_DATA_TS_OUT_SHIFT 0
 
 #define BUS_ERROR_UNIT_CAUSE_DATA_MASK 0x7
 #define BUS_ERROR_UNIT_CAUSE_DATA_SHIFT 0
@@ -12434,6 +12875,9 @@ typedef struct {
 
 #define TT_CACHE_CONTROLLER_FULLINVALIDATE_INVALIDATE_CACHE_MASK 0xFFFFFFFF
 #define TT_CACHE_CONTROLLER_FULLINVALIDATE_INVALIDATE_CACHE_SHIFT 0
+
+#define TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_INVALIDATE_FLUSH_DIRTY_MASK 0xFFFFFFFFFFFFFFFF
+#define TT_CACHE_CONTROLLER_INVALIDATEFLUSHDIRTY_INVALIDATE_FLUSH_DIRTY_SHIFT 0
 
 #define TT_DEBUG_MODULE_SBUS_HALTED_DEBUG_HART_HALTED_MASK 0x3FF
 #define TT_DEBUG_MODULE_SBUS_HALTED_DEBUG_HART_HALTED_SHIFT 0
