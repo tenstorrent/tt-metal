@@ -71,18 +71,8 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     // Note: compute_kernel_config is not used by fill_cache operation
     (void)compute_kernel_config;
 
-    log_info(
-        tt::LogAlways,
-        "[paged_fill_cache] START: Operation invoked (batch_idx: {}, mesh_coords: {})",
-        batch_idx_fallback,
-        mesh_coords.has_value() ? std::to_string(mesh_coords.value().size()) : "none");
-
-    auto result = ttnn::prim::paged_fill_cache(
+    return ttnn::prim::paged_fill_cache(
         cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx_fallback, mesh_coords);
-
-    log_info(tt::LogAlways, "[paged_fill_cache] COMPLETE: Operation returned");
-
-    return result;
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache

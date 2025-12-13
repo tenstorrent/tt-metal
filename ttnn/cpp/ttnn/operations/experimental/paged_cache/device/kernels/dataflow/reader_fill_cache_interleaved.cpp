@@ -12,7 +12,7 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
     const uint32_t num_rows = get_arg_val<uint32_t>(2);
-    const uint32_t noop = get_arg_val<uint32_t>(3);  // Runtime arg: noop flag
+    const uint32_t noop = get_arg_val<uint32_t>(3);
 
     if (noop == 1) {
         return;  // Early exit, no work done

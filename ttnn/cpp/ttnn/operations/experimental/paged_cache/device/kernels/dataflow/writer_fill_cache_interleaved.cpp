@@ -44,14 +44,13 @@ void kernel_main() {
     constexpr uint32_t batch_idx_stick_size =
         get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
 
-    // Runtime args
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t page_table_addr = get_arg_val<uint32_t>(1);
     uint32_t start_row_num = get_arg_val<uint32_t>(2);
     uint32_t num_rows = get_arg_val<uint32_t>(3);
     // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
     uint32_t batch_arg = get_arg_val<uint32_t>(4);
-    uint32_t noop = get_arg_val<uint32_t>(5);  // Runtime arg: noop flag
+    uint32_t noop = get_arg_val<uint32_t>(5);
 
     if (noop == 1) {
         return;  // Early exit, no work done
