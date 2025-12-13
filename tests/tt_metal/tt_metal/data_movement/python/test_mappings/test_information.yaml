@@ -422,6 +422,12 @@ tests:
   318:
     name: "All from All Custom"
 
+  319:
+    name: "Atomic Semaphore Adjacent Bandwidth Sweep"
+
+  320:
+    name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
     comment: |
