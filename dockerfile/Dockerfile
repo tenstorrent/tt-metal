@@ -201,7 +201,8 @@ ARG GIT_REF=main
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
     https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
     && cd ${TT_METAL_HOME} \
-    && git checkout ${GIT_REF}"
+    && git checkout ${GIT_REF} \
+    && git submodule update --init --recursive"
 
 WORKDIR /tt-metal
 
