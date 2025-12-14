@@ -7,16 +7,12 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_shared_variables.hpp"
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-struct TilizeWithValPaddingMultiCoreInterleavedfactories {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
-        std::vector<CoreCoord> cores;
-    };
-
+struct TilizeWithValPaddingMultiCoreInterleavedFactory {
+    using shared_variables_t = shared_variables_interleaved;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     using operation_attributes_t = tilize_with_val_padding::operation_attributes_t;

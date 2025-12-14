@@ -26,10 +26,10 @@ struct TilizeWithValPaddingDeviceOperation {
     using tensor_return_value_t = tilize_with_val_padding::tensor_return_value_t;
 
     using program_factory_t = std::variant<
-        tilize_with_val_padding::program::TilizeWithValPaddingSingleCorefactories,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedfactories,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedfactories,
-        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedfactories>;
+        tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory,
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory,
+        tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -50,7 +50,8 @@ struct TilizeWithValPaddingDeviceOperation {
         const std::optional<tt::tt_metal::DataType>& output_dtype,
         const bool use_multicore,
         const bool enough_space_width,
-        const bool enough_space_height);
+        const bool enough_space_height,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement

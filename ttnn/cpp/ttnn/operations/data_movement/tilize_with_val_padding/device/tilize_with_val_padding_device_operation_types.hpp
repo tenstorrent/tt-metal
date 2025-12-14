@@ -16,6 +16,7 @@ struct operation_attributes_t {
     bool use_multicore;
     bool enough_space_width;
     bool enough_space_height;
+    std::optional<CoreRangeSet> sub_core_grids;
 };
 
 struct tensor_args_t {

@@ -23,7 +23,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-TilizeWithValPaddingSingleCorefactories::cached_program_t TilizeWithValPaddingSingleCorefactories::create(
+TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSingleCoreFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
@@ -31,8 +31,9 @@ TilizeWithValPaddingSingleCorefactories::cached_program_t TilizeWithValPaddingSi
 
     const Tensor& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-
-    CoreRange core({0, 0}, {0, 0});
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
+    CoreRange default_core({0, 0}, {0, 0});
+    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
     // This should allocate a DRAM buffer on the device
 
@@ -124,7 +125,7 @@ TilizeWithValPaddingSingleCorefactories::cached_program_t TilizeWithValPaddingSi
             .set_page_size(output_cb_index, output_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    uint32_t packed_pad_value = tilize_with_val_padding::detail::get_packed_value(a, operation_attributes.pad_value);
+    uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
     uint32_t tile_row_size_bytes = a.element_size() * TILE_HEIGHT;
 
     const std::array reader_kernel_args = {
@@ -183,33 +184,32 @@ TilizeWithValPaddingSingleCorefactories::cached_program_t TilizeWithValPaddingSi
     tt::tt_metal::SetRuntimeArgs(
         program, unary_writer_kernel_id, core, {dst_buffer->address(), (uint32_t)num_tiles, 0});
 
-    shared_variables_t shared_variables;
-    shared_variables.reader_kernel_id = unary_reader_kernel_id;
-    shared_variables.writer_kernel_id = unary_writer_kernel_id;
-
+    shared_variables_t shared_variables{
+        .reader_kernel_id = unary_reader_kernel_id, .writer_kernel_id = unary_writer_kernel_id, .core = core};
     return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-void TilizeWithValPaddingSingleCorefactories::override_runtime_arguments(
+void TilizeWithValPaddingSingleCoreFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
+    const auto& core = shared_variables.core;
 
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = output.buffer();
 
-    CoreCoord core = {0, 0};
+    CoreCoord core_0 = corerange_to_cores(core).at(0);
 
     {
-        auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+        auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core_0);
         runtime_args[0] = src_buffer->address();
     }
 
     {
-        auto& runtime_args = GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
+        auto& runtime_args = GetRuntimeArgs(program, shared_variables.writer_kernel_id, core_0);
         runtime_args[0] = dst_buffer->address();
     }
 }

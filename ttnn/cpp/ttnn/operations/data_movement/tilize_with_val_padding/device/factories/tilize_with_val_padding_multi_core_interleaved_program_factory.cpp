@@ -17,22 +17,21 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-TilizeWithValPaddingMultiCoreInterleavedfactories::cached_program_t
-TilizeWithValPaddingMultiCoreInterleavedfactories::create(
+TilizeWithValPaddingMultiCoreInterleavedFactory::cached_program_t
+TilizeWithValPaddingMultiCoreInterleavedFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
     const Tensor& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -42,12 +41,45 @@ TilizeWithValPaddingMultiCoreInterleavedfactories::create(
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
-
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid =
+        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
     uint32_t num_blocks = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
+    uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(available_grid, num_blocks);
+
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block) {
+        if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
+            uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+
+            auto
+                [ncores_block,
+                 all_cores_block,
+                 core_range_block,
+                 cliff_row_core_range,
+                 cliff_col_core_range,
+                 cliff_col_row_core_range,
+                 nblocks_per_core_block,
+                 single_block_size,
+                 single_block_size_cliff_row,
+                 single_block_size_cliff_col,
+                 has_cliff_row,
+                 has_cliff_col,
+                 full_cores_per_row,
+                 full_cores_per_col] =
+                    ttnn::split_blocks_for_tilize_wh(
+                        available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+            if (ncores < ncores_block) {
+                return TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
+                    operation_attributes, tensor_args, tensor_return_value);
+            }
+        }
+    }
 
     bool has_cliff = !core_range_cliff.empty();
 
@@ -65,7 +97,7 @@ TilizeWithValPaddingMultiCoreInterleavedfactories::create(
 
     /** reader
      */
-    uint32_t packed_pad_value = tilize_with_val_padding::detail::get_packed_value(a, operation_attributes.pad_value);
+    uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
     // log2(TILE_WIDTH * data_format_size_in_bytes)
     uint32_t shift_bits = static_cast<uint32_t>(std::log2(
         a.element_size() *
@@ -126,7 +158,7 @@ TilizeWithValPaddingMultiCoreInterleavedfactories::create(
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
 
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
@@ -140,11 +172,11 @@ TilizeWithValPaddingMultiCoreInterleavedfactories::create(
             static_cast<unsigned int>(assignment.size()),
         };
 
-        uint32_t nblocks_per_core_local = 0;
+        uint32_t nblocks_per_core = 0;
         BlockRep ref_el = assignment[0];
         uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
         for (const auto& el : assignment) {
-            nblocks_per_core_local += el.block_count();
+            nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
             if (compare_assignments(ref_el, el)) {
                 count_repeated++;
@@ -166,7 +198,7 @@ TilizeWithValPaddingMultiCoreInterleavedfactories::create(
         reader_rt_args.push_back(ref_el.times);
         reader_rt_args.push_back(count_repeated);
 
-        uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_local;
+        uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
         // writer runtime args
         const std::array writer_rt_args = {dst_buffer->address(), num_tiles_per_core, tile_start_id};
@@ -177,28 +209,30 @@ TilizeWithValPaddingMultiCoreInterleavedfactories::create(
         tile_start_id += num_tiles_per_core;
     }
 
-    shared_variables_t shared_variables;
-    shared_variables.reader_kernel_id = unary_reader_kernel_id;
-    shared_variables.writer_kernel_id = unary_writer_kernel_id;
-    shared_variables.cores = cores;
-
+    shared_variables_t shared_variables{
+        .reader_kernel_id = unary_reader_kernel_id,
+        .writer_kernel_id = unary_writer_kernel_id,
+        .cores = cores,
+        .ncores = ncores};
     return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-void TilizeWithValPaddingMultiCoreInterleavedfactories::override_runtime_arguments(
+void TilizeWithValPaddingMultiCoreInterleavedFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
-
+    const auto& ncores = shared_variables.ncores;
+    const auto& cores = shared_variables.cores;
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = output.buffer();
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);
-    for (const auto& core : shared_variables.cores) {
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const CoreCoord& core = cores[i];
         {
             auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
             runtime_args[0] = src_buffer->address();

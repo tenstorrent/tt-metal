@@ -18,16 +18,19 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     const auto& input_tensor = tensor_args.input_tensor;
 
     if (input_tensor.memory_config().is_sharded()) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedfactories{};
+        TT_FATAL(
+            !operation_attributes.sub_core_grids.has_value(),
+            "Sharded tilize does not support sub core grid specification");
+        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedfactories{};
+        return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCorefactories{};
+        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory{};
     }
 
-    return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedfactories{};
+    return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory{};
 }
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_hit(
@@ -150,7 +153,8 @@ TilizeWithValPaddingDeviceOperation::invoke(
     const std::optional<DataType>& output_dtype,
     const bool use_multicore,
     const bool enough_space_width,
-    const bool enough_space_height) {
+    const bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return {
         TilizeWithValPaddingDeviceOperation::operation_attributes_t{
             .output_padded_shape = output_padded_shape,
@@ -160,6 +164,7 @@ TilizeWithValPaddingDeviceOperation::invoke(
             .use_multicore = use_multicore,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
+            .sub_core_grids = sub_core_grids,
         },
         TilizeWithValPaddingDeviceOperation::tensor_args_t{.input_tensor = input_tensor}};
 }

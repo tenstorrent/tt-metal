@@ -23,7 +23,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-TilizeWithValPaddingMultiCoreShardedfactories::cached_program_t TilizeWithValPaddingMultiCoreShardedfactories::create(
+TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddingMultiCoreShardedFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
@@ -31,7 +31,7 @@ TilizeWithValPaddingMultiCoreShardedfactories::cached_program_t TilizeWithValPad
 
     const Tensor& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-
+    auto pad_value = operation_attributes.pad_value;
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
@@ -125,7 +125,7 @@ TilizeWithValPaddingMultiCoreShardedfactories::cached_program_t TilizeWithValPad
         all_cores,
         ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = compute_args});
 
-    uint32_t packed_pad_value = tilize_with_val_padding::detail::get_packed_value(a, operation_attributes.pad_value);
+    uint32_t packed_pad_value = detail::get_packed_value(a, pad_value);
 
     const std::array reader_rt_args = {
         num_input_rows,
@@ -140,16 +140,15 @@ TilizeWithValPaddingMultiCoreShardedfactories::cached_program_t TilizeWithValPad
     const std::array writer_rt_args = {ntiles_per_core};
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
 
-    shared_variables_t shared_variables;
-    shared_variables.reader_kernel_id = unary_reader_kernel_id;
-    shared_variables.writer_kernel_id = unary_writer_kernel_id;
-    shared_variables.cb_src0 = cb_src0;
-    shared_variables.cb_output = cb_output;
-
+    shared_variables_t shared_variables{
+        .reader_kernel_id = unary_reader_kernel_id,
+        .writer_kernel_id = unary_writer_kernel_id,
+        .cb_src0 = cb_src0,
+        .cb_output = cb_output};
     return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-void TilizeWithValPaddingMultiCoreShardedfactories::override_runtime_arguments(
+void TilizeWithValPaddingMultiCoreShardedFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
