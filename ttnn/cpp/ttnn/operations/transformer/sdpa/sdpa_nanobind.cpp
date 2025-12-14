@@ -91,7 +91,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("attention_sink") = std::nullopt});
+            nb::arg("attention_sink") = nb::none()});
 
     const auto* chunked_doc =
         R"doc(
@@ -407,12 +407,12 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("head_dim_v").noconvert(),
             nb::kw_only(),
-            nb::arg("attn_mask").noconvert() = nb::none(),
+            nb::arg("attn_mask") = nb::none(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 
     const auto* chunked_mla_doc =
         R"doc(
