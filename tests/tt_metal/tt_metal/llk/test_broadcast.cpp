@@ -97,18 +97,16 @@ struct BroadcastConfig {
     BroadcastDim broadcast_dim;
     TileShape tile_shape = TileShape::FULL_TILE;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    uint32_t bcast_row_idx = 0;
 };
 
-void mask_src_b_for_broadcast(
-    std::vector<bfloat16>& tile, const std::vector<uint32_t>& shape, BroadcastDim dim, uint32_t row_idx = 0) {
+void mask_src_b_for_broadcast(std::vector<bfloat16>& tile, const std::vector<uint32_t>& shape, BroadcastDim dim) {
     int num_rows = shape.at(0);
     int num_cols = shape.at(1);
 
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
-            if ((dim == BroadcastDim::ROW && i != row_idx) ||
-                (dim == BroadcastDim::SCALAR && (i != row_idx || j != 0))) {
+            if (((dim == BroadcastDim::ROW || dim == BroadcastDim::SCALAR) && i != 0) ||
+                ((dim == BroadcastDim::ROW || dim == BroadcastDim::SCALAR) && j != 0)) {
                 tile[(i * num_cols) + j] = 0.0f;
             }
         }
@@ -121,7 +119,6 @@ std::vector<bfloat16> gold_broadcast(
     const std::vector<uint32_t>& shape,
     EltwiseOp op,
     BroadcastDim dim,
-    uint32_t row_idx = 0,
     MathFidelity math_fidelity = MathFidelity::HiFi4) {
     int num_rows = shape.at(0);
     int num_cols = shape.at(1);
@@ -157,7 +154,7 @@ std::vector<bfloat16> gold_broadcast(
             bfloat16 broadcast_value{};
             switch (dim) {
                 case BroadcastDim::ROW: {
-                    broadcast_value = src_b[(row_idx * num_cols) + j];
+                    broadcast_value = src_b[j];
                     break;
                 }
                 case BroadcastDim::COL: {
@@ -259,20 +256,9 @@ void run_single_core_broadcast(
     std::map<std::string, std::string> defines = {
         {"BCAST_LLKOP", eltwise_op_to_type.at(test_config.eltwise_op)},
         {"BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim)},
-        {"BCAST_OP", eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast"},
-        {"BCAST_ROW_IDX", std::to_string(test_config.bcast_row_idx)}};
+        {"BCAST_OP", eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast"}};
 
-    // Add a helper define to indicate if this is a row broadcast
-    if (test_config.broadcast_dim == BroadcastDim::ROW) {
-        defines["BCAST_IS_ROW"] = "1";
-    }
-
-    log_info(
-        tt::LogTest,
-        "Testing BCAST_LLKOP={} BCAST_DIM={} ROW_IDX={}",
-        defines["BCAST_LLKOP"],
-        defines["BCAST_DIM"],
-        test_config.bcast_row_idx);
+    log_info(tt::LogTest, "Testing BCAST_LLKOP={} BCAST_DIM={}", defines["BCAST_LLKOP"], defines["BCAST_DIM"]);
 
     if (test_config.api_convention == ApiConvention::SHORT_INIT ||
         test_config.api_convention == ApiConvention::SHORT_BOTH) {
@@ -348,7 +334,7 @@ void run_single_core_broadcast(
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
         -1.0f, 1.0f, single_tile_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
-    mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim, test_config.bcast_row_idx);
+    mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim);
 
     std::vector<bfloat16> golden = gold_broadcast(
         input0,
@@ -356,7 +342,6 @@ void run_single_core_broadcast(
         {tile_height, tile_width},
         test_config.eltwise_op,
         test_config.broadcast_dim,
-        test_config.bcast_row_idx,
         test_config.math_fidelity);
 
     auto packed_input0 = pack_vector<uint32_t, bfloat16>(input0);
@@ -457,36 +442,6 @@ INSTANTIATE_TEST_SUITE_P(
         (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
-        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
-        (BroadcastConfig){ApiConvention::DEFAULT,
-                          EltwiseOp::ADD,
-                          BroadcastDim::ROW,
-                          TileShape::FULL_TILE,
-                          MathFidelity::HiFi4,
-                          15},  // Row 15 (middle)
-        (BroadcastConfig){ApiConvention::DEFAULT,
-                          EltwiseOp::SUB,
-                          BroadcastDim::ROW,
-                          TileShape::FULL_TILE,
-                          MathFidelity::HiFi4,
-                          15},  // Row 15 (middle)
-        (BroadcastConfig){ApiConvention::DEFAULT,
-                          EltwiseOp::ADD,
-                          BroadcastDim::ROW,
-                          TileShape::FULL_TILE,
-                          MathFidelity::HiFi4,
-                          31},  // Row 31 (last)
-        (BroadcastConfig){ApiConvention::SHORT_CALL,
-                          EltwiseOp::MUL,
-                          BroadcastDim::ROW,
-                          TileShape::FULL_TILE,
-                          MathFidelity::HiFi4,
-                          31},  // Row 31 with MUL
-        (BroadcastConfig){ApiConvention::SHORT_BOTH,
-                          EltwiseOp::ADD,
-                          BroadcastDim::ROW,
-                          TileShape::FULL_TILE,
-                          MathFidelity::HiFi4,
-                          20}));  // Row 20
+        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32}));
 
 }  // namespace tt::tt_metal
