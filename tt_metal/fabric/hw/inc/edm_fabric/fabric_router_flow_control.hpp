@@ -11,6 +11,14 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/flow-control/credits.hpp"
 
+// Packed credit flags: determine whether credits are packed into shared registers
+// or sent individually per channel.
+// - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK is true
+// - BH (multi_txq_enabled): Uses counter-based mechanism (via function calls) regardless of ENABLE_FIRST_LEVEL_ACK
+constexpr bool USE_PACKED_PACKET_SENT_CREDITS = ENABLE_FIRST_LEVEL_ACK;// && !multi_txq_enabled;
+constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK;// && !multi_txq_enabled;
+constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK;// && !multi_txq_enabled;
+
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
@@ -26,16 +34,62 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        completion_counters[src_id]++;
-        completion_counters_base_ptr[src_id] = completion_counters[src_id];
-        update_sender_side_credits();
+        if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
+            size_t store_word_index = src_id >> 2;
+            size_t offset_in_word = src_id & 0x3;
+            
+            size_t shift = offset_in_word * 8;
+            size_t mask = 0xFF << shift;
+            auto old_completion_counter_value = completion_counters[store_word_index];
+            completion_counters[store_word_index] = 
+                (old_completion_counter_value & ~mask) | 
+                (((old_completion_counter_value & mask) + (1 << shift)) & mask);
+
+            // completion_counters[store_word_index] += 1 << (offset_in_word * 8);
+            completion_counters_base_ptr[store_word_index] = completion_counters[store_word_index];
+            update_sender_side_credits();
+        } else {
+            completion_counters[src_id]++;
+            completion_counters_base_ptr[src_id] = completion_counters[src_id];
+            update_sender_side_credits();
+        }
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
-    FORCE_INLINE void send_ack_credit(uint8_t src_id, int count = 1) {
-        ack_counters[src_id] += count;
-        ack_counters_base_ptr[src_id] = ack_counters[src_id];
-        update_sender_side_credits();
+    FORCE_INLINE void send_ack_credit(uint8_t src_id, int packed_count = 1) {
+        if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
+            static_assert(NUM_SENDER_CHANNELS <= 8, "NUM_SENDER_CHANNELS must be less than or equal to 8");
+            if constexpr (NUM_SENDER_CHANNELS > 4) {
+                auto partial0_2 = ((ack_counters[1] & 0xFF00FF) + packed_count) & 0xFF00FF;
+                auto partial1_3 = ((ack_counters[1] & 0xFF00FF00) + packed_count) & 0xFF00FF00;
+                ack_counters[1] = partial1_3 | partial0_2;
+                ack_counters_base_ptr[1] = ack_counters[1];
+                update_sender_side_credits();
+            }
+            if constexpr (NUM_SENDER_CHANNELS > 2) {
+                auto partial0_2 = ((ack_counters[0] & 0xFF00FF) + packed_count) & 0xFF00FF;
+                auto partial1_3 = ((ack_counters[0] & 0xFF00FF00) + packed_count) & 0xFF00FF00;
+                ack_counters[0] = partial1_3 | partial0_2;
+                ack_counters_base_ptr[0] = ack_counters[0];
+                update_sender_side_credits();
+
+            } else if constexpr (NUM_SENDER_CHANNELS > 1) {
+                auto partial0 = ((ack_counters[0] & 0xFF) + packed_count) & 0xFF;
+                auto partial1 = ((ack_counters[0] & 0xFF00) + packed_count) & 0xFF00;
+                ack_counters[0] = partial1 | partial0;
+                ack_counters_base_ptr[0] = ack_counters[0];
+                update_sender_side_credits();
+                
+            } else {
+                ack_counters[0] += packed_count;
+                ack_counters_base_ptr[0] = ack_counters[0];
+                update_sender_side_credits();
+            }
+        } else {
+            ack_counters[src_id] += packed_count;
+            ack_counters_base_ptr[src_id] = ack_counters[src_id];
+            update_sender_side_credits();
+        }
     }
 
     volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
@@ -88,14 +142,6 @@ using ReceiverChannelResponseCreditSender = typename std::conditional_t<
     ReceiverChannelCounterBasedResponseCreditSender,
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
 
-// Packed credit flags: determine whether credits are packed into shared registers
-// or sent individually per channel.
-// - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK is true
-// - BH (multi_txq_enabled): Uses counter-based mechanism (via function calls) regardless of ENABLE_FIRST_LEVEL_ACK
-constexpr bool USE_PACKED_PACKET_SENT_CREDITS = ENABLE_FIRST_LEVEL_ACK && !multi_txq_enabled;
-constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK && !multi_txq_enabled;
-constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK && !multi_txq_enabled;
-
 template <typename T = void>
 struct init_receiver_channel_response_credit_senders_impl;
 
@@ -136,25 +182,46 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
     SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
         acks_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address) + sender_channel_index),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)),// + sender_channel_index),
         completions_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) +
-            sender_channel_index),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)),// +
+            // sender_channel_index),
         acks_received_and_processed(0),
         completions_received_and_processed(0) {}
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        return *acks_received_counter_ptr - acks_received_and_processed;
+        if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+            return static_cast<uint32_t>(static_cast<uint8_t>(*acks_received_counter_ptr >> (sender_channel_index * 8)) - static_cast<uint8_t>(acks_received_and_processed >> (sender_channel_index * 8))) << (sender_channel_index * 8);
+        } else {
+            return *acks_received_counter_ptr - acks_received_and_processed;
+        }
     }
 
-    FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
+    template<uint8_t sender_channel_index>
+    FORCE_INLINE void increment_num_processed_acks(size_t packed_num_acks) { 
+        if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+            auto incremented_value = ((packed_num_acks & (0xFF << (sender_channel_index * 8))) + acks_received_and_processed) & (0xFF << (sender_channel_index * 8));
+            acks_received_and_processed = acks_received_and_processed & ~(0xFF << (sender_channel_index * 8));
+            acks_received_and_processed = acks_received_and_processed | incremented_value;
+        } else {
+            acks_received_and_processed += packed_num_acks; 
+        }
+    }
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        return *completions_received_counter_ptr - completions_received_and_processed;
+        // if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+        //     constexpr size_t store_word_index = sender_channel_index >> 2;
+        //     constexpr size_t offset_in_word = sender_channel_index & 0x3;
+        //     constexpr size_t shift = offset_in_word * 8;
+        //     return 
+        //     static_cast<uint32_t>(static_cast<uint8_t>((completions_received_counter_ptr[store_word_index] >> shift) & 0xFF) - static_cast<uint8_t>((completions_received_and_processed >> shift) & 0xFF));
+        // } else {
+            return *completions_received_counter_ptr - completions_received_and_processed;
+        // }
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
@@ -178,7 +245,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
             ENABLE_FIRST_LEVEL_ACK ? to_receiver_packets_sent_streams[0]
                                    : to_sender_packets_completed_streams[sender_channel_index]) {}
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         return get_ptr_val(to_sender_packets_acked_stream);
     }
@@ -188,7 +255,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         return get_ptr_val(to_sender_packets_completed_stream);
     }
@@ -293,13 +360,17 @@ FORCE_INLINE void receiver_send_received_ack(
 template <uint8_t sender_channel_index>
 FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
     if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-        // WH: Stream register with packing - need to extract this channel's credits
-        auto packed_acks_named =
-            tt::tt_fabric::PackedCreditValue<NUM_SENDER_CHANNELS, tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS>{packed_acks};
-        return tt::tt_fabric::PackedCredits<
-            NUM_SENDER_CHANNELS,
-            tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
-            to_sender_packets_acked_streams[0]>::template get_value<sender_channel_index>(packed_acks_named);
+        if constexpr (multi_txq_enabled) {
+            return (packed_acks >> (sender_channel_index * 8)) & 0xFF;
+        } else {
+            // WH: Stream register with packing - need to extract this channel's credits
+            auto packed_acks_named =
+                tt::tt_fabric::PackedCreditValue<NUM_SENDER_CHANNELS, tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS>{packed_acks};
+            return tt::tt_fabric::PackedCredits<
+                NUM_SENDER_CHANNELS,
+                tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
+                to_sender_packets_acked_streams[0]>::template get_value<sender_channel_index>(packed_acks_named);
+        }
     } else {
         // BH or !ENABLE_FIRST_LEVEL_ACK: Counter-based, already unpacked (one counter per channel)
         return packed_acks;
@@ -313,12 +384,16 @@ FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
 template <uint8_t sender_channel_index>
 FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
     if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-        // WH: Pack into register position for this channel
-        return tt::tt_fabric::PackedCredits<
-                   NUM_SENDER_CHANNELS,
-                   tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
-                   to_sender_packets_acked_streams[0]>::template pack_value<sender_channel_index>(acks_count)
-            .get();
+        if constexpr (multi_txq_enabled) {
+            return acks_count << (sender_channel_index * 8);
+        } else {
+            // WH: Pack into register position for this channel
+            return tt::tt_fabric::PackedCredits<
+                    NUM_SENDER_CHANNELS,
+                    tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
+                    to_sender_packets_acked_streams[0]>::template pack_value<sender_channel_index>(acks_count)
+                .get();
+        }
     } else {
         // BH or !ENABLE_FIRST_LEVEL_ACK: Direct value, no packing
         return acks_count;
