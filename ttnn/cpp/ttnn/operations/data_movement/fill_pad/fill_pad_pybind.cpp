@@ -16,7 +16,6 @@ namespace py = pybind11;
 void bind_fill_pad_op(py::module& module) {
     auto doc = fmt::format(
         R"doc(
-
             Fills the implicit padding of a tiled input tensor with the specified value.
             Specifically, any nD tensor will have the implicit padding of the last 2 dims that exists from [height:tile_height, width:tile_width] filled with the specified value.
 

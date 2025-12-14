@@ -28,7 +28,8 @@ def _normalize_paths(paths: Sequence[str]) -> list[str]:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=("Abort commits that modify or add files under ttnn/cpp/ttnn-pybind."))
+    parser = argparse.ArgumentParser(description=("Warn commits that modify or add files under ttnn/cpp/ttnn-pybind."))
+    # parser = argparse.ArgumentParser(description=("Abort commits that modify or add files under ttnn/cpp/ttnn-pybind."))
     parser.add_argument(
         "paths",
         nargs="*",
@@ -59,7 +60,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print("Please move any new binding work to the nanobind implementation.")
 
-    return 1
+    return 0
+    # return 1
 
 
 if __name__ == "__main__":

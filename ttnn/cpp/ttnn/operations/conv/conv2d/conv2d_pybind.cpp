@@ -275,13 +275,11 @@ void py_bind_conv2d(py::module& module) {
         | It slices the input & output into slices and applies the Conv2D op on each slice. \
         | Conv2dSliceConfig determines how this slicing happens.
         )doc");
-
     py_conv_slice_config.def(
         py::init<Conv2dSliceConfig::SliceType, uint32_t>(),
         py::kw_only(),
         py::arg("slice_type"),
         py::arg("num_slices"));
-
     py_conv_slice_config.def(py::init<Conv2dSliceConfig::SliceType>(), py::kw_only(), py::arg("slice_type"));
     py_conv_slice_config.def("__repr__", [](const Conv2dSliceConfig& config) { return fmt::format("{}", config); });
     py_conv_slice_config.def_readwrite(
@@ -292,7 +290,6 @@ void py_bind_conv2d(py::module& module) {
         | Slicing along the width is preferable as it reduces the size of the output of the Halo operation.
         | Use SliceHeight only when the height dimension is much larger than the width dimension.
         )doc");
-
     py_conv_slice_config.def_readwrite(
         "num_slices",
         &Conv2dSliceConfig::num_slices,
@@ -302,7 +299,6 @@ void py_bind_conv2d(py::module& module) {
         | The corresponding input tensor needed to calculate that output is determined and sliced.
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
         )doc");
-
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
         .value("L1Full", Conv2dSliceConfig::SliceType::L1_FULL)
         .value("DRAMSliceHeight", Conv2dSliceConfig::SliceType::DRAM_HEIGHT)
@@ -314,7 +310,6 @@ void py_bind_conv2d(py::module& module) {
         R"doc(
         Conv2DConfig is a structure that contains all the Tenstorrent device specific & implementation specific flags for the :func:`ttnn.conv1d`, :func:`ttnn.conv2d` and :func:`ttnn.conv_transpose2d` ops
         )doc");
-
     py_conv_config.def(
         py::init<
             std::optional<DataType>,
@@ -364,7 +359,6 @@ void py_bind_conv2d(py::module& module) {
         If unspecified, the preprocessed weights will be in the same format as the input weights.
         If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.bfloat16 or ttnn.float32 in row major format.
     )doc");
-
     py_conv_config.def_readwrite(
         "activation",
         &Conv2dConfig::activation,
@@ -374,24 +368,20 @@ void py_bind_conv2d(py::module& module) {
         Supported activation functions include:
         RELU, SILU, GELU, SIGMOID, TANH, etc.
     )doc");
-
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
         If true, the activation tensor will be deallocated after the halo micro-op is done.
         Should not be used if the input to the conv op is used by another op.
         Has no effect if input tensor is in DRAM.
         )doc");
-
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
         reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.
         This is ideally used with deallocate_activation = true, when facing OOM issues in the conv micro-op.
     )doc");
-
     py_conv_config.def_readwrite("config_tensors_in_dram", &Conv2dConfig::config_tensors_in_dram, R"doc(
         Boolean that determines where config tensors should be stored. Setting it to true stores them in DRAM. False stores them in L1_SMALL.
         Config tensors are used by Conv2D, Pooling and other 2D ops to store how data should be loaded, instead of computing on device RISC-cores.
     )doc");
-
     py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override, R"doc(
             Controls the size of the activation block height.
 
@@ -402,14 +392,12 @@ void py_bind_conv2d(py::module& module) {
 
             This flag specifies the height of the activation block to act_block_h_override. This must be a multiple of 32, and must evenly divide the maximum possible size of the activation block.
         )doc");
-
     py_conv_config.def_readwrite("act_block_w_div", &Conv2dConfig::act_block_w_div, R"doc(
             Reduces the width of the activation block to reduce Circular Buffer sizes and prevent OOM. Valid only for Width Sharded Conv2d.
             This is only useful when the input channels is greater than 32 * num_cores. For n150, thats 32 * 64 =  2048.
             This is a divisor of the activation block width.
             A value of 1 means no reduction, and a value of 2 means the activation block width is halved.
         )doc");
-
     py_conv_config.def_readwrite("reshard_if_not_optimal", &Conv2dConfig::reshard_if_not_optimal, R"doc(
         This flag is used to determine if the input tensor should be resharded if the input tensor current shard config is not optimal.
         This flag is used only if the input tensor is already sharded. If it is not sharded, the input tensor will anyway be sharded to the optimal config.
@@ -417,18 +405,15 @@ void py_bind_conv2d(py::module& module) {
         If this flag is false, the conv op will try to execute the op with the current shard config.
         It is recommended to set this flag to true if the input dimensions of the previous conv op and the current op are significantly different, either due to differences in the input vs output channels, or large stride / kernel size / dilation.
         )doc");
-
     py_conv_config.def_readwrite("override_sharding_config", &Conv2dConfig::override_sharding_config, R"doc(
         Boolean flag that allows the core grid for the conv op to be specified.
         If true, then core_grid must also be specified.
         )doc");
-
     py_conv_config.def_readwrite("shard_layout", &Conv2dConfig::shard_layout, R"doc(
         Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
         If this is not specified, the op will try to determine the optimal layout based on it's own heuristics.
         Can be either :class:`ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, :class:`ttnn.TensorMemoryLayout.BLOCK_SHARDED` or :class:`ttnn.TensorMemoryLayout.WIDTH_SHARDED`.
         )doc");
-
     py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid, R"doc(
         Core Grid to be used for sharding the input tensor.
         This flag is only used when override_sharding_config or override_output_sharding_config is set to true. )doc");
@@ -438,24 +423,20 @@ void py_bind_conv2d(py::module& module) {
         If true, the shard orientation is Row Major. If false, the shard orientation is Column Major.
         This is useful for Block Sharded Conv2D when the device core grid is not a square.
         )doc");
-
     py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout, R"doc(
         The layout of the output tensor. Can be either :class:`ttnn.Layout.TILE` or :class:`ttnn.Layout.ROW_MAJOR`.
         Conv2D expects it's input to be in :class:`ttnn.Layout.ROW_MAJOR` format.
         If the input is in :class:`ttnn.Layout.TILE` format, the halo micro-op will convert it to :class:`ttnn.Layout.ROW_MAJOR` format.
         So if the next op is a conv op, it is recommended to set this to :class:`ttnn.Layout.ROW_MAJOR`.
         )doc");
-
     py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer, R"doc(
             Doubles the size of the Activation Circular Buffer to allow for double buffering, preventing stalls of the activation reader kernel.
             This improves performance, but increases memory usage.
     )doc");
-
     py_conv_config.def_readwrite("enable_weights_double_buffer", &Conv2dConfig::enable_weights_double_buffer, R"doc(
             Doubles the size of the Weights Circular Buffer to allow for double buffering, preventing stalls of the weights reader kernel.
             This improves performance, but increases the memory usage of the weights tensor.
         )doc");
-
     py_conv_config.def_readwrite("full_inner_dim", &Conv2dConfig::full_inner_dim, R"doc(
             Applies only to block sharded layout.
             By default inner dim of activation matrix will be sliced by kernel_h.
