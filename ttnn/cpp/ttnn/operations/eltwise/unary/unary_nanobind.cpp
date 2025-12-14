@@ -2518,7 +2518,7 @@ void py_module(nb::module_& mod) {
     bind_unary_composite_float_with_default(
         mod, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
-    bind_unary_composite_float_with_default(mod, ttnn::logit, "eps", "eps", 0.0f, R"doc(BFLOAT16)doc");
+    bind_unary_logit(mod, ttnn::logit);
 
     bind_unary_rdiv(
         mod,
