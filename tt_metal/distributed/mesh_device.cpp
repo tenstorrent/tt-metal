@@ -550,7 +550,7 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
 }
 
 CoreRangeSet MeshDevice::get_compute_cores(std::optional<SubDeviceId> sub_device_id) const {
-    auto requested_sub_device_id = current_sub_device_id_.value_or(sub_device_id.value_or(SubDeviceId(0)));
+    auto requested_sub_device_id = sub_device_id.value_or(current_sub_device_id_.value_or(SubDeviceId(0)));
     const auto& sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     TT_FATAL(
         *requested_sub_device_id < sub_device_manager->num_sub_devices(),
