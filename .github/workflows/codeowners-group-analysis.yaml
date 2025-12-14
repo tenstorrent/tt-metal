@@ -1594,19 +1594,27 @@ jobs:
             local github_username="$2"
             local ALL_USERS="$3"  # Pre-fetched user list passed as parameter
 
-            # Hardcoded mappings for users where fuzzy matching fails
-            case "$github_username" in
-              "mradosavljevicTT")
-                echo "U0837MYG788"
-                return 0
-                ;;
-              "nsextonTT")
-                echo "U08TVGQGGAE"
-                return 0
-                ;;
-            esac
+              # Hardcoded mappings for users where fuzzy matching fails
+              case "$github_username" in
+                "mradosavljevicTT")
+                  echo "U0837MYG788"
+                  return 0
+                  ;;
+                "nsextonTT")
+                  echo "U08TVGQGGAE"
+                  return 0
+                  ;;
+                "ncvetkovicTT")
+                  echo "U07AUABTEP6"
+                  return 0
+                  ;;
+                "jvegaTT")
+                  echo "U07M7QZ0BQA"
+                  return 0
+                  ;;
+              esac
 
-            # Try exact matching first
+              # Try exact matching first
             USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
 
             if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
@@ -2554,6 +2562,14 @@ jobs:
                   ;;
                 "nsextonTT")
                   echo "U08TVGQGGAE"
+                  return 0
+                  ;;
+                "ncvetkovicTT")
+                  echo "U07AUABTEP6"
+                  return 0
+                  ;;
+                "jvegaTT")
+                  echo "U07M7QZ0BQA"
                   return 0
                   ;;
               esac
