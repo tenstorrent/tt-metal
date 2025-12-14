@@ -26,7 +26,7 @@ DRAMUsage extract_DRAM_usage(const nlohmann::json& trace);
 L1Usage extract_L1_usage(const nlohmann::json& trace);
 
 namespace MemoryUsageTracker {
-void start_capture();
+void begin_capture();
 void end_capture();
 DRAMUsage get_DRAM_usage();
 L1Usage get_L1_usage();

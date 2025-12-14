@@ -68,7 +68,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
 
     // First test with cache enabled (enabled by default)
 
-    ttml::utils::MemoryUsageTracker::start_capture();
+    ttml::utils::MemoryUsageTracker::begin_capture();
     test();
     ttml::utils::MemoryUsageTracker::end_capture();
 
@@ -92,7 +92,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Second test with cache disabled
     device->disable_and_clear_program_cache();
 
-    ttml::utils::MemoryUsageTracker::start_capture();
+    ttml::utils::MemoryUsageTracker::begin_capture();
     test();
     ttml::utils::MemoryUsageTracker::end_capture();
 
@@ -148,7 +148,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     auto k = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto v = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
 
-    ttml::utils::MemoryUsageTracker::start_capture();
+    ttml::utils::MemoryUsageTracker::begin_capture();
 
     auto add_result = ttnn::add(tensor1, tensor2);           // (1, 1, 128, 32) + (1, 1, 128, 32) = (1, 1, 128, 32)
     auto mul_result = ttnn::multiply(tensor2, 2.0F);         // (1, 1, 128, 32) * 2.0 = (1, 1, 128, 32)
@@ -217,7 +217,7 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto tensor1 = ttnn::to_memory_config(tensor1_dram, ttnn::L1_MEMORY_CONFIG);
         auto tensor2 = ttnn::to_memory_config(tensor2_dram, ttnn::L1_MEMORY_CONFIG);
 
-        ttml::utils::MemoryUsageTracker::start_capture();
+        ttml::utils::MemoryUsageTracker::begin_capture();
         auto add_result = ttnn::add(tensor1, tensor2);
         size_t add_result_size = compute_tensor_size(add_result);
         ttml::utils::MemoryUsageTracker::end_capture();
@@ -262,7 +262,7 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto tensor1 = ttnn::to_memory_config(tensor1_dram, ttnn::L1_MEMORY_CONFIG);
         auto tensor2 = ttnn::to_memory_config(tensor2_dram, ttnn::L1_MEMORY_CONFIG);
 
-        ttml::utils::MemoryUsageTracker::start_capture();
+        ttml::utils::MemoryUsageTracker::begin_capture();
         auto add_result = ttnn::add(tensor1, tensor2);
         size_t add_result_size = compute_tensor_size(add_result);
         ttml::utils::MemoryUsageTracker::end_capture();

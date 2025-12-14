@@ -129,15 +129,21 @@ L1Usage extract_L1_usage(const nlohmann::json& trace) {
 namespace MemoryUsageTracker {
 static std::shared_ptr<ttnn::graph::GraphProcessor> graph_processor;
 static nlohmann::json trace;
+static bool is_capture_active = false;
 
-void start_capture() {
+void begin_capture() {
+    if (is_capture_active) {
+        throw std::runtime_error("MemoryUsageTracker: Capture already active");
+    }
     auto mode = tt::tt_metal::IGraphProcessor::RunMode::NORMAL;
     graph_processor = std::make_shared<ttnn::graph::GraphProcessor>(mode);
     graph_processor->begin_graph_capture(mode);
+    is_capture_active = true;
 }
 
 void end_capture() {
     trace = graph_processor->end_graph_capture();
+    is_capture_active = false;
 }
 
 DRAMUsage get_DRAM_usage() {

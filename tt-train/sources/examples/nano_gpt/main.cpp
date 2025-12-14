@@ -325,7 +325,7 @@ int main(int argc, char **argv) {
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
     if (training_config.estimate_memory_usage) {
-        ttml::utils::MemoryUsageTracker::start_capture();
+        ttml::utils::MemoryUsageTracker::begin_capture();
     }
 
     MultihostConfig multihost_config;
