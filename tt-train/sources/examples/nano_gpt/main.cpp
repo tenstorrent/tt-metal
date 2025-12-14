@@ -289,6 +289,91 @@ inline void pipeline_transfer_targets_if_needed(const MultihostConfig &config, c
 
 }  // namespace
 
+void print_model_summary(Model &model, bool tp = false) {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+
+    auto contains = [](const std::string &str, const std::string &substr) {
+        return str.find(substr) != std::string::npos;
+    };
+
+    auto parameters = get_model_parameters(model);
+
+    uint64_t total_trainable_params = 0;
+    uint64_t total_non_trainable_params = 0;
+
+    std::vector<std::tuple<std::string, std::string, uint64_t, bool>> param_info;
+
+    // Collect parameter information
+    for (const auto &[name, tensor_ptr] : parameters) {
+        auto tensor = tensor_ptr->get_value();
+        auto shape = tensor.logical_shape();
+        auto params_in_tensor = tensor.logical_volume();
+
+        // Adjust for tensor parallel if needed
+        if (tp && (contains(name, "fc") || contains(name, "linear"))) {
+            params_in_tensor *= num_devices;
+        }
+
+        bool is_trainable = tensor_ptr->get_requires_grad();
+
+        if (is_trainable) {
+            total_trainable_params += params_in_tensor;
+        } else {
+            total_non_trainable_params += params_in_tensor;
+        }
+
+        // Format shape string
+        std::string shape_str = "[";
+        for (size_t i = 0; i < shape.rank(); ++i) {
+            if (i > 0)
+                shape_str += ", ";
+            shape_str += std::to_string(shape[i]);
+        }
+        shape_str += "]";
+
+        param_info.emplace_back(name, shape_str, params_in_tensor, is_trainable);
+    }
+
+    // Print header
+    fmt::print("\n");
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("Model Summary\n");
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("{:<55} {:<30} {:<20} {:<15}\n", "Layer Name", "Shape", "Parameters", "Trainable");
+    fmt::print("{}\n", std::string(120, '-'));
+
+    // Print trainable parameters
+    fmt::print("\nTrainable Layers:\n");
+    fmt::print("{}\n", std::string(120, '-'));
+    for (const auto &[name, shape_str, params, is_trainable] : param_info) {
+        if (is_trainable) {
+            fmt::print("{:<55} {:<30} {:<20} {:<15}\n", name, shape_str, params, "Yes");
+        }
+    }
+
+    // Print non-trainable parameters
+    bool has_non_trainable = total_non_trainable_params > 0;
+    if (has_non_trainable) {
+        fmt::print("\nNon-Trainable Layers:\n");
+        fmt::print("{}\n", std::string(120, '-'));
+        for (const auto &[name, shape_str, params, is_trainable] : param_info) {
+            if (!is_trainable) {
+                fmt::print("{:<55} {:<30} {:<20} {:<15}\n", name, shape_str, params, "No");
+            }
+        }
+    }
+
+    // Print summary
+    fmt::print("\n");
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("Total trainable parameters: {}\n", total_trainable_params);
+    fmt::print("Total non-trainable parameters: {}\n", total_non_trainable_params);
+    fmt::print("Total parameters: {}\n", total_trainable_params + total_non_trainable_params);
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("\n");
+}
+
 int main(int argc, char **argv) {
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
@@ -544,6 +629,8 @@ int main(int argc, char **argv) {
             }
         },
         model_config.transformer_config);
+
+    print_model_summary(model, device_config.enable_tp);
 
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
