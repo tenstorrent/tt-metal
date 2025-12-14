@@ -298,7 +298,7 @@ Shape2D TensorLayout::get_physical_shard_shape() const {
     return shard_spec.shape;
 }
 
-Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const {
+Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape) {
     if (shape.rank() < 2) {
         return Shape2D{1, shape[-1]};
     }

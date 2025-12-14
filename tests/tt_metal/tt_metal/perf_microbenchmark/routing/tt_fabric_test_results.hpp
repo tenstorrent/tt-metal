@@ -183,11 +183,11 @@ public:
 private:
     void organize_speedups_by_topology();
 
-    double calculate_geomean_speedup(const std::vector<double>& speedups);
+    static double calculate_geomean_speedup(const std::vector<double>& speedups);
 
     void calculate_overall_geomean_speedup();
 
-    std::vector<double> concatenate_topology_speedups(const SpeedupsByTopology& topology_speedups);
+    static std::vector<double> concatenate_topology_speedups(const SpeedupsByTopology& topology_speedups);
 
     void calculate_geomean_speedup_by_topology();
 

@@ -188,10 +188,10 @@ public:
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(AsicID asic_id) const;
-    UID get_u_id(const std::string& hostname);
-    RackID get_rack_id(const std::string& hostname);
-    AisleID get_aisle_id(const std::string& hostname);
-    HallID get_hall_id(const std::string& hostname);
+    static UID get_u_id(const std::string& hostname);
+    static RackID get_rack_id(const std::string& hostname);
+    static AisleID get_aisle_id(const std::string& hostname);
+    static HallID get_hall_id(const std::string& hostname);
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;

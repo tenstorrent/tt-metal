@@ -36,7 +36,7 @@ protected:
     static tt::tt_metal::AsicID make_asic(uint64_t id) { return tt::tt_metal::AsicID{id}; }
 
     // Create N nodes for the default mesh
-    std::vector<FabricNodeId> make_nodes(size_t count) const {
+    static std::vector<FabricNodeId> make_nodes(size_t count) {
         std::vector<FabricNodeId> nodes;
         nodes.reserve(count);
         for (uint32_t i = 0; i < count; ++i) {
@@ -121,8 +121,8 @@ protected:
     // -------------------------------------------------------------------------
 
     // Assign all nodes to the same rank
-    std::map<FabricNodeId, MeshHostRankId> make_uniform_node_ranks(
-        const std::vector<FabricNodeId>& nodes, MeshHostRankId rank = MeshHostRankId{0}) const {
+    static std::map<FabricNodeId, MeshHostRankId> make_uniform_node_ranks(
+        const std::vector<FabricNodeId>& nodes, MeshHostRankId rank = MeshHostRankId{0}) {
         std::map<FabricNodeId, MeshHostRankId> result;
         for (const auto& node : nodes) {
             result[node] = rank;

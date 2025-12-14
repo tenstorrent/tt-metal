@@ -20,7 +20,7 @@ protected:
     void TearDown() override {}
 
     // Helper to create core coordinate vectors
-    std::vector<CoreCoord> make_cores(uint32_t num_cores) {
+    static std::vector<CoreCoord> make_cores(uint32_t num_cores) {
         std::vector<CoreCoord> cores;
         cores.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; i++) {
@@ -30,7 +30,7 @@ protected:
     }
 
     // Verify transfer correctness by checking that all elements are accounted for
-    bool verify_transfers(const std::vector<GatherTransfer>& transfers, uint32_t B, uint32_t C, uint32_t HW) {
+    static bool verify_transfers(const std::vector<GatherTransfer>& transfers, uint32_t B, uint32_t C, uint32_t HW) {
         // Track which elements have been transferred
         std::set<std::tuple<uint32_t, uint32_t, uint32_t>> transferred_elements;
 
@@ -63,7 +63,7 @@ protected:
     }
 
     // Check if transfers are properly coalesced
-    bool check_coalescing(const std::vector<GatherTransfer>& transfers) {
+    static bool check_coalescing(const std::vector<GatherTransfer>& transfers) {
         for (size_t i = 1; i < transfers.size(); i++) {
             const auto& prev = transfers[i - 1];
             const auto& curr = transfers[i];
@@ -79,7 +79,7 @@ protected:
     }
 
     // Validate blocked transfer groups
-    bool verify_blocked_groups(
+    static bool verify_blocked_groups(
         const std::vector<BlockedTransferGroup>& groups, uint32_t output_width, uint32_t block_size) {
         // Check that groups are properly organized
         std::set<std::pair<uint32_t, uint32_t>> seen_blocks;
@@ -102,7 +102,7 @@ protected:
     }
 
     // Helper to create test input shards
-    std::vector<std::vector<float>> create_test_input(uint32_t B, uint32_t C, uint32_t HW, uint32_t num_cores) {
+    static std::vector<std::vector<float>> create_test_input(uint32_t B, uint32_t C, uint32_t HW, uint32_t num_cores) {
         std::vector<std::vector<float>> shards(num_cores);
         uint32_t shard_width = HW / num_cores;
         uint32_t shard_height = B * C;
@@ -124,7 +124,7 @@ protected:
     // Helper to compute expected output value for a given position
     // Output layout: [C, B*HW/num_output_cores] per shard
     // For output shard idx, position [c, pos] corresponds to input [b, c, hw]
-    float compute_expected_output_value(
+    static float compute_expected_output_value(
         uint32_t output_shard_idx,
         uint32_t c,
         uint32_t pos,

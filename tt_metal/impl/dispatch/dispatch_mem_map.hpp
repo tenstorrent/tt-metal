@@ -64,16 +64,16 @@ public:
 
     uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const;
 
-    uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const;
+    static uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr);
 
-    uint32_t get_sync_offset(uint32_t index) const;
+    static uint32_t get_sync_offset(uint32_t index);
 
     uint32_t get_dispatch_message_addr_start() const;
 
     uint32_t get_dispatch_stream_index(uint32_t index) const;
 
     // Offset to be passed in the go message.
-    uint8_t get_dispatch_message_update_offset(uint32_t index) const;
+    static uint8_t get_dispatch_message_update_offset(uint32_t index);
 
     uint32_t get_prefetcher_l1_size() const;
 
@@ -81,7 +81,7 @@ private:
     // Reset the instance using the settings for the core_type and num_hw_cqs.
     void reset(const CoreType& core_type, uint32_t num_hw_cqs);
 
-    std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const;
+    static std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type);
 
     uint32_t cmddat_q_base_ = 0;
     uint32_t scratch_db_base_ = 0;

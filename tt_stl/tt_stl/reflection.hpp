@@ -957,9 +957,9 @@ struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
 
 template <>
 struct fmt::formatter<std::filesystem::path> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const std::filesystem::path& path, format_context& ctx) const -> format_context::iterator {
+    static auto format(const std::filesystem::path& path, format_context& ctx) -> format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << path;

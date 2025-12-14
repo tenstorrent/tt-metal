@@ -14,28 +14,28 @@
 class InspectorFixture : public ::testing::Test {
   protected:
     // Helper to find a free port
-    int find_free_port() {
-        int sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) {
-            return 0;
-        }
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = INADDR_ANY;
-        addr.sin_port = 0; // Let OS pick
-        if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            close(sock);
-            return 0;
-        }
-        socklen_t len = sizeof(addr);
-        if (getsockname(sock, (struct sockaddr*)&addr, &len) == -1) {
-            close(sock);
-            return 0;
-        }
-        int port = ntohs(addr.sin_port);
-        close(sock);
-        return port;
-    }
+      static int find_free_port() {
+          int sock = socket(AF_INET, SOCK_STREAM, 0);
+          if (sock < 0) {
+              return 0;
+          }
+          sockaddr_in addr{};
+          addr.sin_family = AF_INET;
+          addr.sin_addr.s_addr = INADDR_ANY;
+          addr.sin_port = 0;  // Let OS pick
+          if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+              close(sock);
+              return 0;
+          }
+          socklen_t len = sizeof(addr);
+          if (getsockname(sock, (struct sockaddr*)&addr, &len) == -1) {
+              close(sock);
+              return 0;
+          }
+          int port = ntohs(addr.sin_port);
+          close(sock);
+          return port;
+      }
 
     std::string find_free_port_address() {
         int port = find_free_port();
@@ -45,7 +45,7 @@ class InspectorFixture : public ::testing::Test {
         return "localhost:" + std::to_string(port);
     }
 
-    void try_connect(const std::string& address) {
+    static void try_connect(const std::string& address) {
         auto io = ::kj::setupAsyncIo();
         auto& waitScope = io.waitScope;
         kj::Network& network = io.provider->getNetwork();
@@ -57,7 +57,7 @@ class InspectorFixture : public ::testing::Test {
         auto response = request.send().wait(waitScope);
     }
 
-    void start(tt::tt_metal::inspector::RpcServerController& controller, const std::string& address) {
+    static void start(tt::tt_metal::inspector::RpcServerController& controller, const std::string& address) {
         controller.get_rpc_server().setGetProgramsCallback([](auto result) {
             result.initPrograms(0);
         });

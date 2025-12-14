@@ -77,7 +77,7 @@ private:
     void initialize_host(IDevice* dev) const;
 
     // Initialize state for activated devices
-    void init_fabric(const std::vector<IDevice*>& active_devices) const;
+    static void init_fabric(const std::vector<IDevice*>& active_devices);
     void initialize_active_devices();
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;

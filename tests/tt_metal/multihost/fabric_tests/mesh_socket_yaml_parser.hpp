@@ -113,7 +113,7 @@ public:
 
     std::optional<std::string> get_yaml_config_path();
     bool has_help_option();
-    void print_help();
+    static void print_help();
     bool print_configs();
 
 private:

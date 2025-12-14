@@ -174,7 +174,7 @@ public:
 
     eth_chan_directions get_eth_chan_direction(FabricNodeId fabric_node_id, int chan) const;
     // TODO: remove this converter, we should consolidate the directions here
-    eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
+    static eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction);
 
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
@@ -202,7 +202,7 @@ public:
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    static std::unordered_set<CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false);
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
     // Collect router port directions map from all hosts via MPI and merge into local map
@@ -268,8 +268,8 @@ private:
     // custom logic to order eth channels
     void order_ethernet_channels();
 
-    routing_plane_id_t get_routing_plane_id(
-        chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
+    static routing_plane_id_t get_routing_plane_id(
+        chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction);
 
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
@@ -403,7 +403,7 @@ private:
 
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
-    std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
+    static std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config);
 };
 
 }  // namespace tt::tt_fabric

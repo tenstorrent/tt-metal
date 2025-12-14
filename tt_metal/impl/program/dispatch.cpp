@@ -1642,7 +1642,7 @@ private:
 class GoSignalGenerator {
 public:
     // Determine the size of the go signal commands.
-    void size_commands(
+    static void size_commands(
         DeviceCommandCalculator& calculator,
         IDevice* /*device*/,
         SubDeviceId /*sub_device_id*/,
@@ -1663,7 +1663,7 @@ public:
     }
 
     // Assemble the go signal commands into the device command sequence.
-    void assemble_commands(
+    static void assemble_commands(
         ProgramCommandSequence& program_command_sequence,
         HostMemDeviceCommand& device_command_sequence,
         const CommandConstants& constants,

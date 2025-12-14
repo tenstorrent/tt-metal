@@ -197,7 +197,7 @@ void TestProgressMonitor::display_progress(
     std::cout << ss.str() << std::flush;
 }
 
-std::string TestProgressMonitor::format_count(uint64_t count) const {
+std::string TestProgressMonitor::format_count(uint64_t count) {
     if (count >= 1000000) {
         return std::to_string(count / 1000000) + "M";
     } else if (count >= 1000) {
@@ -206,7 +206,7 @@ std::string TestProgressMonitor::format_count(uint64_t count) const {
     return std::to_string(count);
 }
 
-std::string TestProgressMonitor::format_throughput(double packets_per_second) const {
+std::string TestProgressMonitor::format_throughput(double packets_per_second) {
     std::stringstream ss;
     if (packets_per_second >= 1000000) {
         ss << std::fixed << std::setprecision(1) << (packets_per_second / 1000000.0) << "M/s";
@@ -218,7 +218,7 @@ std::string TestProgressMonitor::format_throughput(double packets_per_second) co
     return ss.str();
 }
 
-std::string TestProgressMonitor::format_duration(double seconds) const {
+std::string TestProgressMonitor::format_duration(double seconds) {
     if (seconds >= 3600) {
         uint32_t hours = static_cast<uint32_t>(seconds / 3600);
         uint32_t minutes = static_cast<uint32_t>((seconds - (hours * 3600)) / 60);
@@ -233,7 +233,7 @@ std::string TestProgressMonitor::format_duration(double seconds) const {
 }
 
 std::optional<double> TestProgressMonitor::estimate_eta(
-    uint64_t current_total, uint64_t target_total, double throughput) const {
+    uint64_t current_total, uint64_t target_total, double throughput) {
     if (throughput <= 0 || current_total >= target_total) {
         return std::nullopt;
     }

@@ -403,8 +403,8 @@ public:
     }
 
     // Process results after barrier_reads() has been called
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
-        const ReadBufferOperation& op) const {
+    static std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
+        const ReadBufferOperation& op) {
         // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
         auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
@@ -1437,7 +1437,7 @@ public:
         return true;
     }
 
-    uint32_t get_max_routing_planes_for_device(const FabricNodeId& node_id) const {
+    static uint32_t get_max_routing_planes_for_device(const FabricNodeId& node_id) {
         // Find the minimum number of routing planes across all directions for this device
         uint32_t min_routing_planes = std::numeric_limits<uint32_t>::max();
 
@@ -1626,7 +1626,7 @@ private:
         are_devices_open_ = true;
     }
 
-    MeshCoordinate get_displacement(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
+    static MeshCoordinate get_displacement(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) {
         TT_FATAL(
             src_coords.dims() == dst_coords.dims(),
             "Cannot find distance from coords with different dimensions: {} != {}",
@@ -1640,8 +1640,8 @@ private:
         return MeshCoordinate(coords);
     }
 
-    MeshCoordinateRange get_coords_from_range(
-        const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
+    static MeshCoordinateRange get_coords_from_range(
+        const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) {
         const auto start = std::min(src_coords, dst_coords);
         const auto end = std::max(src_coords, dst_coords);
         return MeshCoordinateRange(start, end);
@@ -1863,7 +1863,7 @@ private:
         return visited;
     }
 
-    int32_t get_step_for_direction(RoutingDirection dir) const {
+    static int32_t get_step_for_direction(RoutingDirection dir) {
         switch (dir) {
             case RoutingDirection::N: return -1;
             case RoutingDirection::S: return 1;
@@ -1873,7 +1873,7 @@ private:
         }
     }
 
-    int32_t get_dim_for_direction(RoutingDirection dir) const {
+    static int32_t get_dim_for_direction(RoutingDirection dir) {
         switch (dir) {
             case RoutingDirection::N:
             case RoutingDirection::S: return NS_DIM;
@@ -1898,7 +1898,7 @@ private:
         return MeshCoordinate::BoundaryMode::NONE;
     }
 
-    RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
+    static RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) {
         if (split_hops.count(RoutingDirection::N) > 0 && split_hops.at(RoutingDirection::N) > 0) {
             return RoutingDirection::N;
         } else if (split_hops.count(RoutingDirection::S) > 0 && split_hops.at(RoutingDirection::S) > 0) {

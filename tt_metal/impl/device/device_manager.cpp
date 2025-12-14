@@ -360,7 +360,7 @@ void DeviceManager::initialize_host(IDevice* dev) const {
     }
 }
 
-void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
+void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) {
     std::vector<std::shared_future<tt_metal::IDevice*>> events;
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         const auto& dev = active_devices[i];

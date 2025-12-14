@@ -79,7 +79,9 @@ public:
         return *physical_system_descriptor_;
     }
     const std::unordered_map<uint64_t, ChipId>& get_asic_id_to_chip_id() const { return asic_id_to_chip_id_; }
-    std::string get_cabling_descriptor_path() const { return "tools/tests/scaleout/cabling_descriptors/t3k.textproto"; }
+    static std::string get_cabling_descriptor_path() {
+        return "tools/tests/scaleout/cabling_descriptors/t3k.textproto";
+    }
 };
 
 [[nodiscard]] uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {

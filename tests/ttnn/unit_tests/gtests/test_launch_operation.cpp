@@ -114,10 +114,10 @@ static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFacto
 // Old infrastructure device operation that uses the "create_program" method
 struct OldInfraDeviceOpWithCreateProgram {
     void validate(const std::vector<Tensor>& input_tensors) const {}
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const { return {}; }
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const { return {}; }
+    static std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) { return {}; }
+    static std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) { return {}; }
 
-    auto create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    static auto create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
         return tt::tt_metal::operation::ProgramWithCallbacks();
     }
 };
@@ -125,13 +125,13 @@ struct OldInfraDeviceOpWithCreateProgram {
 // Old infrastructure device operation that uses the "create_program_at" method
 struct OldInfraDeviceOpWithCreateMeshWorkload {
     void validate(const std::vector<Tensor>& input_tensors) const {}
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const { return {}; }
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const { return {}; }
+    static std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) { return {}; }
+    static std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) { return {}; }
 
-    auto create_mesh_workload(
+    static auto create_mesh_workload(
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const {
+        std::vector<Tensor>& output_tensors) {
         return tt::tt_metal::operation::MeshWorkloadWithCallbacks();
     }
 };

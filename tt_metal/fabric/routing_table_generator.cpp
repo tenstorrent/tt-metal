@@ -18,7 +18,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
-    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
+    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) -> format_context::iterator {
     return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
 }
 
@@ -161,7 +161,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
 // Shortest Path
 // TODO: Put into mesh algorithms?
 std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> RoutingTableGenerator::get_paths_to_all_meshes(
-    MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const {
+    MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) {
     // TODO: add more tests for this
     std::uint32_t num_meshes = inter_mesh_connectivity.size();
     // avoid vector<bool> specialization

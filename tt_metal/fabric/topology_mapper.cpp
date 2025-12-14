@@ -1294,7 +1294,7 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
     return -1;  // Unreachable
 }
 
-void TopologyMapper::print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const {
+void TopologyMapper::print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) {
     log_debug(tt::LogFabric, "TopologyMapper: Logical Adjacency Map:");
     for (const auto& [mesh_id, node_map] : adj_map) {
         log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);

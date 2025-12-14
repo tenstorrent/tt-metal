@@ -65,7 +65,7 @@ protected:
     void TearDown() override {}
 
     // Helper to verify a single target
-    void verify_target(
+    static void verify_target(
         const ConnectionTarget& target,
         ConnectionType expected_type,
         uint32_t expected_vc,

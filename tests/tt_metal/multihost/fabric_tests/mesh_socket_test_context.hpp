@@ -50,7 +50,7 @@ private:
     tt::tt_metal::distributed::SocketConfig convert_to_socket_config(
         const TestSocketConfig& socket_config, const ParsedMemoryConfig& memory_config);
 
-    tt::tt_metal::distributed::SocketConnection convert_to_socket_connection(
+    static tt::tt_metal::distributed::SocketConnection convert_to_socket_connection(
         const SocketConnectionConfig& connection_config);
 
     void run_test(const ParsedTestConfig& test);

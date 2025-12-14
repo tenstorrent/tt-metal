@@ -34,7 +34,7 @@ private:
     bool initialized{false};
     std::filesystem::path logging_path;
 
-    int64_t convert_timestamp(const time_point& tp) const {
+    static int64_t convert_timestamp(const time_point& tp) {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
     }
 

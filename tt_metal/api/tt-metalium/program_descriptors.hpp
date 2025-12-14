@@ -156,9 +156,9 @@ struct hash<tt::tt_metal::TileDescriptor> {
 // Formatter support for TileDescriptor (needed for reflection/logging)
 template <>
 struct fmt::formatter<tt::tt_metal::TileDescriptor> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::tt_metal::TileDescriptor& tile_desc, format_context& ctx) const -> format_context::iterator {
+    static auto format(const tt::tt_metal::TileDescriptor& tile_desc, format_context& ctx) -> format_context::iterator {
         return fmt::format_to(
             ctx.out(), "TileDescriptor({}x{}{})", tile_desc.height, tile_desc.width, tile_desc.transpose ? ",T" : "");
     }

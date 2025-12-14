@@ -470,7 +470,7 @@ protected:
             this->devices_[0]);
     }
 
-    DestPrintTestConfig CreateTestConfig(const TestParams& params) {
+    static DestPrintTestConfig CreateTestConfig(const TestParams& params) {
         return DestPrintTestConfigBuilder()
             .set_num_tiles(params.num_tiles)
             .set_data_format(params.data_format)

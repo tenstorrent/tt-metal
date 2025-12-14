@@ -401,7 +401,7 @@ private:
     void rebuild_host_rank_structs_from_mapping(
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
-    void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
+    static void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map);
 
     void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
 };

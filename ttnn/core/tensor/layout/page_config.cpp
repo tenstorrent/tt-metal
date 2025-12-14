@@ -145,7 +145,7 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
 
 RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
-Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
+Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) {
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
         return Alignment({shard_spec.shape[1]});
@@ -157,7 +157,7 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
 }
 
 void RowMajorPageConfig::validate_alignment(
-    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
+    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) {
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
 
@@ -179,7 +179,7 @@ Shape2D RowMajorPageConfig::get_page_shape(
     const Shape2D& physical_size,
     DataType dtype,
     const MemoryConfig& memory_config,
-    const std::optional<Shape2D>& physical_shard_size) const {
+    const std::optional<Shape2D>& physical_shard_size) {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
         return Shape2D(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
     }
@@ -201,16 +201,16 @@ Shape2D RowMajorPageConfig::get_page_shape(
     return Shape2D(1, physical_size.width());
 }
 
-size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
+size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) {
     const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     return size;
 }
 
 const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
 
-Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
+Alignment RowMajorPageConfig::get_required_shard_shape_alignment() { return Alignment({1}); }
 
-Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
+Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dtype) {
     auto element_size_bytes = CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     auto alignment_bytes = std::lcm(CMAKE_UNIQUE_NAMESPACE::RECOMMENDED_MEMORY_ALIGNMENT_BYTES, element_size_bytes);
     return Alignment({alignment_bytes / element_size_bytes});

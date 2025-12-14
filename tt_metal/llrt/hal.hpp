@@ -457,7 +457,7 @@ public:
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
     // Parses a string representation of a set of processor names (used by env vars).
-    HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
+    static HalProcessorSet parse_processor_set_spec(std::string_view spec);
 
     uint32_t get_total_num_risc_processors() const;
     uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }

@@ -277,7 +277,7 @@ public:
 
     // The derived fixture must infer if the current system is suitable for the requested
     // topology in the Mesh Graph, when implementing this function.
-    bool system_supported() {
+    static bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
@@ -302,7 +302,7 @@ public:
         }
     }
 
-    bool system_supported() {
+    static bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==

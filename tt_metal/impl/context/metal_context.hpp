@@ -120,8 +120,8 @@ public:
 
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
-    CommandQueueIdStack& get_command_queue_id_stack_for_thread();
-    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
+    static CommandQueueIdStack& get_command_queue_id_stack_for_thread();
+    static const CommandQueueIdStack& get_command_queue_id_stack_for_thread();
 
     // Utilities
     bool is_coord_in_range(CoreCoord coord, CoreType core_type);

@@ -38,7 +38,7 @@ struct LayerNormPreAllGather {
     LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    static void validate(const std::vector<Tensor>& input_tensors);
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;

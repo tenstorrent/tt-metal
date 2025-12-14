@@ -113,9 +113,9 @@ public:
     }
 
     // Instance type checks
-    bool is_graph(const InstanceData& instance) const { return instance.kind == NodeKind::Graph; }
-    bool is_mesh(const InstanceData& instance) const { return instance.kind == NodeKind::Mesh; }
-    bool is_switch(const InstanceData& instance) const { return instance.kind == NodeKind::Switch; }
+    static bool is_graph(const InstanceData& instance) { return instance.kind == NodeKind::Graph; }
+    static bool is_mesh(const InstanceData& instance) { return instance.kind == NodeKind::Mesh; }
+    static bool is_switch(const InstanceData& instance) { return instance.kind == NodeKind::Switch; }
 
     // Typed enumeration
     const std::vector<GlobalNodeId>& all_meshes() const { return mesh_instances_; }

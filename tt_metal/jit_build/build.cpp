@@ -472,7 +472,7 @@ void JitBuildState::compile_one(
     jit_build::write_dependency_hashes(out_dir, obj);
 }
 
-bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
+bool JitBuildState::need_compile(const string& out_dir, const string& obj) {
     return MetalContext::instance().rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
@@ -576,7 +576,7 @@ std::string JitBuildState::weakened_firmware_name() const {
     return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
 }
 
-void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
+void JitBuildState::extract_zone_src_locations(const std::string& out_dir) {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {

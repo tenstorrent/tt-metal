@@ -21,7 +21,7 @@ struct FusedRMSNormPreAllGather {
     const DataType dtype;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    static void validate(const std::vector<Tensor>& input_tensors);
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;

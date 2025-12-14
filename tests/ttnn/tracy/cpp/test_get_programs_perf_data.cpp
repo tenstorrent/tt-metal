@@ -109,7 +109,7 @@ protected:
         distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
     }
 
-    void WriteProgramsPerfDataToJson(
+    static void WriteProgramsPerfDataToJson(
         const std::vector<std::map<tt::ChipId, std::set<experimental::ProgramAnalysisData>>>& programs_perf_data_list,
         const std::string& file_name) {
         nlohmann::json json_programs_perf_data_list;

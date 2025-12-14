@@ -362,7 +362,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 }
 
 // UDM mode helper: builds list of workers sorted by column (x first, then y within each column)
-std::vector<CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt_metal::IDevice* device) const {
+std::vector<CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt_metal::IDevice* device) {
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t total_workers = compute_grid.x * compute_grid.y;
 

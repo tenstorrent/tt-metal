@@ -34,7 +34,7 @@ protected:
     size_t num_devices_ = 0;
 
 public:
-    bool check_dispatch_mode() {
+    static bool check_dispatch_mode() {
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         return slow_dispatch == nullptr;
     }

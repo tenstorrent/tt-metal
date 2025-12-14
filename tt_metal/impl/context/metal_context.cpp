@@ -1568,7 +1568,7 @@ thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_st
 MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
     return MetalContext::command_queue_id_stack_for_thread_;
 }
-const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
     return MetalContext::command_queue_id_stack_for_thread_;
 }
 

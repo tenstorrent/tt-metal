@@ -56,7 +56,7 @@ public:
 
     EnqueueCommandType type() override { return EnqueueCommandType::TERMINATE; }
 
-    constexpr bool has_side_effects() { return false; }
+    static constexpr bool has_side_effects() { return false; }
 };
 
 }  // namespace tt::tt_metal

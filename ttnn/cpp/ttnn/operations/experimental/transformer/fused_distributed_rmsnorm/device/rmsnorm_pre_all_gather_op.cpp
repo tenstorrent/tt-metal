@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-void FusedRMSNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) const {
+void FusedRMSNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) {
     using namespace tt::constants;
 
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");

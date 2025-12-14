@@ -119,7 +119,7 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
-    bool need_compile(const std::string& out_dir, const std::string& obj) const;
+    static bool need_compile(const std::string& out_dir, const std::string& obj);
     size_t compile(const std::string& out_path, const JitBuildSettings* settings) const;
     void compile_one(
         const std::string& out_path,
@@ -130,7 +130,7 @@ protected:
     void link(const std::string& out_path, const JitBuildSettings* settings) const;
     void weaken(const std::string& out_path) const;
     std::string weakened_firmware_name() const;
-    void extract_zone_src_locations(const std::string& out_dir) const;
+    static void extract_zone_src_locations(const std::string& out_dir);
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);

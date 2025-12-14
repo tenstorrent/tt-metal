@@ -30,7 +30,7 @@ public:
     HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
-    auto attribute_values() const { return std::forward_as_tuple(); }
+    static auto attribute_values() { return std::forward_as_tuple(); }
 
 private:
     DistributedHostBuffer distributed_buffer_;
@@ -48,7 +48,7 @@ struct DeviceStorage {
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
-    auto attribute_values() const { return std::forward_as_tuple(); }
+    static auto attribute_values() { return std::forward_as_tuple(); }
 
     bool is_allocated() const;
 

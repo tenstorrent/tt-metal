@@ -42,7 +42,7 @@ protected:
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
     }
 
-    void setup_kernel_dir(const std::string& orig_kernel_file, const std::string& new_kernel_file) {
+    static void setup_kernel_dir(const std::string& orig_kernel_file, const std::string& new_kernel_file) {
         const std::string& kernel_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_kernel_dir();
         const std::filesystem::path& kernel_file_path_under_kernel_dir(kernel_dir + new_kernel_file);
         const std::filesystem::path& dirs_under_kernel_dir = kernel_file_path_under_kernel_dir.parent_path();
@@ -53,7 +53,7 @@ protected:
         std::filesystem::copy(kernel_file_path_under_metal_root, kernel_file_path_under_kernel_dir);
     }
 
-    void cleanup_kernel_dir() {
+    static void cleanup_kernel_dir() {
         const std::string& kernel_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_kernel_dir();
         for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(kernel_dir)) {
             std::filesystem::remove_all(entry);
@@ -66,7 +66,7 @@ protected:
 private:
     bool are_preconditions_satisfied() { return this->are_env_vars_set() && this->is_kernel_dir_valid(); }
 
-    bool are_env_vars_set() {
+    static bool are_env_vars_set() {
         bool are_set = true;
         if (!tt::tt_metal::MetalContext::instance().rtoptions().is_kernel_dir_specified()) {
             log_info(tt::LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
@@ -86,7 +86,7 @@ private:
         return is_valid;
     }
 
-    bool does_path_exist(const std::string& path) {
+    static bool does_path_exist(const std::string& path) {
         const std::filesystem::path& file_path(path);
         return std::filesystem::exists(file_path);
     }

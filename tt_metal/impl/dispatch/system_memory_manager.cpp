@@ -571,7 +571,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
-void SystemMemoryManager::on_timeout_detected() const {
+void SystemMemoryManager::on_timeout_detected() {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // Serialize Inspector RPC data if enabled

@@ -524,7 +524,7 @@ protected:
     }
 
     // Helper function to report performance
-    void report_performance(
+    static void report_performance(
         DeviceData& device_data,
         size_t num_cores_to_log,
         std::chrono::duration<double> elapsed,

@@ -47,7 +47,7 @@ public:
 struct VirtualCoordWormholeWorkerToNocLookup
     : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup> {
     VirtualCoordWormholeWorkerToNocLookup() : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup>() {}
-    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
+    static noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) {
         #if defined(KERNEL_BUILD)
         return worker_x + VIRTUAL_TENSIX_START_X;
         #else
@@ -56,7 +56,7 @@ struct VirtualCoordWormholeWorkerToNocLookup
         #endif
     }
 
-    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
+    static noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) {
         #if defined(KERNEL_BUILD)
         return worker_y + VIRTUAL_TENSIX_START_Y
         #else

@@ -161,8 +161,7 @@ public:
     bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
 
 private:
-
-    IntermeshVCConfig compute_intermesh_vc_config() const;
+    static IntermeshVCConfig compute_intermesh_vc_config();
 
     friend class FabricContext;
 

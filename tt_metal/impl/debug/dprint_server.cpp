@@ -457,14 +457,14 @@ private:
     void transfer_stream_to_output(const RiscKey& risc_key, ostringstream* intermediate_stream);
 
     // Returns the formatted output data from a dprint stream
-    string get_formatted_output_data(const RiscKey& risc_key, const ostringstream* stream);
+    static string get_formatted_output_data(const RiscKey& risc_key, const ostringstream* stream);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
     ostream* get_output_stream(const RiscKey& risc_key);
 
     // Helper functions to init/attach/detach a single device
-    void init_device(ChipId device_id);
+    static void init_device(ChipId device_id);
     void attach_device(ChipId device_id);
     void detach_device(ChipId device_id);
 

@@ -64,7 +64,7 @@ public:
     // Flattens input shape into height and width
     // - Height is accumulated over all dims except last
     // - Width is equal to the last dim
-    Shape2D compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const;
+    static Shape2D compute_logical_2d_shape(const tt::tt_metal::Shape& shape);
 
     // Returns number of elements laid out in physically memory across H:W dimensions
     //  W is row width aligned to page width and shard width, depends on data type

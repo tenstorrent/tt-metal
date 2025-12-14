@@ -129,7 +129,7 @@ void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevi
         this->program_l1_usage_summary_report_);
 }
 
-void MemoryReporter::dump_memory_usage_state(const IDevice* device, const std::string& prefix) const {
+void MemoryReporter::dump_memory_usage_state(const IDevice* device, const std::string& prefix) {
     std::ofstream memory_usage_summary_report, l1_usage_summary_report, detailed_memory_usage_report;
 
     fs::create_directories(metal_reports_dir());
@@ -157,7 +157,7 @@ void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
     MemoryReporter::inst().dump_memory_usage_state(device, prefix);
 }
 
-MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) const {
+MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) {
     auto stats = device->allocator()->get_statistics(buffer_type);
     auto num_banks_ = device->allocator()->get_num_banks(buffer_type);
 

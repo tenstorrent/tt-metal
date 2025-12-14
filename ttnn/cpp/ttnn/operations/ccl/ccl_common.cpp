@@ -254,7 +254,7 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direct
     }
 }
 
-ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
+ttnn::ccl::Topology LineTopology::topology() { return ttnn::ccl::Topology::Linear; }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,

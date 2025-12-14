@@ -81,7 +81,7 @@ protected:
         }
     }
 
-    void initialize_seed() {
+    static void initialize_seed() {
         const uint32_t seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
@@ -191,7 +191,7 @@ protected:
         return {unique_rt_args, common_rt_args};
     }
 
-    KernelProperties get_small_kernel_properties() {
+    static KernelProperties get_small_kernel_properties() {
         KernelProperties small_kernel_properties;
         small_kernel_properties.min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES;
         small_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
@@ -207,7 +207,7 @@ protected:
         return small_kernel_properties;
     }
 
-    KernelProperties get_large_kernel_properties() {
+    static KernelProperties get_large_kernel_properties() {
         KernelProperties large_kernel_properties;
         large_kernel_properties.min_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (9.0 / 10);
         large_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES;
@@ -282,7 +282,7 @@ private:
     }
 
     // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
-    uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
+    static uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
         TT_FATAL(max >= min, "max: {}, min: {} - max must be >= min", max, min);
 
         const uint32_t adjusted_min = ((min + divisible_by - 1) / divisible_by) * divisible_by;

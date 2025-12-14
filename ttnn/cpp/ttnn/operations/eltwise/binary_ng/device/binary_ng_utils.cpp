@@ -21,7 +21,7 @@ struct Lowercase {
 
 template <>
 struct fmt::formatter<ttnn::operations::binary_ng::Lowercase> : fmt::formatter<std::string_view> {
-    auto format(const ttnn::operations::binary_ng::Lowercase& value, fmt::format_context& ctx) const {
+    static auto format(const ttnn::operations::binary_ng::Lowercase& value, fmt::format_context& ctx) {
         auto out = ctx.out();
         for (char c : value.view) {
             *out++ = std::tolower(static_cast<unsigned char>(c));

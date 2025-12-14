@@ -112,9 +112,9 @@ public:
 
     void flush_program_memory_usage(uint64_t program_id, const IDevice* device);
 
-    void dump_memory_usage_state(const IDevice* device, const std::string& prefix = "") const;
+    static void dump_memory_usage_state(const IDevice* device, const std::string& prefix = "");
 
-    MemoryView get_memory_view(const IDevice* device, const BufferType& buffer_type) const;
+    static MemoryView get_memory_view(const IDevice* device, const BufferType& buffer_type);
 
     static void toggle(bool state);
     static MemoryReporter& inst();

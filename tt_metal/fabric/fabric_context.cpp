@@ -20,7 +20,7 @@
 
 namespace tt::tt_fabric {
 
-std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
+std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -122,14 +122,14 @@ bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     return it->second;
 }
 
-bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
+bool FabricContext::is_switch_mesh(MeshId mesh_id) {
     // Stub: returns false for now (all meshes are compute meshes)
     // TODO: Implement when switch mesh support lands - delegate to ControlPlane
     (void)mesh_id;  // Unused for now
     return false;
 }
 
-bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+bool FabricContext::has_z_router_on_device(ChipId device_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();

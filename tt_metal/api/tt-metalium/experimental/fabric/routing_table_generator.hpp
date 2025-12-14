@@ -70,8 +70,8 @@ private:
     // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
     std::vector<std::vector<std::vector<ChipId>>> exit_node_lut_;
 
-    std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> get_paths_to_all_meshes(
-        MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const;
+    static std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> get_paths_to_all_meshes(
+        MeshId src, const InterMeshConnectivity& inter_mesh_connectivity);
     void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
     // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to
     // the exit chip
@@ -92,7 +92,7 @@ struct hash<tt::tt_fabric::FabricNodeId> {
 
 template <>
 struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
+    static auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) -> format_context::iterator;
 };

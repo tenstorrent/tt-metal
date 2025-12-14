@@ -276,7 +276,7 @@ private:
         const std::vector<tt_metal::IDevice*>& all_active_devices);
 
     // UDM mode helper: builds list of workers sorted by column (y first, then x)
-    std::vector<CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device) const;
+    static std::vector<CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device);
 
     // UDM mode helper: gets unique tensix cores for worker assignment (excludes dispatch routing plane)
     std::vector<CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const;

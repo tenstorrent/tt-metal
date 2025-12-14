@@ -56,7 +56,7 @@ private:
     CoreCoord host_core;
 
     // Validate a single core's worth of results vs expected
-    bool validate_one_core(
+    static bool validate_one_core(
         IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,

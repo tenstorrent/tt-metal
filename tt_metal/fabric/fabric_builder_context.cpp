@@ -186,7 +186,7 @@ void FabricBuilderContext::initialize_tensix_config() {
     }
 }
 
-IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
+IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
@@ -237,6 +237,5 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     return config;
 }
-
 
 }  // namespace tt::tt_fabric

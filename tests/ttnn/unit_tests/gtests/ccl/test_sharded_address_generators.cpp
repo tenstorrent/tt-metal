@@ -22,12 +22,12 @@ struct UnharvestedWormholeWorkerToNocLookup
     static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x = {1, 2, 3, 4, 6, 7, 8, 9};
     static constexpr std::array<noc_grid_index_t, 10> worker_to_routing_y = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
 
-    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
+    static noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) {
         // ASSERT worker_x < worker_to_routing_x_wormhole.size()
         return worker_to_routing_x[worker_x];
     }
 
-    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
+    static noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) {
         // ASSERT worker_y < worker_to_routing_y_wormhole.size()
         return worker_to_routing_y[worker_y];
     }

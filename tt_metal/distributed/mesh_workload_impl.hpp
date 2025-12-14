@@ -43,7 +43,7 @@ private:
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
-    ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
+    static ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
 

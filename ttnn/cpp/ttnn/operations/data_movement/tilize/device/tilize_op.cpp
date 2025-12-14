@@ -89,7 +89,7 @@ std::vector<ttnn::TensorSpec> Tilize::compute_output_specs(const std::vector<Ten
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Tilize::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
+    std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();

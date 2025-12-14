@@ -101,7 +101,7 @@ private:
     // launch message must be unique across physical devices to accurately capture program execution time on host and
     // device. This API is responsible for updating the launch message before writing it to each device (see
     // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
-    void update_launch_messages_for_device_profiler(
+    static void update_launch_messages_for_device_profiler(
         ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();

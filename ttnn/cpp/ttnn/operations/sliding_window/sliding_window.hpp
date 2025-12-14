@@ -195,18 +195,18 @@ struct std::hash<ttnn::operations::sliding_window::ParallelConfig> {
 
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig> : formatter<string_view> {
-    auto format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, fmt::format_context& ctx) const
+    static auto format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, fmt::format_context& ctx)
         -> format_context::iterator;
 };
 
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::ParallelConfig> : formatter<string_view> {
-    auto format(const ttnn::operations::sliding_window::ParallelConfig& t, fmt::format_context& ctx) const
+    static auto format(const ttnn::operations::sliding_window::ParallelConfig& t, fmt::format_context& ctx)
         -> format_context::iterator;
 };
 
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::ShardBoundary> : formatter<string_view> {
-    auto format(const ttnn::operations::sliding_window::ShardBoundary& t, fmt::format_context& ctx) const
+    static auto format(const ttnn::operations::sliding_window::ShardBoundary& t, fmt::format_context& ctx)
         -> format_context::iterator;
 };

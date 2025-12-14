@@ -156,7 +156,7 @@ private:
 
     std::condition_variable reads_processed_cv_;
     std::mutex reads_processed_cv_mutex_;
-    CoreType get_dispatch_core_type();
+    static CoreType get_dispatch_core_type();
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
     CoreCoord completion_queue_writer_core_;

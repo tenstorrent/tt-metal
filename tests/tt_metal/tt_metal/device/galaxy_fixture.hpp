@@ -33,7 +33,7 @@ private:
 };
 
 class TGFixture : public MeshDispatchFixture {
-    void SkipTestSuiteIfNotTG() {
+    static void SkipTestSuiteIfNotTG() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "This test can only run on Wormhole B0";
         }

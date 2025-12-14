@@ -860,7 +860,7 @@ private:
         }
     }
 
-    void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size) {
+    static void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size) {
         uint32_t max_packet_size = 0;
         for (const auto& sender : config.senders) {
             for (const auto& pattern : sender.patterns) {
@@ -1527,7 +1527,7 @@ private:
         write_bandwidth_summary_csv_to_file(csv_summary_upload_file_path_, true);
     }
 
-    std::string get_golden_csv_filename() {
+    static std::string get_golden_csv_filename() {
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
@@ -1618,7 +1618,7 @@ private:
         return true;
     }
 
-    std::string get_golden_latency_csv_filename();
+    static std::string get_golden_latency_csv_filename();
 
     bool load_golden_latency_csv();
 
@@ -1644,7 +1644,8 @@ private:
     }
 
     // Common CSV diff file initialization
-    std::ofstream init_diff_csv_file(std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
+    static std::ofstream init_diff_csv_file(
+        std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         std::ostringstream diff_oss;
@@ -1679,7 +1680,7 @@ private:
 
     ComparisonResult create_comparison_result(const BandwidthResultSummary& test_result);
 
-    std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
+    static std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
 
     void compare_summary_results_with_golden() {
         if (golden_csv_entries_.empty()) {

@@ -254,9 +254,9 @@ public:
 
 private:
     void reserve_core_internal(const CoreCoord& core, CoreType core_type, uint32_t partition_id = 0);
-    void assign_core_to_partition(CorePool& pool, const CoreCoord& core, uint32_t partition_id);
+    static void assign_core_to_partition(CorePool& pool, const CoreCoord& core, uint32_t partition_id);
     CoreCoord find_next_available_core(CorePool& pool, uint32_t partition_id = 0);
-    CoreCoord find_next_available_sync_core(CorePool& pool);
+    static CoreCoord find_next_available_sync_core(CorePool& pool);
     void refill_pool(CorePool& pool);
 };
 

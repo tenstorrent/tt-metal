@@ -880,8 +880,7 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
     return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
 }
 
-void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
+void Cluster::verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) {
     umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     log_info(
         tt::LogDevice,

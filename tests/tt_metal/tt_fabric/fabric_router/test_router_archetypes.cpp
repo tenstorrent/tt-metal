@@ -85,7 +85,7 @@ protected:
     /**
      * @brief Create a mesh router archetype
      */
-    RouterArchetype create_mesh_router_archetype(
+    static RouterArchetype create_mesh_router_archetype(
         Topology topology, RoutingDirection direction, bool has_z, FabricNodeId node_id, uint8_t eth_chan = 0) {
         // Channel mapping
         FabricRouterChannelMapping channel_mapping(
@@ -108,9 +108,7 @@ protected:
     /**
      * @brief Create a Z router archetype
      */
-    RouterArchetype create_z_router_archetype(
-        FabricNodeId node_id,
-        uint8_t eth_chan = 0) {
+    static RouterArchetype create_z_router_archetype(FabricNodeId node_id, uint8_t eth_chan = 0) {
         static auto intermesh_config = IntermeshVCConfig::full_mesh();
 
         // Channel mapping

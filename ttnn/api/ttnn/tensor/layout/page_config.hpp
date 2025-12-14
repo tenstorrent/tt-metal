@@ -20,20 +20,20 @@ class RowMajorPageConfig {
 public:
     RowMajorPageConfig(const Tile& tile = Tile());
 
-    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
+    static Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config);
+    static void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config);
 
-    Shape2D get_page_shape(
+    static Shape2D get_page_shape(
         const Shape2D& physical_size,
         DataType dtype,
         const MemoryConfig& memory_config,
-        const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
+        const std::optional<Shape2D>& physical_shard_size);
+    static size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype);
 
     const Tile& get_tile() const;
 
-    Alignment get_required_shard_shape_alignment() const;
-    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+    static Alignment get_required_shard_shape_alignment();
+    static Alignment get_recommended_shard_shape_alignment(DataType dtype);
 
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;

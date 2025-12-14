@@ -56,7 +56,7 @@ public:
     bfloat16 operator/(bfloat16 rhs) const;
 
 private:
-    uint16_t from_float(float val);
+    static uint16_t from_float(float val);
 };
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);

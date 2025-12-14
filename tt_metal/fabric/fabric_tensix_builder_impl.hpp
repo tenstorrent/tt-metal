@@ -446,7 +446,7 @@ public:
     void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
 private:
-    const char* get_kernel_file_path() const;
+    static const char* get_kernel_file_path();
     std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
 

@@ -60,12 +60,12 @@ uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceA
     return device_cq_addrs_[index];
 }
 
-uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
+uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) {
     return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) *
            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
-uint32_t DispatchMemMap::get_sync_offset(uint32_t index) const {
+uint32_t DispatchMemMap::get_sync_offset(uint32_t index) {
     TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     uint32_t offset = index * MetalContext::instance().hal().get_alignment(HalMemType::L1);
     return offset;
@@ -95,7 +95,7 @@ uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
     }
 }
 
-uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {
+uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) {
     TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET);
     return index;
 }
@@ -178,7 +178,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     TT_ASSERT(dispatch_cb_end < l1_size);
 }
 
-std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType& core_type) const {
+std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType& core_type) {
     uint32_t l1_base;
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {

@@ -51,7 +51,7 @@ public:
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
     }
-    std::string log_file_name();
+    static std::string log_file_name();
     int register_kernel(const std::string& name);
     void register_kernel_elf_paths(int id, std::vector<std::string>& paths);
     void read_kernel_ids_from_file();
@@ -63,7 +63,7 @@ public:
     std::unique_lock<std::mutex> get_lock() { return std::unique_lock<std::mutex>(watch_mutex_); }
 
 private:
-    double get_elapsed_secs();
+    static double get_elapsed_secs();
     void create_log_file();
     void create_kernel_file();
     void create_kernel_elf_file();

@@ -77,15 +77,15 @@ private:
         std::chrono::duration<double> elapsed_since_last_poll);
 
     // Formatting helpers
-    std::string format_count(uint64_t count) const;
-    std::string format_throughput(double packets_per_second) const;
-    std::string format_duration(double seconds) const;
+    static std::string format_count(uint64_t count);
+    static std::string format_throughput(double packets_per_second);
+    static std::string format_duration(double seconds);
 
     // Hung detection
     bool is_device_hung(tt::tt_fabric::FabricNodeId device_id, uint64_t current_packets);
 
     // ETA calculation
-    std::optional<double> estimate_eta(uint64_t current_total, uint64_t target_total, double throughput) const;
+    static std::optional<double> estimate_eta(uint64_t current_total, uint64_t target_total, double throughput);
 
     // Context and configuration
     ::TestContext* ctx_;

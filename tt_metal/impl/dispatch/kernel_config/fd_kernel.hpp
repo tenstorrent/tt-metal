@@ -167,7 +167,7 @@ protected:
         bool send_to_brisc,
         bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
-    int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
+    static int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {
                 return idx;

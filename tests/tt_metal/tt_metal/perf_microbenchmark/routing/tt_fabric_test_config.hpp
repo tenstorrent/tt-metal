@@ -259,7 +259,7 @@ private:
     // Parsing helpers
     CoreCoord parse_core_coord(const YAML::Node& node);
     MeshCoordinate parse_mesh_coord(const YAML::Node& node);
-    MeshId parse_mesh_id(const YAML::Node& yaml_node);
+    static MeshId parse_mesh_id(const YAML::Node& yaml_node);
     template <typename T>
     T parse_scalar(const YAML::Node& yaml_node);
     template <typename T>
@@ -287,7 +287,7 @@ public:
     bool dump_built_tests();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
     bool has_help_option();
-    void print_help();
+    static void print_help();
 
     // Progress monitoring options
     bool show_progress();
@@ -406,7 +406,7 @@ public:
         return built_tests;
     }
     // Helper function to check if a test should be skipped based on architecture or cluster type.
-    bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const {
+    static bool should_skip_test_on_platform(const ParsedTestConfig& test_config) {
         // Skip if the test declares platforms to skip and this platform matches
         if (test_config.skip.has_value()) {
             // Determine current platform identifiers
@@ -632,7 +632,7 @@ private:
         return expanded_tests;
     }
 
-    std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config) {
+    static std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config) {
         std::vector<ParsedTestConfig> parametrized_configs;
         parametrized_configs.push_back(raw_config);
 
@@ -754,8 +754,8 @@ private:
         }
     }
 
-    void validate_chip_unicast(
-        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+    static void validate_chip_unicast(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) {
         TT_FATAL(
             pattern.destination.has_value() &&
                 (pattern.destination->device.has_value() || pattern.destination->hops.has_value()),
@@ -777,8 +777,8 @@ private:
             test.name);
     }
 
-    void validate_chip_multicast(
-        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+    static void validate_chip_multicast(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) {
         TT_FATAL(
             pattern.destination.has_value() && pattern.destination->hops.has_value(),
             "Test '{}': Multicast pattern for sender on device {} must have a destination specified by 'hops'.",
@@ -790,8 +790,8 @@ private:
             test.name);
     }
 
-    void validate_sync_pattern(
-        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+    static void validate_sync_pattern(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) {
         // The NeighborExchange topology uses unicast sync patterns, so we perform a different check
         if (test.fabric_setup.topology == tt::tt_fabric::Topology::NeighborExchange) {
             TT_FATAL(
@@ -1223,7 +1223,7 @@ private:
         return {sync_patterns, sync_val};
     }
 
-    void add_senders_from_pairs(
+    static void add_senders_from_pairs(
         ParsedTestConfig& test,
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
         const ParsedTrafficPatternConfig& base_pattern) {

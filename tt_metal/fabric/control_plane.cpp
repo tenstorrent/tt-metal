@@ -618,7 +618,7 @@ void ControlPlane::validate_mesh_connections() const {
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(
-    chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const {
+    chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) {
     auto it = std::find(eth_chans_in_direction.begin(), eth_chans_in_direction.end(), eth_chan_id);
     return std::distance(eth_chans_in_direction.begin(), it);
 }
@@ -1192,7 +1192,7 @@ std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
     return valid_eth_chans;
 }
 
-eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDirection direction) const {
+eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDirection direction) {
     eth_chan_directions dir;
     switch (direction) {
         case RoutingDirection::N: dir = eth_chan_directions::NORTH; break;
@@ -1980,7 +1980,7 @@ bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) con
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
-std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
+std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     std::unordered_set<CoreCoord> active_ethernet_cores;
@@ -2943,7 +2943,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
 }
 
-std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) {
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     TT_FATAL(
         cluster_type == tt::tt_metal::ClusterType::GALAXY,

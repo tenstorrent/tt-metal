@@ -51,8 +51,8 @@ public:
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
 
-    const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
+    static const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() { return devices_; }
+    static const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) {
         return devices_map_.at(id);
     }
 
@@ -262,7 +262,7 @@ public:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
-    void SetUp(
+    static void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(

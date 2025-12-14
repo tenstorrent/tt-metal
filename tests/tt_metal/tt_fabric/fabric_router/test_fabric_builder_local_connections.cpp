@@ -65,7 +65,7 @@ protected:
         RouterConnectionMapping connection_mapping;
     };
 
-    MockRouter create_mock_mesh_router(RoutingDirection dir, uint32_t router_id, bool has_z) {
+    static MockRouter create_mock_mesh_router(RoutingDirection dir, uint32_t router_id, bool has_z) {
         return MockRouter{
             .node_id = FabricNodeId(MeshId{0}, router_id),
             .direction = dir,
@@ -81,7 +81,7 @@ protected:
         };
     }
 
-    MockRouter create_mock_z_router(uint32_t router_id) {
+    static MockRouter create_mock_z_router(uint32_t router_id) {
         static auto intermesh_config = IntermeshVCConfig::full_mesh();
         return MockRouter{
             .node_id = FabricNodeId(MeshId{0}, router_id),

@@ -148,7 +148,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 UntilizeWithUnpadding::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
+    std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();

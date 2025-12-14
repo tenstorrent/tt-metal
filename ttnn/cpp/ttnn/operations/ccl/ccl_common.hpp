@@ -118,7 +118,7 @@ class LineTopology {
 
     size_t get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const;
 
-    ttnn::ccl::Topology topology() const;
+    static ttnn::ccl::Topology topology() ;
 
    private:
     size_t _line_size;
@@ -654,12 +654,12 @@ public:
     ttnn::ccl::v2::TensorSlice get_worker_slice_v2(std::size_t global_worker_index);
 
     // method to compute offsets in a wrapped layout
-    std::vector<tt_xy_pair> compute_worker_slice_offsets(
+    static std::vector<tt_xy_pair> compute_worker_slice_offsets(
         const std::vector<tt_xy_pair>& worker_slice_shapes,
         tt_xy_pair const& tensor_slice_shape);
 
     // method to create worker slice shapes in a tile layout
-    std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+    static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
         const ttnn::Shape& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
@@ -677,7 +677,7 @@ private:
         uint32_t max_slice_size_in_bytes,
         uint32_t half_cb_n_pages);
 
-    tt_xy_pair calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size);
+    static tt_xy_pair calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size);
     Shape4D<uint32_t> calculate_tensor_slice_offset(const Tensor& input_tensor, int slice_dim, uint32_t partition_index);
 
     // Class member variables
@@ -705,10 +705,10 @@ public:
     ttnn::ccl::v2::TensorSlice get_worker_slice_v2(std::size_t global_worker_index);
 
     // method to compute offsets in a wrapped layout
-    std::vector<Shape4D<uint32_t>> compute_worker_slice_offsets(std::vector<Shape4D<uint32_t>> const& worker_slice_shapes);
+    static std::vector<Shape4D<uint32_t>> compute_worker_slice_offsets(std::vector<Shape4D<uint32_t>> const& worker_slice_shapes);
 
     // method to create worker slice shapes in a tile layout
-    std::vector<Shape4D<uint32_t>> create_worker_slice_shapes_for_tile_layout(
+    static std::vector<Shape4D<uint32_t>> create_worker_slice_shapes_for_tile_layout(
         Shape4D<uint32_t> const& tensor_slice_shape_in_tiles,
         uint32_t num_workers);
 
@@ -720,7 +720,7 @@ private:
         uint32_t partition_size,
         uint32_t total_num_workers);
 
-    Shape4D<uint32_t> calculate_tensor_slice_shape(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_size);
+    static Shape4D<uint32_t> calculate_tensor_slice_shape(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_size);
     Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index);
 
     // Class member variables

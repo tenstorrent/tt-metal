@@ -184,7 +184,7 @@ private:
     static constexpr uint32_t BUFFERS_PER_CHANNEL = 8;
 
     // Helper method to assign and validate mux channels for a connection
-    void assign_and_validate_channels(Connection& conn, const ConnectionKey& key);
+    static void assign_and_validate_channels(Connection& conn, const ConnectionKey& key);
 };
 
 struct TestWorker {

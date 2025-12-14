@@ -63,16 +63,16 @@ public:
     // Executor functions for all traced host API calls (commands)
     // Trace APIs are no longer supported due to trace API deprecation. See Issue #24955
     void execute(const tt::tt_metal::flatbuffer::Command* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
+    static void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
+    static void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
+    static void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
+    static void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
+    static void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);

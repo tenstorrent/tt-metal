@@ -139,7 +139,7 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     return jal_offset | opcode;
 }
 
-HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
+HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) {
     HalProcessorSet set;
 
     // TODO: might need a new syntax for new architectures.
