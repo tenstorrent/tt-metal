@@ -53,6 +53,7 @@ jobs:
               "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 49448704, \"l1_small_size\": 24576}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 4",
+              "multimodal": true,
               "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": true,
