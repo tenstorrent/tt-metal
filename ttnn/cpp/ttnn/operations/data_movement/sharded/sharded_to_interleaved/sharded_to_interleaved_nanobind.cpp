@@ -29,19 +29,13 @@ void bind_sharded_to_interleaved(
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType>& output_dtype,
-               const std::optional<bool>& is_l1_aligned) -> ttnn::Tensor {
+               const std::optional<DataType>& output_dtype) -> ttnn::Tensor {
                 return self(
-                    input_tensor,
-                    memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                    output_dtype,
-                    is_l1_aligned);
+                    input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_dtype") = nb::none(),
-            nb::kw_only(),
-            nb::arg("is_l1_aligned") = false,
         });
 }
 

@@ -69,7 +69,7 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("num_links") = 1,
             nb::arg("memory_config") = nb::none(),
             nb::arg("intermediate_memory_config") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Ring,
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("chunks_per_sync") = nb::none(),

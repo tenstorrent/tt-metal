@@ -1817,6 +1817,59 @@ void bind_unary_composite_float_with_default(
 }
 
 template <typename unary_operation_t>
+void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, const std::string& info_doc = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Performs {0} function on :attr:`input_tensor`, :attr:`eps`.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            eps (float, optional): The epsilon for input clamp bound. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - FLOAT32, BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, eps = None)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
+
+    bind_registered_operation(
+        mod,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               std::optional<float> eps,
+               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, eps, memory_config); },
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("eps") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
+}
+
+template <typename unary_operation_t>
 void bind_unary_composite_rpow(
     nb::module_& mod,
     const unary_operation_t& operation,
@@ -2107,7 +2160,13 @@ void py_module(nb::module_& mod) {
         ttnn::silu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|silu|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        mod,
+        ttnn::swish,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|swish|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         mod,
         ttnn::sin,
@@ -2361,12 +2420,6 @@ void py_module(nb::module_& mod) {
         ttnn::sinh,
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(
-        mod,
-        ttnn::swish,
-        R"doc(Performs swish function on :attr:`input_tensor`.)doc",
-        "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite(mod, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     bind_unary_composite(mod, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");

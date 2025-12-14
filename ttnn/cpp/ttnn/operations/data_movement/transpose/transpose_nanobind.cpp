@@ -31,7 +31,7 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`dim1`: First dim of transpose.
                 * :attr:`dim2`: Second dim of transpose.
-                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
+                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
@@ -48,7 +48,9 @@ void bind_transpose(nb::module_& mod) {
                int64_t dim1,
                int64_t dim2,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<float> pad_value) { return self(input_tensor, dim1, dim2, memory_config, pad_value); },
+               std::optional<float> pad_value) {
+                return self(input_tensor, dim1, dim2, memory_config, pad_value);  // TODO(#34353)
+            },
             nb::arg("input_tensor"),
             nb::arg("dim1"),
             nb::arg("dim2"),
