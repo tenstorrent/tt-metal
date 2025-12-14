@@ -455,6 +455,7 @@ class ModelArgs:
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
         supported_batches = {1, 2, 4, 8, 16, 32}
+        logger.info(f"Using max batch size: {self.max_batch_size}")
         if self.max_batch_size not in supported_batches:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
