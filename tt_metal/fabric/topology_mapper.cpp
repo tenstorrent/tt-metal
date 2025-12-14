@@ -20,6 +20,10 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "experimental/fabric/routing_table_generator.hpp"
+#include <cmath>
 #include <chrono>
 #include <thread>
 #include <atomic>
@@ -463,8 +467,9 @@ void TopologyMapper::build_mapping() {
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
         // Build logical and physical adjacency maps
-        auto adjacency_map_logical = build_adjacency_map_logical();
-        auto adjacency_map_physical = build_adjacency_map_physical(asic_id_to_mesh_rank);
+        auto adjacency_map_logical = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph_);
+        auto adjacency_map_physical = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_physical(
+            physical_system_descriptor_, asic_id_to_mesh_rank);
 
         print_logical_adjacency_map(adjacency_map_logical);
         print_physical_adjacency_map(adjacency_map_physical);
@@ -607,101 +612,6 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     }
 
     return mapping;
-}
-
-std::map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical() const {
-    std::map<MeshId, LogicalAdjacencyMap> adjacency_map;
-
-    auto get_local_adjacents = [&](tt::tt_fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
-        auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
-
-        std::vector<tt::tt_fabric::FabricNodeId> adjacents;
-        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
-        for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
-            // Skip self-connections
-            if (neighbor_chip_id == fabric_node_id.chip_id) {
-                continue;
-            }
-            size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
-            for (size_t i = 0; i < repeat_count; ++i) {
-                adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
-            }
-        }
-        return adjacents;
-    };
-
-    // Iterate over all mesh IDs from the mesh graph
-    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
-        LogicalAdjacencyMap logical_adjacency_map;
-        for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
-            auto fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, chip_id);
-            logical_adjacency_map[fabric_node_id] = get_local_adjacents(fabric_node_id, mesh_id);
-        }
-        adjacency_map[mesh_id] = logical_adjacency_map;
-    }
-
-    return adjacency_map;
-}
-
-std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const {
-    std::map<MeshId, PhysicalAdjacencyMap> adjacency_map;
-
-    // Build a set of ASIC IDs for each mesh based on mesh rank mapping
-    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_asic_ids;
-    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-        for (const auto& [asic_id, _] : asic_map) {
-            mesh_asic_ids[mesh_id].insert(asic_id);
-        }
-    }
-
-    for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
-        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
-        auto z_channels = std::unordered_set<uint8_t>{8, 9};
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-
-        auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
-                                       const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
-            std::vector<tt::tt_metal::AsicID> adjacents;
-
-            for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
-                // Skip self-connections
-                if (neighbor == asic_id) {
-                    continue;
-                }
-                // Make sure that the neighbor is in the mesh
-                if (mesh_asics.contains(neighbor)) {
-                    if (relaxed) {
-                        if (std::find(adjacents.begin(), adjacents.end(), neighbor) == adjacents.end()) {
-                            adjacents.push_back(neighbor);
-                        }
-                    } else {
-                        // In strict mode, add each neighbor multiple times based on number of ethernet connections
-                        auto eth_connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
-                        for (const auto& eth_connection : eth_connections) {
-                            // NOTE: IGNORE Z channels for Blackhole galaxy in intra mesh connectivity since they are
-                            // not used intra mesh communication on black hole
-                            if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
-                                (z_channels.contains(eth_connection.src_chan) ||
-                                 z_channels.contains(eth_connection.dst_chan))) {
-                                continue;
-                            }
-                            adjacents.push_back(neighbor);
-                        }
-                    }
-                }
-            }
-            return adjacents;
-        };
-
-        PhysicalAdjacencyMap physical_adjacency_map;
-        for (const auto& asic_id : mesh_asics) {
-            physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_asics);
-        }
-        adjacency_map[mesh_id] = physical_adjacency_map;
-    }
-
-    return adjacency_map;
 }
 
 void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
@@ -1441,6 +1351,175 @@ InterMeshConnectivity TopologyMapper::get_inter_mesh_connectivity(MeshId mesh_id
         mesh_id,
         connectivity.size());
     return connectivity;
+}
+
+namespace {
+/**
+ * @brief Determines the maximum number of local Ethernet connections per direction between ASICs in the system.
+ *
+ * For each ASIC in the provided PhysicalSystemDescriptor, this function examines all neighboring ASICs and counts
+ * the number of Ethernet connections to each neighbor that are marked as local (i.e., connection.is_local is true).
+ * It returns the maximum number of such local connections found in any direction for any ASIC.
+ *
+ * @param psd The PhysicalSystemDescriptor representing the system's ASICs and their interconnections.
+ * @return The maximum number of local Ethernet connections per direction between any two ASICs.
+ */
+std::uint32_t get_num_connections_per_direction(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+    // Check the number of connections per direction for each asic
+    std::uint32_t num_connections_per_direction = 1;  // Default to 1 connection per direction
+    for (const auto& [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
+        auto neighbors = psd.get_asic_neighbors(asic_id);
+        for (const auto& neighbor : neighbors) {
+            auto connections = psd.get_eth_connections(asic_id, neighbor);
+            std::uint32_t num_local_connections = 0;
+            for (const auto& connection : connections) {
+                if (connection.is_local) {
+                    num_local_connections++;
+                }
+            }
+            num_connections_per_direction = std::max(num_connections_per_direction, num_local_connections);
+        }
+    }
+    return num_connections_per_direction;
+}
+
+/**
+ * @brief Generate all possible mesh shapes that can be formed from a given number of chips
+ *
+ * This function generates all possible rectangular mesh shapes (MxN) where M*N equals the total number of chips.
+ * It tries shapes from total_number_of_chips down to 1, prioritizing 2D shapes over 1D line topologies.
+ *
+ * @param total_number_of_chips The total number of chips to form a mesh from
+ * @return std::vector<MeshShape> Vector of possible mesh shapes, ordered by preference
+ */
+std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_number_of_chips) {
+    // Come up with all possible mesh shapes that can be formed from the given number of chips
+    // Try shapes for total_number_of_chips first, then total_number_of_chips - 1, etc., down to 1
+    // All 1D cases (where one dimension is 1) are saved for the end
+    std::vector<MeshShape> mesh_shapes_to_try;
+    std::vector<MeshShape> one_d_shapes;
+
+    // Try from total_number_of_chips down to 1
+    for (std::uint32_t num_chips = total_number_of_chips; num_chips > 0; num_chips--) {
+        // Find all divisor pairs (x, y) where x * y = num_chips
+        // Only check divisors up to sqrt(num_chips) for efficiency
+        std::uint32_t sqrt_num_chips = static_cast<std::uint32_t>(std::sqrt(num_chips));
+
+        for (std::uint32_t i = sqrt_num_chips; i > 0; i--) {
+            if (num_chips % i == 0) {
+                auto x = num_chips / i;
+                auto y = i;
+                // Normalize: always put larger dimension first to avoid duplicates like (x,y) and (y,x)
+                // This ensures (x,y) and (y,x) are treated as the same shape
+                auto larger_dim = std::max(x, y);
+                auto smaller_dim = std::min(x, y);
+                MeshShape shape(larger_dim, smaller_dim);
+
+                // NOTE: Special case for t3k 4x2 mesh shape, change it to 2x4 to avoid performance issues with mesh
+                // device shape
+                if (larger_dim == 4 && smaller_dim == 2) {
+                    shape = MeshShape(2, 4);
+                }
+
+                // if odd shape then skip
+                if ((larger_dim % 2 != 0 && larger_dim != 1) || (smaller_dim % 2 != 0 && smaller_dim != 1)) {
+                    continue;
+                }
+
+                // Save 1D cases (where one dimension is 1) to be added at the end
+                if (smaller_dim == 1) {
+                    // Avoid duplicates by checking if this shape is already in one_d_shapes
+                    if (std::find(one_d_shapes.begin(), one_d_shapes.end(), shape) == one_d_shapes.end()) {
+                        one_d_shapes.push_back(shape);
+                    }
+                } else {
+                    // Avoid duplicates by checking if this shape is already in mesh_shapes_to_try
+                    if (std::find(mesh_shapes_to_try.begin(), mesh_shapes_to_try.end(), shape) ==
+                        mesh_shapes_to_try.end()) {
+                        mesh_shapes_to_try.push_back(shape);
+                    }
+                }
+            }
+        }
+    }
+
+    // Append all 1D shapes at the end
+    mesh_shapes_to_try.insert(mesh_shapes_to_try.end(), one_d_shapes.begin(), one_d_shapes.end());
+
+    return mesh_shapes_to_try;
+}
+}  // namespace
+
+MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config) {
+    // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
+    FabricType fabric_type = get_fabric_type(fabric_config);
+
+    // Detect the number of connections per direction using the psd
+    const auto number_of_connections = get_num_connections_per_direction(physical_system_descriptor);
+
+    // Get the total number of chips in the physical system descriptor
+    const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
+
+    // Extract ASIC IDs from the descriptors map
+    std::vector<tt::tt_metal::AsicID> all_asic_ids;
+    for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
+        all_asic_ids.push_back(asic_id);
+    }
+
+    // Form physical adjacency matrix from physical system descriptor
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}] = std::map<tt::tt_metal::AsicID, MeshHostRankId>();
+    for (const auto& asic_id : all_asic_ids) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = MeshHostRankId{0};
+    }
+    auto physical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_physical(
+        physical_system_descriptor, asic_id_to_mesh_rank);
+
+    // Generate possible mesh shapes
+    std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
+
+    // Try all possible mesh shapes
+    const MeshId mesh_id{0};
+    for (const auto& mesh_shape : mesh_shapes_to_try) {
+        auto mesh_graph = MeshGraph::generate_mesh_graph_of_shape(mesh_shape, fabric_type, number_of_connections);
+        auto logical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph);
+
+        // Extract adjacency maps for this mesh_id
+        if (logical_adjacency_matrix.find(mesh_id) == logical_adjacency_matrix.end() ||
+            physical_adjacency_matrix.find(mesh_id) == physical_adjacency_matrix.end()) {
+            continue;
+        }
+
+        const auto& logical_adj = logical_adjacency_matrix.at(mesh_id);
+        const auto& physical_adj = physical_adjacency_matrix.at(mesh_id);
+
+        // Build node_to_host_rank map - assume single mesh, all nodes on same host rank
+        std::map<FabricNodeId, MeshHostRankId> node_to_host_rank;
+        auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        const MeshHostRankId single_host_rank{0};
+        for (const auto& chip_id : chip_ids.values()) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            node_to_host_rank[fabric_node_id] = single_host_rank;
+        }
+
+        // Extract asic_to_host_rank for this mesh_id
+        const auto& asic_to_host_rank = asic_id_to_mesh_rank.at(mesh_id);
+
+        // Do the mapping and see if its successful
+        tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
+        config.strict_mode = false;  // Use relaxed mode for initial matching
+
+        auto mapping_result = tt::tt_metal::experimental::tt_fabric::map_mesh_to_physical(
+            mesh_id, logical_adj, physical_adj, node_to_host_rank, asic_to_host_rank, config);
+
+        // Return mesh_graph if mapping is successful
+        if (mapping_result.success) {
+            return mesh_graph;
+        }
+    }
+    // Throw if no possible mesh shape is found to match, this means there are no devices! This should never happen
+    TT_THROW("No possible mesh shape found to match physical adjacency matrix");
 }
 
 }  // namespace tt::tt_fabric

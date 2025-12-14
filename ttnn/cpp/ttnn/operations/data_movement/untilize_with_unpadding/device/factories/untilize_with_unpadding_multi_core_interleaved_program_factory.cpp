@@ -40,9 +40,13 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
@@ -50,7 +54,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(available_grid, num_blocks);
 
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
@@ -167,7 +171,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
 
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
@@ -219,7 +223,10 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     }
 
     shared_variables_t shared_variables{
-        .reader_kernel_id = unary_reader_kernel_id, .writer_kernel_id = unary_writer_kernel_id, .cores = cores};
+        .reader_kernel_id = unary_reader_kernel_id,
+        .writer_kernel_id = unary_writer_kernel_id,
+        .cores = cores,
+        .ncores = ncores};
 
     return cached_program_t{std::move(program), std::move(shared_variables)};
 }
@@ -231,13 +238,15 @@ void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_a
     const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
+    const auto& ncores = shared_vars.ncores;
+    const auto& cores = shared_vars.cores;
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
-
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
 
-    for (const auto& core : shared_vars.cores) {
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const CoreCoord& core = cores[i];
         {
             auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
             runtime_args[0] = src_buffer->address();

@@ -14,9 +14,8 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-namespace ttnn {
 
-namespace operations::conv {
+namespace ttnn::operations::conv {
 using namespace conv2d;
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
@@ -94,6 +93,14 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> dilation);
+
+std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
@@ -332,5 +339,4 @@ std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
     std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv

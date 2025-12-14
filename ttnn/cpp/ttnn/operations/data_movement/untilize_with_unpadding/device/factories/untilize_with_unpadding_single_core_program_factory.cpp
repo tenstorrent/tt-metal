@@ -28,13 +28,14 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
     tt::tt_metal::Program program{};
 
-    CoreRange core({0, 0}, {0, 0});
+    CoreRange default_core({0, 0}, {0, 0});
+    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -192,7 +193,7 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
     shared_variables_t shared_variables{
-        .reader_kernel_id = unary_reader_kernel_id, .writer_kernel_id = unary_writer_kernel_id};
+        .reader_kernel_id = unary_reader_kernel_id, .writer_kernel_id = unary_writer_kernel_id, .core = core};
 
     return cached_program_t{std::move(program), std::move(shared_variables)};
 }
@@ -206,16 +207,15 @@ void UntilizeWithUnpaddingSingleCoreProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
+    auto& core = shared_vars.core;
 
-    CoreCoord core = {0, 0};
-
+    CoreCoord core_0 = corerange_to_cores(core).at(0);
     {
-        auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
+        auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core_0);
         runtime_args[0] = src_buffer->address();
     }
-
     {
-        auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
+        auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core_0);
         runtime_args[0] = dst_buffer->address();
     }
 }

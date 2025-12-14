@@ -307,7 +307,7 @@ public:
 
     // Inform the consumer that n pages are available.
     FORCE_INLINE void release_pages(uint32_t n, uint32_t writer_ptr = 0, bool round_to_page_size = false) {
-#if WATCHER_ASSERT_ENABLED
+#if ASSERT_ENABLED
         if constexpr (buffer_page_size != 0) {
             constexpr uint32_t buffer_size = buffer_end - buffer_base;
             if constexpr (buffer_size != 0) {
@@ -335,7 +335,7 @@ public:
 
     uint32_t additional_count{0};
 
-#if WATCHER_ASSERT_ENABLED
+#if ASSERT_ENABLED
 private:
     // Pointer to the end of the last released page. Used for watcher assertions.
     uint32_t watch_released_ptr_{buffer_base};

@@ -15,6 +15,9 @@ namespace ttnn::operations::data_movement {
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.memory_config().is_sharded()) {
+        TT_FATAL(
+            !operation_attributes.sub_core_grids.has_value(),
+            "Sharded untilize does not support sub core grid specification");
         return detail::UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
     }
     if (!operation_attributes.use_multicore) {
@@ -184,7 +187,8 @@ UntilizeWithUnpaddingDeviceOperation::invoke(
     const bool use_pack_untilize,
     const bool fp32_dest_acc_en,
     const bool enough_space_width,
-    const bool enough_space_height) {
+    const bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     operation_attributes_t operation_attributes{
         .output_tensor_end = output_tensor_end,
         .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
@@ -192,7 +196,8 @@ UntilizeWithUnpaddingDeviceOperation::invoke(
         .use_pack_untilize = use_pack_untilize,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .enough_space_width = enough_space_width,
-        .enough_space_height = enough_space_height};
+        .enough_space_height = enough_space_height,
+        .sub_core_grids = sub_core_grids};
 
     tensor_args_t tensor_args{.input_tensor = input_tensor};
 

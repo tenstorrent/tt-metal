@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
+#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 
 #include <array>
@@ -22,14 +23,9 @@
 
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
-constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 1;
-constexpr size_t MAX_NUM_SENDER_CHANNELS = 4;
-
-// Compile Time args
-
 constexpr bool SPECIAL_MARKER_CHECK_ENABLED = true;
 
-// Stream IDs from compile time arguments (first 23 arguments)
+// Stream IDs from compile time arguments (first 28 arguments)
 constexpr size_t STREAM_ID_ARGS_START_IDX = 0;
 constexpr uint32_t to_receiver_0_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 0);
 constexpr uint32_t to_receiver_1_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 1);
@@ -41,32 +37,57 @@ constexpr uint32_t to_sender_0_pkts_completed_id = get_compile_time_arg_val(STRE
 constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 7);
 constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 8);
 constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
+constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
+constexpr uint32_t to_sender_5_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
+constexpr uint32_t to_sender_6_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
+constexpr uint32_t to_sender_7_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_1_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_2_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_3_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
-constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
-constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
-constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
-constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
+constexpr uint32_t vc_0_free_slots_from_downstream_edge_4_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_1_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_2_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
+constexpr uint32_t sender_channel_0_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
+constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
+constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 24);
+constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 25);
+constexpr uint32_t sender_channel_5_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 26);
+constexpr uint32_t sender_channel_6_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 27);
+constexpr uint32_t sender_channel_7_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 28);
+constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 29);
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 30);
 
 // Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 18;
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 31;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
     "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Downstream tensix connections argument (after stream IDs and marker)
-constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+// Maximum channel counts (from builder_config::num_max_sender_channels and builder_config::num_max_receiver_channels)
+constexpr size_t MAX_NUM_SENDER_CHANNELS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+constexpr size_t MAX_NUM_SENDER_CHANNELS = get_compile_time_arg_val(MAX_NUM_SENDER_CHANNELS_IDX);
+constexpr size_t MAX_NUM_RECEIVER_CHANNELS_IDX = MAX_NUM_SENDER_CHANNELS_IDX + 1;
+constexpr size_t MAX_NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(MAX_NUM_RECEIVER_CHANNELS_IDX);
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = 4;  // Channels 0-3
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = 4;  // Channels 4-7 (2D only)
+
+// Downstream tensix connections argument (after stream IDs, marker, and max channel counts)
+constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = MAX_NUM_RECEIVER_CHANNELS_IDX + 1;
 constexpr uint32_t num_ds_or_local_tensix_connections =
     get_compile_time_arg_val(NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX);
 
-// Main configuration arguments (after stream IDs, marker, and downstream tensix connections)
+// Main configuration arguments (after stream IDs, marker, max channel counts, and downstream tensix connections)
 constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
@@ -89,14 +110,16 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 24,
-    "wait_for_host_signal_IDX must be 28 (24 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
+    wait_for_host_signal_IDX == 39,
+    "wait_for_host_signal_IDX must be 39 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 4 "
+    "config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 25,
-    "MAIN_CT_ARGS_START_IDX must be 29 (24 stream IDs + 1 marker + 1 tensix connections + 5 config args)");
+    MAIN_CT_ARGS_START_IDX == 40,
+    "MAIN_CT_ARGS_START_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 5 "
+    "config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -128,8 +151,9 @@ constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 9;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 
@@ -160,8 +184,6 @@ constexpr size_t CHANNEL_POOL_COLLECTION_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 using channel_pools_args =
     ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
 constexpr size_t NUM_POOLS = channel_pools_args::num_channel_pools;
-static_assert(NUM_SENDER_CHANNELS <= 5, "NUM_SENDER_CHANNELS must be less than or equal to 5");
-static_assert(NUM_RECEIVER_CHANNELS <= 2, "NUM_RECEIVER_CHANNELS must be less than or equal to 2");
 // Parse channel-to-pool mappings (after all pool data)
 constexpr size_t CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX  = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
 static_assert(
@@ -223,7 +245,9 @@ constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFE
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+// Add an edge case for NeighborExchange topology, which contains no downstream sender channels
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 =
+    (NUM_DOWNSTREAM_CHANNELS > 0) ? DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0] : 0;
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
@@ -236,9 +260,13 @@ constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_
 constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
 constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
 constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
+constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
+constexpr size_t local_sender_channel_5_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 5);
+constexpr size_t local_sender_channel_6_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 6);
+constexpr size_t local_sender_channel_7_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 7);
 
 // TODO: CONVERT TO SEMAPHORE
-constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 4;
+constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + MAX_NUM_SENDER_CHANNELS;
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
@@ -370,10 +398,24 @@ constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER
 
 constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
 
-constexpr PerfTelemetryRecorderType perf_telemetry_mode =
-    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+constexpr uint8_t FABRIC_TELEMETRY_STATS_MASK =
+    static_cast<uint8_t>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+constexpr bool FABRIC_TELEMETRY_BANDWIDTH =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::BANDWIDTH)) != 0);
+constexpr bool FABRIC_TELEMETRY_HEARTBEAT_TX =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_TX)) != 0);
+constexpr bool FABRIC_TELEMETRY_HEARTBEAT_RX =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX)) != 0);
+constexpr bool FABRIC_TELEMETRY_ANY_DYNAMIC_STAT =
+    FABRIC_TELEMETRY_BANDWIDTH || FABRIC_TELEMETRY_HEARTBEAT_TX || FABRIC_TELEMETRY_HEARTBEAT_RX;
 
-constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 2;
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 2));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 3;
 constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
 
 
@@ -400,10 +442,12 @@ constexpr size_t to_sender_remote_ack_counters_base_address =
 constexpr size_t to_sender_remote_completion_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 1>();
 
-// To optimize for CPU bottleneck instructions, instead of sending acks individually, based on the specific credit addresses, the router instead
-// will send all credits at once. This eliminates a handful of instructions per ack. This behaviour is completely safe when using these unbounded counter
-// credits because the credits are unbounded unsigned counters. Any overflow materializes as a roll back to zero, and subtractions are safe with unsigned.
-constexpr size_t to_senders_credits_base_address = std::min(to_sender_remote_ack_counters_base_address, to_sender_remote_completion_counters_base_address);
+// To optimize for CPU bottleneck instructions, instead of sending acks individually, based on the specific credit
+// addresses, the router instead will send all credits at once. This eliminates a handful of instructions per ack. This
+// behaviour is completely safe when using these unbounded counter credits because the credits are unbounded unsigned
+// counters. Any overflow materializes as a roll back to zero, and subtractions are safe with unsigned.
+constexpr size_t to_senders_credits_base_address =
+    std::min(to_sender_remote_ack_counters_base_address, to_sender_remote_completion_counters_base_address);
 
 constexpr size_t local_receiver_ack_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 2>();
@@ -411,10 +455,17 @@ constexpr size_t local_receiver_ack_counters_base_address =
 constexpr size_t local_receiver_completion_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 3>();
 
-constexpr size_t local_receiver_credits_base_address = std::min(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address);
+constexpr size_t local_receiver_credits_base_address =
+    std::min(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address);
 // the two arrays are contiguous in memory. so we take the size of the first and then double it
-constexpr size_t total_number_of_receiver_to_sender_credit_num_bytes = (std::max(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address) - local_receiver_credits_base_address) * 2;
-static_assert(align_power_of_2(total_number_of_receiver_to_sender_credit_num_bytes, ETH_WORD_SIZE_BYTES) == total_number_of_receiver_to_sender_credit_num_bytes, "total_number_of_receiver_to_sender_credit_num_bytes must be aligned to ETH_WORD_SIZE_BYTES");
+constexpr size_t total_number_of_receiver_to_sender_credit_num_bytes =
+    (std::max(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address) -
+     local_receiver_credits_base_address) *
+    2;
+static_assert(
+    align_power_of_2(total_number_of_receiver_to_sender_credit_num_bytes, ETH_WORD_SIZE_BYTES) ==
+        total_number_of_receiver_to_sender_credit_num_bytes,
+    "total_number_of_receiver_to_sender_credit_num_bytes must be aligned to ETH_WORD_SIZE_BYTES");
 
 static_assert(
     !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
@@ -480,16 +531,22 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id});
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
+            // VC0
             to_sender_0_pkts_acked_id,
             to_sender_1_pkts_acked_id,
             to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id});
+            to_sender_3_pkts_acked_id,
+            // VC1
+            0,  // Padding upto MAX_NUM_SENDER_CHANNELS. VC1 does not use first level acks.
+            0,
+            0,
+            0});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
@@ -498,7 +555,11 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_0_pkts_completed_id,
             to_sender_1_pkts_completed_id,
             to_sender_2_pkts_completed_id,
-            to_sender_3_pkts_completed_id});
+            to_sender_3_pkts_completed_id,
+            to_sender_4_pkts_completed_id,
+            to_sender_5_pkts_completed_id,
+            to_sender_6_pkts_completed_id,
+            to_sender_7_pkts_completed_id});
 
 // Miscellaneous configuration
 

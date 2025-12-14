@@ -125,7 +125,6 @@ TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(1, 8), /*offset=*/MeshCoordinate(0, 1)));
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
 
     // Offset dimensionality mismatch.
@@ -176,19 +175,6 @@ TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {
 
     // Verify original shape is preserved after failed reshapes
     EXPECT_EQ(mesh_device_->shape(), MeshShape(1, 8));
-}
-
-class MeshDevice1x4ReshapeTest : public MeshDeviceFixtureBase {
-public:
-    MeshDevice1x4ReshapeTest() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{1, 4},
-        }) {}
-};
-
-TEST_F(MeshDevice1x4ReshapeTest, From1x4To2x2Invalid) {
-    // This is an invalid reshape because the 1x4 mesh does not fully cover the 2x2 mesh
-    EXPECT_THROW(mesh_device_->reshape(MeshShape(2, 2)), std::runtime_error);
 }
 
 class MeshDevice2x2ReshapeTest : public MeshDeviceFixtureBase {

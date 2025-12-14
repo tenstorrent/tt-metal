@@ -13,6 +13,7 @@ struct UntilizeWithUnpaddingMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id {};
     tt::tt_metal::KernelHandle writer_kernel_id {};
     std::vector<tt::tt_metal::CoreCoord> cores{};
+    uint32_t ncores = 0;
 };
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -19,8 +19,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
@@ -213,28 +212,44 @@ protected:
 };
 
 class Fabric2DUDMModeFixture : public BaseFabricFixture {
+private:
+    inline static bool should_skip_ = false;
+
 protected:
     static void SetUpTestSuite() {
+        // Check specifically for Wormhole Galaxy
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) &&
+                                  (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+                                   tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster());
+
+        if (is_wormhole_galaxy) {
+            should_skip_ = true;
+            return;
+        }
+
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
             tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Tensix fixture tests are not supported on Wormhole Galaxy systems";
+        }
+        BaseFabricFixture::SetUp();
+    }
 };
 
-class NightlyFabric2DUDMModeFixture : public BaseFabricFixture {
-protected:
-    static void SetUpTestSuite() {
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_2D,
-            std::nullopt,
-            tt_fabric::FabricTensixConfig::UDM,
-            tt_fabric::FabricUDMMode::ENABLED);
-    }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
-};
+class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {};
 
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
@@ -373,7 +388,10 @@ void UDMFabricUnicastCommon(
     const std::variant<
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
-    std::optional<RoutingDirection> override_initial_direction = std::nullopt);
+    std::optional<RoutingDirection> override_initial_direction = std::nullopt,
+    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt);
+
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
@@ -399,5 +417,4 @@ void RunEDMConnectionStressTest(
 
 void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

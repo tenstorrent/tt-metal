@@ -16,6 +16,7 @@ struct operation_attributes_t {
     bool fp32_dest_acc_en = false;
     bool enough_space_width = false;
     bool enough_space_height = false;
+    std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct tensor_args_t {

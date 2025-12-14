@@ -53,7 +53,8 @@ struct UntilizeWithUnpaddingDeviceOperation {
         const bool use_pack_untilize,
         const bool fp32_dest_acc_en,
         const bool enough_space_width,
-        const bool enough_space_height);
+        const bool enough_space_height,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement
