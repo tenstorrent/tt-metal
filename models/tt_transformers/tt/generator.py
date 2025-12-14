@@ -113,6 +113,7 @@ class Generator:
         enable_trace,
         sampling_params=None,
     ):
+        return
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
