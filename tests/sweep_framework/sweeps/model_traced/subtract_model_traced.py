@@ -16,41 +16,6 @@ from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpac
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
-
-def _parse_shape(input_shape):
-    """Helper to parse input_shape which can be tuple, list, dict, or string representation of dict"""
-    # If string, try to evaluate it as a dict
-    if isinstance(input_shape, str):
-        try:
-            import ast
-
-            input_shape = ast.literal_eval(input_shape)
-        except:
-            pass
-
-    if isinstance(input_shape, dict):
-        # Check for binary format (self/other) or multi-input format (input_a/input_b)
-        if "self" in input_shape and "other" in input_shape:
-            shape_a = input_shape["self"]
-            shape_b = input_shape["other"]
-        elif "input_a" in input_shape and "input_b" in input_shape:
-            shape_a = input_shape["input_a"]
-            shape_b = input_shape["input_b"]
-        else:
-            # Fallback
-            shape_a = (1, 1, 32, 32)
-            shape_b = (1, 1, 32, 32)
-        # Ensure tuples
-        return (
-            tuple(shape_a) if isinstance(shape_a, list) else shape_a,
-            tuple(shape_b) if isinstance(shape_b, list) else shape_b,
-        )
-    elif isinstance(input_shape, (tuple, list)):
-        return tuple(input_shape), tuple(input_shape)
-    else:
-        return input_shape, input_shape
-
-
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
@@ -93,8 +58,13 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Parse shapes using helper
-    shape_a, shape_b = _parse_shape(input_shape)
+    # Handle both sample suite (tuple) and model_traced suite (dict with 'self'/'other')
+    if isinstance(input_shape, dict):
+        shape_a = input_shape.get("self", input_shape.get("input_a", (1, 1, 32, 32)))
+        shape_b = input_shape.get("other", input_shape.get("input_b", (1, 1, 32, 32)))
+    else:
+        shape_a = input_shape
+        shape_b = input_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
