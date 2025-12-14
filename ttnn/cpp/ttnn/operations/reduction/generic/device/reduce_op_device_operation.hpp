@@ -38,7 +38,8 @@ struct ReduceDeviceOperation {
         const MemoryConfig& output_mem_config,
         const std::optional<DataType>& output_dtype,
         const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-        const std::optional<CoreRangeSet>& sub_core_grids);
+        const std::optional<CoreRangeSet>& sub_core_grids,
+        const bool negate = false);
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
