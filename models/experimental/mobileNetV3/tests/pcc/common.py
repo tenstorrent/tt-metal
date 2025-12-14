@@ -23,30 +23,10 @@ inverted_residual_setting = [
     bneck_conf(40, 5, 120, 48, True, "HS", 1, 1, input_height=14, input_width=14),
     bneck_conf(48, 5, 144, 48, True, "HS", 1, 1, input_height=14, input_width=14),
     bneck_conf(48, 5, 288, 96 // reduce_divider, True, "HS", 2, dilation, input_height=14, input_width=14),
-    bneck_conf(
-        96 // reduce_divider,
-        5,
-        576 // reduce_divider,
-        96 // reduce_divider,
-        True,
-        "HS",
-        1,
-        dilation,
-        input_height=7,
-        input_width=7,
-    ),
-    bneck_conf(
-        96 // reduce_divider,
-        5,
-        576 // reduce_divider,
-        96 // reduce_divider,
-        True,
-        "HS",
-        1,
-        dilation,
-        input_height=7,
-        input_width=7,
-    ),
+    # fmt: off
+    bneck_conf(96 // reduce_divider, 5, 576 // reduce_divider, 96 // reduce_divider, True, "HS", 1, dilation, input_height=7, input_width=7),
+    bneck_conf(96 // reduce_divider, 5, 576 // reduce_divider, 96 // reduce_divider, True, "HS", 1, dilation, input_height=7, input_width=7),
+    # fmt: on
 ]
 
 last_channel = adjust_channels(1024 // reduce_divider)
