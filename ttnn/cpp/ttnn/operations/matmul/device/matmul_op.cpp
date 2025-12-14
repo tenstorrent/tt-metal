@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1487,7 +1488,7 @@ std::vector<Tensor> matmul_batched_weights(
     const Tensor& input_tensor_a,
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    const struct Matmul& parameters,
+    const matmul::operation_attributes_t& parameters,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
@@ -1499,11 +1500,10 @@ std::vector<Tensor> matmul_batched_weights(
     std::vector<Tensor> input_tensors = input_tensors_b;
     input_tensors.insert(input_tensors.begin(), input_tensor_a);
 
-    return operation::run(
-        create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
+    return ttnn::prim::matmul(
         input_tensors,
-        optional_input_tensors,
-        {optional_output_tensor});
+        optional_output_tensor,
+        create_matmul_attributes(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}));
 }
 
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {

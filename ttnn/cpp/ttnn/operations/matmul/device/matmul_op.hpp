@@ -14,6 +14,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/matmul/device/tmp/matmul_1d_type.hpp"
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::matmul {
 
@@ -216,7 +217,7 @@ std::vector<Tensor> matmul_batched_weights(
     const Tensor& input_tensor_a,
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias = std::nullopt,
-    const struct Matmul& parameters = Matmul{},
+    const matmul::operation_attributes_t& parameters = {},
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn::operations::matmul

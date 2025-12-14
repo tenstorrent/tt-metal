@@ -1169,6 +1169,24 @@ MatmulDeviceOperation::invoke(
     return {attributes, tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
 }
 
+std::tuple<MatmulDeviceOperation::operation_attributes_t, MatmulDeviceOperation::tensor_args_t>
+MatmulDeviceOperation::invoke(
+    const std::vector<Tensor>& input_tensors,
+    const std::optional<Tensor>& optional_output_tensor,
+    const matmul::operation_attributes_t& attributes) {
+    if (!attributes.program_config.has_value()) {
+        uint32_t bias_single_tile_size = 0;
+
+        matmul::operation_attributes_t attributes_with_program_config = attributes;
+        attributes_with_program_config.program_config =
+            get_program_config(input_tensors.at(0), input_tensors.at(1), bias_single_tile_size, attributes);
+
+        return {attributes_with_program_config, tensor_args_t{input_tensors, {}, {optional_output_tensor}}};
+    }
+
+    return {attributes, tensor_args_t{input_tensors, {}, {optional_output_tensor}}};
+}
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 MatmulDeviceOperation::create_op_performance_model(
     const operation_attributes_t& operation_attributes,

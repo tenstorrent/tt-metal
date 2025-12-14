@@ -353,11 +353,14 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
     TT_FATAL(global_cb.has_value(), "global_cb must be provided");
     TT_FATAL(sub_device_id.has_value(), "sub_device_id must be provided");
 
+    std::vector<Tensor> input_tensors = input_tensors_b;
+    input_tensors.insert(input_tensors.begin(), input_tensor_a);
+
     return matmul_batched_weights(
         input_tensor_a,
         input_tensors_b,
         /*bias=*/std::nullopt,
-        Matmul{
+        matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,

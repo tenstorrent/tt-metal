@@ -55,6 +55,11 @@ struct MatmulDeviceOperation {
         const std::optional<Tensor>& bias = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const matmul::operation_attributes_t& attributes = matmul::operation_attributes_t());
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const std::vector<Tensor>& input_tensors,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const matmul::operation_attributes_t& attributes = matmul::operation_attributes_t());
 };
 
 MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
