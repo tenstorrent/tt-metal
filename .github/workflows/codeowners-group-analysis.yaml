@@ -862,43 +862,30 @@ jobs:
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Generate comment data
-        id: generate-comment
+      - name: Fetch team members and setup
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-          # Handle cases where analyze-codeowners job might be skipped (direct ping)
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
-          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
-          FILES_WITHOUT_OWNERS="${{ needs.analyze-codeowners.outputs.files-without-owners || '' }}"
-          APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
-          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
-          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
           CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
 
-          # Determine parameters based on trigger type
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
             PING_OWNERS="${{ github.event.inputs.ping-pending-owners }}"
             SEND_SLACK="${{ github.event.inputs.send-slack-notification }}"
             AUTHOR_NOTES="${{ github.event.inputs.author-notes }}"
           else
-            # Comment trigger - use parsed parameters
             CREATE_NEW="${{ needs.parse-comment.outputs.create-new-comment }}"
             PING_OWNERS="${{ needs.parse-comment.outputs.ping-pending-owners }}"
             SEND_SLACK="${{ needs.parse-comment.outputs.send-slack-notification }}"
             AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
           fi
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
-
-          echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
-
-          # Check for large PRs that might cause processing issues
+          echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK"
           if [ "$CHANGED_FILES_COUNT" -gt 200 ]; then
             echo "⚠️  WARNING: Large PR detected ($CHANGED_FILES_COUNT files). Comment generation may be slow."
           fi
 
+          # Fetch team members
           TEAM_MEMBERS=""
           if [ -n "$TEAMS" ]; then
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
@@ -923,11 +910,22 @@ jobs:
             done
           fi
           echo "$TEAM_MEMBERS" > "${RUNNER_TEMP}/team_members.txt"
+          echo "$PR_NUMBER" > "${RUNNER_TEMP}/pr_number.txt"
+          echo "$CREATE_NEW" > "${RUNNER_TEMP}/create_new.txt"
+          echo "$PING_OWNERS" > "${RUNNER_TEMP}/ping_owners.txt"
+          echo "$SEND_SLACK" > "${RUNNER_TEMP}/send_slack.txt"
+          echo "$AUTHOR_NOTES" > "${RUNNER_TEMP}/author_notes.txt"
+
+      - name: Build group data structures (Part 1 - Teams)
+        run: |
+          PR_NUMBER=$(cat "${RUNNER_TEMP}/pr_number.txt")
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
+          TEAM_MEMBERS=$(cat "${RUNNER_TEMP}/team_members.txt")
 
           declare -A GROUP_TYPE GROUP_NAME GROUP_MEMBERS_INFO GROUP_MEMBERS_LIST GROUP_FILES GROUP_FILES_HTML
-          declare -A GROUP_APPROVED_BY GROUP_IS_APPROVED
           GROUP_KEYS=()
           GROUP_INDEX=0
+
           if [ -n "$TEAMS" ]; then
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team_entry in "${TEAM_ARRAY[@]}"; do
@@ -984,7 +982,6 @@ jobs:
               GROUP_MEMBERS_LIST["$KEY"]="$team_members_list"
               file_list_html=""
               if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
-                # Count total files for this team
                 team_file_count=$(echo "$team_files" | tr ',' '\n' | wc -l)
                 file_list_html="\n  <details><summary>&#128193; Files owned by this team ($team_file_count files)</summary>\n\n"
                 IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
@@ -998,9 +995,29 @@ jobs:
                 file_list_html="$file_list_html\n  </details>"
               fi
               GROUP_FILES_HTML["$KEY"]="$file_list_html"
+
+              # Save to temp files
+              echo "${GROUP_TYPE[$KEY]}" > "${RUNNER_TEMP}/group_${KEY}_type.txt"
+              echo "${GROUP_NAME[$KEY]}" > "${RUNNER_TEMP}/group_${KEY}_name.txt"
+              echo "${GROUP_MEMBERS_INFO[$KEY]}" > "${RUNNER_TEMP}/group_${KEY}_members_info.txt"
+              echo "${GROUP_MEMBERS_LIST[$KEY]}" > "${RUNNER_TEMP}/group_${KEY}_members_list.txt"
+              echo "${GROUP_FILES[$KEY]}" > "${RUNNER_TEMP}/group_${KEY}_files.txt"
+              echo "$file_list_html" > "${RUNNER_TEMP}/group_${KEY}_files_html.txt"
+
               GROUP_INDEX=$((GROUP_INDEX + 1))
             done
           fi
+
+          echo "$GROUP_INDEX" > "${RUNNER_TEMP}/group_index.txt"
+          printf '%s\n' "${GROUP_KEYS[@]}" > "${RUNNER_TEMP}/group_keys.txt"
+
+      - name: Build group data structures (Part 2 - Individuals)
+        run: |
+          PR_NUMBER=$(cat "${RUNNER_TEMP}/pr_number.txt")
+          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
+          GROUP_INDEX=$(cat "${RUNNER_TEMP}/group_index.txt")
+          GROUP_KEYS=()
+          while IFS= read -r key; do GROUP_KEYS+=("$key"); done < "${RUNNER_TEMP}/group_keys.txt"
 
           if [ -n "$INDIVIDUALS" ]; then
             IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
@@ -1013,9 +1030,7 @@ jobs:
               sorted_files=$(echo "$files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
               KEY="pattern_$GROUP_INDEX"
               GROUP_KEYS+=("$KEY")
-              GROUP_TYPE["$KEY"]="pattern"
-              GROUP_NAME["$KEY"]="$pattern"
-              GROUP_FILES["$KEY"]="$sorted_files"
+
               all_owners="" usernames_list=""
               IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
               for owner_pair in "${OWNERS_ARRAY[@]}"; do
@@ -1024,11 +1039,11 @@ jobs:
                 all_owners="$all_owners$full_name, "
                 usernames_list="$usernames_list$username,"
               done
-              GROUP_MEMBERS_INFO["$KEY"]="Members: $(echo "$all_owners" | sed 's/, $//')"
-              GROUP_MEMBERS_LIST["$KEY"]="$(echo "$usernames_list" | sed 's/,$//')"
+              members_info="Members: $(echo "$all_owners" | sed 's/, $//')"
+              members_list="$(echo "$usernames_list" | sed 's/,$//')"
+
               file_list_html=""
               if [ -n "$files" ] && [ "$files" != "null" ]; then
-                # Count total files for this group
                 group_file_count=$(echo "$files" | tr ',' '\n' | wc -l)
                 file_list_html="\n  <details><summary>&#128193; Files owned by this group ($group_file_count files)</summary>\n\n"
                 IFS=',' read -ra FILES_ARRAY <<< "$files"
@@ -1037,12 +1052,35 @@ jobs:
                 done
                 file_list_html="$file_list_html\n  </details>"
               fi
-              GROUP_FILES_HTML["$KEY"]="$file_list_html"
+
+              # Save to temp files
+              echo "pattern" > "${RUNNER_TEMP}/group_${KEY}_type.txt"
+              echo "$pattern" > "${RUNNER_TEMP}/group_${KEY}_name.txt"
+              echo "$members_info" > "${RUNNER_TEMP}/group_${KEY}_members_info.txt"
+              echo "$members_list" > "${RUNNER_TEMP}/group_${KEY}_members_list.txt"
+              echo "$sorted_files" > "${RUNNER_TEMP}/group_${KEY}_files.txt"
+              echo "$file_list_html" > "${RUNNER_TEMP}/group_${KEY}_files_html.txt"
+
               GROUP_INDEX=$((GROUP_INDEX + 1))
             done
           fi
 
-          # Helper function to check if a file is owned by other groups (co-ownership)
+          printf '%s\n' "${GROUP_KEYS[@]}" > "${RUNNER_TEMP}/group_keys.txt"
+
+      - name: Split groups and check approvals
+        run: |
+          APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
+          GROUP_KEYS=()
+          while IFS= read -r key; do GROUP_KEYS+=("$key"); done < "${RUNNER_TEMP}/group_keys.txt"
+
+          declare -A GROUP_TYPE GROUP_NAME GROUP_FILES GROUP_MEMBERS_LIST
+          for key in "${GROUP_KEYS[@]}"; do
+            GROUP_TYPE["$key"]=$(cat "${RUNNER_TEMP}/group_${key}_type.txt")
+            GROUP_NAME["$key"]=$(cat "${RUNNER_TEMP}/group_${key}_name.txt")
+            GROUP_FILES["$key"]=$(cat "${RUNNER_TEMP}/group_${key}_files.txt")
+            GROUP_MEMBERS_LIST["$key"]=$(cat "${RUNNER_TEMP}/group_${key}_members_list.txt")
+          done
+
           file_has_coowners() {
             local file="$1"
             local current_key="$2"
@@ -1058,16 +1096,11 @@ jobs:
             [ $owner_count -gt 0 ] && return 0 || return 1
           }
 
-          # Split groups into exclusive and shared ownership
           SPLIT_GROUP_KEYS=()
-          declare -A SPLIT_GROUP_TYPE SPLIT_GROUP_NAME SPLIT_GROUP_FILES SPLIT_GROUP_MEMBERS_INFO SPLIT_GROUP_MEMBERS_LIST SPLIT_GROUP_FILES_HTML SPLIT_GROUP_IS_SHARED
-
           for key in "${GROUP_KEYS[@]}"; do
             files="${GROUP_FILES[$key]}"
             exclusive_files=""
             shared_files=""
-
-            # Categorize each file
             IFS=',' read -ra FILES_ARRAY <<< "$files"
             for file in "${FILES_ARRAY[@]}"; do
               [ -z "$file" ] && continue
@@ -1080,18 +1113,11 @@ jobs:
               fi
             done
 
-            # Create entries based on what we found
+            PR_NUMBER=$(cat "${RUNNER_TEMP}/pr_number.txt")
+
             if [ -n "$exclusive_files" ]; then
               new_key="${key}_exclusive"
               SPLIT_GROUP_KEYS+=("$new_key")
-              SPLIT_GROUP_TYPE["$new_key"]="${GROUP_TYPE[$key]}"
-              SPLIT_GROUP_NAME["$new_key"]="${GROUP_NAME[$key]}"
-              SPLIT_GROUP_FILES["$new_key"]="$exclusive_files"
-              SPLIT_GROUP_MEMBERS_INFO["$new_key"]="${GROUP_MEMBERS_INFO[$key]}"
-              SPLIT_GROUP_MEMBERS_LIST["$new_key"]="${GROUP_MEMBERS_LIST[$key]}"
-              SPLIT_GROUP_IS_SHARED["$new_key"]="false"
-
-              # Build file list HTML for exclusive files
               file_count=$(echo "$exclusive_files" | tr ',' '\n' | wc -l)
               file_list_html="\n  <details><summary>&#128193; Files owned by this ${GROUP_TYPE[$key]} ($file_count files)</summary>\n\n"
               IFS=',' read -ra EX_FILES_ARRAY <<< "$exclusive_files"
@@ -1103,94 +1129,8 @@ jobs:
                 fi
               done
               file_list_html="$file_list_html\n  </details>"
-              SPLIT_GROUP_FILES_HTML["$new_key"]="$file_list_html"
-            fi
 
-            if [ -n "$shared_files" ]; then
-              new_key="${key}_shared"
-              SPLIT_GROUP_KEYS+=("$new_key")
-              SPLIT_GROUP_TYPE["$new_key"]="${GROUP_TYPE[$key]}"
-              SPLIT_GROUP_NAME["$new_key"]="${GROUP_NAME[$key]}"
-              SPLIT_GROUP_FILES["$new_key"]="$shared_files"
-              SPLIT_GROUP_MEMBERS_INFO["$new_key"]="${GROUP_MEMBERS_INFO[$key]}"
-              SPLIT_GROUP_MEMBERS_LIST["$new_key"]="${GROUP_MEMBERS_LIST[$key]}"
-              SPLIT_GROUP_IS_SHARED["$new_key"]="true"
-
-              # Build file list HTML for shared files
-              file_count=$(echo "$shared_files" | tr ',' '\n' | wc -l)
-              file_list_html="\n  <details><summary>&#128193; Files owned by this ${GROUP_TYPE[$key]} ($file_count files)</summary>\n\n"
-              IFS=',' read -ra SH_FILES_ARRAY <<< "$shared_files"
-              for file in "${SH_FILES_ARRAY[@]}"; do
-                if [ -n "$file" ]; then
-                  escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                  file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
-                  file_list_html="$file_list_html  - [<code>$escaped_file</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash)\n"
-                fi
-              done
-              file_list_html="$file_list_html\n  </details>"
-              SPLIT_GROUP_FILES_HTML["$new_key"]="$file_list_html"
-            fi
-          done
-
-          # Now process approvals for split groups
-          declare -A SPLIT_GROUP_IS_APPROVED SPLIT_GROUP_APPROVED_BY
-
-          for key in "${SPLIT_GROUP_KEYS[@]}"; do
-            files="${SPLIT_GROUP_FILES[$key]}"
-            members="${SPLIT_GROUP_MEMBERS_LIST[$key]}"
-            is_shared="${SPLIT_GROUP_IS_SHARED[$key]}"
-
-            if [ "$is_shared" = "true" ]; then
-              # For shared files, collect all co-owner members
-              combined_members="$members"
-              for file in $(echo "$files" | tr ',' '\n'); do
-                [ -z "$file" ] && continue
-                # Find all groups that own this file
-                for other_key in "${SPLIT_GROUP_KEYS[@]}"; do
-                  if [ "$other_key" != "$key" ]; then
-                    other_files="${SPLIT_GROUP_FILES[$other_key]}"
-                    if echo ",$other_files," | grep -q ",$file,"; then
-                      other_members="${SPLIT_GROUP_MEMBERS_LIST[$other_key]}"
-                      [ -n "$other_members" ] && combined_members="$combined_members,$other_members"
-                    fi
-                  fi
-                done
-              done
-
-              # Check for approvals from any co-owner
-              shared_approved=""
-              if [ -n "$combined_members" ]; then
-                IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
-                seen_members=""
-                for member in "${COMBINED_ARRAY[@]}"; do
-                  [ -z "$member" ] && continue
-                  # Skip if already seen (avoid duplicates)
-                  if echo ",$seen_members," | grep -q ",$member,"; then
-                    continue
-                  fi
-                  seen_members="$seen_members,$member"
-
-                  if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                    # Only show as shared if the approver is NOT from this group
-                    if ! echo ",$members," | grep -q ",$member,"; then
-                      USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
-                      USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                      [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
-                      shared_approved="$shared_approved$USER_NAME, "
-                    fi
-                  fi
-                done
-              fi
-
-              shared_approved=$(echo "$shared_approved" | sed 's/, $//')
-              if [ -n "$shared_approved" ]; then
-                SPLIT_GROUP_IS_APPROVED["$key"]="true"
-                SPLIT_GROUP_APPROVED_BY["$key"]="$shared_approved (shared)"
-              else
-                SPLIT_GROUP_IS_APPROVED["$key"]="false"
-              fi
-            else
-              # For exclusive files, only count approvals from this group's members
+              members="${GROUP_MEMBERS_LIST[$key]}"
               direct_approved=""
               if [ -n "$members" ]; then
                 IFS=',' read -ra MEMBERS_ARRAY <<< "$members"
@@ -1204,25 +1144,114 @@ jobs:
                   fi
                 done
               fi
-
               direct_approved=$(echo "$direct_approved" | sed 's/, $//')
+
+              cp "${RUNNER_TEMP}/group_${key}_type.txt" "${RUNNER_TEMP}/split_${new_key}_type.txt"
+              cp "${RUNNER_TEMP}/group_${key}_name.txt" "${RUNNER_TEMP}/split_${new_key}_name.txt"
+              cp "${RUNNER_TEMP}/group_${key}_members_info.txt" "${RUNNER_TEMP}/split_${new_key}_members_info.txt"
+              echo "$file_list_html" > "${RUNNER_TEMP}/split_${new_key}_files_html.txt"
+              echo "$direct_approved" > "${RUNNER_TEMP}/split_${new_key}_approved_by.txt"
               if [ -n "$direct_approved" ]; then
-                SPLIT_GROUP_IS_APPROVED["$key"]="true"
-                SPLIT_GROUP_APPROVED_BY["$key"]="$direct_approved"
+                echo "true" > "${RUNNER_TEMP}/split_${new_key}_is_approved.txt"
               else
-                SPLIT_GROUP_IS_APPROVED["$key"]="false"
+                echo "false" > "${RUNNER_TEMP}/split_${new_key}_is_approved.txt"
+              fi
+            fi
+
+            if [ -n "$shared_files" ]; then
+              new_key="${key}_shared"
+              SPLIT_GROUP_KEYS+=("$new_key")
+              file_count=$(echo "$shared_files" | tr ',' '\n' | wc -l)
+              file_list_html="\n  <details><summary>&#128193; Files owned by this ${GROUP_TYPE[$key]} ($file_count files)</summary>\n\n"
+              IFS=',' read -ra SH_FILES_ARRAY <<< "$shared_files"
+              for file in "${SH_FILES_ARRAY[@]}"; do
+                if [ -n "$file" ]; then
+                  escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
+                  file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                  file_list_html="$file_list_html  - [<code>$escaped_file</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash)\n"
+                fi
+              done
+              file_list_html="$file_list_html\n  </details>"
+
+              members="${GROUP_MEMBERS_LIST[$key]}"
+              combined_members="$members"
+              for file in $(echo "$shared_files" | tr ',' '\n'); do
+                [ -z "$file" ] && continue
+                for other_key in "${SPLIT_GROUP_KEYS[@]}"; do
+                  if [[ "$other_key" != "${key}_"* ]]; then
+                    other_base="${other_key%_*}"
+                    if [ -f "${RUNNER_TEMP}/group_${other_base}_files.txt" ]; then
+                      other_files=$(cat "${RUNNER_TEMP}/group_${other_base}_files.txt")
+                      if echo ",$other_files," | grep -q ",$file,"; then
+                        other_members=$(cat "${RUNNER_TEMP}/group_${other_base}_members_list.txt")
+                        [ -n "$other_members" ] && combined_members="$combined_members,$other_members"
+                      fi
+                    fi
+                  fi
+                done
+              done
+
+              shared_approved=""
+              if [ -n "$combined_members" ]; then
+                IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
+                seen_members=""
+                for member in "${COMBINED_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
+                  if echo ",$seen_members," | grep -q ",$member,"; then
+                    continue
+                  fi
+                  seen_members="$seen_members,$member"
+                  if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                    if ! echo ",$members," | grep -q ",$member,"; then
+                      USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                      USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                      [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
+                      shared_approved="$shared_approved$USER_NAME, "
+                    fi
+                  fi
+                done
+              fi
+              shared_approved=$(echo "$shared_approved" | sed 's/, $//')
+
+              cp "${RUNNER_TEMP}/group_${key}_type.txt" "${RUNNER_TEMP}/split_${new_key}_type.txt"
+              cp "${RUNNER_TEMP}/group_${key}_name.txt" "${RUNNER_TEMP}/split_${new_key}_name.txt"
+              cp "${RUNNER_TEMP}/group_${key}_members_info.txt" "${RUNNER_TEMP}/split_${new_key}_members_info.txt"
+              echo "$file_list_html" > "${RUNNER_TEMP}/split_${new_key}_files_html.txt"
+              if [ -n "$shared_approved" ]; then
+                echo "$shared_approved (shared)" > "${RUNNER_TEMP}/split_${new_key}_approved_by.txt"
+                echo "true" > "${RUNNER_TEMP}/split_${new_key}_is_approved.txt"
+              else
+                echo "" > "${RUNNER_TEMP}/split_${new_key}_approved_by.txt"
+                echo "false" > "${RUNNER_TEMP}/split_${new_key}_is_approved.txt"
               fi
             fi
           done
 
+          printf '%s\n' "${SPLIT_GROUP_KEYS[@]}" > "${RUNNER_TEMP}/split_group_keys.txt"
+
+      - name: Generate comment markdown
+        id: generate-comment
+        run: |
+          PR_NUMBER=$(cat "${RUNNER_TEMP}/pr_number.txt")
+          CREATE_NEW=$(cat "${RUNNER_TEMP}/create_new.txt")
+          PING_OWNERS=$(cat "${RUNNER_TEMP}/ping_owners.txt")
+          SEND_SLACK=$(cat "${RUNNER_TEMP}/send_slack.txt")
+          AUTHOR_NOTES=$(cat "${RUNNER_TEMP}/author_notes.txt")
+          FILES_WITHOUT_OWNERS="${{ needs.analyze-codeowners.outputs.files-without-owners || '' }}"
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
+          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
+
+          SPLIT_GROUP_KEYS=()
+          while IFS= read -r key; do SPLIT_GROUP_KEYS+=("$key"); done < "${RUNNER_TEMP}/split_group_keys.txt"
+
           PENDING_GROUPS="" APPROVED_GROUPS="" PENDING_COUNT=0 APPROVED_COUNT=0
           for key in "${SPLIT_GROUP_KEYS[@]}"; do
-            group_type="${SPLIT_GROUP_TYPE[$key]}"
-            group_name="${SPLIT_GROUP_NAME[$key]}"
-            members_info="${SPLIT_GROUP_MEMBERS_INFO[$key]}"
-            file_list_html="${SPLIT_GROUP_FILES_HTML[$key]}"
-            is_approved="${SPLIT_GROUP_IS_APPROVED[$key]}"
-            approved_by="${SPLIT_GROUP_APPROVED_BY[$key]}"
+            group_type=$(cat "${RUNNER_TEMP}/split_${key}_type.txt")
+            group_name=$(cat "${RUNNER_TEMP}/split_${key}_name.txt")
+            members_info=$(cat "${RUNNER_TEMP}/split_${key}_members_info.txt")
+            file_list_html=$(cat "${RUNNER_TEMP}/split_${key}_files_html.txt")
+            is_approved=$(cat "${RUNNER_TEMP}/split_${key}_is_approved.txt")
+            approved_by=$(cat "${RUNNER_TEMP}/split_${key}_approved_by.txt")
             [ "$group_type" = "team" ] && type_label="Team" || type_label="Group"
             if [ "$is_approved" = "true" ]; then
               [ -n "$APPROVED_GROUPS" ] && APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n"
@@ -1250,13 +1279,12 @@ jobs:
             fi
             COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\n$STATUS_MESSAGE\n\n$SUMMARY_LINE\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
           fi
-          [ "$NO_OWNERS_AVAILABLE" = "true" ] && COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
+
           [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ] && COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
+
           if [ -n "$FILES_WITHOUT_OWNERS" ]; then
             FILE_COUNT=$(echo "$FILES_WITHOUT_OWNERS" | wc -l)
             COMMENT="$COMMENT\n\n---\n\n### ⚠️ Files Without CodeOwners\n\n$FILE_COUNT files have no designated code owners."
-
-            # Limit the number of files shown to avoid comment size limits
             if [ "$FILE_COUNT" -le 20 ]; then
               FILES_WITHOUT_OWNERS_LIST=""
               IFS=$'\n' read -ra FILES_ARRAY <<< "$FILES_WITHOUT_OWNERS"
@@ -1276,38 +1304,36 @@ jobs:
               done
               COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST"
             fi
-
             COMMENT="$COMMENT\n\n💡 **Suggestion:** Consider adding these files to the CODEOWNERS file for better review coverage."
           fi
 
-            # Output comment for next step (use temp file for large comments)
-            COMMENT_FILE=$(mktemp)
-            printf '%b\n' "$COMMENT" > "$COMMENT_FILE"
-            {
-              echo "comment<<EOF"
-              cat "$COMMENT_FILE"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
-            rm -f "$COMMENT_FILE"
+          COMMENT_FILE=$(mktemp)
+          printf '%b\n' "$COMMENT" > "$COMMENT_FILE"
+          {
+            echo "comment<<EOF"
+            cat "$COMMENT_FILE"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          rm -f "$COMMENT_FILE"
+          {
+            echo "pr-number<<EOF"
+            echo "$PR_NUMBER"
+            echo "EOF"
+            echo "create-new<<EOF"
+            echo "$CREATE_NEW"
+            echo "EOF"
+            echo "ping-owners<<EOF"
+            echo "$PING_OWNERS"
+            echo "EOF"
+            echo "send-slack<<EOF"
+            echo "$SEND_SLACK"
+            echo "EOF"
+            echo "author-notes<<EOF"
+            echo "$AUTHOR_NOTES"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
-            # Output other data for next steps
-            {
-              echo "pr-number<<EOF"
-              echo "$PR_NUMBER"
-              echo "EOF"
-              echo "create-new<<EOF"
-              echo "$CREATE_NEW"
-              echo "EOF"
-              echo "ping-owners<<EOF"
-              echo "$PING_OWNERS"
-              echo "EOF"
-              echo "send-slack<<EOF"
-              echo "$SEND_SLACK"
-              echo "EOF"
-              echo "author-notes<<EOF"
-              echo "$AUTHOR_NOTES"
-              echo "EOF"
-            } >> $GITHUB_OUTPUT
+
 
       - name: Post comment to PR
         run: |
@@ -1515,7 +1541,6 @@ jobs:
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
 
-          # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
             local github_team="$1"
             case "$github_team" in
@@ -1588,7 +1613,6 @@ jobs:
             fi
           fi
 
-          # Define the find_slack_user_id function (uses pre-fetched user list)
           find_slack_user_id() {
             local full_name="$1"
             local github_username="$2"
@@ -1630,7 +1654,6 @@ jobs:
               echo "Trying word-by-word fuzzy matching for: $full_name" >&2
               IFS=' ' read -ra NAME_WORDS <<< "$full_name"
 
-              # Try each word individually - use the first word that has exactly one match
               for word in "${NAME_WORDS[@]}"; do
                 if [ ${#word} -ge 3 ]; then
                   echo "  Checking word: '$word'" >&2
@@ -1639,7 +1662,6 @@ jobs:
                   WORD_MATCHES=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id + "|" + (.real_name // .profile.real_name // .name)')
 
                   if [ -n "$WORD_MATCHES" ]; then
-                    # Count unique matches for this word
                     MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
 
                     if [ "$MATCH_COUNT" -eq 1 ]; then
@@ -1657,7 +1679,6 @@ jobs:
                 fi
               done
 
-              # If no unique word match found, report it
               if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
                 echo "⚠️  No unique word matches found for: $full_name" >&2
               fi
@@ -1780,7 +1801,6 @@ jobs:
             GITHUB_USERNAMES=$(echo "$AUTHOR_NOTES" | grep -oE '@[a-zA-Z0-9_-]+' | grep -v '@.*/' | sort | uniq)
 
             if [ -n "$GITHUB_USERNAMES" ]; then
-              echo "Found GitHub usernames in author notes: $GITHUB_USERNAMES"
 
               for github_mention in $GITHUB_USERNAMES; do
                 if [ -n "$github_mention" ]; then
@@ -1823,7 +1843,6 @@ jobs:
             # Find GitHub team mentions and optionally convert to Slack groups
             GITHUB_TEAMS=$(echo "$AUTHOR_NOTES" | grep -oE '@[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | sort | uniq)
             if [ -n "$GITHUB_TEAMS" ]; then
-              echo "Found GitHub team mentions: $GITHUB_TEAMS"
               for team_mention in $GITHUB_TEAMS; do
                 # Check if this team has a corresponding Slack group
                 SLACK_GROUP_ID=$(get_slack_group_id "$team_mention")
@@ -2391,7 +2410,6 @@ jobs:
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
 
-          # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
 
           # Check if we have any owners to ping
@@ -2522,7 +2540,6 @@ jobs:
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
 
-          # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
             local github_team="$1"
             case "$github_team" in
@@ -2590,12 +2607,10 @@ jobs:
                 echo "Trying word-by-word fuzzy matching for: $full_name" >&2
                 IFS=' ' read -ra NAME_WORDS <<< "$full_name"
 
-                # Try each word individually - use the first word that has exactly one match
                 for word in "${NAME_WORDS[@]}"; do
                   if [ ${#word} -ge 3 ]; then
                     echo "  Checking word: '$word'" >&2
 
-                    # Skip very common words that might cause false matches
                     if [ "$word" = "Tenstorrent" ] || [ "$word" = "Inc" ] || [ "$word" = "LLC" ] || [ "$word" = "ULC" ] || [ "$word" = "Corp" ] || [ "$word" = "Ltd" ]; then
                       echo "  '$word' is too common, skipping" >&2
                       continue
@@ -2605,7 +2620,6 @@ jobs:
                     WORD_MATCHES=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id + "|" + (.real_name // .profile.real_name // .name)')
 
                     if [ -n "$WORD_MATCHES" ]; then
-                      # Count unique matches for this word
                       MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
 
                       if [ "$MATCH_COUNT" -eq 1 ]; then
@@ -2623,7 +2637,6 @@ jobs:
                   fi
                 done
 
-                # If no unique word match found, report it
                 if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
                   echo "⚠️  No unique word matches found for: $full_name" >&2
                 fi
@@ -2636,7 +2649,6 @@ jobs:
               fi
             }
 
-            # Build Slack message with user mentions and group mentions
             SLACK_MESSAGE="🔔 *CodeOwners Review Request*"$'\n\n'"Hi"
 
             # Add Slack group mentions first
@@ -2650,7 +2662,6 @@ jobs:
               done
             fi
 
-            # Add individual user mentions
             SLACK_USER_MENTIONS=""
             if [ -n "$SELECTED_OWNERS" ]; then
               IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
@@ -2742,7 +2753,6 @@ jobs:
 
             # Add author notes if provided
             if [ -n "$AUTHOR_NOTES" ]; then
-              echo "Processing author notes for GitHub username mentions..."
 
               # Process author notes to convert @username to full names or Slack mentions
               PROCESSED_NOTES="$AUTHOR_NOTES"
@@ -2762,7 +2772,6 @@ jobs:
               GITHUB_USERNAMES=$(echo "$AUTHOR_NOTES" | grep -oE '@[a-zA-Z0-9_-]+' | grep -v '@.*/' | sort | uniq)
 
               if [ -n "$GITHUB_USERNAMES" ]; then
-                echo "Found GitHub usernames in author notes: $GITHUB_USERNAMES"
 
                 for github_mention in $GITHUB_USERNAMES; do
                   if [ -n "$github_mention" ]; then
@@ -2812,7 +2821,6 @@ jobs:
               # Find GitHub team mentions and optionally convert to Slack groups
               GITHUB_TEAMS=$(echo "$PROCESSED_NOTES" | grep -oE '@[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | sort | uniq)
               if [ -n "$GITHUB_TEAMS" ]; then
-                echo "Found GitHub team mentions: $GITHUB_TEAMS"
                 for team_mention in $GITHUB_TEAMS; do
                   # Check if this team has a corresponding Slack group
                   SLACK_GROUP_ID=$(get_slack_group_id "$team_mention")
@@ -2881,9 +2889,6 @@ jobs:
             rm -f /tmp/slack_message.txt
 
           elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
-            echo "Slack notification enabled but no owners available for notification (only PR author is codeowner)"
           elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
-            echo "Slack notification enabled but no pending owners or groups to notify"
           else
-            echo "Slack notification disabled"
           fi
