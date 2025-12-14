@@ -31,7 +31,8 @@ ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     tensix_builder_(std::move(tensix_builder)),
     channel_mapping_(std::move(channel_mapping)),
     connection_mapping_(std::move(connection_mapping)),
-    connection_registry_(std::move(connection_registry)) {
+    connection_registry_(std::move(connection_registry)),
+    is_inter_mesh_(local_node.mesh_id != location.remote_node.mesh_id) {
     TT_FATAL(erisc_builder_ != nullptr, "Erisc builder cannot be null");
 }
 
@@ -82,7 +83,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     } else {
         // Check if this device has a Z router
         bool has_z = fabric_context.has_z_router_on_device(device->id());
-        connection_mapping = RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z);
+        // Enable VC1 for intra-mesh routers when intermesh VC is configured
+        bool enable_vc1 = !is_inter_mesh_router && intermesh_config.requires_vc1;
+        connection_mapping = RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z, enable_vc1);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -378,13 +381,13 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
         // 2. If downstream is inter-mesh, skip VC1 connections
         if (vc == 1) {
             // Skip VC1 if source is inter-mesh (inter-mesh routers don't have VC1)
-            if (erisc_builder_->isInterMesh) {
+            if (is_inter_mesh_) {
                 log_debug(tt::LogFabric, "Skipping VC1 connections (source is inter-mesh router)");
                 continue;
             }
 
             // Skip VC1 if downstream is inter-mesh (inter-mesh routers don't accept VC1)
-            if (downstream_router.erisc_builder_->isInterMesh) {
+            if (downstream_router.is_inter_mesh_) {
                 log_debug(tt::LogFabric, "Skipping VC1 connections (downstream is inter-mesh router)");
                 continue;
             }
@@ -412,8 +415,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 uint32_t downstream_vc = target.target_vc;
 
                 // Apply VC crossover rule: Inter-mesh VC0 → Intra-mesh VC1
-                bool is_inter_to_intra_crossover = erisc_builder_->isInterMesh && !downstream_router.erisc_builder_->isInterMesh;
-
+                bool is_inter_to_intra_crossover = is_inter_mesh_ && !downstream_router.is_inter_mesh_;
                 if (is_inter_to_intra_crossover && upstream_vc == 0 && is_2D_routing) {
                     // Inter-mesh VC0 crosses over to intra-mesh VC1
                     downstream_vc = 1;
@@ -431,10 +433,8 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 }
 
                 // Get target builder using the adjusted sender channel
-                auto* downstream_builder = downstream_router.get_builder_for_vc_channel(
-                    downstream_vc, actual_target_sender_channel);
-
-                // Get downstream internal channel mapping
+                auto* downstream_builder =
+                    downstream_router.get_builder_for_vc_channel(downstream_vc, actual_target_sender_channel);
                 auto downstream_mapping = downstream_router.channel_mapping_.get_sender_mapping(
                     downstream_vc, actual_target_sender_channel);
                 uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
@@ -595,8 +595,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
         // Set FABRIC_2D_VC1_ACTIVE when VC1 is configured and needed
         // VC1 is used for inter-mesh routing in multi-mesh topologies
-        bool vc1_active =
-            erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0 && !erisc_builder_->isInterMesh;
+        bool vc1_active = channel_mapping_.get_num_virtual_channels() > 1;
         if (vc1_active) {
             defines["FABRIC_2D_VC1_ACTIVE"] = "";
         }

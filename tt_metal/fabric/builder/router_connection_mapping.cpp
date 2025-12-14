@@ -54,7 +54,7 @@ RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirectio
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
-    Topology topology, RoutingDirection direction, bool has_z) {
+    Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1) {
     RouterConnectionMapping mapping;
 
     // VC0 receiver_channel channels for mesh routers
@@ -139,15 +139,17 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         // Add VC1 targets for intra-mesh routers (to forward inter-mesh traffic)
         // VC1 connections are only for intra-mesh routers in multi-mesh topologies
         // They forward inter-mesh traffic that was received via VC1
-        for (size_t i = 0; i < outbound_directions.size(); ++i) {
-            mapping.add_target(
-                1,  // VC1 - for inter-mesh traffic forwarding
-                0,  // Receiver channel 0 (VC1 only has one receiver channel)
-                ConnectionTarget(
-                    ConnectionType::INTRA_MESH,
-                    1,      // Target VC1
-                    i,      // Target sender channel (0-2 for VC1)
-                    outbound_directions[i]));
+        if (enable_vc1) {
+            for (size_t i = 0; i < outbound_directions.size(); ++i) {
+                mapping.add_target(
+                    1,  // VC1 - for inter-mesh traffic forwarding
+                    0,  // Receiver channel 0 (VC1 only has one receiver channel)
+                    ConnectionTarget(
+                        ConnectionType::INTRA_MESH,
+                        1,  // Target VC1
+                        i,  // Target sender channel (0-2 for VC1)
+                        outbound_directions[i]));
+            }
         }
     }
 

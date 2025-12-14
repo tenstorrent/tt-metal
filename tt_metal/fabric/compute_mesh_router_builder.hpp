@@ -190,6 +190,7 @@ private:
     FabricRouterChannelMapping channel_mapping_;
     RouterConnectionMapping connection_mapping_;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
+    bool is_inter_mesh_;  // True if this router connects different meshes
 };
 
 }  // namespace tt::tt_fabric

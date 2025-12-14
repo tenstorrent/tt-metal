@@ -85,7 +85,7 @@ public:
         bool has_tensix_extension,
         RouterVariant variant,
         const IntermeshVCConfig* intermesh_config,
-        bool is_inter_mesh = false);
+        bool is_inter_mesh_router = false);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
