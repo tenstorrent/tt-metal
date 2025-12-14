@@ -1488,6 +1488,14 @@ jobs:
                 echo "U08TVGQGGAE"
                 return 0
                 ;;
+              "ncvetkovicTT")
+                echo "U07AUABTEP6"
+                return 0
+                ;;
+              "jvegaTT")
+                echo "U07M7QZ0BQA"
+                return 0
+                ;;
             esac
 
             # Try exact matching first
@@ -2438,6 +2446,14 @@ jobs:
                   ;;
                 "nsextonTT")
                   echo "U08TVGQGGAE"
+                  return 0
+                  ;;
+                "ncvetkovicTT")
+                  echo "U07AUABTEP6"
+                  return 0
+                  ;;
+                "jvegaTT")
+                  echo "U07M7QZ0BQA"
                   return 0
                   ;;
               esac
