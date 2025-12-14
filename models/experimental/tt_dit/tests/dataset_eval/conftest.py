@@ -3,6 +3,7 @@
 
 import pytest
 import json
+import ttnn
 from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 from ...pipelines.motif.pipeline_motif import MotifPipeline
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
@@ -90,3 +91,51 @@ def dit_pipeline(model_id):
 @pytest.fixture
 def model_metadata(model_id):
     return targets_setup[model_id]
+
+
+@pytest.fixture
+def device_params(request, model_id):
+    """Return device_params based on model_id, with optional parametrization override."""
+
+    # If parametrized (indirect=True), use that value as base
+    params = getattr(request, "param", {}).copy()
+
+    # Define device_params per model based on performance tests
+    model_device_params = {
+        "flux.1-dev": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 50000000,
+        },
+        "flux.1-schnell": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 50000000,
+        },
+        "stable-diffusion-3.5-large": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 25000000,
+        },
+        "motif-image-6b-preview": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 31000000,
+        },
+        "mochi-1-preview": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+        "wan2.2": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+    }
+
+    # If no parametrization, use model-specific params
+    if not params:
+        params = model_device_params.get(model_id, {"fabric_config": ttnn.FabricConfig.FABRIC_1D})
+    # If parametrized, merge with model-specific (parametrized takes precedence)
+    else:
+        model_defaults = model_device_params.get(model_id, {})
+        params = {**model_defaults, **params}  # Parametrized overrides model defaults
+
+    return params

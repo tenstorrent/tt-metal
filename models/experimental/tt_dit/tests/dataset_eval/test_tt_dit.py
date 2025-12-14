@@ -150,13 +150,13 @@ def check_accuracy(num_prompts, score, score_key, model_info):
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize(
-    "device_params",
-    # [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
-    # [{"fabric_config": ttnn.FabricConfig.FABRIC_1D,"trace_region_size": 50000000}],
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+# @pytest.mark.parametrize(
+#    "device_params",
+# [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+# [{"fabric_config": ttnn.FabricConfig.FABRIC_1D,"trace_region_size": 50000000}],
+#    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+#    indirect=True,
+# )
 def test_tt_dit_accuracy(
     *,
     mesh_device: ttnn.MeshDevice,
