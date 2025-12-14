@@ -158,8 +158,8 @@ def test_sd35_new_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     seed=0,  # Different seed for each run
                     traced=True,
-                    timer=benchmark_profiler,
-                    timer_iteration=i,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 

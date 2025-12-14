@@ -124,6 +124,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_parallel_config,
         num_links,
         use_cache,
+        checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         boundary_ratio: Optional[float] = None,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
@@ -132,23 +133,19 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     ):
         super().__init__()
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="tokenizer", trust_remote_code=True
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
         self.text_encoder = UMT5EncoderModel.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="text_encoder", trust_remote_code=True
+            checkpoint_name, subfolder="text_encoder", trust_remote_code=True
         )
-        self.vae = AutoencoderKLWan.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae", trust_remote_code=True
-        )
+        self.vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="scheduler", trust_remote_code=True
+            checkpoint_name, subfolder="scheduler", trust_remote_code=True
         )
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", trust_remote_code=True
+            checkpoint_name, subfolder="transformer", trust_remote_code=True
         )
         self.torch_transformer_2 = TorchWanTransformer3DModel.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer_2", trust_remote_code=True
+            checkpoint_name, subfolder="transformer_2", trust_remote_code=True
         )
 
         self.dit_ccl_manager = CCLManager(
@@ -196,7 +193,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     @staticmethod
     def create_pipeline(
-        mesh_device, sp_axis=None, tp_axis=None, num_links=None, dynamic_load=None, topology=None, is_fsdp=None
+        mesh_device,
+        checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        sp_axis=None,
+        tp_axis=None,
+        num_links=None,
+        dynamic_load=None,
+        topology=None,
+        is_fsdp=None,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -265,6 +269,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
+            checkpoint_name=checkpoint_name,
         )
 
     def _load_transformer1(self):
@@ -590,6 +595,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         guidance_scale: float = 5.0,
         guidance_scale_2: Optional[float] = None,
         num_videos_per_prompt: Optional[int] = 1,
+        seed: Optional[int] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
@@ -602,6 +608,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
+        traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
@@ -749,6 +756,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         #     else self.transformer_2.config.in_channels
         # )
         num_channels_latents = self.torch_transformer.config.in_channels
+        if seed is not None:
+            torch.manual_seed(seed)
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -914,3 +923,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             return (video,)
 
         return WanPipelineOutput(frames=video)
+
+    def run_single_prompt(self, *args, **kwargs):
+        return self.__call__(*args, **kwargs).frames[0]

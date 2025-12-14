@@ -6,6 +6,8 @@ import json
 from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 from ...pipelines.motif.pipeline_motif import MotifPipeline
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
+from ...pipelines.mochi.pipeline_mochi import MochiPipeline
+from ...pipelines.wan.pipeline_wan import WanPipeline
 import os
 
 targets_setup = json.load(open(os.path.join(os.path.dirname(__file__), "eval_targets.json")))
@@ -38,7 +40,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--num-inference-steps",
         action="store",
-        default=28,
+        default=None,
         type=int,
         help="Number of inference steps (default: 28)",
     )
@@ -79,6 +81,8 @@ def dit_pipeline(model_id):
         "flux.1-schnell": Flux1Pipeline,
         "stable-diffusion-3.5-large": StableDiffusion3Pipeline,
         "motif-image-6b-preview": MotifPipeline,
+        "mochi-1-preview": MochiPipeline,
+        "wan2.2": WanPipeline,
     }
     return pipeline_map[model_id]
 

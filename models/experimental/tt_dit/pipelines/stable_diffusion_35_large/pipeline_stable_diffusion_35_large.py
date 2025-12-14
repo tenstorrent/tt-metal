@@ -430,10 +430,10 @@ class StableDiffusion3Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> List[Image.Image]:
-        with timer("total", timer_iteration) if timer else nullcontext():
+        with profiler("total", profiler_iteration) if profiler else nullcontext():
             batch_size = self._prepared_batch_size
             num_images_per_prompt = self._prepared_num_images_per_prompt
             width = self._prepared_width
@@ -460,7 +460,7 @@ class StableDiffusion3Pipeline:
 
             logger.info("encoding prompts...")
 
-            with timer("encoder", timer_iteration) if timer else nullcontext():
+            with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
@@ -475,8 +475,8 @@ class StableDiffusion3Pipeline:
                     max_t5_sequence_length=max_t5_sequence_length,
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     clip_skip=clip_skip,
-                    timer=timer,
-                    timer_iteration=timer_iteration,
+                    profiler=profiler,
+                    profiler_iteration=profiler_iteration,
                 )
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 1D to 2D
@@ -577,9 +577,9 @@ class StableDiffusion3Pipeline:
 
             logger.info("denoising...")
 
-            with timer("denoising", timer_iteration) if timer else nullcontext():
+            with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
-                    with timer(f"denoising_step_{i}", timer_iteration) if timer else nullcontext():
+                    with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
                         sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
                         tt_timestep_list = []
@@ -619,7 +619,7 @@ class StableDiffusion3Pipeline:
 
             logger.info("decoding image...")
 
-            with timer("vae", timer_iteration) if timer else nullcontext():
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 decoded_output = self._vae_decode(tt_latents_step_list[self.vae_submesh_idx], width, height)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
 
@@ -634,11 +634,11 @@ class StableDiffusion3Pipeline:
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
 
-        if timer:
-            logger.info(f"prompt encoding duration: {timer.get_duration('encoder', timer_iteration)}")
-            logger.info(f"denoising duration: {timer.get_duration('denoising', timer_iteration)}")
-            logger.info(f"image decoding duration: {timer.get_duration('vae', timer_iteration)}")
-            logger.info(f"total runtime: {timer.get_duration('total', timer_iteration)}")
+        if profiler:
+            logger.info(f"prompt encoding duration: {profiler.get_duration('encoder', profiler_iteration)}")
+            logger.info(f"denoising duration: {profiler.get_duration('denoising', profiler_iteration)}")
+            logger.info(f"image decoding duration: {profiler.get_duration('vae', profiler_iteration)}")
+            logger.info(f"total runtime: {profiler.get_duration('total', profiler_iteration)}")
 
         return output
 
@@ -846,12 +846,12 @@ class StableDiffusion3Pipeline:
         max_t5_sequence_length: int,
         do_classifier_free_guidance: bool,
         clip_skip: int | None = None,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         tokenizer_max_length = self._tokenizer_1.model_max_length
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             prompt_embed, pooled_prompt_embed = _get_clip_prompt_embeds(
                 prompt=prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -875,7 +875,7 @@ class StableDiffusion3Pipeline:
             )
             clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5_prompt_embed = _get_t5_prompt_embeds(
                 device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,
@@ -899,7 +899,7 @@ class StableDiffusion3Pipeline:
         if not do_classifier_free_guidance:
             return prompt_embeds, pooled_prompt_embeds
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             negative_prompt_embed, negative_pooled_prompt_embed = _get_clip_prompt_embeds(
                 prompt=negative_prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -922,7 +922,7 @@ class StableDiffusion3Pipeline:
             )
             negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5_negative_prompt_embed = _get_t5_prompt_embeds(
                 device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,

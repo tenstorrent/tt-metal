@@ -642,6 +642,7 @@ class MochiPipeline(DiffusionPipeline):
         timesteps: List[int] = None,
         guidance_scale: float = 4.5,
         num_videos_per_prompt: Optional[int] = 1,
+        seed: Optional[int] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
@@ -654,6 +655,7 @@ class MochiPipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
@@ -755,6 +757,9 @@ class MochiPipeline(DiffusionPipeline):
             logger.info("Recreated MochiTransformer3DModel")
 
         # 4. Prepare latent variables
+        if seed is not None:
+            torch.manual_seed(seed)
+
         num_channels_latents = self.transformer_config.in_channels
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
@@ -911,3 +916,6 @@ class MochiPipeline(DiffusionPipeline):
             return (video,)
 
         return MochiPipelineOutput(frames=video)
+
+    def run_single_prompt(self, *args, **kwargs):
+        return self.__call__(*args, **kwargs).frames[0]

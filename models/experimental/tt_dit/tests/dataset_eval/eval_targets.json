@@ -78,6 +78,9 @@
             "16": {
                 "clip_valid_range": [26.20977, 27.83099]
             }
+        },
+        "extra_args": {
+            "num_frames": 168
         }
     },
     "wan2.2": {

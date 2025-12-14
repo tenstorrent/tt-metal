@@ -120,18 +120,16 @@ def get_vid_evals(model_id, model_setup, videos, prompts):
     return evals
 
 
-def check_accuracy(prompt, score, score_key, model_info):
-    accuracy_data = model_info["accuracy"]
-
+def check_accuracy(num_prompts, score, score_key, model_info):
     accuracy_status = 1
-    if str(prompt) in accuracy_data:
-        range_key = f"{score_key}_valid_range"
-        if range_key in accuracy_data:
-            score_range = accuracy_data[range_key]
-            if score >= score_range[0] and score <= score_range[1]:
-                return 2
-            else:
-                return 3
+    prompt_data = model_info["accuracy"].get(str(num_prompts), {})
+    range_key = f"{score_key}_valid_range"
+    if range_key in prompt_data:
+        score_range = prompt_data[range_key]
+        if score >= score_range[0] and score <= score_range[1]:
+            return 2
+        else:
+            return 3
 
     return accuracy_status
 
@@ -154,7 +152,9 @@ def check_accuracy(prompt, score, score_key, model_info):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    # [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    # [{"fabric_config": ttnn.FabricConfig.FABRIC_1D,"trace_region_size": 50000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_tt_dit_accuracy(
@@ -206,15 +206,16 @@ def test_tt_dit_accuracy(
                 num_inference_steps=num_inference_steps,
                 seed=0,
                 traced=True,
-                timer=benchmark_profiler,
-                timer_iteration=i,
+                profiler=benchmark_profiler,
+                profiler_iteration=i,
+                **model_metadata.get("extra_args", {}),
             )
 
         images.append(generated_images[0])
         logger.info(f"Image {i+1} completed in {benchmark_profiler.get_duration('inference', i):.2f}s")
 
         # Save image for inspection
-        if len(generated_images[0]) == 1:  # Save only images for fid computation
+        if not isinstance(generated_images[0], list):  # Save only images for fid computation
             os.makedirs("generated_images", exist_ok=True)
             generated_images[0].save(f"generated_images/tt_dit_image_{i+1}.png")
             is_video = False
@@ -223,13 +224,6 @@ def test_tt_dit_accuracy(
     average_inference_time = benchmark_profiler.get_duration_average("inference", 1)  # Skip warmup iterations
     min_inference_time = min([benchmark_profiler.get_duration("inference", i) for i in range(1, num_prompts)])
     max_inference_time = max([benchmark_profiler.get_duration("inference", i) for i in range(1, num_prompts)])
-    average_denoising_time = statistics.mean(
-        [
-            benchmark_profiler.get_duration_average("denoising_step_{j}", i)
-            for i in range(1, num_prompts)
-            for j in range(num_inference_steps)
-        ]
-    )
 
     data = {
         "model": model_id,
@@ -248,9 +242,7 @@ def test_tt_dit_accuracy(
                 "average_denoising_time": average_inference_time,
                 "average_vae_time": benchmark_profiler.get_duration_average("vae", 1),
                 "average_encoding_time": benchmark_profiler.get_duration_average("encoder", 1),
-                "average_clip_encoding_time": benchmark_profiler.get_duration_average("clip_encoding", 1),
-                "average_t5_encoding_time": benchmark_profiler.get_duration_average("t5_encoding", 1),
-                "average_denoising_time": average_denoising_time,
+                "average_denoising_time": benchmark_profiler.get_duration_average("denoising", 1),
                 "min_inference_time": min_inference_time,
                 "max_inference_time": max_inference_time,
             }

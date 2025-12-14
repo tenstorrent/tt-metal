@@ -118,8 +118,8 @@ def test_sd35_pipeline(
                 num_inference_steps=num_inference_steps,
                 seed=0,
                 traced=traced,
-                timer=benchmark_profiler,
-                timer_iteration=0,
+                profiler=benchmark_profiler,
+                profiler_iteration=0,
             )
 
         # Save image
