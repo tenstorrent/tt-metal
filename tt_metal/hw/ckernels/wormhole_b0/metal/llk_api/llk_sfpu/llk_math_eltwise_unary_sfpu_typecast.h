@@ -136,6 +136,13 @@ inline void llk_math_eltwise_unary_sfpu_typecast_init() {
     if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
             ckernel::sfpu::init_typecast_fp32_to_fp16b<APPROXIMATE>);
+    } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::UInt32) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_uint16_to_uint32<APPROXIMATE>);
+    } else if constexpr (in_format == DataFormat::UInt16 && out_format == DataFormat::Int32) {
+        // Calls same kernel as UInt32 case
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_uint16_to_uint32<APPROXIMATE>);
     } else {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>();
     }
