@@ -9,7 +9,6 @@ import statistics
 import pytest
 import ttnn
 from loguru import logger
-import statistics
 
 from .clip_encoder import CLIPEncoder
 
@@ -222,8 +221,6 @@ def test_tt_dit_accuracy(
 
     # Performance metrics
     average_inference_time = benchmark_profiler.get_duration_average("inference", 1)  # Skip warmup iterations
-    min_inference_time = min([benchmark_profiler.get_duration("inference", i) for i in range(1, num_prompts)])
-    max_inference_time = max([benchmark_profiler.get_duration("inference", i) for i in range(1, num_prompts)])
 
     data = {
         "model": model_id,
@@ -239,12 +236,10 @@ def test_tt_dit_accuracy(
             {
                 "device": f"{device_name}",
                 "model": model_id,
-                "average_denoising_time": average_inference_time,
+                "average_inference_time": average_inference_time,
                 "average_vae_time": benchmark_profiler.get_duration_average("vae", 1),
                 "average_encoding_time": benchmark_profiler.get_duration_average("encoder", 1),
                 "average_denoising_time": benchmark_profiler.get_duration_average("denoising", 1),
-                "min_inference_time": min_inference_time,
-                "max_inference_time": max_inference_time,
             }
         ],
         "evals": get_vid_evals(model_id, model_metadata, images, prompts)

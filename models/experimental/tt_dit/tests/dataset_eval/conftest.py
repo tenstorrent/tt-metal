@@ -11,7 +11,8 @@ from ...pipelines.mochi.pipeline_mochi import MochiPipeline
 from ...pipelines.wan.pipeline_wan import WanPipeline
 import os
 
-targets_setup = json.load(open(os.path.join(os.path.dirname(__file__), "eval_targets.json")))
+with open(os.path.join(os.path.dirname(__file__), "eval_targets.json"), "r") as f:
+    targets_setup = json.load(f)
 
 
 def pytest_addoption(parser):
