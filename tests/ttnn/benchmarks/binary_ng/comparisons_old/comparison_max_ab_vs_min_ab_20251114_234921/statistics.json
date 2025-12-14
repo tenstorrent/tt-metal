@@ -1,0 +1,25 @@
+{
+  "strategies": [
+    "max_ab",
+    "min_ab"
+  ],
+  "generated": "2025-11-14T23:49:22.361383",
+  "comparisons": {
+    "ADD_no_broadcast": {
+      "total_configs": 100,
+      "faster1": 67,
+      "faster2": 33,
+      "mean_diff_us": 5.127259999999999,
+      "mean_diff_pct": 14.400267740180881,
+      "median_diff_us": 1.0379999999999967,
+      "median_diff_pct": 1.8019702603817715
+    }
+  },
+  "overall": {
+    "total_configs": 100,
+    "max_ab_faster": 67,
+    "min_ab_faster": 33,
+    "max_ab_win_rate": 67.0,
+    "min_ab_win_rate": 33.0
+  }
+}

@@ -1,0 +1,81 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_ab vs half_grid vs full_grid
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 392
+Strategies Compared: max_ab, half_grid, full_grid
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+         max_ab: avg=  58.19μs  median=  63.55μs  std= 20.79μs
+      half_grid: avg=  57.87μs  median=  63.04μs  std= 24.68μs
+      full_grid: avg=  50.27μs  median=  53.74μs  std= 20.30μs
+
+🏆 WINNER DISTRIBUTION (fastest per config)
+------------------------------------------------------------------------------------------
+      full_grid: 338 configs ( 86.2%)
+         max_ab:  50 configs ( 12.8%)
+      half_grid:   4 configs (  1.0%)
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_ab vs half_grid:
+  max_ab faster: 262 configs
+  half_grid faster: 130 configs
+  Mean diff: +0.32% (negative = half_grid faster)
+  Median diff: +3.21%
+  Range: [-64.27%, 50.58%]
+
+max_ab vs full_grid:
+  max_ab faster: 54 configs
+  full_grid faster: 338 configs
+  Mean diff: -11.96% (negative = full_grid faster)
+  Median diff: -7.80%
+  Range: [-73.52%, 29.54%]
+
+half_grid vs full_grid:
+  half_grid faster: 40 configs
+  full_grid faster: 352 configs
+  Mean diff: -12.02% (negative = full_grid faster)
+  Median diff: -13.30%
+  Range: [-36.00%, 24.57%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+         max_ab: 21.98μs
+                 interleaved + interleaved → interleaved
+      half_grid: 19.65μs
+                 height + height → height
+      full_grid: 17.57μs
+                 interleaved + height → interleaved
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+           max_ab:   53.19μs avg (112 configs)
+        half_grid:   53.66μs avg (112 configs)
+        full_grid:   45.42μs avg (112 configs)
+
+height:
+           max_ab:   50.29μs avg (112 configs)
+        half_grid:   44.24μs avg (112 configs)
+        full_grid:   42.19μs avg (112 configs)
+
+interleaved:
+           max_ab:   46.61μs avg (56 configs)
+        half_grid:   41.48μs avg (56 configs)
+        full_grid:   32.39μs avg (56 configs)
+
+width:
+           max_ab:   76.88μs avg (112 configs)
+        half_grid:   83.89μs avg (112 configs)
+        full_grid:   72.13μs avg (112 configs)
+
+==========================================================================================
+Report generated: 2025-11-16 06:07:39
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_no_broadcast_max_ab_20251115_225919_vs_ADD_no_broadcast_half_grid_20251116_002025_vs_ADD_no_broadcast_full_grid_20251114_180108_20251116_060735
+==========================================================================================

@@ -1,0 +1,31 @@
+================================================================================
+STRATEGY COMPARISON: full_grid vs half_grid
+================================================================================
+Generated: 2025-11-16 00:47:05
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_full_grid_vs_half_grid_20251116_004704
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+Total configurations: 49
+full_grid faster: 44 cases (89.8%)
+half_grid faster: 5 cases (10.2%)
+
+BREAKDOWN BY OPERATION AND BROADCAST TYPE
+--------------------------------------------------------------------------------
+
+ADD / no_broadcast:
+  Configurations: 49
+  full_grid faster: 44 (89.8%)
+  half_grid faster: 5 (10.2%)
+  Mean time difference: 7.597 μs (+15.53%)
+  Median time difference: 7.732 μs (+15.25%)
+
+================================================================================
+Output files generated:
+  - comparison_summary.txt (this file)
+  - statistics.json
+  - For each comparison:
+      - comparison_data_{OP_TYPE}_{BROADCAST_TYPE}.csv
+      - {strategy1}_vs_{strategy2}/scatter_*.png
+================================================================================

@@ -1,0 +1,55 @@
+================================================================================
+KERNEL TIME COMPARISON SUMMARY: max_ab vs max_abc
+================================================================================
+
+📊 OVERALL STATISTICS
+--------------------------------------------------------------------------------
+Total Configurations Compared: 104
+max_ab Faster:  50 configs (48.1%)
+max_abc Faster: 54 configs (51.9%)
+Ties:           0 configs (0.0%)
+
+📈 TIME DIFFERENCE STATISTICS
+--------------------------------------------------------------------------------
+Mean Difference:     -0.611 μs  (-0.31%)
+Median Difference:   -0.052 μs  (-0.07%)
+Std Deviation:       9.678 μs  (18.70%)
+Min Difference:      -42.598 μs  (-100.00%) [max_abc much faster]
+Max Difference:      +41.834 μs  (+112.08%) [max_ab much faster]
+
+🏆 TOP 10 CONFIGS WHERE max_abc IS FASTER
+--------------------------------------------------------------------------------
+  interleaved + interleaved → interleaved  |  -100.00%  (-42.60μs)
+  interleaved +       block → interleaved  |  -40.37%  (-30.58μs)
+  interleaved +      height → interleaved  |  -39.15%  (-31.93μs)
+  interleaved +       width → interleaved  |  -26.67%  (-20.69μs)
+  interleaved +       block → interleaved  |  -26.19%  (-11.74μs)
+  interleaved +      height → interleaved  |  -24.37%  (-12.12μs)
+        block +       block →       block  |  -22.11%  (-18.22μs)
+        block + interleaved →       block  |  -21.61%  (-17.89μs)
+        block +       block →       block  |  -19.75%  (-15.04μs)
+        block +       width →       block  |  -11.51%  (-10.90μs)
+
+🏆 TOP 10 CONFIGS WHERE max_ab IS FASTER
+--------------------------------------------------------------------------------
+  interleaved +      height → interleaved  |  +112.08%  (+41.83μs)
+  interleaved +       block → interleaved  |  +41.61%  (+13.44μs)
+        block +      height →       block  |  +34.54%  (+22.08μs)
+  interleaved +       width → interleaved  |  +32.73%  (+19.00μs)
+        block +      height →       block  |  +31.29%  (+22.74μs)
+        block +       block →       block  |  +22.46%  (+15.21μs)
+        block + interleaved →       block  |  +22.35%  (+14.99μs)
+        block +       block →       block  |  +15.51%  ( +9.80μs)
+        block +      height →       block  |   +8.31%  ( +5.71μs)
+        block +      height →       block  |   +7.34%  ( +4.80μs)
+
+📋 PERFORMANCE BY OUTPUT SHARDING (C tensor)
+--------------------------------------------------------------------------------
+      block:   36 configs  |  avg diff:  +1.50%  |  max_ab wins:  17  |  max_abc wins:  19
+     height:   15 configs  |  avg diff:  +0.02%  |  max_ab wins:   9  |  max_abc wins:   6
+interleaved:   17 configs  |  avg diff:  -4.37%  |  max_ab wins:   5  |  max_abc wins:  12
+      width:   36 configs  |  avg diff:  -0.35%  |  max_ab wins:  19  |  max_abc wins:  17
+
+================================================================================
+Charts generated in: /workspace/tests/ttnn/benchmarks/binary_ng/visualizations
+================================================================================

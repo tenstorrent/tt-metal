@@ -1,0 +1,81 @@
+{
+  "strategies": [
+    "full_grid",
+    "half_grid",
+    "max_ab"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "full_grid",
+      "strategy2": "half_grid",
+      "total_configs": 800,
+      "full_grid_faster": 760,
+      "half_grid_faster": 40,
+      "ties": 0,
+      "mean_diff_us": 8.470425,
+      "mean_diff_pct": 27.248285811521747,
+      "median_diff_pct": 24.897636978891555,
+      "std_diff_pct": 18.112636427874452,
+      "min_diff_pct": -11.929026387625113,
+      "max_diff_pct": 66.33956386292836
+    },
+    {
+      "strategy1": "full_grid",
+      "strategy2": "max_ab",
+      "total_configs": 800,
+      "full_grid_faster": 530,
+      "max_ab_faster": 270,
+      "ties": 0,
+      "mean_diff_us": 5.538995,
+      "mean_diff_pct": 18.33979051568737,
+      "median_diff_pct": 3.402057757002008,
+      "std_diff_pct": 42.456064910596055,
+      "min_diff_pct": -8.26670105751869,
+      "max_diff_pct": 283.63846917392743
+    },
+    {
+      "strategy1": "half_grid",
+      "strategy2": "max_ab",
+      "total_configs": 800,
+      "half_grid_faster": 244,
+      "max_ab_faster": 556,
+      "ties": 0,
+      "mean_diff_us": -2.9314299999999998,
+      "mean_diff_pct": -5.388679096120438,
+      "median_diff_pct": -11.28279419273987,
+      "std_diff_pct": 34.53233805930731,
+      "min_diff_pct": -39.59035580524345,
+      "max_diff_pct": 182.29589352377863
+    }
+  ],
+  "three_way": {
+    "strategies": [
+      "full_grid",
+      "half_grid",
+      "max_ab"
+    ],
+    "total_configs": 800,
+    "winners": {
+      "full_grid": 516,
+      "half_grid": 36,
+      "max_ab": 248
+    },
+    "avg_times": {
+      "full_grid": 33.662290000000006,
+      "half_grid": 42.132715,
+      "max_ab": 39.201285
+    },
+    "median_times": {
+      "full_grid": 27.189,
+      "half_grid": 41.578,
+      "max_ab": 33.952
+    },
+    "std_times": {
+      "full_grid": 16.39772247276332,
+      "half_grid": 18.89661860193534,
+      "max_ab": 20.318778451249567
+    },
+    "best_strategy": "full_grid",
+    "worst_strategy": "half_grid"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "strategies": [
+    "full_grid",
+    "full_grid"
+  ],
+  "generated": "2025-11-17T21:44:34.642707",
+  "comparisons": {
+    "ADD_no_broadcast": {
+      "total_configs": 100,
+      "faster1": 0,
+      "faster2": 0,
+      "mean_diff_us": 0.0,
+      "mean_diff_pct": 0.0,
+      "median_diff_us": 0.0,
+      "median_diff_pct": 0.0
+    }
+  },
+  "overall": {
+    "total_configs": 100,
+    "full_grid_faster": 0,
+    "full_grid_win_rate": 0.0
+  }
+}

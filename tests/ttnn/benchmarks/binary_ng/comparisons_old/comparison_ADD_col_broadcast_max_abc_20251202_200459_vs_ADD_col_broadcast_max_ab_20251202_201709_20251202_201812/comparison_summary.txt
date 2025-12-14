@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_abc vs max_ab
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 76
+Strategies Compared: max_abc, max_ab
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+        max_abc: avg=  45.92μs  median=  31.98μs  std= 29.61μs
+         max_ab: avg=  49.60μs  median=  33.84μs  std= 30.57μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_abc vs max_ab:
+  max_abc faster: 36 configs
+  max_ab faster: 40 configs
+  Mean diff: +inf% (negative = max_ab faster)
+  Median diff: -0.03%
+  Range: [-66.29%, inf%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+        max_abc: 0.00μs
+                 interleaved + block → interleaved
+         max_ab: 19.68μs
+                 height + height → height
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+          max_abc:   45.89μs avg (16 configs)
+           max_ab:   55.16μs avg (16 configs)
+
+height:
+          max_abc:   43.34μs avg (33 configs)
+           max_ab:   43.25μs avg (33 configs)
+
+interleaved:
+          max_abc:   44.66μs avg (15 configs)
+           max_ab:   53.80μs avg (15 configs)
+
+width:
+          max_abc:   54.64μs avg (12 configs)
+           max_ab:   54.43μs avg (12 configs)
+
+==========================================================================================
+Report generated: 2025-12-02 20:18:13
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_col_broadcast_max_abc_20251202_200459_vs_ADD_col_broadcast_max_ab_20251202_201709_20251202_201812
+==========================================================================================

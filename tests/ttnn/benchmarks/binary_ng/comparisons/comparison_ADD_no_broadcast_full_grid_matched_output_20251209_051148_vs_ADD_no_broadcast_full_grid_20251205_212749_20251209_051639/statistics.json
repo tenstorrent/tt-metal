@@ -1,0 +1,22 @@
+{
+  "strategies": [
+    "full_grid_matched_output",
+    "full_grid"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "full_grid_matched_output",
+      "strategy2": "full_grid",
+      "total_configs": 36,
+      "full_grid_matched_output_faster": 4,
+      "full_grid_faster": 32,
+      "ties": 0,
+      "mean_diff_us": -13.833555555555556,
+      "mean_diff_pct": -32.92818032584023,
+      "median_diff_pct": -31.25172852480779,
+      "std_diff_pct": 29.41034265991836,
+      "min_diff_pct": -71.99260722245376,
+      "max_diff_pct": 3.2681159420289765
+    }
+  ]
+}

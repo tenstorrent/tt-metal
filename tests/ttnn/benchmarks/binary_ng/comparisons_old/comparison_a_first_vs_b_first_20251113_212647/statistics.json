@@ -1,0 +1,22 @@
+{
+  "strategies": [
+    "a_first",
+    "b_first"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "a_first",
+      "strategy2": "b_first",
+      "total_configs": 140,
+      "a_first_faster": 70,
+      "b_first_faster": 70,
+      "ties": 0,
+      "mean_diff_us": -0.00971428571428561,
+      "mean_diff_pct": 0.29868828722402724,
+      "median_diff_pct": 0.09620194869400817,
+      "std_diff_pct": 9.079410180805262,
+      "min_diff_pct": -23.24093816631131,
+      "max_diff_pct": 29.11917421608222
+    }
+  ]
+}

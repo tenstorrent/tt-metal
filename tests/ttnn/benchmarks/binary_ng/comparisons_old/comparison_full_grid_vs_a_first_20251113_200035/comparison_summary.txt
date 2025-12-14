@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: full_grid vs a_first
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 140
+Strategies Compared: full_grid, a_first
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+      full_grid: avg=  67.61μs  median=  66.06μs  std= 17.01μs
+        a_first: avg=  75.96μs  median=  74.02μs  std= 15.51μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+full_grid vs a_first:
+  full_grid faster: 126 configs
+  a_first faster: 14 configs
+  Mean diff: +16.61% (negative = a_first faster)
+  Median diff: +9.83%
+  Range: [-7.15%, 295.18%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+      full_grid: 21.62μs
+                 height + interleaved → height
+        a_first: 29.88μs
+                 block + interleaved → block
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+        full_grid:   68.33μs avg (51 configs)
+          a_first:   74.25μs avg (51 configs)
+
+height:
+        full_grid:   59.05μs avg (21 configs)
+          a_first:   72.61μs avg (21 configs)
+
+interleaved:
+        full_grid:   44.46μs avg (17 configs)
+          a_first:   58.29μs avg (17 configs)
+
+width:
+        full_grid:   78.13μs avg (51 configs)
+          a_first:   84.95μs avg (51 configs)
+
+==========================================================================================
+Report generated: 2025-11-13 20:00:36
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_full_grid_vs_a_first_20251113_200035
+==========================================================================================

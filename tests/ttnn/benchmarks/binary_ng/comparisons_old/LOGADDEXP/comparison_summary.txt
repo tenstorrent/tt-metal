@@ -1,0 +1,31 @@
+================================================================================
+STRATEGY COMPARISON: full_grid vs max_ab
+================================================================================
+Generated: 2025-11-16 07:08:55
+Output directory: tests/ttnn/benchmarks/binary_ng/comparisons/LOGADDEXP
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+Total configurations: 100
+full_grid faster: 75 cases (75.0%)
+max_ab faster: 25 cases (25.0%)
+
+BREAKDOWN BY OPERATION AND BROADCAST TYPE
+--------------------------------------------------------------------------------
+
+LOGADDEXP / no_broadcast:
+  Configurations: 100
+  full_grid faster: 75 (75.0%)
+  max_ab faster: 25 (25.0%)
+  Mean time difference: 90.369 μs (+114.70%)
+  Median time difference: 20.567 μs (+24.70%)
+
+================================================================================
+Output files generated:
+  - comparison_summary.txt (this file)
+  - statistics.json
+  - For each comparison:
+      - comparison_data_{OP_TYPE}_{BROADCAST_TYPE}.csv
+      - {strategy1}_vs_{strategy2}/scatter_*.png
+================================================================================

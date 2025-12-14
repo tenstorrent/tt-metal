@@ -1,0 +1,22 @@
+{
+  "strategies": [
+    "max_ab",
+    "max_abc"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "max_ab",
+      "strategy2": "max_abc",
+      "total_configs": 292,
+      "max_ab_faster": 109,
+      "max_abc_faster": 183,
+      "ties": 0,
+      "mean_diff_us": -4.402260273972603,
+      "mean_diff_pct": -10.292225356930095,
+      "median_diff_pct": -0.4090521702897011,
+      "std_diff_pct": 27.158541688818424,
+      "min_diff_pct": -92.00662793380457,
+      "max_diff_pct": 8.13732708179952
+    }
+  ]
+}

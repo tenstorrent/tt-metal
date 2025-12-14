@@ -1,0 +1,31 @@
+================================================================================
+STRATEGY COMPARISON: max_ab vs min_ab
+================================================================================
+Generated: 2025-11-14 23:49:22
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_max_ab_vs_min_ab_20251114_234921
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+Total configurations: 100
+max_ab faster: 67 cases (67.0%)
+min_ab faster: 33 cases (33.0%)
+
+BREAKDOWN BY OPERATION AND BROADCAST TYPE
+--------------------------------------------------------------------------------
+
+ADD / no_broadcast:
+  Configurations: 100
+  max_ab faster: 67 (67.0%)
+  min_ab faster: 33 (33.0%)
+  Mean time difference: 5.127 μs (+14.40%)
+  Median time difference: 1.038 μs (+1.80%)
+
+================================================================================
+Output files generated:
+  - comparison_summary.txt (this file)
+  - statistics.json
+  - For each comparison:
+      - comparison_data_{OP_TYPE}_{BROADCAST_TYPE}.csv
+      - {strategy1}_vs_{strategy2}/scatter_*.png
+================================================================================

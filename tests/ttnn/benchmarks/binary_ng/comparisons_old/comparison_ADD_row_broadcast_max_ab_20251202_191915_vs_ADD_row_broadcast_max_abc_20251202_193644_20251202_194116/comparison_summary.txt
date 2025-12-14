@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_ab vs max_abc
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 76
+Strategies Compared: max_ab, max_abc
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+         max_ab: avg=  50.03μs  median=  46.89μs  std= 22.12μs
+        max_abc: avg=  48.63μs  median=  47.31μs  std= 22.15μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_ab vs max_abc:
+  max_ab faster: 34 configs
+  max_abc faster: 42 configs
+  Mean diff: +0.00% (negative = max_abc faster)
+  Median diff: -0.19%
+  Range: [-100.00%, 207.15%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+         max_ab: 20.51μs
+                 block + interleaved → block
+        max_abc: 0.00μs
+                 interleaved + interleaved → interleaved
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+           max_ab:   57.90μs avg (16 configs)
+          max_abc:   55.05μs avg (16 configs)
+
+height:
+           max_ab:   48.98μs avg (12 configs)
+          max_abc:   48.92μs avg (12 configs)
+
+interleaved:
+           max_ab:   41.51μs avg (15 configs)
+          max_abc:   36.76μs avg (15 configs)
+
+width:
+           max_ab:   50.47μs avg (33 configs)
+          max_abc:   50.80μs avg (33 configs)
+
+==========================================================================================
+Report generated: 2025-12-02 19:41:17
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_row_broadcast_max_ab_20251202_191915_vs_ADD_row_broadcast_max_abc_20251202_193644_20251202_194116
+==========================================================================================

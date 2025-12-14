@@ -1,0 +1,42 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_abc vs full_grid
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 24
+Strategies Compared: max_abc, full_grid
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+        max_abc: avg=  14.76μs  median=  14.66μs  std=  8.85μs
+      full_grid: avg=  14.03μs  median=  14.61μs  std=  8.00μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_abc vs full_grid:
+  max_abc faster: 10 configs
+  full_grid faster: 14 configs
+  Mean diff: +66.93% (negative = full_grid faster)
+  Median diff: -27.82%
+  Range: [-72.53%, 298.92%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+        max_abc: 3.89μs
+                 height + height → height
+      full_grid: 3.89μs
+                 height + height → height
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+height:
+          max_abc:   14.76μs avg (24 configs)
+        full_grid:   14.03μs avg (24 configs)
+
+==========================================================================================
+Report generated: 2025-12-05 20:34:50
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_no_broadcast_max_abc_20251205_202544_vs_ADD_no_broadcast_full_grid_20251205_202544_20251205_203449
+==========================================================================================

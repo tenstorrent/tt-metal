@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: full_grid vs max_abc
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 292
+Strategies Compared: full_grid, max_abc
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+      full_grid: avg=  80.01μs  median=  60.50μs  std= 73.95μs
+        max_abc: avg= 155.87μs  median= 108.30μs  std=143.04μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+full_grid vs max_abc:
+  full_grid faster: 213 configs
+  max_abc faster: 79 configs
+  Mean diff: +119.02% (negative = max_abc faster)
+  Median diff: +1.23%
+  Range: [-19.48%, 647.48%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+      full_grid: 54.40μs
+                 block + block → block
+        max_abc: 54.42μs
+                 block + block → block
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+        full_grid:   80.25μs avg (84 configs)
+          max_abc:  147.60μs avg (84 configs)
+
+height:
+        full_grid:   81.98μs avg (84 configs)
+          max_abc:  150.19μs avg (84 configs)
+
+interleaved:
+        full_grid:   60.81μs avg (40 configs)
+          max_abc:  191.71μs avg (40 configs)
+
+width:
+        full_grid:   86.95μs avg (84 configs)
+          max_abc:  152.76μs avg (84 configs)
+
+==========================================================================================
+Report generated: 2025-12-04 21:26:25
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_POWER_no_broadcast_full_grid_20251204_212306_vs_POWER_no_broadcast_max_abc_20251204_212003_20251204_212624
+==========================================================================================

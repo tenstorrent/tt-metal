@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_ab vs max_abc
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 38
+Strategies Compared: max_ab, max_abc
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+         max_ab: avg=  60.25μs  median=  40.51μs  std= 39.03μs
+        max_abc: avg=  60.68μs  median=  44.33μs  std= 40.67μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_ab vs max_abc:
+  max_ab faster: 16 configs
+  max_abc faster: 20 configs
+  Mean diff: +37.25% (negative = max_abc faster)
+  Median diff: -0.34%
+  Range: [-100.00%, 308.43%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+         max_ab: 0.00μs
+                 interleaved + block → interleaved
+        max_abc: 0.00μs
+                 interleaved + width → interleaved
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+           max_ab:   81.44μs avg (6 configs)
+          max_abc:   80.17μs avg (6 configs)
+
+height:
+           max_ab:   58.59μs avg (11 configs)
+          max_abc:   70.31μs avg (11 configs)
+
+interleaved:
+           max_ab:   49.36μs avg (10 configs)
+          max_abc:   38.63μs avg (10 configs)
+
+width:
+           max_ab:   60.26μs avg (11 configs)
+          max_abc:   60.48μs avg (11 configs)
+
+==========================================================================================
+Report generated: 2025-12-02 20:22:42
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_row_col_mixed_max_ab_20251202_202130_vs_ADD_row_col_mixed_max_abc_20251202_202202_20251202_202241
+==========================================================================================

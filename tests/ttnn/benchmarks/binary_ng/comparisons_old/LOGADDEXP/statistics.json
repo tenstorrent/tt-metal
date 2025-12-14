@@ -1,0 +1,25 @@
+{
+  "strategies": [
+    "full_grid",
+    "max_ab"
+  ],
+  "generated": "2025-11-16T07:08:55.673977",
+  "comparisons": {
+    "LOGADDEXP_no_broadcast": {
+      "total_configs": 100,
+      "faster1": 75,
+      "faster2": 25,
+      "mean_diff_us": 90.36940999999999,
+      "mean_diff_pct": 114.70002753848217,
+      "median_diff_us": 20.566999999999993,
+      "median_diff_pct": 24.695711525951438
+    }
+  },
+  "overall": {
+    "total_configs": 100,
+    "full_grid_faster": 75,
+    "max_ab_faster": 25,
+    "full_grid_win_rate": 75.0,
+    "max_ab_win_rate": 25.0
+  }
+}

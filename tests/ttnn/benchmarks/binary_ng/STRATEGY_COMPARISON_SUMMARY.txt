@@ -1,0 +1,148 @@
+================================================================================
+GRID STRATEGY COMPARISON: max_ab vs max_abc
+================================================================================
+
+OVERALL RESULTS (138 configurations)
+--------------------------------------------------------------------------------
+Mean difference:   -0.130 μs (0.75%)   [max_abc slightly slower]
+Median difference: -0.003 μs (-0.01%)  [essentially identical]
+
+max_ab faster:   69 cases (50.0%)
+max_abc faster:  69 cases (50.0%)
+Tied:            0 cases
+
+Standard deviation: 8.358 μs  [HIGH VARIANCE]
+
+
+CRITICAL DISCOVERY
+--------------------------------------------------------------------------------
+🔍 ALL 138 configurations use IDENTICAL compute cores in both strategies!
+
+   This means: Performance differences are NOT due to compute grid size
+
+   Instead:    Differences are due to OUTPUT TENSOR SHARDING choices
+
+
+PERFORMANCE BY OUTPUT SHARDING TYPE
+--------------------------------------------------------------------------------
+Output Type     │ Cases │  Avg Diff  │ Winner
+────────────────┼───────┼────────────┼─────────────────
+HEIGHT          │  21   │  +3.51%    │ max_abc (slower)
+WIDTH           │  51   │  -0.44%    │ ~tie~
+BLOCK           │  50   │  +0.53%    │ ~tie~
+INTERLEAVED     │  16   │  +1.61%    │ max_ab (faster)
+
+
+EXTREME CASES
+--------------------------------------------------------------------------------
+
+🏆 BEST for max_abc (40% faster):
+   Config: 1×1024 (interleaved) + 1024×1024 (block,8) → interleaved
+   max_ab:  75.75 μs
+   max_abc: 45.17 μs  ← 40.4% improvement
+
+❌ WORST for max_abc (112% slower):
+   Config: 1×1024 (interleaved) + 1024×1024 (height,32) → interleaved
+   max_ab:  37.33 μs  ← 112.1% faster!
+   max_abc: 79.16 μs
+
+⚠️  ERROR in max_abc:
+   Config: 1×1024 (block,8) + 1024×1024 (height,16) → block
+   Error: Invalid block sharding grid
+
+
+PATTERN ANALYSIS
+--------------------------------------------------------------------------------
+
+max_abc EXCELS when:
+✅ Small tensor A (1×1024) is interleaved
+✅ Output is interleaved (matches input locality)
+✅ Low to moderate core counts (8-16)
+✅ Memory locality is important
+
+max_ab EXCELS when:
+✅ High parallelism (32 cores)
+✅ Height-sharded large tensors
+✅ Output sharding is flexible/doesn't matter
+✅ Predictable performance is needed
+
+
+VARIANCE DISTRIBUTION
+--------------------------------------------------------------------------------
+  Difference Range        │ Count │  %
+──────────────────────────┼───────┼──────
+  max_abc faster by >20%  │  10   │  7.2%
+  max_abc faster by 10-20%│   3   │  2.2%
+  max_abc faster by 5-10% │   6   │  4.3%
+  ≈ Negligible (<5%)      │  87   │ 63.0%  ← MOST CASES!
+  max_ab faster by 5-10%  │   8   │  5.8%
+  max_ab faster by 10-20% │  15   │ 10.9%
+  max_ab faster by >20%   │   9   │  6.5%
+
+
+RECOMMENDATIONS
+--------------------------------------------------------------------------------
+
+🎯 DEFAULT CHOICE: max_ab
+   Reasons:
+   • Slightly better average (0.75% faster)
+   • More predictable (fewer extreme regressions)
+   • Zero errors in test suite
+   • Simpler strategy (ignores output sharding)
+
+💡 USE max_abc WHEN:
+   • Small tensor broadcasts (1×N + M×N)
+   • Interleaved input/output patterns
+   • Output sharding matters for downstream fusion
+   • Memory locality is critical
+
+⚠️  AVOID max_abc FOR:
+   • High parallelism scenarios (32 cores)
+   • Height-sharded large tensors
+   • When output sharding is unknown/flexible
+
+
+KEY INSIGHT
+--------------------------------------------------------------------------------
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│  max_abc does NOT use C's cores for COMPUTATION                        │
+│                                                                         │
+│  Both strategies compute with max(A, B) cores                          │
+│                                                                         │
+│  max_abc only tries to match C's SHARDING for OUTPUT                   │
+│                                                                         │
+│  Performance differences come from OUTPUT LAYOUT, not compute grid     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+
+STATISTICAL SUMMARY
+--------------------------------------------------------------------------------
+Configurations tested:  138
+Errors in max_ab:       0
+Errors in max_abc:      1 (block sharding validation)
+
+Performance spread:     37.33 μs to 99.45 μs
+Max improvement by abc: 40.4% (30.58 μs absolute)
+Max improvement by ab:  112.1% (41.83 μs absolute)
+
+63% of cases differ by less than 5% → STRATEGIES ARE VERY SIMILAR
+
+
+BOTTOM LINE
+--------------------------------------------------------------------------------
+Use max_ab as the default. It's slightly faster on average, more predictable,
+and has no errors. Consider max_abc only for specific small-tensor broadcast
+patterns where interleaved output is desired.
+
+The choice matters most in extreme cases (±20% difference in 25 configs).
+For the majority (87 configs), the strategies perform identically.
+
+
+================================================================================
+Generated: November 13, 2025
+Data: 138 matching configurations
+Files: example_multiple_ops_max_ab_20251113_013450.csv
+       example_multiple_ops_max_abc_20251113_062946.csv
+================================================================================

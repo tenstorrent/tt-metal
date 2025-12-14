@@ -1,0 +1,31 @@
+================================================================================
+STRATEGY COMPARISON: max_ab vs full_grid
+================================================================================
+Generated: 2025-11-16 00:39:23
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_max_ab_vs_full_grid_20251116_003922
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+Total configurations: 49
+max_ab faster: 7 cases (14.3%)
+full_grid faster: 42 cases (85.7%)
+
+BREAKDOWN BY OPERATION AND BROADCAST TYPE
+--------------------------------------------------------------------------------
+
+ADD / no_broadcast:
+  Configurations: 49
+  max_ab faster: 7 (14.3%)
+  full_grid faster: 42 (85.7%)
+  Mean time difference: -8.056 μs (-12.11%)
+  Median time difference: -5.117 μs (-7.81%)
+
+================================================================================
+Output files generated:
+  - comparison_summary.txt (this file)
+  - statistics.json
+  - For each comparison:
+      - comparison_data_{OP_TYPE}_{BROADCAST_TYPE}.csv
+      - {strategy1}_vs_{strategy2}/scatter_*.png
+================================================================================

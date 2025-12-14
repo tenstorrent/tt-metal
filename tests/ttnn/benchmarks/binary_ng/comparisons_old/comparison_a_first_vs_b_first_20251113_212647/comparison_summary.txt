@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: a_first vs b_first
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 140
+Strategies Compared: a_first, b_first
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+        a_first: avg=  75.96μs  median=  74.02μs  std= 15.51μs
+        b_first: avg=  75.95μs  median=  76.23μs  std= 15.80μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+a_first vs b_first:
+  a_first faster: 70 configs
+  b_first faster: 70 configs
+  Mean diff: +0.30% (negative = b_first faster)
+  Median diff: +0.10%
+  Range: [-23.24%, 29.12%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+        a_first: 29.88μs
+                 block + interleaved → block
+        b_first: 30.00μs
+                 block + interleaved → block
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+          a_first:   74.25μs avg (51 configs)
+          b_first:   76.51μs avg (51 configs)
+
+height:
+          a_first:   72.61μs avg (21 configs)
+          b_first:   64.91μs avg (21 configs)
+
+interleaved:
+          a_first:   58.29μs avg (17 configs)
+          b_first:   58.64μs avg (17 configs)
+
+width:
+          a_first:   84.95μs avg (51 configs)
+          b_first:   85.71μs avg (51 configs)
+
+==========================================================================================
+Report generated: 2025-11-13 21:26:48
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_a_first_vs_b_first_20251113_212647
+==========================================================================================

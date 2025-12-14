@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_ab vs max_abc
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 292
+Strategies Compared: max_ab, max_abc
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+         max_ab: avg= 215.92μs  median= 152.08μs  std=202.24μs
+        max_abc: avg= 215.96μs  median= 152.10μs  std=202.22μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_ab vs max_abc:
+  max_ab faster: 168 configs
+  max_abc faster: 124 configs
+  Mean diff: +0.04% (negative = max_abc faster)
+  Median diff: +0.02%
+  Range: [-1.64%, 1.91%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+         max_ab: 76.27μs
+                 block + block → block
+        max_abc: 76.20μs
+                 block + block → block
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+           max_ab:  205.55μs avg (84 configs)
+          max_abc:  205.66μs avg (84 configs)
+
+height:
+           max_ab:  209.00μs avg (84 configs)
+          max_abc:  209.03μs avg (84 configs)
+
+interleaved:
+           max_ab:  261.97μs avg (40 configs)
+          max_abc:  261.79μs avg (40 configs)
+
+width:
+           max_ab:  211.28μs avg (84 configs)
+          max_abc:  211.37μs avg (84 configs)
+
+==========================================================================================
+Report generated: 2025-12-04 21:14:14
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_LOGADDEXP_no_broadcast_max_ab_20251204_211215_vs_LOGADDEXP_no_broadcast_max_abc_20251204_210819_20251204_211413
+==========================================================================================

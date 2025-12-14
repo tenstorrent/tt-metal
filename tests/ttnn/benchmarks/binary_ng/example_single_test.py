@@ -21,6 +21,19 @@ import io
 import contextlib
 import re
 import tempfile
+import shutil
+
+
+# Module-level variable to store the result suffix (set by fixture from conftest.py)
+_result_suffix = ""
+
+
+def get_results_dir():
+    """Get the results directory path based on the configured suffix."""
+    base_dir = "/workspace/tests/ttnn/benchmarks/binary_ng"
+    if _result_suffix:
+        return Path(base_dir) / f"results_{_result_suffix}"
+    return Path(base_dir) / "results"
 
 
 def wait_for_profiler_data(initial_count, max_wait_seconds=10, poll_interval=0.5):
@@ -486,6 +499,7 @@ def process_profiler_after_module(request):
         profiler_df = process_profiler_logs_and_get_timing()
 
         # Process each stored test result
+        cumulative_idx = 0  # Track cumulative position across all tests
         for test_key, stored_data in list(_test_results_storage.items()):
             stored_results = stored_data["results"]
             stored_strategy = stored_data["grid_strategy"]
@@ -498,16 +512,18 @@ def process_profiler_after_module(request):
                 # Convert nanoseconds to microseconds
                 durations_us = (profiler_df["DEVICE KERNEL DURATION [ns]"] / 1_000).tolist()
 
-                # Match timing data to test results (assuming order matches)
-                # Note: If multiple tests ran, we need to track which entries belong to which test
-                # For now, assume entries are in order of test execution
-                start_idx = len([k for k in _test_results_storage.keys() if k < test_key])
+                # Match timing data to test results in execution order
+                # Python dicts preserve insertion order (3.7+), so we iterate in test execution order
+                start_idx = cumulative_idx
                 for i, result_info in enumerate(stored_results):
                     idx = start_idx + i
                     if idx < len(durations_us):
                         result_info["kernel_duration"] = durations_us[idx]
                     else:
                         result_info["kernel_duration"] = None
+
+                # Update cumulative index for next test
+                cumulative_idx += len(stored_results)
             else:
                 print(f"[PROFILER] Warning: Could not get timing data for {stored_strategy}")
                 for result_info in stored_results:
@@ -525,8 +541,8 @@ def process_profiler_after_module(request):
 @pytest.mark.parametrize(
     "op_type",
     [
-        # ttnn.BinaryOpType.ADD,
-        ttnn.BinaryOpType.POWER,
+        ttnn.BinaryOpType.ADD,
+        # ttnn.BinaryOpType.POWER,
         # ttnn.BinaryOpType.LOGADDEXP
     ],
 )
@@ -538,7 +554,8 @@ def process_profiler_after_module(request):
         # "min_ab",
         # "half_grid",
         # "current",
-        "full_grid",
+        # "full_grid",
+        "full_grid_matched_output",  # full_grid + output shard grid matches compute grid
         # "a_first",
         # "b_first",
         # "new_grid",
@@ -561,7 +578,9 @@ def process_profiler_after_module(request):
         # 2048,
     ],
 )
-def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, op_type, broadcast_type, tensor_size):
+def test_multiple_operations_with_timing(
+    device_with_profiling, grid_strategy, op_type, broadcast_type, tensor_size, result_suffix, grid_strategy_override
+):
     """
     Test multiple binary operations with different tensor configurations and broadcast types.
     Writes CSV with kernel duration after processing profiler data synchronously.
@@ -572,20 +591,41 @@ def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, o
     3. Runs multiple operations with different tensor configurations
     4. After test completes, processes profiler logs and writes CSV with timing data
 
-    To run this test:
-        pytest example_single_test.py::test_multiple_operations_with_timing -v -s
+    IMPORTANT: When testing multiple grid strategies, run SEPARATE pytest commands
+    with --grid-strategy flag, since C++ caches the env var at device creation:
 
-    To run with profiling:
-        TT_METAL_DEVICE_PROFILER=1 pytest example_single_test.py::test_multiple_operations_with_timing -v -s
+        # Run full_grid strategy
+        TT_METAL_DEVICE_PROFILER=1 pytest example_single_test.py -v -s --grid-strategy=full_grid --result-suffix=full_grid
+
+        # Run max_abc strategy (separate invocation)
+        TT_METAL_DEVICE_PROFILER=1 pytest example_single_test.py -v -s --grid-strategy=max_abc --result-suffix=max_abc
+
+    To run a single strategy (can use parametrize):
+        TT_METAL_DEVICE_PROFILER=1 pytest example_single_test.py -v -s
+
+    To save results to a different folder (e.g., results_2):
+        pytest example_single_test.py -v -s --result-suffix=2
     """
+    # Set the module-level result suffix for CSV writing
+    global _result_suffix
+    _result_suffix = result_suffix
 
-    # Set grid strategy
-    os.environ["TT_METAL_BINARY_NG_GRID_STRATEGY"] = grid_strategy
+    # Use command-line grid strategy if provided (overrides parametrized value)
+    # This is necessary because C++ caches the env var at device creation
+    effective_grid_strategy = grid_strategy_override if grid_strategy_override else grid_strategy
+
+    # Skip test if command-line override doesn't match parametrized value
+    # This allows running only one grid strategy per pytest invocation
+    if grid_strategy_override and grid_strategy != grid_strategy_override:
+        pytest.skip(f"Skipping {grid_strategy} - running with --grid-strategy={grid_strategy_override}")
+
+    # Set grid strategy (may already be set by fixture, but set again for logging)
+    os.environ["TT_METAL_BINARY_NG_GRID_STRATEGY"] = effective_grid_strategy
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"  # Enable profiling
 
     print(f"\n{'='*80}")
     print(f"[TEST] Multiple Operations with Timing")
-    print(f"       Grid Strategy: {grid_strategy}")
+    print(f"       Grid Strategy: {effective_grid_strategy}")
     print(f"       Operation: {op_type}")
     print(f"       Broadcast Type: {broadcast_type}")
     print(f"       Tensor Size: {tensor_size}")
@@ -611,12 +651,16 @@ def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, o
         pytest.skip(f"Unknown broadcast type: {broadcast_type}")
 
     # Sharding strategies and core counts
-    sharding_strategies = ["height", "width", "block", "interleaved"]
+    sharding_strategies = [
+        "height",
+        # "width", "block",
+        # "interleaved"
+    ]
     # Use different core counts based on tensor size
     if tensor_size >= 2048:
         core_counts = [32, 64]
     else:
-        core_counts = [8, 32, 64]
+        core_counts = [8, 16, 32]
 
     # Generate all combinations of sharding strategies and core counts
     # For each tensor, we can have: (sharding_strategy, cores)
@@ -712,7 +756,7 @@ def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, o
 
     for i, config in enumerate(test_configs):
         print(f"\n[Operation {i+1}/{len(test_configs)}] {config['name']}")
-        print(f"  Grid Strategy: {grid_strategy}")
+        print(f"  Grid Strategy: {effective_grid_strategy}")
         print(f"  Tensor A: shape={config['shape_a']}, sharding={config['sharding_a']}, cores={config['cores_a']}")
         print(f"  Tensor B: shape={config['shape_b']}, sharding={config['sharding_b']}, cores={config['cores_b']}")
 
@@ -977,10 +1021,10 @@ def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, o
     # Store test results for processing after fixture teardown
     # The fixture will call ReadDeviceProfiler() in teardown, which writes the log file
     # A module-scoped fixture will process it after all tests complete
-    test_key = f"{grid_strategy}_{len(_test_results_storage)}"
+    test_key = f"{effective_grid_strategy}_{len(_test_results_storage)}"
     _test_results_storage[test_key] = {
         "results": test_results,
-        "grid_strategy": grid_strategy,
+        "grid_strategy": effective_grid_strategy,
         "op_type": op_type,
         "broadcast_type": broadcast_type,
         "tensor_size": tensor_size,
@@ -988,7 +1032,7 @@ def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, o
 
     # Print summary (timing will be added after profiler processing)
     print(f"\n{'='*80}")
-    print(f"[SUMMARY] Grid Strategy: {grid_strategy}")
+    print(f"[SUMMARY] Grid Strategy: {effective_grid_strategy}")
     print(f"{'='*80}")
     print(f"{'Operation':<40} {'Status':<15} {'Result Cores':<15}")
     print(f"{'-'*80}")
@@ -1006,7 +1050,7 @@ def test_multiple_operations_with_timing(device_with_profiling, grid_strategy, o
         print(f"         (Profiler data will be processed by module fixture)")
     else:
         # If profiling not enabled, write CSV immediately without timing
-        _write_csv_with_timing(test_results, grid_strategy, op_type, broadcast_type, tensor_size)
+        _write_csv_with_timing(test_results, effective_grid_strategy, op_type, broadcast_type, tensor_size)
 
 
 def _write_csv_with_timing(test_results, grid_strategy, op_type, broadcast_type, tensor_size):
@@ -1092,8 +1136,8 @@ def _write_csv_with_timing(test_results, grid_strategy, op_type, broadcast_type,
             }
         )
 
-    # Create results directory if it doesn't exist
-    results_dir = Path("/workspace/tests/ttnn/benchmarks/binary_ng/results")
+        # Create results directory if it doesn't exist
+    results_dir = get_results_dir()
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate filename based on operation type, broadcast type, grid strategy, and tensor size
@@ -1127,6 +1171,354 @@ def _write_csv_with_timing(test_results, grid_strategy, op_type, broadcast_type,
         print(f"         1. TT_METAL_DEVICE_PROFILER was not set to '1'")
         print(f"         2. Profiler data processing failed")
         print(f"         3. No profiler entries were found")
+
+
+def _run_operations_with_device(device, grid_strategy, op_type, broadcast_type, tensor_size):
+    """
+    Run all operations for a given configuration on the provided device.
+    Returns list of test results (without timing - timing is added after profiler read).
+    """
+    # Define shape pairs based on broadcast type and tensor_size
+    if broadcast_type == "no_broadcast":
+        shape_b = (tensor_size, tensor_size)
+        shape_a = (tensor_size, tensor_size)
+    elif broadcast_type == "row_broadcast":
+        shape_b = (1, tensor_size)
+        shape_a = (tensor_size, tensor_size)
+    elif broadcast_type == "col_broadcast":
+        shape_b = (tensor_size, 1)
+        shape_a = (tensor_size, tensor_size)
+    elif broadcast_type == "row_col_mixed":
+        shape_b = (tensor_size, 1)
+        shape_a = (1, tensor_size)
+    elif broadcast_type == "scalar_broadcast":
+        shape_b = (1, 1)
+        shape_a = (tensor_size, tensor_size)
+    else:
+        return []
+
+    # Sharding strategies and core counts
+    sharding_strategies = ["height"]
+    if tensor_size >= 2048:
+        core_counts = [32, 64]
+    else:
+        core_counts = [8, 16, 32]
+
+    test_configs = []
+
+    def generate_configs_for_shapes(shape_a_val, shape_b_val, label=""):
+        configs = []
+        for a_sharding in sharding_strategies:
+            for b_sharding in sharding_strategies:
+                if a_sharding == "height" and shape_a_val[0] == 1:
+                    continue
+                if b_sharding == "height" and shape_b_val[0] == 1:
+                    continue
+                if a_sharding == "width" and shape_a_val[1] == 1:
+                    continue
+                if b_sharding == "width" and shape_b_val[1] == 1:
+                    continue
+
+                a_cores_options = [None] if a_sharding == "interleaved" else core_counts
+                b_cores_options = [None] if b_sharding == "interleaved" else core_counts
+
+                for a_cores in a_cores_options:
+                    for b_cores in b_cores_options:
+                        if a_sharding == "block" and a_cores is not None:
+                            if compute_valid_block_grid(shape_a_val, a_cores) is None:
+                                continue
+                        if b_sharding == "block" and b_cores is not None:
+                            if compute_valid_block_grid(shape_b_val, b_cores) is None:
+                                continue
+                        if a_sharding != "interleaved" and a_cores is not None:
+                            if not check_l1_memory_fit(shape_a_val, a_cores, a_sharding):
+                                continue
+                        if b_sharding != "interleaved" and b_cores is not None:
+                            if not check_l1_memory_fit(shape_b_val, b_cores, b_sharding):
+                                continue
+
+                        configs.append(
+                            {
+                                "name": f"{label}a({shape_a_val[0]}×{shape_a_val[1]})_b({shape_b_val[0]}×{shape_b_val[1]})_a{a_sharding}{a_cores or 'inter'}_b{b_sharding}{b_cores or 'inter'}",
+                                "shape_a": shape_a_val,
+                                "shape_b": shape_b_val,
+                                "sharding_a": a_sharding,
+                                "sharding_b": b_sharding,
+                                "cores_a": a_cores,
+                                "cores_b": b_cores,
+                            }
+                        )
+        return configs
+
+    configs1 = generate_configs_for_shapes(shape_a, shape_b, "")
+    test_configs.extend(configs1)
+    configs2 = generate_configs_for_shapes(shape_b, shape_a, "SWAP_")
+    test_configs.extend(configs2)
+
+    test_results = []
+
+    for i, config in enumerate(test_configs):
+        print(f"\n[Operation {i+1}/{len(test_configs)}] {config['name']}")
+        print(f"  Grid Strategy: {grid_strategy}")
+
+        try:
+            tensor_a, torch_a = create_sharded_tensor(
+                device,
+                config["shape_a"],
+                config["sharding_a"],
+                config["cores_a"] if config["cores_a"] is not None else 8,
+                return_torch=True,
+            )
+
+            tensor_b, torch_b = create_sharded_tensor(
+                device,
+                config["shape_b"],
+                config["sharding_b"],
+                config["cores_b"] if config["cores_b"] is not None else 8,
+                return_torch=True,
+            )
+
+            # Get grid info
+            a_grid = None
+            b_grid = None
+            if tensor_a.is_sharded():
+                a_shard_spec = tensor_a.memory_config().shard_spec
+                grid_bbox = a_shard_spec.grid.bounding_box()
+                a_grid = f"{grid_bbox.grid_size().x}x{grid_bbox.grid_size().y}"
+            else:
+                a_grid = "8x8"
+
+            if tensor_b.is_sharded():
+                b_shard_spec = tensor_b.memory_config().shard_spec
+                grid_bbox = b_shard_spec.grid.bounding_box()
+                b_grid = f"{grid_bbox.grid_size().x}x{grid_bbox.grid_size().y}"
+            else:
+                b_grid = "8x8"
+
+            # Run operation with stderr capture
+            stderr_fd = sys.stderr.fileno()
+            with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+                original_stderr_fd = os.dup(stderr_fd)
+                try:
+                    os.dup2(tmp_file.fileno(), stderr_fd)
+                    sys.stderr = tmp_file
+
+                    if op_type == ttnn.BinaryOpType.ADD:
+                        op_func = ttnn.add
+                    elif op_type == ttnn.BinaryOpType.POWER:
+                        op_func = ttnn.pow
+                    elif op_type == ttnn.BinaryOpType.LOGADDEXP:
+                        op_func = ttnn.logaddexp
+                    else:
+                        continue
+
+                    result = op_func(tensor_a, tensor_b)
+                    ttnn.synchronize_device(device)
+                    tmp_file.flush()
+                    os.fsync(tmp_file.fileno())
+                finally:
+                    os.dup2(original_stderr_fd, stderr_fd)
+                    os.close(original_stderr_fd)
+                    sys.stderr = sys.__stderr__
+
+            with open(tmp_path, "r") as f:
+                stderr_output = f.read()
+            os.unlink(tmp_path)
+
+            if stderr_output:
+                sys.stderr.write(stderr_output)
+                sys.stderr.flush()
+
+            # Parse WORKER_GRID log
+            compute_cores = None
+            compute_grid = None
+            worker_grid_match = re.search(
+                r"WORKER_GRID:\s*strategy=(\S+)\s+cores=(\d+)\s+grid=(\d+)x(\d+)", stderr_output
+            )
+            if worker_grid_match:
+                compute_cores = int(worker_grid_match.group(2))
+                compute_grid = f"{worker_grid_match.group(3)}x{worker_grid_match.group(4)}"
+
+            # Get result info
+            result_cores = None
+            result_sharding = None
+            result_sharding_strategy = None
+            result_grid = None
+            if result.is_sharded():
+                result_shard_spec = result.memory_config().shard_spec
+                result_cores = result_shard_spec.grid.num_cores()
+                result_sharding = result_shard_spec.shape
+                grid_bbox = result_shard_spec.grid.bounding_box()
+                result_grid = f"{grid_bbox.grid_size().x}x{grid_bbox.grid_size().y}"
+                try:
+                    strategy = result_shard_spec.strategy
+                    if strategy == ttnn.ShardStrategy.HEIGHT:
+                        result_sharding_strategy = "height"
+                    elif strategy == ttnn.ShardStrategy.WIDTH:
+                        result_sharding_strategy = "width"
+                    elif strategy == ttnn.ShardStrategy.BLOCK:
+                        result_sharding_strategy = "block"
+                    else:
+                        result_sharding_strategy = "unknown"
+                except AttributeError:
+                    result_sharding_strategy = (
+                        config["sharding_a"] if config["sharding_a"] != "interleaved" else config["sharding_b"]
+                    )
+            else:
+                result_sharding_strategy = "interleaved"
+                result_grid = "8x8"
+
+            print(f"  Result: cores={result_cores}, grid={result_grid}, compute_grid={compute_grid}")
+
+            test_results.append(
+                {
+                    "config": config,
+                    "a_grid": a_grid,
+                    "b_grid": b_grid,
+                    "result_cores": result_cores,
+                    "result_grid": result_grid,
+                    "compute_cores": compute_cores,
+                    "compute_grid": compute_grid,
+                    "result_shape": result.shape,
+                    "result_sharding": result_sharding,
+                    "result_sharding_strategy": result_sharding_strategy,
+                    "a_cores": config["cores_a"],
+                    "b_cores": config["cores_b"],
+                    "error": None,
+                }
+            )
+
+            tensor_a.deallocate()
+            tensor_b.deallocate()
+            result.deallocate()
+
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            print(f"  ❌ ERROR: {error_msg}")
+            test_results.append(
+                {
+                    "config": config,
+                    "a_grid": None,
+                    "b_grid": None,
+                    "result_cores": None,
+                    "result_grid": None,
+                    "compute_cores": None,
+                    "compute_grid": None,
+                    "result_shape": None,
+                    "result_sharding": None,
+                    "result_sharding_strategy": None,
+                    "a_cores": config["cores_a"],
+                    "b_cores": config["cores_b"],
+                    "error": error_msg,
+                }
+            )
+
+    return test_results
+
+
+@pytest.mark.parametrize("op_type", [ttnn.BinaryOpType.ADD])
+@pytest.mark.parametrize("broadcast_type", ["no_broadcast"])
+@pytest.mark.parametrize("tensor_size", [1024])
+def test_all_grid_strategies(request, op_type, broadcast_type, tensor_size, result_suffix):
+    """
+    Test all grid strategies in a SINGLE pytest run by creating a fresh device for each strategy.
+
+    This solves the C++ env var caching issue by closing and reopening the device
+    for each grid strategy.
+
+    Usage:
+        TT_METAL_DEVICE_PROFILER=1 pytest example_single_test.py::test_all_grid_strategies -v -s
+
+        # With custom result folder:
+        TT_METAL_DEVICE_PROFILER=1 pytest example_single_test.py::test_all_grid_strategies -v -s --result-suffix=3
+
+    Edit GRID_STRATEGIES list below to select which strategies to test.
+    """
+    # ============ CONFIGURE STRATEGIES HERE ============
+    GRID_STRATEGIES = [
+        "max_abc",
+        "full_grid",
+        # "max_ab",
+        # "min_ab",
+        # "half_grid",
+        # "current",
+        # "a_first",
+        # "b_first",
+    ]
+    # ===================================================
+
+    global _result_suffix
+    _result_suffix = result_suffix
+
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
+
+    # Import device creation helpers
+    from tests.scripts.common import get_updated_device_params
+
+    device_id = request.config.getoption("device_id")
+
+    for grid_strategy in GRID_STRATEGIES:
+        print(f"\n{'='*80}")
+        print(f"[STRATEGY] Running grid strategy: {grid_strategy}")
+        print(f"{'='*80}")
+
+        # Set env var BEFORE device creation
+        os.environ["TT_METAL_BINARY_NG_GRID_STRATEGY"] = grid_strategy
+
+        # Create fresh device for this strategy
+        device_params = get_updated_device_params({})
+        device = ttnn.CreateDevice(device_id=device_id, **device_params)
+        ttnn.SetDefaultDevice(device)
+
+        try:
+            # Run operations
+            test_results = _run_operations_with_device(device, grid_strategy, op_type, broadcast_type, tensor_size)
+
+            # Synchronize before reading profiler
+            ttnn.synchronize_device(device)
+
+            # Read profiler data
+            if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+                try:
+                    ttnn.ReadDeviceProfiler(device)
+                except Exception as e:
+                    print(f"[PROFILER] Warning: Failed to read profiler: {e}")
+
+        finally:
+            # Always close device
+            ttnn.close_device(device)
+
+        # Process profiler logs AFTER device close
+        time.sleep(1.0)  # Wait for profiler logs to be written
+        profiler_df = process_profiler_logs_and_get_timing()
+
+        # Add timing data to results
+        if profiler_df is not None and "DEVICE KERNEL DURATION [ns]" in profiler_df.columns:
+            durations_us = (profiler_df["DEVICE KERNEL DURATION [ns]"] / 1_000).tolist()
+            for i, result_info in enumerate(test_results):
+                if i < len(durations_us):
+                    result_info["kernel_duration"] = durations_us[i]
+                else:
+                    result_info["kernel_duration"] = None
+        else:
+            for result_info in test_results:
+                result_info["kernel_duration"] = None
+
+        # Write CSV for this strategy
+        _write_csv_with_timing(test_results, grid_strategy, op_type, broadcast_type, tensor_size)
+
+        # Clean up profiler logs for next strategy
+        profiler_logs_dir = Path("/workspace/generated/profiler/.logs")
+        if profiler_logs_dir.exists():
+            shutil.rmtree(profiler_logs_dir)
+            profiler_logs_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\n[STRATEGY] Completed {grid_strategy}")
+
+    print(f"\n{'='*80}")
+    print(f"[DONE] All {len(GRID_STRATEGIES)} grid strategies completed!")
+    print(f"{'='*80}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: new_grid vs max_abc
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 38
+Strategies Compared: new_grid, max_abc
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+       new_grid: avg=  51.78μs  median=  35.58μs  std= 33.73μs
+        max_abc: avg=  60.68μs  median=  44.33μs  std= 40.67μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+new_grid vs max_abc:
+  new_grid faster: 22 configs
+  max_abc faster: 14 configs
+  Mean diff: +53.04% (negative = max_abc faster)
+  Median diff: +5.24%
+  Range: [-100.00%, 316.56%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+       new_grid: 0.00μs
+                 interleaved + block → interleaved
+        max_abc: 0.00μs
+                 interleaved + width → interleaved
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+         new_grid:   80.59μs avg (6 configs)
+          max_abc:   80.17μs avg (6 configs)
+
+height:
+         new_grid:   45.03μs avg (11 configs)
+          max_abc:   70.31μs avg (11 configs)
+
+interleaved:
+         new_grid:   43.40μs avg (10 configs)
+          max_abc:   38.63μs avg (10 configs)
+
+width:
+         new_grid:   50.44μs avg (11 configs)
+          max_abc:   60.48μs avg (11 configs)
+
+==========================================================================================
+Report generated: 2025-12-02 20:24:51
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_row_col_mixed_new_grid_20251202_202355_vs_ADD_row_col_mixed_max_abc_20251202_202202_20251202_202450
+==========================================================================================

@@ -1,0 +1,52 @@
+{
+  "strategies": [
+    "max_ab",
+    "half_grid",
+    "full_grid"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "max_ab",
+      "strategy2": "half_grid",
+      "total_configs": 0,
+      "max_ab_faster": 0,
+      "half_grid_faster": 0,
+      "ties": 0,
+      "mean_diff_us": 0.0,
+      "mean_diff_pct": 0.0,
+      "median_diff_pct": 0.0,
+      "std_diff_pct": 0.0,
+      "min_diff_pct": 0.0,
+      "max_diff_pct": 0.0
+    },
+    {
+      "strategy1": "max_ab",
+      "strategy2": "full_grid",
+      "total_configs": 0,
+      "max_ab_faster": 0,
+      "full_grid_faster": 0,
+      "ties": 0,
+      "mean_diff_us": 0.0,
+      "mean_diff_pct": 0.0,
+      "median_diff_pct": 0.0,
+      "std_diff_pct": 0.0,
+      "min_diff_pct": 0.0,
+      "max_diff_pct": 0.0
+    },
+    {
+      "strategy1": "half_grid",
+      "strategy2": "full_grid",
+      "total_configs": 0,
+      "half_grid_faster": 0,
+      "full_grid_faster": 0,
+      "ties": 0,
+      "mean_diff_us": 0.0,
+      "mean_diff_pct": 0.0,
+      "median_diff_pct": 0.0,
+      "std_diff_pct": 0.0,
+      "min_diff_pct": 0.0,
+      "max_diff_pct": 0.0
+    }
+  ],
+  "three_way": null
+}

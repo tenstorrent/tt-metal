@@ -1,0 +1,31 @@
+================================================================================
+STRATEGY COMPARISON: full_grid vs full_grid
+================================================================================
+Generated: 2025-11-17 21:44:34
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_full_grid_vs_full_grid_20251117_214433
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+Total configurations: 100
+full_grid faster: 0 cases (0.0%)
+full_grid faster: 0 cases (0.0%)
+
+BREAKDOWN BY OPERATION AND BROADCAST TYPE
+--------------------------------------------------------------------------------
+
+ADD / no_broadcast:
+  Configurations: 100
+  full_grid faster: 0 (0.0%)
+  full_grid faster: 0 (0.0%)
+  Mean time difference: 0.000 μs (+0.00%)
+  Median time difference: 0.000 μs (+0.00%)
+
+================================================================================
+Output files generated:
+  - comparison_summary.txt (this file)
+  - statistics.json
+  - For each comparison:
+      - comparison_data_{OP_TYPE}_{BROADCAST_TYPE}.csv
+      - {strategy1}_vs_{strategy2}/scatter_*.png
+================================================================================

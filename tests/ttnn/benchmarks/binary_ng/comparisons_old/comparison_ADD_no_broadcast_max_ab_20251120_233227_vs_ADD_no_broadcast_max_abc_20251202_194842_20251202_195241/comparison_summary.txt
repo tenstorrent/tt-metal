@@ -1,0 +1,54 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_ab vs max_abc
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 292
+Strategies Compared: max_ab, max_abc
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+         max_ab: avg=  39.71μs  median=  33.55μs  std= 21.25μs
+        max_abc: avg=  35.31μs  median=  27.56μs  std= 21.76μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+max_ab vs max_abc:
+  max_ab faster: 109 configs
+  max_abc faster: 183 configs
+  Mean diff: -10.29% (negative = max_abc faster)
+  Median diff: -0.41%
+  Range: [-92.01%, 8.14%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+         max_ab: 11.66μs
+                 height + height → height
+        max_abc: 2.21μs
+                 block + block → block
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+           max_ab:   37.80μs avg (84 configs)
+          max_abc:   33.09μs avg (84 configs)
+
+height:
+           max_ab:   35.67μs avg (84 configs)
+          max_abc:   32.96μs avg (84 configs)
+
+interleaved:
+           max_ab:   36.92μs avg (40 configs)
+          max_abc:   36.73μs avg (40 configs)
+
+width:
+           max_ab:   46.99μs avg (84 configs)
+          max_abc:   39.19μs avg (84 configs)
+
+==========================================================================================
+Report generated: 2025-12-02 19:52:42
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_no_broadcast_max_ab_20251120_233227_vs_ADD_no_broadcast_max_abc_20251202_194842_20251202_195241
+==========================================================================================

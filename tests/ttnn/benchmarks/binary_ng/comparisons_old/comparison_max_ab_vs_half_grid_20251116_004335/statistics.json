@@ -1,0 +1,25 @@
+{
+  "strategies": [
+    "max_ab",
+    "half_grid"
+  ],
+  "generated": "2025-11-16T00:43:36.336212",
+  "comparisons": {
+    "ADD_no_broadcast": {
+      "total_configs": 100,
+      "faster1": 80,
+      "faster2": 20,
+      "mean_diff_us": 4.464510000000001,
+      "mean_diff_pct": 8.26145474160427,
+      "median_diff_us": 5.661500000000002,
+      "median_diff_pct": 9.195437859210886
+    }
+  },
+  "overall": {
+    "total_configs": 100,
+    "max_ab_faster": 80,
+    "half_grid_faster": 20,
+    "max_ab_win_rate": 80.0,
+    "half_grid_win_rate": 20.0
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "strategies": [
+    "max_ab",
+    "max_abc",
+    "full_grid"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "max_ab",
+      "strategy2": "max_abc",
+      "total_configs": 104,
+      "max_ab_faster": 50,
+      "max_abc_faster": 54,
+      "ties": 0,
+      "mean_diff_us": -0.6111153846153841,
+      "mean_diff_pct": -0.31236057556689273,
+      "median_diff_pct": -0.06617081659053314,
+      "std_diff_pct": 18.695606640064984,
+      "min_diff_pct": -100.0,
+      "max_diff_pct": 112.08037508372404
+    },
+    {
+      "strategy1": "max_ab",
+      "strategy2": "full_grid",
+      "total_configs": 104,
+      "max_ab_faster": 10,
+      "full_grid_faster": 94,
+      "ties": 0,
+      "mean_diff_us": -8.78303846153846,
+      "mean_diff_pct": -11.8543315539533,
+      "median_diff_pct": -8.76797227909193,
+      "std_diff_pct": 13.882777955304963,
+      "min_diff_pct": -74.56282802607733,
+      "max_diff_pct": 8.15974420666076
+    },
+    {
+      "strategy1": "max_abc",
+      "strategy2": "full_grid",
+      "total_configs": 104,
+      "max_abc_faster": 9,
+      "full_grid_faster": 95,
+      "ties": 0,
+      "mean_diff_us": -8.171923076923077,
+      "mean_diff_pct": Infinity,
+      "median_diff_pct": -8.986186045775,
+      "std_diff_pct": NaN,
+      "min_diff_pct": -74.59302530589217,
+      "max_diff_pct": Infinity
+    }
+  ],
+  "three_way": {
+    "strategies": [
+      "max_ab",
+      "max_abc",
+      "full_grid"
+    ],
+    "total_configs": 104,
+    "winners": {
+      "max_ab": 4,
+      "max_abc": 8,
+      "full_grid": 92
+    },
+    "avg_times": {
+      "max_ab": 74.31307692307692,
+      "max_abc": 73.70196153846153,
+      "full_grid": 65.53003846153845
+    },
+    "median_times": {
+      "max_ab": 72.9045,
+      "max_abc": 73.357,
+      "full_grid": 65.207
+    },
+    "std_times": {
+      "max_ab": 16.314304531408624,
+      "max_abc": 17.9016797291405,
+      "full_grid": 17.867898509453692
+    },
+    "best_strategy": "full_grid",
+    "worst_strategy": "max_ab"
+  }
+}

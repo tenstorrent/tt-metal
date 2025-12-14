@@ -1,0 +1,42 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: full_grid_matched_output vs full_grid
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 36
+Strategies Compared: full_grid_matched_output, full_grid
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+full_grid_matched_output: avg=  26.88μs  median=  18.17μs  std= 18.44μs
+      full_grid: avg=  13.05μs  median=  14.04μs  std=  4.59μs
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+full_grid_matched_output vs full_grid:
+  full_grid_matched_output faster: 4 configs
+  full_grid faster: 32 configs
+  Mean diff: -32.93% (negative = full_grid faster)
+  Median diff: -31.25%
+  Range: [-71.99%, 3.27%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+full_grid_matched_output: 3.88μs
+                 height + height → height
+      full_grid: 3.88μs
+                 height + height → height
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+height:
+  full_grid_matched_output:   26.88μs avg (36 configs)
+        full_grid:   13.05μs avg (36 configs)
+
+==========================================================================================
+Report generated: 2025-12-09 05:16:39
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_no_broadcast_full_grid_matched_output_20251209_051148_vs_ADD_no_broadcast_full_grid_20251205_212749_20251209_051639
+==========================================================================================

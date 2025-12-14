@@ -1,0 +1,81 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: full_grid vs half_grid vs max_ab
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 800
+Strategies Compared: full_grid, half_grid, max_ab
+
+📈 AVERAGE PERFORMANCE
+------------------------------------------------------------------------------------------
+      full_grid: avg=  33.66μs  median=  27.19μs  std= 16.40μs
+      half_grid: avg=  42.13μs  median=  41.58μs  std= 18.90μs
+         max_ab: avg=  39.20μs  median=  33.95μs  std= 20.32μs
+
+🏆 WINNER DISTRIBUTION (fastest per config)
+------------------------------------------------------------------------------------------
+      full_grid: 516 configs ( 64.5%)
+         max_ab: 248 configs ( 31.0%)
+      half_grid:  36 configs (  4.5%)
+
+🔀 PAIRWISE COMPARISONS
+------------------------------------------------------------------------------------------
+
+full_grid vs half_grid:
+  full_grid faster: 760 configs
+  half_grid faster: 40 configs
+  Mean diff: +27.25% (negative = half_grid faster)
+  Median diff: +24.90%
+  Range: [-11.93%, 66.34%]
+
+full_grid vs max_ab:
+  full_grid faster: 530 configs
+  max_ab faster: 270 configs
+  Mean diff: +18.34% (negative = max_ab faster)
+  Median diff: +3.40%
+  Range: [-8.27%, 283.64%]
+
+half_grid vs max_ab:
+  half_grid faster: 244 configs
+  max_ab faster: 556 configs
+  Mean diff: -5.39% (negative = max_ab faster)
+  Median diff: -11.28%
+  Range: [-39.59%, 182.30%]
+
+⭐ BEST CONFIGURATIONS FOR EACH STRATEGY
+------------------------------------------------------------------------------------------
+      full_grid: 10.40μs
+                 height + height → height
+      half_grid: 11.65μs
+                 height + height → height
+         max_ab: 11.66μs
+                 height + height → height
+
+📋 AVERAGE PERFORMANCE BY OUTPUT SHARDING (C tensor)
+------------------------------------------------------------------------------------------
+
+block:
+        full_grid:   33.44μs avg (240 configs)
+        half_grid:   41.34μs avg (240 configs)
+           max_ab:   38.13μs avg (240 configs)
+
+height:
+        full_grid:   25.42μs avg (240 configs)
+        half_grid:   30.26μs avg (240 configs)
+           max_ab:   31.37μs avg (240 configs)
+
+interleaved:
+        full_grid:   25.30μs avg (80 configs)
+        half_grid:   35.43μs avg (80 configs)
+           max_ab:   36.92μs avg (80 configs)
+
+width:
+        full_grid:   44.91μs avg (240 configs)
+        half_grid:   57.03μs avg (240 configs)
+           max_ab:   48.86μs avg (240 configs)
+
+==========================================================================================
+Report generated: 2025-11-20 23:43:20
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_ADD_no_broadcast_full_grid_20251120_233915_vs_ADD_no_broadcast_half_grid_20251120_234020_vs_ADD_no_broadcast_max_ab_20251120_233227_20251120_234315
+==========================================================================================

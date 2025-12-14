@@ -1,0 +1,19 @@
+==========================================================================================
+MULTI-STRATEGY COMPARISON: max_ab vs half_grid vs full_grid
+==========================================================================================
+
+📊 OVERALL STATISTICS
+------------------------------------------------------------------------------------------
+Total Configurations: 0
+Strategies Compared: max_ab, half_grid, full_grid
+
+⚠️  WARNING: No common configurations found between the selected files.
+   This may occur if:
+   - Files have different operation types (e.g., ADD vs MUL)
+   - Files have different broadcast types (e.g., no_broadcast vs row_broadcast)
+   - Files use different test configurations
+
+==========================================================================================
+Report generated: 2025-11-16 06:08:29
+Output directory: /workspace/tests/ttnn/benchmarks/binary_ng/comparisons/comparison_max_ab_vs_half_grid_vs_full_grid_20251116_060829
+==========================================================================================

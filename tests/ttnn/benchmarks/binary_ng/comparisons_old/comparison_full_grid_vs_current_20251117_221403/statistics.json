@@ -1,0 +1,25 @@
+{
+  "strategies": [
+    "full_grid",
+    "current"
+  ],
+  "generated": "2025-11-17T22:14:03.962384",
+  "comparisons": {
+    "ADD_no_broadcast": {
+      "total_configs": 49,
+      "faster1": 41,
+      "faster2": 8,
+      "mean_diff_us": 10.476755102040816,
+      "mean_diff_pct": 33.56042548237447,
+      "median_diff_us": 5.925000000000004,
+      "median_diff_pct": 9.93842740703825
+    }
+  },
+  "overall": {
+    "total_configs": 49,
+    "full_grid_faster": 41,
+    "current_faster": 8,
+    "full_grid_win_rate": 83.6734693877551,
+    "current_win_rate": 16.3265306122449
+  }
+}

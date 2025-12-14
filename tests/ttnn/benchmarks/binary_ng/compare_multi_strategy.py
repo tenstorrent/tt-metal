@@ -93,7 +93,7 @@ def parse_filename(filename):
     op_type = "_".join(op_parts)
     remaining = parts[broadcast_start_idx:]
 
-    # Known strategy patterns (can be 1 or 2 parts)
+    # Known strategy patterns (can be 1, 2, or 3 parts)
     known_strategies = [
         ("max", "ab"),
         ("max", "abc"),
@@ -101,6 +101,7 @@ def parse_filename(filename):
         ("a", "first"),
         ("b", "first"),
         ("full", "grid"),
+        ("full", "grid", "matched", "output"),  # full_grid_matched_output
         ("half", "grid"),
         ("new", "grid"),
         ("current",),
@@ -111,8 +112,15 @@ def parse_filename(filename):
     strategy_parts = None
     broadcast_parts = None
 
+    # Try 4-part strategies (e.g., full_grid_matched_output)
+    if len(remaining) >= 5:
+        last_four = (remaining[-4], remaining[-3], remaining[-2], remaining[-1])
+        if last_four in known_strategies:
+            strategy_parts = list(last_four)
+            broadcast_parts = remaining[:-4]
+
     # Try 2-part strategies
-    if len(remaining) >= 3:
+    if strategy_parts is None and len(remaining) >= 3:
         last_two = (remaining[-2], remaining[-1])
         if last_two in known_strategies:
             strategy_parts = list(last_two)
@@ -230,7 +238,9 @@ def merge_multiple_csvs(csv_files):
         dfs.append(df)
 
     # Determine config columns (use columns that exist in all dataframes)
-    base_config_cols = ["a_shape", "a_sharding", "a_cores", "b_shape", "b_sharding", "b_cores", "c_sharding", "c_cores"]
+    # NOTE: Only use INPUT columns for merging, not output columns (c_cores, c_sharding, c_grid)
+    # because different strategies may produce different output configurations
+    base_config_cols = ["a_shape", "a_sharding", "a_cores", "b_shape", "b_sharding", "b_cores"]
 
     # Check which optional columns exist in all dataframes
     optional_cols = ["op_type", "broadcast_type", "c_shape"]
@@ -608,17 +618,23 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Compare two strategies (auto-find latest files)
+  # Compare two strategies (auto-find latest files in results/)
   python compare_multi_strategy.py max_ab max_abc
 
   # Compare three strategies
   python compare_multi_strategy.py max_ab max_abc full_grid
+
+  # Compare strategies from a different results folder (e.g., results_3/)
+  python compare_multi_strategy.py max_abc full_grid -r results_3
 
   # Compare specific CSV files directly
   python compare_multi_strategy.py ADD_no_broadcast_max_ab_20251115_235255 ADD_no_broadcast_half_grid_20251116_002025
 
   # Specify output directory
   python compare_multi_strategy.py max_ab max_abc -o my_comparison
+
+  # Both: custom results folder and output directory
+  python compare_multi_strategy.py max_abc full_grid -r results_3 -o my_comparison
         """,
     )
 
@@ -627,7 +643,11 @@ Examples:
         "-o", "--output", type=str, default=None, help="Output directory name (default: auto-generated)"
     )
     parser.add_argument(
-        "--results-dir", type=str, default="results", help="Directory containing CSV files (default: results)"
+        "-r",
+        "--results-dir",
+        type=str,
+        default="results",
+        help="Directory containing CSV files (default: results). E.g., -r results_3",
     )
 
     args = parser.parse_args()

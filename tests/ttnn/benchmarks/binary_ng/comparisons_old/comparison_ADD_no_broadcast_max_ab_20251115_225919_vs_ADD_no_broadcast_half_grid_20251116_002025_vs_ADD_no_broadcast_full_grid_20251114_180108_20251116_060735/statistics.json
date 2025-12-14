@@ -1,0 +1,81 @@
+{
+  "strategies": [
+    "max_ab",
+    "half_grid",
+    "full_grid"
+  ],
+  "pairwise": [
+    {
+      "strategy1": "max_ab",
+      "strategy2": "half_grid",
+      "total_configs": 392,
+      "max_ab_faster": 262,
+      "half_grid_faster": 130,
+      "ties": 0,
+      "mean_diff_us": -0.3247142857142857,
+      "mean_diff_pct": 0.32099008338653506,
+      "median_diff_pct": 3.209236093197659,
+      "std_diff_pct": 21.0558709115427,
+      "min_diff_pct": -64.26941150145447,
+      "max_diff_pct": 50.57560176548209
+    },
+    {
+      "strategy1": "max_ab",
+      "strategy2": "full_grid",
+      "total_configs": 392,
+      "max_ab_faster": 54,
+      "full_grid_faster": 338,
+      "ties": 0,
+      "mean_diff_us": -7.9207959183673475,
+      "mean_diff_pct": -11.958486634753866,
+      "median_diff_pct": -7.801195869421024,
+      "std_diff_pct": 19.79094979306465,
+      "min_diff_pct": -73.5183113299023,
+      "max_diff_pct": 29.538864225409927
+    },
+    {
+      "strategy1": "half_grid",
+      "strategy2": "full_grid",
+      "total_configs": 392,
+      "half_grid_faster": 40,
+      "full_grid_faster": 352,
+      "ties": 0,
+      "mean_diff_us": -7.5960816326530605,
+      "mean_diff_pct": -12.01526928106231,
+      "median_diff_pct": -13.297191392950484,
+      "std_diff_pct": 11.87830734289031,
+      "min_diff_pct": -35.99963737459205,
+      "max_diff_pct": 24.574305315631012
+    }
+  ],
+  "three_way": {
+    "strategies": [
+      "max_ab",
+      "half_grid",
+      "full_grid"
+    ],
+    "total_configs": 392,
+    "winners": {
+      "max_ab": 50,
+      "half_grid": 4,
+      "full_grid": 338
+    },
+    "avg_times": {
+      "max_ab": 58.19014285714286,
+      "half_grid": 57.86542857142857,
+      "full_grid": 50.26934693877552
+    },
+    "median_times": {
+      "max_ab": 63.553,
+      "half_grid": 63.041,
+      "full_grid": 53.7385
+    },
+    "std_times": {
+      "max_ab": 20.791956073458163,
+      "half_grid": 24.678813042707926,
+      "full_grid": 20.29758835263525
+    },
+    "best_strategy": "full_grid",
+    "worst_strategy": "max_ab"
+  }
+}
