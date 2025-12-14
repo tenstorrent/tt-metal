@@ -59,3 +59,30 @@ provided by nanobind. There is a convenience function to rewrap a `std::unique_p
 `#include "ttnn-nanobind/nanobind_helpers.hpp"`. Called as `nbh::steal_rewrap_unique`.
 
 See also: https://nanobind.readthedocs.io/en/latest/ownership.html#unique-pointers
+
+#### Setting default optional args to `std::nullopt` instead of `nb::none()`
+
+`nb::arg("name") = std::nullopt` does not work. You need `nb::arg("name") = nb::none()`.
+
+See also: https://nanobind.readthedocs.io/en/latest/porting.html#none-null-arguments
+
+#### Typing: placeholders for types covered by typecasters
+
+```cpp
+// MatmulProgramConfig is a std::variant that is covered by the nanobind variant typecaster,
+// but the "MatmulProgramConfig" name is used explicitly in `__init__.py` for type annotations.
+// The easiest way to work around this is making a placeholder class to define the symbol.
+
+// NB_MAKE_OPAQUE is probably not what you want here
+
+struct MatmulProgramConfigPlaceholder {};
+
+auto matmul_program_config = nb::class_<MatmulProgramConfigPlaceholder>(mod, "MatmulProgramConfig", R"doc(
+    Variant defining matmul program config
+)doc");
+```
+
+#### `module` is a reserved name
+
+C++20 added modules to the standard. Regardless of availability, please avoid naming your `nb::module_ module` to avoid
+keyword clashes. Prefer names such as `mod`, `m`, `module_<NAME>`, etc.
