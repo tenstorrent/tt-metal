@@ -6,10 +6,12 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import is_wormhole_b0, run_for_wormhole_b0
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
 @run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": BGE_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_perf, test",
     [

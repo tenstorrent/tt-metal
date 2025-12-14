@@ -59,7 +59,12 @@ class TtnnBGESelfAttention:
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
             num_heads=num_heads,
         )
+
         ttnn.deallocate(query_key_value_output)
+        value_layer = ttnn.reallocate(value_layer)
+        query_layer = ttnn.reallocate(query_layer)
+        key_layer = ttnn.reallocate(key_layer)
+
         attention_scores = ttnn.matmul(
             query_layer,
             key_layer,
@@ -69,6 +74,8 @@ class TtnnBGESelfAttention:
         )
         ttnn.deallocate(query_layer)
         ttnn.deallocate(key_layer)
+        attention_scores = ttnn.reallocate(attention_scores)
+
         attention_probabilities = ttnn.transformer.attention_softmax_(
             attention_scores,
             attention_mask=attention_mask,
@@ -81,8 +88,11 @@ class TtnnBGESelfAttention:
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,  # BF16 compute per engineering guidance (attention output)
         )
+
         ttnn.deallocate(attention_probabilities)
         ttnn.deallocate(value_layer)
+        context_layer = ttnn.reallocate(context_layer)
+
         context_layer = ttnn.experimental.nlp_concat_heads(
             context_layer,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,

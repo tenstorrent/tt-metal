@@ -11,20 +11,22 @@ import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_model import TtnnBGEModel
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from models.demos.wormhole.bge_large_en.ttnn.common import custom_preprocessor, preprocess_inputs
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, custom_preprocessor, preprocess_inputs
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "inputs",
-    [["BAAI/bge-large-en-v1.5", [8, 384], [8, 1, 1, 384]]],
+    [["BAAI/bge-large-en-v1.5", [8, 512], [8, 1, 1, 512]]],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": BGE_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_bge_model(device, inputs, model_location_generator):
     """Test BGE-large-en-v1.5 model with PCC validation against PyTorch reference."""
     config = transformers.BertConfig.from_pretrained(inputs[0])
 
     # Generate random inputs
+    random_seed = 42
+    torch.manual_seed(random_seed)
     input_ids = torch.randint(low=0, high=config.vocab_size - 1, size=inputs[1], dtype=torch.int64)
     attention_mask = torch.ones(inputs[1][0], inputs[1][1])
     extended_mask = custom_extended_mask(attention_mask, dtype=torch.bfloat16)

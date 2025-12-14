@@ -12,74 +12,89 @@ import ttnn
 # Intermediate size: 4096 (vs 3072 in sentence_bert)
 # Layers: 24 (vs 12 in sentence_bert)
 
+core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+
+BGE_L1_SMALL_SIZE = 0
+
+seqL = 512
+TILE_HEIGHT = 32
+seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
+seqL_t = seqL_padded // TILE_HEIGHT  # 12
+dim_t = 1024 // TILE_HEIGHT  # 32
+dim_t__x = dim_t // core_grid_8x8.x  # 4
+head_num = 16
+head_seqL_t__x = (head_num * seqL_t) // core_grid_8x8.x  # 24
+head_size_t = dim_t // head_num  # 2
+
 layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    subblock_w=4,  # Revert to 4
-    block_h=12,  # Keep same as sentence_bert for seq_len handling
-    block_w=4,  # 1024 / 32 / 8 = 4
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    subblock_w=dim_t__x,  # Revert to 4
+    block_h=seqL_t,  # Keep same as sentence_bert for seq_len handling
+    block_w=dim_t__x,  # 1024 / 32 / 8 = 4
     inplace=True,
     legacy_reduction=True,
     legacy_rsqrt=True,
 )
 
 ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    in0_block_w=4,  # Keep 4 (Kt=32, per_core=4, max is 4)
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x,  # Keep 4 (Kt=32, per_core=4, max is 4)
     out_subblock_h=1,
-    out_subblock_w=8,  # Keep 8 (no FP32 accumulation, max for BF16 is 8)
-    per_core_M=12,
-    per_core_N=16,
+    out_subblock_w=dim_t__x * 2,  # Keep 8 (no FP32 accumulation, max for BF16 is 8)
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x * 4,
     transpose_mcast=False,
     fused_activation=(ttnn.UnaryOpType.GELU, True),
+    # fused_activation=None,
 )
 
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    in0_block_w=16,  # Increase from 8 to 16 for better reuse (4096 / 32 / 8 = 16)
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x * 2,  # Increase from 8 to 16 for better reuse (4096 / 32 / 8 = 16)
     out_subblock_h=1,  # Keep 1 (per_core_M=12, so 1 divides evenly)
-    out_subblock_w=4,  # Try 4 (max for FP32: 1*4=4, divides per_core_N=4)
-    per_core_M=12,
-    per_core_N=4,  # Calculated: ceil(1024 / (32 * 8)) = 4
+    out_subblock_w=dim_t__x // 2,  # Try 4 (max for FP32: 1*4=4, divides per_core_N=4)
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x,  # Calculated: ceil(1024 / (32 * 8)) = 4
     transpose_mcast=False,
     fused_activation=None,
 )
 
 query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    in0_block_w=4,  # Revert to 4 (must divide K evenly: 1024/32=32, 32/8=4)
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x // 2,  # Revert to 4 (must divide K evenly: 1024/32=32, 32/8=4)
     out_subblock_h=1,
-    out_subblock_w=4,  # Keep 4 for FP32 accumulation (1*4=4 <= 4, max for FP32)
-    per_core_M=12,
-    per_core_N=12,
+    out_subblock_w=dim_t__x // 2,  # Keep 4 for FP32 accumulation (1*4=4 <= 4, max for FP32)
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x * 3,
     transpose_mcast=False,
     fused_activation=None,
 )
 
 self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    in0_block_w=4,
-    out_subblock_h=2,  # Restore to 2 (no FP32 accumulation on self-output)
-    out_subblock_w=4,  # Restore to 4
-    per_core_M=12,
-    per_core_N=4,
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x,
+    out_subblock_h=1,  # Restore to 2 (no FP32 accumulation on self-output)
+    out_subblock_w=dim_t__x,  # Restore to 4
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x,
     transpose_mcast=False,
     fused_activation=None,
 )
 
 pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    in0_block_w=2,
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=head_size_t,
     out_subblock_h=1,
-    out_subblock_w=6,  # Keep 6 (best balance between performance and PCC)
-    per_core_M=24,
-    per_core_N=12,
+    out_subblock_w=seqL_t // 2,  # Keep 6 (best balance between performance and PCC)
+    per_core_M=head_seqL_t__x,
+    per_core_N=seqL_t,
 )
 
 softmax_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(8, 8),
-    subblock_w=6,  # Revert to 6 (best for accuracy)
-    block_h=24,  # Keep same for seq_len handling
-    block_w=12,  # Keep same for seq_len handling (384 / 32 / 8 = 1.5, but using 12 for compatibility)
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    subblock_w=seqL_t,  # Revert to 6 (best for accuracy)
+    block_h=head_seqL_t__x,  # Keep same for seq_len handling
+    block_w=seqL_t,  # Keep same for seq_len handling (384 / 32 / 8 = 1.5, but using 12 for compatibility)
 )
 
 

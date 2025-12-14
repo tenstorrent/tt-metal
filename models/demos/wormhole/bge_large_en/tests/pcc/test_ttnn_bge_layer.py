@@ -11,17 +11,17 @@ import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_layer import TtnnBGELayer
 from models.demos.sentence_bert.reference.sentence_bert import BertLayer
-from models.demos.wormhole.bge_large_en.ttnn.common import custom_preprocessor
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "inputs",
     [
-        ["BAAI/bge-large-en-v1.5", [8, 384, 1024], [8, 1, 1, 384]],
+        ["BAAI/bge-large-en-v1.5", [8, 512, 1024], [8, 1, 1, 512]],
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": BGE_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_bge_layer(device, inputs, model_location_generator):
     """Test BGE transformer layer (attention + FFN) PCC."""
     target_prefix = f"encoder.layer.{0}."

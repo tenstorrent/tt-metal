@@ -31,7 +31,11 @@ class TtnnBGEOutput:
             ),
             dtype=ttnn.bfloat8_b,  # Keep BF8 for storage; compute will use BF16 with FP32 accumulation
         )
-        bert_output_lin = ttnn.reshard(bert_output_lin, input_tensor.memory_config())
+
+        ttnn.deallocate(hidden_states)
+        # bert_output_lin = ttnn.reshard(bert_output_lin, input_tensor.memory_config())
+        bert_output_lin = ttnn.reallocate(bert_output_lin)
+
         bert_output_lin = self.LayerNorm(
             bert_output_lin,
             residual_input_tensor=input_tensor,
@@ -45,4 +49,6 @@ class TtnnBGEOutput:
             ),
             program_config=layernorm_program_config,
         )
+
+        ttnn.deallocate(input_tensor)
         return bert_output_lin

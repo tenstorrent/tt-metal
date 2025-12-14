@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.bge_large_en.runner.performant_runner import BGEPerformantRunner
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE
 
 
 def run_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weight_dtype, model_location_generator):
@@ -45,13 +46,15 @@ def run_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weigh
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "act_dtype, weight_dtype",
     ((ttnn.bfloat16, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("batch_size, sequence_length", [(8, 384)])
+@pytest.mark.parametrize("batch_size, sequence_length", [(8, 512)])
 def test_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weight_dtype, model_location_generator):
     """Test single device performance for BGE-large-en-v1.5."""
     return run_e2e_performant_bge(
@@ -61,13 +64,15 @@ def test_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weig
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "act_dtype, weight_dtype",
     ((ttnn.bfloat16, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("device_batch_size, sequence_length", [(8, 384)])
+@pytest.mark.parametrize("device_batch_size, sequence_length", [(8, 512)])
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_bge_dp(

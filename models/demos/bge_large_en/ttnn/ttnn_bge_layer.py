@@ -22,6 +22,8 @@ class TtnnBGELayer:
     ):
         self_attention_outputs = self.attention(hidden_states, attention_mask, device=device)
         ttnn.deallocate(hidden_states)
+        self_attention_outputs = ttnn.reallocate(self_attention_outputs)
         intermediate_output = self.intermediate(self_attention_outputs)
-        intermediate_output = self.output(intermediate_output, self_attention_outputs)
-        return intermediate_output
+        layer_output = self.output(intermediate_output, self_attention_outputs)
+        layer_output = ttnn.reallocate(layer_output)
+        return layer_output
