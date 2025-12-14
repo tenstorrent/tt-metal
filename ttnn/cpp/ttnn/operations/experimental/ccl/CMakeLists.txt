@@ -27,6 +27,7 @@ file(
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
+    deepseek_minimal_broadcast/device/kernels/*
 )
 
 target_sources(
@@ -40,7 +41,10 @@ target_sources(
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
             composite_common.hpp
-            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -90,7 +94,7 @@ target_sources(
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
         matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
-        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op_device_operation.cpp
@@ -107,6 +111,9 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
+        deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
