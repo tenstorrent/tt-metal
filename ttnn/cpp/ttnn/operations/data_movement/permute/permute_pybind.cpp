@@ -24,7 +24,7 @@ void bind_permute(py::module& module) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be `0.0`.
+            pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
