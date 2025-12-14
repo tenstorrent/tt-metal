@@ -192,6 +192,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
+    -pthread # Required for PCH consistency across all targets
 )
 
 # Planned to be temporary, remove later.

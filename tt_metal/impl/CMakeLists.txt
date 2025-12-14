@@ -161,6 +161,7 @@ if(TARGET all_generated_files)
         DEPENDS
             ${INSPECTOR_RPC_CAPNP_HEADER}
             ${INSPECTOR_RPC_GENERATED_HEADER}
+            ${RUNTIME_INSPECTOR_RPC_CAPNP_HEADER}
     )
     add_dependencies(all_generated_files capnp_generated_files)
 endif()
@@ -203,20 +204,32 @@ target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatb
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
 
 # Generate Inspector RPC stub file
-set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)
+set(TRIAGE_INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)
+set(TRIAGE_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/rpc.capnp)
+set(TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/runtime_rpc.capnp)
+set(TRIAGE_TTNN_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/ttnn_rpc.capnp)
 add_custom_command(
     OUTPUT
-        ${INSPECTOR_RPC_STUB_FILE}
+        ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
     COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py ${INSPECTOR_RPC_STUB_FILE}
-        ${INSPECTOR_RPC_CAPNP} ${RUNTIME_INSPECTOR_RPC_CAPNP}
+        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
+        ${TRIAGE_INSPECTOR_RPC_CAPNP} ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP} ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
     DEPENDS
-        ${INSPECTOR_RPC_CAPNP}
-        ${RUNTIME_INSPECTOR_RPC_CAPNP}
+        ${TRIAGE_INSPECTOR_RPC_CAPNP}
+        ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}
+        ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py
-    COMMENT "Generating RPC stub for ${INSPECTOR_RPC_CAPNP}"
+    COMMENT
+        "Generating RPC stub for ${TRIAGE_INSPECTOR_RPC_CAPNP}, ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}, ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}"
 )
-add_custom_target(inspector_rpc_stub ALL DEPENDS ${INSPECTOR_RPC_STUB_FILE})
+add_custom_target(
+    inspector_rpc_stub
+    ALL
+    DEPENDS
+        ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
+        ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}
+        ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
+)
 
 # Optionally, ensure impl depends on the stub file
 add_dependencies(impl inspector_rpc_stub)

@@ -39,6 +39,54 @@ foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
+# Generate Inspector Cap'n Proto headers and RPC server implementation
+set(_INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/rpc.capnp)
+set(TTNN_INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp)
+set(CAPNPC_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+file(MAKE_DIRECTORY ${CAPNPC_OUTPUT_DIR})
+
+capnp_generate_cpp(_INSPECTOR_RPC_CAPNP_SOURCES _INSPECTOR_RPC_CAPNP_HEADER ${_INSPECTOR_RPC_CAPNP})
+capnp_generate_cpp(TTNN_INSPECTOR_RPC_CAPNP_SOURCES TTNN_INSPECTOR_RPC_CAPNP_HEADER ${TTNN_INSPECTOR_RPC_CAPNP})
+
+# Generate Inspector RPC callbacks server implementation
+set(TTNN_INSPECTOR_RPC_GENERATED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/core/inspector/ttnn_rpc_channel_generated.hpp)
+set(TTNN_INSPECTOR_RPC_GENERATED_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/core/inspector/ttnn_rpc_channel_generated.cpp)
+add_custom_command(
+    OUTPUT
+        ${TTNN_INSPECTOR_RPC_GENERATED_HEADER}
+        ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
+    COMMAND
+        python3 ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/generate_rpc_channel.py ${TTNN_INSPECTOR_RPC_CAPNP}
+        ${TTNN_INSPECTOR_RPC_GENERATED_HEADER} ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
+    DEPENDS
+        ${TTNN_INSPECTOR_RPC_CAPNP}
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/generate_rpc_channel.py
+    COMMENT "Generating RPC server implementation for ${TTNN_INSPECTOR_RPC_CAPNP}"
+)
+list(APPEND IMPL_SRC ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE})
+# Disable clang-tidy for generated Inspector files
+set_source_files_properties(
+    ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
+    ${TTNN_INSPECTOR_RPC_GENERATED_HEADER}
+    ${_INSPECTOR_RPC_CAPNP_SOURCES}
+    ${TTNN_INSPECTOR_RPC_CAPNP_SOURCES}
+    PROPERTIES
+        SKIP_LINTING
+            TRUE
+)
+
+# Define dependency for CI small build for clang-tidy
+if(TARGET all_generated_files)
+    add_custom_target(
+        ttnn_capnp_generated_files
+        DEPENDS
+            ${_INSPECTOR_RPC_CAPNP_HEADER}
+            ${TTNN_INSPECTOR_RPC_GENERATED_HEADER}
+            ${TTNN_INSPECTOR_RPC_CAPNP_HEADER}
+    )
+    add_dependencies(all_generated_files ttnn_capnp_generated_files)
+endif()
+
 set_target_properties(
     ttnn_core
     PROPERTIES
@@ -58,6 +106,9 @@ target_sources(
         FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
+        ${INSPECTOR_RPC_CAPNP_SOURCES}
+        ${TTNN_INSPECTOR_RPC_CAPNP_SOURCES}
+        ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
@@ -80,6 +131,7 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/graph/levelized_graph.cpp
+        core/inspector/inspector.cpp
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
@@ -113,7 +165,14 @@ target_include_directories(
         core
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
 )
-target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
+target_include_directories(
+    ttnn_core
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}/core/inspector
+)
 target_link_libraries(
     ttnn_core
     PUBLIC
@@ -122,6 +181,8 @@ target_link_libraries(
         xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
+        capnp
+        capnp-rpc
 )
 
 install(

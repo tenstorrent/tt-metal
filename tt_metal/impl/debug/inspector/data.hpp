@@ -15,7 +15,7 @@ class Data {
 public:
     ~Data();
 
-    RuntimeInspectorRpcChannel& get_runtime_inspector_rpc() { return runtime_inspector_rpc; }
+    rpc::RuntimeInspectorRpcChannel& get_runtime_inspector_rpc() { return runtime_inspector_rpc; }
 
 private:
     Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
@@ -48,7 +48,7 @@ private:
 
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
-    RuntimeInspectorRpcChannel runtime_inspector_rpc;
+    rpc::RuntimeInspectorRpcChannel runtime_inspector_rpc;
     std::mutex programs_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;

@@ -1,0 +1,1 @@
+../../../tt_metal/api/tt-metalium/rpc.capnp

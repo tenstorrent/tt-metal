@@ -30,7 +30,7 @@ Data::Data()
             get_rpc_server().registerChannel(
                 "RuntimeInspector",
                 rpc::InspectorChannel::Client(
-                    ::kj::Own<RuntimeInspectorRpcChannel>(&runtime_inspector_rpc, ::kj::NullDisposer::instance)));
+                    ::kj::Own<rpc::RuntimeInspectorRpcChannel>(&runtime_inspector_rpc, ::kj::NullDisposer::instance)));
 
             // Connect callbacks to runtime inspector that we want to respond to
             get_runtime_inspector_rpc().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });

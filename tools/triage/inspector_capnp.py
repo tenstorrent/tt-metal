@@ -20,4 +20,4 @@ def load_capnp_schemas(files: list[str], all: list[str]):
                 all.append(name)
 
 
-load_capnp_schemas(["rpc.capnp", "runtime_rpc.capnp"], __all__)
+load_capnp_schemas(["rpc.capnp", "runtime_rpc.capnp", "ttnn_rpc.capnp"], __all__)

@@ -377,7 +377,7 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     return empty_rpc_server;
 }
 
-inspector::RuntimeInspectorRpcChannel& Inspector::get_runtime_inspector_rpc() {
+inspector::rpc::RuntimeInspectorRpcChannel& Inspector::get_runtime_inspector_rpc() {
     if (is_enabled()) {
         try {
             auto* data = get_inspector_data();
@@ -386,7 +386,7 @@ inspector::RuntimeInspectorRpcChannel& Inspector::get_runtime_inspector_rpc() {
             TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
         }
     }
-    static inspector::RuntimeInspectorRpcChannel empty_runtime_inspector_rpc;
+    static inspector::rpc::RuntimeInspectorRpcChannel empty_runtime_inspector_rpc;
     return empty_runtime_inspector_rpc;
 }
 
@@ -400,6 +400,11 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
     }
+}
+
+// API function to register an Inspector RPC channel
+void RegisterInspectorRpcChannel(const std::string& name, inspector::rpc::InspectorChannel::Client channel) {
+    Inspector::get_rpc_server().registerChannel(name, kj::mv(channel));
 }
 
 }  // namespace tt::tt_metal

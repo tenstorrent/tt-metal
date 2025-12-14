@@ -58,7 +58,8 @@ class InspectorRpcController:
                 exception = self._task.exception()
                 assert exception is not None
                 raise exception
-        self.runtime_rpc = self.__get_rpc_channel_wrapper("RuntimeInspector", inspector_capnp.RuntimeInspector)
+        self.runtime_rpc: inspector_capnp.RuntimeInspector = self.__get_rpc_channel_wrapper("RuntimeInspector", inspector_capnp.RuntimeInspector)  # type: ignore
+        self.ttnn_rpc: inspector_capnp.TtnnInspector = self.__get_rpc_channel_wrapper("TtnnInspector", inspector_capnp.TtnnInspector)  # type: ignore
 
     def __del__(self):
         if self._running:
@@ -74,9 +75,9 @@ class InspectorRpcController:
                 try:
                     connection = await capnp.AsyncIoStream.create_connection(host=self.host, port=self.port)
                     client = capnp.TwoPartyClient(connection)
-                    self.inspector_rpc = self.__get_rpc_wrapper(
+                    self.inspector_rpc: inspector_capnp.InspectorChannelRegistry = self.__get_rpc_wrapper(
                         client.bootstrap(), inspector_capnp.InspectorChannelRegistry
-                    )
+                    )  # type: ignore
                     self._running = True
                 except:
                     self._loop.stop()
@@ -178,6 +179,7 @@ class InspectorRpcSerialized:
 class InspectorData:
     inspector_channel_registry: inspector_capnp.InspectorChannelRegistry
     runtime_rpc: inspector_capnp.RuntimeInspector
+    ttnn_rpc: inspector_capnp.TtnnInspector
 
 
 @triage_singleton
@@ -189,7 +191,7 @@ def run(args, context) -> InspectorData:
     # First try to connect to Inspector RPC
     try:
         controller = InspectorRpcController(rpc_host, rpc_port)
-        return InspectorData(controller.inspector_rpc, controller.runtime_rpc)
+        return InspectorData(controller.inspector_rpc, controller.runtime_rpc, controller.ttnn_rpc)
     except:
         pass
 
@@ -200,10 +202,13 @@ def run(args, context) -> InspectorData:
 
     # Try to load serialized RPC data
     try:
-        rpc_serialized = InspectorRpcSerialized(
+        runtime_rpc_serialized: inspector_capnp.RuntimeInspector = InspectorRpcSerialized(
             os.path.join(log_directory, "RuntimeInspector"), inspector_capnp.RuntimeInspector
-        )
-        return InspectorData(None, rpc_serialized)
+        )  # type: ignore
+        ttnn_rpc_serialized: inspector_capnp.TtnnInspector = InspectorRpcSerialized(
+            os.path.join(log_directory, "TtnnInspector"), inspector_capnp.TtnnInspector
+        )  # type: ignore
+        return InspectorData(None, runtime_rpc_serialized, ttnn_rpc_serialized)
     except:
         raise InspectorException(
             "There is no Inspector RPC data, cannot continue. "

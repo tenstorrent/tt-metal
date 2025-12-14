@@ -1,0 +1,1 @@
+../../impl/debug/inspector/rpc.capnp

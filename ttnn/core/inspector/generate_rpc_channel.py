@@ -1,0 +1,1 @@
+../../../tt_metal/impl/debug/inspector/generate_rpc_channel.py

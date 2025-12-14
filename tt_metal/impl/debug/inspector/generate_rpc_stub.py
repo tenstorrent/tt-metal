@@ -130,6 +130,7 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
         else:
             print_indented(f, indent, f"class {name}:")
         indent += 1
+        printed_content = len(node_schema.as_interface().methods.items()) > 0
         for method_name, method in node_schema.as_interface().methods.items():
             method_name_cap = method_name[0].upper() + method_name[1:]
             method_result = f"{method_name_cap}Results"
@@ -143,6 +144,8 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
             method_name_cap = method_name[0].upper() + method_name[1:]
             method_result = f"{method_name_cap}Results"
             print_type(f, method.result_type, type_ids, indent, method_result)
+        if not printed_content:
+            print_indented(f, indent, "pass")
     else:
         print(f" warning: {node_type} type is not supported in stub generation")
 

@@ -23,7 +23,7 @@ class MethodInfo:
     return_name: str
 
 
-def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo]]:
+def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo], str]:
     """Parse Cap'n Proto schema file and extract interface methods."""
 
     with open(capnp_file, "r") as f:
@@ -31,6 +31,12 @@ def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo]]:
 
     # Remove comments to avoid parsing issues
     content = re.sub(r"#[^\n]*", "", content)
+
+    # Extract C++ namespace if defined
+    cpp_namespace = "tt::tt_metal::inspector"  # Default namespace
+    namespace_match = re.search(r'\$Cxx.namespace\("([^"]+)"\);', content)
+    if namespace_match:
+        cpp_namespace = namespace_match.group(1)
 
     # Find the interface block
     interface_match = re.search(
@@ -102,10 +108,10 @@ def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo]]:
 
         methods.append(MethodInfo(method_name, ordinal, params, return_type, return_name))
 
-    return (interface_name, methods)
+    return (interface_name, methods, cpp_namespace)
 
 
-def generate_header(channel_name: str, methods: List[MethodInfo], capnp_file_path: str) -> str:
+def generate_header(channel_name: str, methods: List[MethodInfo], capnp_file_path: str, cpp_namespace: str) -> str:
     """Generate the header file content."""
 
     capnp_filename = os.path.basename(capnp_file_path)
@@ -122,9 +128,9 @@ def generate_header(channel_name: str, methods: List[MethodInfo], capnp_file_pat
 #include <filesystem>
 #include <functional>
 #include <capnp/ez-rpc.h>
-#include "impl/debug/inspector/{capnp_filename}.h"
+#include "{capnp_filename}.h"
 
-namespace tt::tt_metal::inspector {{
+namespace {cpp_namespace} {{
 
 class {class_name} final : public rpc::{channel_name}::Server {{
 public:
@@ -134,8 +140,8 @@ public:
     void serialize(const std::filesystem::path& directory);
 
     // Base RPC InspectorChannel interface implementation
-    ::kj::Promise<void> serializeRpc(rpc::InspectorChannel::Server::SerializeRpcContext context) override;
-    ::kj::Promise<void> getName(rpc::InspectorChannel::Server::GetNameContext context) override;
+    ::kj::Promise<void> serializeRpc(tt::tt_metal::inspector::rpc::InspectorChannel::Server::SerializeRpcContext context) override;
+    ::kj::Promise<void> getName(tt::tt_metal::inspector::rpc::InspectorChannel::Server::GetNameContext context) override;
 
     // RPC channel interface implementation - delegates to callbacks
 """
@@ -191,7 +197,7 @@ private:
     return header
 
 
-def generate_source(channel_name: str, methods: List[MethodInfo], output_header) -> str:
+def generate_source(channel_name: str, methods: List[MethodInfo], output_header: str, cpp_namespace: str) -> str:
     """Generate the source file content."""
 
     output_header_filename = os.path.basename(output_header)
@@ -201,7 +207,6 @@ def generate_source(channel_name: str, methods: List[MethodInfo], output_header)
 // SPDX-License-Identifier: Apache-2.0
 //
 // Auto-generated file - DO NOT EDIT
-// Generated from impl/debug/inspector/rpc.capnp by generate_inspector_rpc_server.py
 
 #include "{output_header_filename}"
 #include <fstream>
@@ -209,9 +214,9 @@ def generate_source(channel_name: str, methods: List[MethodInfo], output_header)
 #include <kj/std/iostream.h>
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_metal::inspector {{
+namespace {cpp_namespace} {{
 
-::kj::Promise<void> {class_name}::serializeRpc(rpc::InspectorChannel::Server::SerializeRpcContext context) {{
+::kj::Promise<void> {class_name}::serializeRpc(tt::tt_metal::inspector::rpc::InspectorChannel::Server::SerializeRpcContext context) {{
     try {{
         auto params = context.getParams();
         KJ_REQUIRE(params.hasPath(), "serializeRpc called without path parameter");
@@ -224,7 +229,7 @@ namespace tt::tt_metal::inspector {{
     }}
 }}
 
-::kj::Promise<void> {class_name}::getName(rpc::InspectorChannel::Server::GetNameContext context) {{
+::kj::Promise<void> {class_name}::getName(tt::tt_metal::inspector::rpc::InspectorChannel::Server::GetNameContext context) {{
     try {{
         context.getResults().setName("{channel_name}");
         return kj::READY_NOW;
@@ -306,15 +311,15 @@ def main():
     output_source = sys.argv[3]
 
     try:
-        channel_name, methods = parse_capnp_interface(capnp_file)
+        channel_name, methods, cpp_namespace = parse_capnp_interface(capnp_file)
 
         # Generate header
-        header_content = generate_header(channel_name, methods, capnp_file)
+        header_content = generate_header(channel_name, methods, capnp_file, cpp_namespace)
         with open(output_header, "w") as f:
             f.write(header_content)
 
         # Generate source
-        source_content = generate_source(channel_name, methods, output_header)
+        source_content = generate_source(channel_name, methods, output_header, cpp_namespace)
         with open(output_source, "w") as f:
             f.write(source_content)
 
