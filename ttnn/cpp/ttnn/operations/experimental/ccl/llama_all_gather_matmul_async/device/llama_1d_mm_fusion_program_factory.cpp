@@ -12,10 +12,10 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.hpp"
 
 using namespace tt;
 
@@ -26,7 +26,7 @@ namespace llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
+ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t
 process_agmm_fusion_program_and_create_override_variables(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
@@ -641,7 +641,7 @@ process_agmm_fusion_program_and_create_override_variables(
     std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
     shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
 
-    return ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t{
+    return ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t{
         {mm_kernel_in1_sender_writer_id},
         shared_cbs,
         false,
@@ -652,13 +652,13 @@ process_agmm_fusion_program_and_create_override_variables(
 }  // end of process_agmm_fusion_program_and_create_override_variables
 
 inline void override_agmm_fusion_program_parameters(
-    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
+    const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    const auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
+    const auto& global_cb = static_cast<const ttnn::LlamaAllGatherMatmulAsync*>(operation)->matmul_struct.global_cb;
 
     auto* src_buffer_a = input_tensors[0].buffer();
     auto* src_buffer_b = input_tensors[1].buffer();
@@ -699,7 +699,7 @@ inline void override_agmm_fusion_program_parameters(
 }
 
 void override_program_parameters(
-    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
+    const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -714,7 +714,7 @@ void override_program_parameters(
 
 namespace ttnn::operations::llama_matmul {
 
-ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
+ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -949,35 +949,36 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
 
-    ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars = matmul_multi_core_agmm_fusion_(
-        program,
-        a,
-        b_tensors,
-        bias,
-        output_tensors,
-        broadcast_batch,
-        compute_with_storage_grid_size,
-        compute_kernel_config,
-        ttnn::get_throttle_level(compute_kernel_config),
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        out_block_h,
-        out_block_w,
-        per_core_M,
-        per_core_N,
-        fuse_batch,
-        fused_activation,
-        mcast_in0,
-        gather_in0,
-        hop_cores,
-        untilize_out,
-        empty_fused_op_signaler,
-        global_cb,
-        num_global_cb_receivers,
-        sub_device_id,
-        tt::CBIndex::c_0,
-        std::nullopt);
+    ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t shared_vars =
+        matmul_multi_core_agmm_fusion_(
+            program,
+            a,
+            b_tensors,
+            bias,
+            output_tensors,
+            broadcast_batch,
+            compute_with_storage_grid_size,
+            compute_kernel_config,
+            ttnn::get_throttle_level(compute_kernel_config),
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            out_block_h,
+            out_block_w,
+            per_core_M,
+            per_core_N,
+            fuse_batch,
+            fused_activation,
+            mcast_in0,
+            gather_in0,
+            hop_cores,
+            untilize_out,
+            empty_fused_op_signaler,
+            global_cb,
+            num_global_cb_receivers,
+            sub_device_id,
+            tt::CBIndex::c_0,
+            std::nullopt);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -991,8 +992,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
-
-ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
+ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -1058,7 +1058,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
+    ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t shared_vars =
         llama_matmul::matmul_multi_core_agmm_fusion_helper(
             program,
             a,
