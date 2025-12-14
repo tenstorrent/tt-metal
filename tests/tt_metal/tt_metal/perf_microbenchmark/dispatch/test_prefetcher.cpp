@@ -196,7 +196,12 @@ private:
     uint32_t dram_data_size_words_{};
 
     // Helper function to execute generated commands via exec buff on device
-    // Orchestrates the command buffer reservation, writing, and submission
+    // Orchestrates the command buffer reservation, writing, and submission.
+    // Executing commands via using exec buf in DRAM involves below steps:
+    // 1. Concat all commands to be executed via exec buf in a buffer.
+    // 2. Append a barrier, and then add exec buf end command to switch back to issue queue
+    // 3. Write exec buf data into dram
+    // 4. execute exec buf start command from issue queue
     void execute_generated_commands_exec_buff(
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
         DeviceData& device_data,
@@ -497,12 +502,6 @@ protected:
     }
 };
 
-class PrefetcherSmokeTestFixture : public PrefetcherRingbufferReadTestFixture,
-                                   public PrefetcherPackedReadTestFixture,
-                                   public PrefecherHostTextFixture {
-protected:
-};
-
 // Host-side helpers used by tests to emit the same CQ commands
 // that prefetcher/dispatcher code emits. This namespace replicates the production code's command generation logic
 // for testing purposes.
@@ -794,44 +793,34 @@ protected:
         uint32_t noc_xy,
         uint32_t& remaining_bytes) {
         const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
-        uint32_t start_page = payload_generator_->get_rand<uint32_t>(0, num_banks_ - 1);
-        // Calculate how many pages fit in this chunk
-        uint32_t max_bytes_in_chunk = big_chunk_ ? MAX_PAGE_SIZE : 4096;
-        uint32_t page_size = (payload_generator_->get_rand<uint32_t>(0, max_bytes_in_chunk)) & ~(dram_alignment - 1);
-        page_size = std::max(page_size, dram_alignment);
-        // Ensure we don't exceed remaining bytes
-        if (page_size > remaining_bytes) {
-            page_size = remaining_bytes & ~(dram_alignment - 1);
-            if (page_size == 0) {
-                return std::nullopt;  // Cannot proceed if less than alignment
-            }
-        }
-        uint32_t page_size_words = page_size / sizeof(uint32_t);
 
-        // Calculate max random size we can read
-        uint32_t max_data = big_chunk_ ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
-        uint32_t max = DEVICE_DATA_SIZE - (device_data.size() * sizeof(uint32_t));
-        max = std::max(max, max_data);
-
-        // Randomize base address in DRAM
-        uint32_t random_offset =
-            (payload_generator_->get_rand<uint32_t>(0, DRAM_DATA_SIZE_BYTES / 2 - 1)) & ~(dram_alignment - 1);
-        // Randomize total size to read
-        uint32_t size = payload_generator_->get_rand<uint32_t>(0, max - 1);
-        size = std::max(size, page_size);
-        // Calculate number of pages
-        uint32_t pages = size / page_size;
-        // Clamp pages to remaining bytes if needed
-        if (pages * page_size > remaining_bytes) {
-            pages = remaining_bytes / page_size;
-        }
-
-        if (pages == 0) {
+        // Get max pages
+        uint32_t max_page_size = std::min(big_chunk_ ? MAX_PAGE_SIZE : 4096, remaining_bytes);
+        if (max_page_size < dram_alignment) {
             return std::nullopt;
         }
+        // Pick a random page size, align up and then clamp down if we overshot remaining bytes
+        uint32_t page_size = tt::align(payload_generator_->get_rand<uint32_t>(1, max_page_size), dram_alignment);
+        if (page_size > remaining_bytes) {
+            page_size -= dram_alignment;
+        }
 
-        // Validation check
-        TT_ASSERT(random_offset + (start_page * page_size + pages * page_size / num_banks_) < DRAM_DATA_SIZE_BYTES);
+        // Pick random number of pages
+        uint32_t max_pages = remaining_bytes / page_size;
+        uint32_t max_data_limit = big_chunk_ ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
+        uint32_t cmd_limit_pages = std::max(1u, max_data_limit / page_size);
+        uint32_t pages = payload_generator_->get_rand<uint32_t>(1, std::min(max_pages, cmd_limit_pages));
+
+        // Randomize source DRAM location
+        uint32_t total_bytes = pages * page_size;
+        uint32_t random_offset =
+            tt::align(payload_generator_->get_rand<uint32_t>(0, DRAM_DATA_SIZE_BYTES / 2), dram_alignment);
+
+        if (random_offset + total_bytes > DRAM_DATA_SIZE_BYTES) {
+            random_offset = 0;
+        }
+
+        uint32_t start_page = payload_generator_->get_rand<uint32_t>(0, num_banks_ - 1);
 
         // TODO: Randomize length adjust
         uint32_t length_adjust = 0;
@@ -842,29 +831,30 @@ protected:
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
             noc_xy, addr, start_page, cmd_base_addr, page_size, pages, length_adjust);
 
-        // Use offset words for validation indexing
-        uint32_t validation_base_addr_words = random_offset / sizeof(uint32_t);
+        // Update DeviceData for paged read
+        uint32_t page_size_words = page_size / sizeof(uint32_t);
+        uint32_t base_addr_words = random_offset / sizeof(uint32_t);
         uint32_t length_adjust_words = length_adjust / sizeof(uint32_t);
         uint32_t last_page = start_page + pages;
 
         for (uint32_t page_idx = start_page; page_idx < last_page; ++page_idx) {
             const uint32_t bank_id = page_idx % num_banks_;
-            uint32_t bank_offset = validation_base_addr_words + page_size_words * (page_idx / num_banks_);
+            uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_banks_);
 
             // Get the logical core for this bank
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+
             uint32_t words_to_read = page_size_words;
             if (page_idx == last_page - 1) {
                 words_to_read -= length_adjust_words;
             }
 
-            // Update DeviceData for paged read
             DeviceDataUpdater::update_paged_dram_read(
                 worker_range, device_data, bank_core, bank_id, bank_offset, words_to_read);
         }
 
-        uint32_t actual_data_size = (page_size * pages) - length_adjust;
+        uint32_t actual_data_size = total_bytes - length_adjust;
         remaining_bytes -= actual_data_size;
         return cmd;
     }
@@ -1225,6 +1215,7 @@ public:
         cmds_.push_back(cmd);
     }
 
+    // Relay inline dispatcher to host writes smoke test helper
     void add_host_write(uint32_t length, const std::function<void(DeviceData&)>& pad_host_data) {
         constexpr bool inline_data = true;
         std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
@@ -1902,9 +1893,9 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
-// Smoke test of prefetcher/dispatcher commands
-TEST_P(PrefetcherSmokeTestFixture, SmokeTest) {
-    log_info(tt::LogTest, "PrefetcherSmokeTestFixture - SmokeTest - Test Start");
+// Smoke test of prefetcher/dispatcher commands except add_dispatch_write_host
+TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
+    log_info(tt::LogTest, "PrefetcherPackedReadTestFixture - SmokeTest - Test Start");
 
     const uint32_t num_iterations = get_num_iterations();
     const uint32_t dram_data_size_words = get_dram_data_size_words();
@@ -2048,8 +2039,8 @@ TEST_P(PrefetcherSmokeTestFixture, SmokeTest) {
 // Smoke test for writes to Host from dispatcher
 // This needed to be separate since it executes differently than others
 // (we skip distributed::Finish)
-TEST_P(PrefetcherSmokeTestFixture, HostSmokeTest) {
-    log_info(tt::LogTest, "PrefetcherSmokeTestFixture - HostSmokeTest - Test Start");
+TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
+    log_info(tt::LogTest, "PrefecherHostTextFixture - HostSmokeTest - Test Start");
 
     const uint32_t num_iterations = get_num_iterations();
     const uint32_t dram_data_size_words = get_dram_data_size_words();
@@ -2125,10 +2116,10 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
-// PrefetcherSmokeTestFixture tests with exec buff enabled / disabled
+// PrefetcherPackedReadTestFixture tests with exec buff enabled / disabled
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
-    PrefetcherSmokeTestFixture,
+    PrefetcherPackedReadTestFixture,
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
@@ -2160,23 +2151,6 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
     PrefecherHostTextFixture,
-    ::testing::Values(
-        // With exec buf disabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
-        // With exec buf enabled
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<PagedReadParams>& info) {
-        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
-               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
-               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
-    });
-
-// PrefetcherPackedReadTestFixture test with exec buff enabled / disabled
-INSTANTIATE_TEST_SUITE_P(
-    PrefetcherTests,
-    PrefetcherPackedReadTestFixture,
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
