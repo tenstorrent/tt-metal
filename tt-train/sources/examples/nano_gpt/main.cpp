@@ -24,6 +24,7 @@
 #include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "models/lora_model.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -109,6 +110,7 @@ struct TrainingConfig {
     std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
+    std::optional<std::string> lora_config_path;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -134,6 +136,11 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
+
+    auto lora_config_node = training_config["lora_config"];
+    if (lora_config_node) {
+        config.lora_config_path = lora_config_node.as<std::string>();
+    }
 
     return config;
 }
@@ -231,6 +238,23 @@ ModelConfig parse_model_config(const YAML::Node &yaml_config) {
         config.transformer_config = ttml::models::llama::read_config(model_config);
     } else {
         throw std::runtime_error("Unknown model type: " + config.model_type);
+    }
+
+    return config;
+}
+
+ttml::models::LoRAConfig parse_lora_config(const YAML::Node &yaml_config) {
+    ttml::models::LoRAConfig config;
+    auto lora_config = yaml_config["lora_config"];
+
+    config.r = lora_config["r"].as<uint32_t>(config.r);
+    config.lora_alpha = lora_config["lora_alpha"].as<float>(config.lora_alpha);
+    config.lora_dropout = lora_config["lora_dropout"].as<float>(config.lora_dropout);
+    config.is_bias_trainable = lora_config["is_bias_trainable"].as<bool>(config.is_bias_trainable);
+
+    auto target_modules_node = lora_config["target_modules"];
+    if (target_modules_node && target_modules_node.IsSequence()) {
+        config.target_modules = target_modules_node.as<std::vector<std::string>>();
     }
 
     return config;
@@ -406,6 +430,11 @@ int main(int argc, char **argv) {
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
+    std::optional<ttml::models::LoRAConfig> lora_config;
+    if (training_config.lora_config_path.has_value()) {
+        lora_config = parse_lora_config(YAML::LoadFile(*training_config.lora_config_path));
+    }
+
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
@@ -455,6 +484,24 @@ int main(int argc, char **argv) {
     fmt::print("Total batch size {}\n", training_config.batch_size * training_config.gradient_accumulation_steps);
     fmt::print("Scheduler type {}\n", training_config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
+    if (lora_config.has_value()) {
+        fmt::print("LoRA configuration loaded from: {}\n", *training_config.lora_config_path);
+        fmt::print("  Rank (r): {}\n", lora_config->r);
+        fmt::print("  Alpha: {}\n", lora_config->lora_alpha);
+        fmt::print("  Dropout: {}\n", lora_config->lora_dropout);
+        fmt::print("  Bias trainable: {}\n", lora_config->is_bias_trainable);
+        if (lora_config->target_modules.has_value()) {
+            fmt::print("  Target modules: [");
+            for (size_t i = 0; i < lora_config->target_modules->size(); ++i) {
+                if (i > 0)
+                    fmt::print(", ");
+                fmt::print("{}", (*lora_config->target_modules)[i]);
+            }
+            fmt::print("]\n");
+        } else {
+            fmt::print("  Target modules: all\n");
+        }
+    }
     auto sequence_length =
         std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
@@ -630,13 +677,19 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
-    print_model_summary(model, device_config.enable_tp);
-
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
         model->load_from_safetensors(safetensors_path);
         fmt::print("Model loaded from safetensors\n");
     }
+
+    // Wrap model with LoRA if config is provided
+    if (lora_config.has_value()) {
+        fmt::print("Wrapping model with LoRA adaptation layers\n");
+        model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
+    }
+
+    print_model_summary(model, device_config.enable_tp);
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
