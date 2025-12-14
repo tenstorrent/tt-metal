@@ -192,11 +192,11 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-            return static_cast<uint32_t>(static_cast<uint8_t>(*acks_received_counter_ptr >> (sender_channel_index * 8)) - static_cast<uint8_t>(acks_received_and_processed >> (sender_channel_index * 8))) << (sender_channel_index * 8);
-        } else {
+        // if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+        //     return static_cast<uint32_t>(static_cast<uint8_t>(*acks_received_counter_ptr >> (sender_channel_index * 8)) - static_cast<uint8_t>(acks_received_and_processed >> (sender_channel_index * 8))) << (sender_channel_index * 8);
+        // } else {
             return *acks_received_counter_ptr - acks_received_and_processed;
-        }
+        // }
     }
 
     template<uint8_t sender_channel_index>
@@ -213,15 +213,7 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        // if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-        //     constexpr size_t store_word_index = sender_channel_index >> 2;
-        //     constexpr size_t offset_in_word = sender_channel_index & 0x3;
-        //     constexpr size_t shift = offset_in_word * 8;
-        //     return 
-        //     static_cast<uint32_t>(static_cast<uint8_t>((completions_received_counter_ptr[store_word_index] >> shift) & 0xFF) - static_cast<uint8_t>((completions_received_and_processed >> shift) & 0xFF));
-        // } else {
-            return *completions_received_counter_ptr - completions_received_and_processed;
-        // }
+        return *completions_received_counter_ptr - completions_received_and_processed;
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
