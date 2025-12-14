@@ -6,6 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::matmul::program {
 
@@ -41,6 +42,13 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const shared_variables_t& shared_variables,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory {
@@ -59,5 +67,17 @@ struct MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 };
+
+MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt::tt_metal::Program& program, /* Take programa as input by reference */
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor>& bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
 
 }  // namespace ttnn::operations::matmul::program

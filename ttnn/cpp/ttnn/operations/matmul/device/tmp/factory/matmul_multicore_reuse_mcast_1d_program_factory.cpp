@@ -2919,6 +2919,16 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
         tensor_return_value);
 }
 
+void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const shared_variables_t& shared_variables,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    reuse_mcast_1d_optimized_helpers::override_program_parameters(
+        shared_variables, operation_attributes.global_cb, program, tensor_args, tensor_return_value);
+}
+
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt_metal::Program& program,
     const Tensor& a,
@@ -2999,6 +3009,39 @@ void MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::override_runtime_arg
         MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
             cached_program_proxy, attributes, tensor_args, tensor_return_value);
     }
+}
+
+MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt_metal::Program& program,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t shared_vars =
+        matmul_multi_core_reuse_mcast_1d_optimized_helper(
+            program,
+            a,
+            b_tensors,
+            bias,
+            output_tensors,
+            broadcast_batch,
+            compute_kernel_config,
+            program_config,
+            untilize_out,
+            fused_op_signaler,
+            global_cb,
+            sub_device_id,
+            tt::CBIndex::c_0,
+            std::nullopt);
+
+    return {std::move(program), std::move(shared_vars)};
 }
 
 }  // namespace ttnn::operations::matmul::program

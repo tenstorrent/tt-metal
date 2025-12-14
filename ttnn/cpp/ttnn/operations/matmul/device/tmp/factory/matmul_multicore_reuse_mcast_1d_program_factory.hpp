@@ -36,6 +36,13 @@ struct MatmulMultiCoreReuseMcast1DProgramFactory {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const shared_variables_t& shared_variables,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {
@@ -71,8 +78,21 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores);
 
-namespace reuse_mcast_1d_optimized_helpers {
+MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
+namespace reuse_mcast_1d_optimized_helpers {
 void override_program_parameters(
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
