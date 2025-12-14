@@ -683,13 +683,14 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded from safetensors\n");
     }
 
-    // Wrap model with LoRA if config is provided
-    if (lora_config.has_value()) {
-        fmt::print("Wrapping model with LoRA adaptation layers\n");
-        model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
+    // Load model parameters if in eval mode and model path exists
+    if (!safetensors_path.empty() && !model_config.model_path.empty() &&
+        std::filesystem::exists(model_config.model_path)) {
+        fmt::print("Loading model parameters\n");
+        load_model_parameters(model_config.model_path, model, model_config.model_type);
+        fmt::print("Model loaded\n");
     }
 
-    print_model_summary(model, device_config.enable_tp);
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
@@ -700,14 +701,6 @@ int main(int argc, char **argv) {
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
-    }
-
-    // Load model parameters if in eval mode and model path exists
-    if (!safetensors_path.empty() && !model_config.model_path.empty() &&
-        std::filesystem::exists(model_config.model_path)) {
-        fmt::print("Loading model parameters\n");
-        load_model_parameters(model_config.model_path, model, model_config.model_type);
-        fmt::print("Model loaded\n");
     }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
@@ -781,6 +774,14 @@ int main(int argc, char **argv) {
                 num_devices));
         }
     }
+
+    // Wrap model with LoRA if config is provided
+    if (lora_config.has_value()) {
+        fmt::print("Wrapping model with LoRA adaptation layers\n");
+        model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
+    }
+
+    print_model_summary(model, device_config.enable_tp);
 
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
