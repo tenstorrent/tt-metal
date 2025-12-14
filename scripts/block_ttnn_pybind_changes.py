@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 """
 Pre-commit hook that blocks changes to pybind11 sources under ttnn/.
 Used while nanobind bindings fully replace the legacy pybind11 layer.
