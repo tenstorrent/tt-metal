@@ -60,6 +60,8 @@ def get_type_hint(type, type_ids: dict[int, str]) -> str:
         return type_ids[type.enum.typeId]
     elif slot_type == "struct":
         return type_ids[type.struct.typeId]
+    elif slot_type == "interface":
+        return type_ids[type.interface.typeId]
     else:
         assert slot_type == "anyPointer"
         raise NotImplementedError("AnyPointer type is not supported in stub generation")
@@ -86,7 +88,9 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
         ]
 
         # Print fields
+        printed_content = len(node_schema.node.struct.fields) > 0
         for field, raw_field in zip(node_schema.node.struct.fields, node_schema.as_struct().fields_list):
+            printed_content = True
             field_type = field.which()
             if field_type == "slot":
                 print_indented(f, indent, f"{field.name}: {get_type_hint(field.slot.type, type_ids)}")
@@ -106,13 +110,25 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
             field_names = [
                 f'"{field.name}"' for field in node_schema.node.struct.fields if field.discriminantValue != 65535
             ]
+            printed_content = len(field_names) > 0 or printed_content
             print_indented(f, indent, f"def which(self) -> Literal[{', '.join(field_names)}]: ...")
 
         # Print nested types
+        printed_content = len(nested_types) > 0 or printed_content
         for nested_type in nested_types:
             print_type(f, nested_type[0], type_ids, indent, nested_type[1])
+
+        # If no content, add pass
+        if not printed_content:
+            print_indented(f, indent, "pass")
     elif node_type == "interface":
-        print_indented(f, indent, f"class {name}:")
+        # Check if interface extends another interface
+        superclasses = node_schema.node.interface.superclasses
+        if superclasses:
+            base_classes = [type_ids[base.id] for base in superclasses]
+            print_indented(f, indent, f"class {name}({', '.join(base_classes)}):")
+        else:
+            print_indented(f, indent, f"class {name}:")
         indent += 1
         for method_name, method in node_schema.as_interface().methods.items():
             method_name_cap = method_name[0].upper() + method_name[1:]
@@ -142,35 +158,40 @@ def fill_type_ids(schema, type_ids: dict[int, str], prefix: str = ""):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: generate_rpc_stub.py <capnp_file> <output_stub_file>")
+    if len(sys.argv) < 3:
+        print("Usage: generate_rpc_stub.py <output_stub_file> <capnp_file>...")
         sys.exit(0)
 
-    capnp_file = sys.argv[1]
-    output_stub_file = sys.argv[2]
+    output_stub_file = sys.argv[1]
+    capnp_files = sys.argv[2:]
 
     try:
         # Import Cap'n Proto schema
         capnp.remove_import_hook()
         script_dir = os.path.dirname(os.path.abspath(__file__))
         parser = capnp.SchemaParser()
-        module = parser.load(capnp_file, imports=[os.path.dirname(p) for p in capnp.__path__])
+        modules = []
+
+        type_ids: dict[int, str] = {}
+        for capnp_file in capnp_files:
+            module = parser.load(capnp_file, imports=[os.path.dirname(p) for p in capnp.__path__])
+            fill_type_ids(module.schema, type_ids)
+            modules.append(module)
 
         with open(output_stub_file, "w") as f:
             f.write(
-                f"""# Auto-generated RPC stub from {capnp_file}
+                f"""# Auto-generated RPC stub from {capnp_files}
 
 from __future__ import annotations
 
 from typing import Literal, Sequence, TypeAlias
 """
             )
-            type_ids: dict[int, str] = {}
-            fill_type_ids(module.schema, type_ids)
 
-            for node in module.schema.node.nestedNodes:
-                node_schema = module.schema.get_nested(node.name)
-                print_type(f, node_schema, type_ids)
+            for module in modules:
+                for node in module.schema.node.nestedNodes:
+                    node_schema = module.schema.get_nested(node.name)
+                    print_type(f, node_schema, type_ids)
 
     except Exception as e:
         print(f"Error: {e}")

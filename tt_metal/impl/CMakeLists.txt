@@ -67,6 +67,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
@@ -109,34 +110,45 @@ list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 
 # Generate Inspector Cap'n Proto headers and RPC server implementation
 set(INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp)
+set(RUNTIME_INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp)
 set(CAPNPC_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/impl/)
 file(MAKE_DIRECTORY ${CAPNPC_OUTPUT_DIR})
 
 capnp_generate_cpp(INSPECTOR_RPC_CAPNP_SOURCES INSPECTOR_RPC_CAPNP_HEADER ${INSPECTOR_RPC_CAPNP})
-list(APPEND IMPL_SRC ${INSPECTOR_RPC_CAPNP_SOURCES})
+capnp_generate_cpp(RUNTIME_INSPECTOR_RPC_CAPNP_SOURCES RUNTIME_INSPECTOR_RPC_CAPNP_HEADER ${RUNTIME_INSPECTOR_RPC_CAPNP})
+list(
+    APPEND
+    IMPL_SRC
+    ${INSPECTOR_RPC_CAPNP_SOURCES}
+    ${RUNTIME_INSPECTOR_RPC_CAPNP_SOURCES}
+)
 
 # Generate Inspector RPC callbacks server implementation
-set(INSPECTOR_RPC_GENERATED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/rpc_server_generated.hpp)
-set(INSPECTOR_RPC_GENERATED_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/rpc_server_generated.cpp)
+set(RUNTIME_INSPECTOR_RPC_GENERATED_HEADER
+    ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/runtime_rpc_channel_generated.hpp
+)
+set(RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE
+    ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/runtime_rpc_channel_generated.cpp
+)
 add_custom_command(
     OUTPUT
-        ${INSPECTOR_RPC_GENERATED_HEADER}
-        ${INSPECTOR_RPC_GENERATED_SOURCE}
+        ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
+        ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
     COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_server.py ${INSPECTOR_RPC_CAPNP}
-        ${INSPECTOR_RPC_GENERATED_HEADER} ${INSPECTOR_RPC_GENERATED_SOURCE}
+        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_channel.py ${RUNTIME_INSPECTOR_RPC_CAPNP}
+        ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER} ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
     DEPENDS
-        ${INSPECTOR_RPC_CAPNP}
-        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_server.py
-    COMMENT "Generating RPC server implementation for ${INSPECTOR_RPC_CAPNP}"
+        ${RUNTIME_INSPECTOR_RPC_CAPNP}
+        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_channel.py
+    COMMENT "Generating RPC server implementation for ${RUNTIME_INSPECTOR_RPC_CAPNP}"
 )
-list(APPEND IMPL_SRC ${INSPECTOR_RPC_GENERATED_SOURCE})
-
+list(APPEND IMPL_SRC ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE})
 # Disable clang-tidy for generated Inspector files
 set_source_files_properties(
-    ${INSPECTOR_RPC_GENERATED_SOURCE}
-    ${INSPECTOR_RPC_GENERATED_HEADER}
+    ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
+    ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
     ${INSPECTOR_RPC_CAPNP_SOURCES}
+    ${RUNTIME_INSPECTOR_RPC_CAPNP_SOURCES}
     PROPERTIES
         SKIP_LINTING
             TRUE
@@ -196,10 +208,11 @@ add_custom_command(
     OUTPUT
         ${INSPECTOR_RPC_STUB_FILE}
     COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py ${INSPECTOR_RPC_CAPNP}
-        ${INSPECTOR_RPC_STUB_FILE}
+        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py ${INSPECTOR_RPC_STUB_FILE}
+        ${INSPECTOR_RPC_CAPNP} ${RUNTIME_INSPECTOR_RPC_CAPNP}
     DEPENDS
         ${INSPECTOR_RPC_CAPNP}
+        ${RUNTIME_INSPECTOR_RPC_CAPNP}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py
     COMMENT "Generating RPC stub for ${INSPECTOR_RPC_CAPNP}"
 )

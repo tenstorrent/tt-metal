@@ -1,0 +1,1 @@
+../../tt_metal/impl/debug/inspector/runtime_rpc.capnp

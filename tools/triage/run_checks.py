@@ -158,7 +158,7 @@ def get_devices(
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
-            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+            metal_device_ids = list(inspector_data.runtime_rpc.getDevicesInUse().metalDeviceIds)
 
             if len(metal_device_ids) == 0:
                 print(

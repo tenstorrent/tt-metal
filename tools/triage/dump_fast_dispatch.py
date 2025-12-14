@@ -124,7 +124,7 @@ def build_core_lookup_map(
     MultiCategoryCoreLookup object contains dispatch_info, dispatch_s_info, and prefetch_info
     """
     # Get all core info from inspector data
-    all_cores = inspector_data.getAllDispatchCoreInfos()
+    all_cores = inspector_data.runtime_rpc.getAllDispatchCoreInfos()
 
     # Convert to dictionary for faster lookup
     # key is (unique_id, x, y) and value is a MultiCategoryCoreLookup object

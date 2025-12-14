@@ -23,7 +23,7 @@ class MethodInfo:
     return_name: str
 
 
-def parse_capnp_interface(capnp_file: str) -> List[MethodInfo]:
+def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo]]:
     """Parse Cap'n Proto schema file and extract interface methods."""
 
     with open(capnp_file, "r") as f:
@@ -33,9 +33,11 @@ def parse_capnp_interface(capnp_file: str) -> List[MethodInfo]:
     content = re.sub(r"#[^\n]*", "", content)
 
     # Find the interface block
-    interface_match = re.search(r"interface\s+(\w+)\s*\{([^}]+)\}", content, re.DOTALL)
+    interface_match = re.search(
+        r"interface\s+(\w+)\s*extends\s*\(\s*Rpc\s*\.\s*InspectorChannel\s*\)\s*\{([^}]+)\}", content, re.DOTALL
+    )
     if not interface_match:
-        raise ValueError("No interface found in Cap'n Proto file")
+        raise ValueError("No interface channel found in Cap'n Proto file")
 
     interface_name = interface_match.group(1)
     interface_body = interface_match.group(2)
@@ -100,45 +102,49 @@ def parse_capnp_interface(capnp_file: str) -> List[MethodInfo]:
 
         methods.append(MethodInfo(method_name, ordinal, params, return_type, return_name))
 
-    return methods
+    return (interface_name, methods)
 
 
-def generate_header(methods: List[MethodInfo]) -> str:
+def generate_header(channel_name: str, methods: List[MethodInfo], capnp_file_path: str) -> str:
     """Generate the header file content."""
 
-    header = """// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+    capnp_filename = os.path.basename(capnp_file_path)
+    class_name = f"{channel_name}RpcChannel"
+    header = f"""// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //
 // Auto-generated file - DO NOT EDIT
-// Generated from inspector.capnp by generate_inspector_rpc_server.py
+// Generated from {capnp_filename} by generate_rpc_channel.py
 
 #pragma once
 
 #include <filesystem>
 #include <functional>
 #include <capnp/ez-rpc.h>
-#include "impl/debug/inspector/rpc.capnp.h"
+#include "impl/debug/inspector/{capnp_filename}.h"
 
-namespace tt::tt_metal::inspector {
+namespace tt::tt_metal::inspector {{
 
-class RpcServer final : public rpc::Inspector::Server {
+class {class_name} final : public rpc::{channel_name}::Server {{
 public:
-    RpcServer() = default;
-    ~RpcServer() = default;
+    {class_name}() = default;
+    ~{class_name}() = default;
 
     void serialize(const std::filesystem::path& directory);
 
-    // RPC interface implementation - delegates to callbacks
+    // Base RPC InspectorChannel interface implementation
+    ::kj::Promise<void> serializeRpc(rpc::InspectorChannel::Server::SerializeRpcContext context) override;
+    ::kj::Promise<void> getName(rpc::InspectorChannel::Server::GetNameContext context) override;
+
+    // RPC channel interface implementation - delegates to callbacks
 """
 
     # Generate override methods
     for method in methods:
         # Use full CallContext type since Server::Context might not exist
         method_name_cap = method.name[0].upper() + method.name[1:]
-        context_name = (
-            f"::capnp::CallContext<rpc::Inspector::{method_name_cap}Params, rpc::Inspector::{method_name_cap}Results>"
-        )
+        context_name = f"rpc::{channel_name}::Server::{method_name_cap}Context"
         header += f"""    ::kj::Promise<void> {method.name}({context_name} context) override;
 """
 
@@ -150,13 +156,13 @@ public:
     for method in methods:
         # Create proper Cap'n Proto types
         method_name_cap = method.name[0].upper() + method.name[1:]
-        results_builder = f"rpc::Inspector::{method_name_cap}Results::Builder"
+        results_builder = f"rpc::{channel_name}::{method_name_cap}Results::Builder"
         callback_type_name = f"{method_name_cap}Callback"
         setter_name = f"set{method_name_cap}Callback"
 
         # Build callback signature based on whether method has parameters
         if method.params:
-            params_reader = f"rpc::Inspector::{method_name_cap}Params::Reader"
+            params_reader = f"rpc::{channel_name}::{method_name_cap}Params::Reader"
             callback_signature = f"void({params_reader} params, {results_builder} results)"
         else:
             callback_signature = f"void({results_builder} results)"
@@ -185,23 +191,48 @@ private:
     return header
 
 
-def generate_source(methods: List[MethodInfo]) -> str:
+def generate_source(channel_name: str, methods: List[MethodInfo], output_header) -> str:
     """Generate the source file content."""
 
-    source = """// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+    output_header_filename = os.path.basename(output_header)
+    class_name = f"{channel_name}RpcChannel"
+    source = f"""// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //
 // Auto-generated file - DO NOT EDIT
 // Generated from impl/debug/inspector/rpc.capnp by generate_inspector_rpc_server.py
 
-#include "impl/debug/inspector/rpc_server_generated.hpp"
+#include "{output_header_filename}"
 #include <fstream>
 #include <capnp/serialize-packed.h>
 #include <kj/std/iostream.h>
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_metal::inspector {
+namespace tt::tt_metal::inspector {{
+
+::kj::Promise<void> {class_name}::serializeRpc(rpc::InspectorChannel::Server::SerializeRpcContext context) {{
+    try {{
+        auto params = context.getParams();
+        KJ_REQUIRE(params.hasPath(), "serializeRpc called without path parameter");
+        const auto& path = params.getPath();
+        serialize(std::filesystem::path(path.cStr()));
+        return kj::READY_NOW;
+    }} catch (const std::exception& e) {{
+        log_debug(tt::LogInspector, "Failed to execute serializeRpc: {{}}", e.what());
+        return kj::Promise<void>(KJ_EXCEPTION(FAILED, e.what()));
+    }}
+}}
+
+::kj::Promise<void> {class_name}::getName(rpc::InspectorChannel::Server::GetNameContext context) {{
+    try {{
+        context.getResults().setName("{channel_name}");
+        return kj::READY_NOW;
+    }} catch (const std::exception& e) {{
+        log_debug(tt::LogInspector, "Failed to execute getName: {{}}", e.what());
+        return kj::Promise<void>(KJ_EXCEPTION(FAILED, e.what()));
+    }}
+}}
 
 """
 
@@ -209,9 +240,7 @@ namespace tt::tt_metal::inspector {
     for method in methods:
         # Use full CallContext type to match override signature
         method_name_cap = method.name[0].upper() + method.name[1:]
-        context_name = (
-            f"::capnp::CallContext<rpc::Inspector::{method_name_cap}Params, rpc::Inspector::{method_name_cap}Results>"
-        )
+        context_name = f"rpc::{channel_name}::Server::{method_name_cap}Context"
 
         # Build callback call based on whether method has parameters
         if method.params:
@@ -219,7 +248,7 @@ namespace tt::tt_metal::inspector {
         else:
             callback_call = f"{method.name}_callback(context.getResults());"
 
-        source += f"""::kj::Promise<void> RpcServer::{method.name}({context_name} context) {{
+        source += f"""::kj::Promise<void> {class_name}::{method.name}({context_name} context) {{
     try {{
         if (!{method.name}_callback) {{
             log_error(tt::LogInspector, "No callback set for {method.name}");
@@ -235,10 +264,10 @@ namespace tt::tt_metal::inspector {
 
 """
 
-    source += """void RpcServer::serialize(const std::filesystem::path& directory) {
-    if (!std::filesystem::exists(directory)) {
+    source += f"""void {class_name}::serialize(const std::filesystem::path& directory) {{
+    if (!std::filesystem::exists(directory)) {{
         std::filesystem::create_directories(directory);
-    }
+    }}
 """
     for method in methods:
         if method.params:
@@ -248,7 +277,7 @@ namespace tt::tt_metal::inspector {
     if ({method.name}_callback) {{
         auto file_path = directory / "{method.name}.capnp.bin";
         ::capnp::MallocMessageBuilder message;
-        {method.name}_callback(message.initRoot<rpc::Inspector::{method_name_cap}Results>());
+        {method.name}_callback(message.initRoot<rpc::{channel_name}::{method_name_cap}Results>());
         std::fstream file(file_path, std::ios::out | std::ios::binary);
         if (file) {{
             ::kj::std::StdOutputStream ostream(file);
@@ -277,15 +306,15 @@ def main():
     output_source = sys.argv[3]
 
     try:
-        methods = parse_capnp_interface(capnp_file)
+        channel_name, methods = parse_capnp_interface(capnp_file)
 
         # Generate header
-        header_content = generate_header(methods)
+        header_content = generate_header(channel_name, methods, capnp_file)
         with open(output_header, "w") as f:
             f.write(header_content)
 
         # Generate source
-        source_content = generate_source(methods)
+        source_content = generate_source(channel_name, methods, output_header)
         with open(output_source, "w") as f:
             f.write(source_content)
 

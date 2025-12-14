@@ -5,7 +5,6 @@
 #include "inspector.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
-#include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "mesh_device.hpp"
@@ -376,6 +375,19 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     }
     static inspector::RpcServer empty_rpc_server;
     return empty_rpc_server;
+}
+
+inspector::RuntimeInspectorRpcChannel& Inspector::get_runtime_inspector_rpc() {
+    if (is_enabled()) {
+        try {
+            auto* data = get_inspector_data();
+            return data->get_runtime_inspector_rpc();
+        } catch (const std::exception& e) {
+            TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
+        }
+    }
+    static inspector::RuntimeInspectorRpcChannel empty_runtime_inspector_rpc;
+    return empty_runtime_inspector_rpc;
 }
 
 void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {

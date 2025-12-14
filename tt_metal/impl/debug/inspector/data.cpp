@@ -26,17 +26,27 @@ Data::Data()
             auto address = rtoptions.get_inspector_rpc_server_address();
             rpc_server_controller.start(address);
 
-            // Connect callbacks that we want to respond to
-            get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
-            get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
-            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
-            get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
-            get_rpc_server().setGetKernelCallback(
+            // Register RuntimeInspector channel
+            get_rpc_server().registerChannel(
+                "RuntimeInspector",
+                rpc::InspectorChannel::Client(
+                    ::kj::Own<RuntimeInspectorRpcChannel>(&runtime_inspector_rpc, ::kj::NullDisposer::instance)));
+
+            // Connect callbacks to runtime inspector that we want to respond to
+            get_runtime_inspector_rpc().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
+            get_runtime_inspector_rpc().setGetMeshDevicesCallback(
+                [this](auto result) { this->rpc_get_mesh_devices(result); });
+            get_runtime_inspector_rpc().setGetMeshWorkloadsCallback(
+                [this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_runtime_inspector_rpc().setGetDevicesInUseCallback(
+                [this](auto result) { this->rpc_get_devices_in_use(result); });
+            get_runtime_inspector_rpc().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
-            get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
-            get_rpc_server().setGetAllDispatchCoreInfosCallback(
+            get_runtime_inspector_rpc().setGetAllBuildEnvsCallback(
+                [this](auto result) { this->rpc_get_all_build_envs(result); });
+            get_runtime_inspector_rpc().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
-            get_rpc_server().setGetMetalDeviceIdMappingsCallback(
+            get_runtime_inspector_rpc().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
@@ -56,7 +66,7 @@ void Data::serialize_rpc() {
     rpc_server_controller.get_rpc_server().serialize(logger.get_logging_path());
 }
 
-void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results) {
+void Data::rpc_get_programs(rpc::RuntimeInspector::GetProgramsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(programs_mutex);
     auto programs = results.initPrograms(programs_data.size());
     uint32_t i = 0;
@@ -94,7 +104,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
     }
 }
 
-void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results) {
+void Data::rpc_get_mesh_devices(rpc::RuntimeInspector::GetMeshDevicesResults::Builder& results) {
     std::lock_guard<std::mutex> lock(mesh_devices_mutex);
     auto mesh_devices = results.initMeshDevices(mesh_devices_data.size());
     uint32_t i = 0;
@@ -120,7 +130,7 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
     }
 }
 
-void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results) {
+void Data::rpc_get_mesh_workloads(rpc::RuntimeInspector::GetMeshWorkloadsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(mesh_workloads_mutex);
     auto mesh_workloads = results.initMeshWorkloads(mesh_workloads_data.size());
     uint32_t i = 0;
@@ -156,7 +166,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     }
 }
 
-void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
+void Data::rpc_get_devices_in_use(rpc::RuntimeInspector::GetDevicesInUseResults::Builder& results) {
     // Get all active device ids
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
@@ -168,7 +178,8 @@ void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builde
     }
 }
 
-void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results) {
+void Data::rpc_get_kernel(
+    rpc::RuntimeInspector::GetKernelParams::Reader params, rpc::RuntimeInspector::GetKernelResults::Builder results) {
     std::lock_guard<std::mutex> lock(programs_mutex);
     auto kernel_id = params.getWatcherKernelId();
     auto program_id_it = kernel_id_to_program_id.find(kernel_id);
@@ -199,7 +210,7 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
 // without relying on relative paths
 // Declared here in Data to centralize Inspector RPC callback registration and
 // tie it to Inspector Data's lifetime
-void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
+void Data::rpc_get_all_build_envs(rpc::RuntimeInspector::GetAllBuildEnvsResults::Builder results) {
     // Get build environment info for all devices
     // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex
     const auto& build_envs_info = BuildEnvManager::get_instance().get_all_build_envs_info();
@@ -221,7 +232,7 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Get all dispatch core infos for all active devices
 // Do an on-demand snapshot of the command queue event info
 // Populate the results with the dispatch core info and corresponding cq_id event info
-void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
+void Data::rpc_get_all_dispatch_core_infos(rpc::RuntimeInspector::GetAllDispatchCoreInfosResults::Builder results) {
     // This returns a map of command queue id to event id for all active devices
     auto cq_to_event_by_device =
         tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
@@ -264,7 +275,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
     }
 }
 
-void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
+void Data::rpc_get_metal_device_id_mappings(rpc::RuntimeInspector::GetMetalDeviceIdMappingsResults::Builder results) {
     // Get cluster descriptor from MetalContext
     auto& cluster = MetalContext::instance().get_cluster();
     const auto& chip_id_to_unique_id = cluster.get_cluster_desc()->get_chip_unique_ids();

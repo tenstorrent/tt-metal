@@ -18,6 +18,7 @@ class MeshWorkloadImpl;
 namespace inspector {
 class Data;
 class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
+class RuntimeInspectorRpcChannel;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
 }  // namespace inspector
 
 class Inspector {
@@ -85,6 +86,7 @@ public:
     static void clear_all_core_info();
 
     static inspector::RpcServer& get_rpc_server();
+    static inspector::RuntimeInspectorRpcChannel& get_runtime_inspector_rpc();
 
     static void set_build_env_fw_compile_hash(uint64_t fw_compile_hash);
 };
