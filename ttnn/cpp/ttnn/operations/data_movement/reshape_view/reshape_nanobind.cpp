@@ -79,7 +79,8 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
             nb::arg("sub_core_grids") = nb::none(),
-            py::arg("on_device_mappings") = true} ttnn::nanobind_overload_t{
+            nb::arg("on_device_mappings") = true},
+        ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t>& shape,

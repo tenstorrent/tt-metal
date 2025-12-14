@@ -1858,7 +1858,7 @@ void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, cons
         mod,
         operation,
         doc,
-        ttnn::pybind_overload_t{
+        ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
                std::optional<float> eps,

@@ -15,8 +15,6 @@
 
 namespace ttnn::operations::normalization::detail {
 
-namespace py = pybind11;
-
 void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
@@ -82,7 +80,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
+            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
