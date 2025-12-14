@@ -2889,6 +2889,9 @@ jobs:
             rm -f /tmp/slack_message.txt
 
           elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
+            : # No owners available
           elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
+            : # No pending owners to notify
           else
+            : # Slack notification disabled
           fi
