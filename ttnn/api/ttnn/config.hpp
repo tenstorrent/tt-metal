@@ -198,9 +198,10 @@ using core::Config;
 
 template <>
 struct fmt::formatter<ttnn::Config> {
-    static constexpr auto parse(format_parse_context& ctx) { return ctx.end(); }
+    constexpr auto parse(format_parse_context& ctx) { return ctx.end(); }
 
-    static auto format(const ttnn::Config& config, format_context& ctx) -> format_context::iterator {
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    auto format(const ttnn::Config& config, format_context& ctx) const -> format_context::iterator {
         std::stringstream ss;
         ss << config;
         return fmt::format_to(ctx.out(), "{}", ss.str());

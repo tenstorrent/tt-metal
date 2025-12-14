@@ -9,7 +9,8 @@
 
 template <>
 struct fmt::formatter<ttnn::operations::experimental::broadcast_to::Lowercase> : fmt::formatter<std::string_view> {
-    static auto format(const ttnn::operations::experimental::broadcast_to::Lowercase& value, fmt::format_context& ctx) {
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    auto format(const ttnn::operations::experimental::broadcast_to::Lowercase& value, fmt::format_context& ctx) const {
         auto out = ctx.out();
         for (char c : value.view) {
             *out++ = std::tolower(static_cast<unsigned char>(c));

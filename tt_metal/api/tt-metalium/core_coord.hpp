@@ -261,24 +261,26 @@ template <bool _compiler_deprioritize_this = true>
 
 template <>
 struct fmt::formatter<tt::tt_metal::CoreRangeSet> {
-    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    static auto format(const tt::tt_metal::CoreRangeSet& core_range_set, format_context& ctx)
-        -> format_context::iterator;
+    auto format(const tt::tt_metal::CoreRangeSet& core_range_set, format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };
 
 template <>
 struct fmt::formatter<tt::tt_metal::CoreRange> {
-    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    static auto format(const tt::tt_metal::CoreRange& core_range, format_context& ctx) -> format_context::iterator;
+    auto format(const tt::tt_metal::CoreRange& core_range, format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };
 
 template <>
 struct fmt::formatter<tt::tt_metal::CoreCoord> {
-    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    static auto format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) -> format_context::iterator;
+    auto format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };
 
 namespace std {

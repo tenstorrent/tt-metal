@@ -500,7 +500,7 @@ std::vector<std::vector<BlockedTransferGroup>> split_by_destination_core(
 namespace fmt {
 
 auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer>::format(
-    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer& t, format_context& ctx)
+    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer& t, format_context& ctx) const
     -> format_context::iterator {
     std::string str = fmt::format(
         "GatherTransfer(B={}, C={}: Core{}[{},{}][row={}·C+{}, cols={}:{}] → Core{}[{},{}][row={}, cols={}:{}], "
@@ -525,8 +525,8 @@ auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::Gath
 }
 
 auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer>::format(
-    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer& t, format_context& ctx)
-    -> format_context::iterator {
+    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer& t,
+    format_context& ctx) const -> format_context::iterator {
     std::string str = fmt::format(
         "LowLevelGatherTransfer(src_shard{}[{}:{}] (offset={} B) @ NOC({},{}) => dst_shard{}[{}:{}] (offset={} B), "
         "len={}, size={} B)",
@@ -546,8 +546,8 @@ auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowL
 }
 
 auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup>::format(
-    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup& t, format_context& ctx)
-    -> format_context::iterator {
+    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup& t,
+    format_context& ctx) const -> format_context::iterator {
     uint32_t col_start = t.dst_block_idx * t.block_size;
     uint32_t col_end = col_start + t.block_size;
 

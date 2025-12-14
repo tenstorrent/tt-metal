@@ -645,19 +645,21 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b)
 
 }  // namespace tt::tt_metal
 
-auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) -> format_context::iterator {
+auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
+    -> format_context::iterator {
     std::stringstream ss;
     ss << core_coord.str();
     return fmt::format_to(ctx.out(), "{}", ss.str());
 }
 
-auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) -> format_context::iterator {
+auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
+    -> format_context::iterator {
     std::stringstream ss;
     ss << core_range.str();
     return fmt::format_to(ctx.out(), "{}", ss.str());
 }
 
-auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, format_context& ctx)
+auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, format_context& ctx) const
     -> format_context::iterator {
     std::stringstream ss;
     ss << core_range_set.str();

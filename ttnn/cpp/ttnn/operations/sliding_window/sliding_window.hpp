@@ -195,18 +195,18 @@ struct std::hash<ttnn::operations::sliding_window::ParallelConfig> {
 
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig> : formatter<string_view> {
-    static auto format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, fmt::format_context& ctx)
-        -> format_context::iterator;
+    auto format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, fmt::format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };
 
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::ParallelConfig> : formatter<string_view> {
-    static auto format(const ttnn::operations::sliding_window::ParallelConfig& t, fmt::format_context& ctx)
-        -> format_context::iterator;
+    auto format(const ttnn::operations::sliding_window::ParallelConfig& t, fmt::format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };
 
 template <>
 struct fmt::formatter<ttnn::operations::sliding_window::ShardBoundary> : formatter<string_view> {
-    static auto format(const ttnn::operations::sliding_window::ShardBoundary& t, fmt::format_context& ctx)
-        -> format_context::iterator;
+    auto format(const ttnn::operations::sliding_window::ShardBoundary& t, fmt::format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };

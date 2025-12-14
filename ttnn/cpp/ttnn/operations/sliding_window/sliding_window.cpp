@@ -1131,7 +1131,7 @@ std::string SlidingWindowConfig::to_string() const {
 }  // namespace ttnn::operations::sliding_window
 
 auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
-    const ttnn::operations::sliding_window::ParallelConfig& t, format_context& ctx) -> format_context::iterator {
+    const ttnn::operations::sliding_window::ParallelConfig& t, format_context& ctx) const -> format_context::iterator {
     std::string shard_scheme_str;
     if (t.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         shard_scheme_str = "HEIGHT_SHARDED";
@@ -1187,7 +1187,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::ShardBoundary>::format(
-    const ttnn::operations::sliding_window::ShardBoundary& t, format_context& ctx) -> format_context::iterator {
+    const ttnn::operations::sliding_window::ShardBoundary& t, format_context& ctx) const -> format_context::iterator {
     return fmt::format_to(
         ctx.out(),
         "[output_shard=({}, {}), input_shard=({}, {})]",

@@ -92,7 +92,8 @@ struct hash<tt::tt_fabric::FabricNodeId> {
 
 template <>
 struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
-    static constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    static auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) -> format_context::iterator;
+    auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const
+        -> format_context::iterator;  // NOLINT(readability-convert-member-functions-to-static)
 };
