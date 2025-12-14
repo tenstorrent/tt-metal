@@ -35,13 +35,10 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     std::vector<float> data1(64 * 128, 1.0F);
     std::vector<float> data2(128 * 64, 2.0F);
 
-    // Start memory capture
-    ttml::utils::MemoryUsageTracker::start_capture();
-
     size_t tensor1_size = 0;
     size_t tensor2_size = 0;
     size_t result_size = 0;
-    {
+    auto test = [&]() {
         // Create a few tensors in DRAM (default memory location)
         auto shape1 = ttnn::Shape({64, 128});
         auto shape2 = ttnn::Shape({128, 64});
@@ -67,27 +64,42 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
         // Perform an operation that creates a new tensor (matmul)
         auto result = ttnn::matmul(tensor1, tensor2);
         result_size = compute_tensor_size(result);
-    }
+    };
 
-    // End capture
+    // First test with cache enabled (enabled by default)
+
+    ttml::utils::MemoryUsageTracker::start_capture();
+    test();
     ttml::utils::MemoryUsageTracker::end_capture();
 
     // Get DRAM usage
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
 
-    // TODO: Verify why 16384 bytes are allocated
-    size_t expected_size = 16384;  // Calls are inside scope - everything should be deallocated (0)
-    size_t expected_peak_size = tensor1_size + tensor2_size + std::max(tensor1_size, tensor2_size) + result_size;
+    size_t binary_size = 16384;          // Size of DRAM buffer used for matmul program
+    size_t expected_size = binary_size;  // Allocated left over is program cache
+    size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
 
-    // Should have at least one device entry
-    EXPECT_FALSE(dram_usage.peak.empty());
-    EXPECT_FALSE(dram_usage.current.empty());
+    auto assert_dram_usage = [](const auto& dram_usage, size_t expected_size, size_t expected_peak_size) {
+        EXPECT_FALSE(dram_usage.peak.empty());
+        EXPECT_FALSE(dram_usage.current.empty());
+        for (const auto& [dev_id, peak] : dram_usage.peak) {
+            EXPECT_EQ(peak, expected_peak_size);
+            EXPECT_EQ(dram_usage.current.at(dev_id), expected_size);
+        }
+    };
+    assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 
-    // Verify peak is at least as large as current
-    for (const auto& [dev_id, peak] : dram_usage.peak) {
-        EXPECT_EQ(peak, expected_peak_size);
-        EXPECT_EQ(dram_usage.current[dev_id], expected_size);
-    }
+    // Second test with cache disabled
+    device->disable_and_clear_program_cache();
+
+    ttml::utils::MemoryUsageTracker::start_capture();
+    test();
+    ttml::utils::MemoryUsageTracker::end_capture();
+
+    dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
+    expected_size = 0;
+    expected_peak_size = tensor1_size + tensor2_size + result_size + binary_size;  // Binary size is still allocated
+    assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
@@ -154,13 +166,13 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     expected_size += compute_tensor_size(sdpa_result);
 
     // tensor 2 is converted to row major + to_layout for some reason allocated additional 4096 bytes
-    // TODO: Verify why 4096 bytes are allocated
+    // TODO: Trace those extra allocations. 99% those are programs caches + intermediate tensors.
     expected_peak_size = compute_tensor_size(add_result) + compute_tensor_size(tensor2) + 4096;
-    expected_peak_size += compute_tensor_size(mul_result) + 10240;     // TODO: Why 10240 bytes are allocated?
-    expected_peak_size += compute_tensor_size(matmul_result) + 18432;  // TODO: Why 18432 bytes are allocated?
-    expected_peak_size += compute_tensor_size(sdpa_result) + 36864;    // TODO: Why 36864 bytes are allocated?
+    expected_peak_size += compute_tensor_size(mul_result) + 10240;
+    expected_peak_size += compute_tensor_size(matmul_result) + 18432;
+    expected_peak_size += compute_tensor_size(sdpa_result) + 36864;
 
-    expected_size = expected_peak_size;  // TODO: Figure out why expected_size is not smaller than expected_peak_size
+    expected_size = expected_peak_size;
 
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
     EXPECT_FALSE(dram_usage.peak.empty());
@@ -215,7 +227,8 @@ TEST_F(MemoryUtilsTest, L1Usage) {
 
         // DRAM usage should be 0 since we're using L1 tensors
         for (const auto& [dev_id, current] : dram_usage.current) {
-            EXPECT_EQ(current, 12288);  // TODO: Where is 12288 coming from? to_layout moves to DRAM?
+            // TODO: verify that 12288 comes from program cache
+            EXPECT_EQ(current, 12288);
         }
 
         // num_cores = 64 (256 * 256 / (32 * 32))
