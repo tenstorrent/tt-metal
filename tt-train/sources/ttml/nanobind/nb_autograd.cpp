@@ -190,6 +190,11 @@ void py_module(nb::module_& m) {
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
             "Construct a numpy tensor from the Tensor gradient");
+
+        py_tensor.def(
+            "clear_grad",
+            [](Tensor& self) { self.set_grad(tt::tt_metal::Tensor{}); },
+            "Clear(unset) gradient by setting it to an uninitialized metal tensor");
     }
 
     {
