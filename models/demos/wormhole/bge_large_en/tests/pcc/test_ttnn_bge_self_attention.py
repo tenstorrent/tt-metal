@@ -11,13 +11,13 @@ import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_self_attention import TtnnBGESelfAttention
 from models.demos.sentence_bert.reference.sentence_bert import BertSelfAttention
-from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, custom_preprocessor
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH, custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "inputs",
-    [["BAAI/bge-large-en-v1.5", [8, 384, 1024], [8, 1, 1, 384]]],
+    [["BAAI/bge-large-en-v1.5", [8, BGE_SEQ_LENGTH, 1024], [8, 1, 1, BGE_SEQ_LENGTH]]],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": BGE_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_bge_self_attention(device, inputs, model_location_generator):

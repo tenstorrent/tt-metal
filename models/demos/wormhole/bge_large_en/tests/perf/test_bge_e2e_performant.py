@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.bge_large_en.runner.performant_runner import BGEPerformantRunner
-from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH
 
 
 def run_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weight_dtype, model_location_generator):
@@ -54,7 +54,7 @@ def run_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weigh
     "act_dtype, weight_dtype",
     ((ttnn.bfloat16, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("batch_size, sequence_length", [(8, 512)])
+@pytest.mark.parametrize("batch_size, sequence_length", [(8, BGE_SEQ_LENGTH)])
 def test_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weight_dtype, model_location_generator):
     """Test single device performance for BGE-large-en-v1.5."""
     return run_e2e_performant_bge(
@@ -72,7 +72,7 @@ def test_e2e_performant_bge(device, batch_size, sequence_length, act_dtype, weig
     "act_dtype, weight_dtype",
     ((ttnn.bfloat16, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("device_batch_size, sequence_length", [(8, 512)])
+@pytest.mark.parametrize("device_batch_size, sequence_length", [(8, BGE_SEQ_LENGTH)])
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_bge_dp(

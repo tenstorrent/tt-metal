@@ -11,14 +11,14 @@ import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_output import TtnnBGEOutput
 from models.demos.sentence_bert.reference.sentence_bert import BertOutput
-from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, custom_preprocessor
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH, custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "inputs",
     [
-        ["BAAI/bge-large-en-v1.5", [8, 384, 4096], [8, 384, 1024]],
+        ["BAAI/bge-large-en-v1.5", [8, BGE_SEQ_LENGTH, 4096], [8, BGE_SEQ_LENGTH, 1024]],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": BGE_L1_SMALL_SIZE}], indirect=True)

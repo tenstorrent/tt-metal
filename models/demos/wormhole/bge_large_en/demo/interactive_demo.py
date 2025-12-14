@@ -16,6 +16,7 @@ from tqdm import tqdm
 import ttnn
 from models.demos.bge_large_en.runner.performant_runner import BGEPerformantRunner
 from models.demos.sentence_bert.reference.sentence_bert import custom_extended_mask
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH
 
 # Instruction prefix recommended for BGE retrieval tasks
 RETRIEVAL_INSTRUCTION = "Represent this sentence for searching relevant passages: "
@@ -46,7 +47,7 @@ def compute_ttnn_embeddings(
             batch_sentences = list(islice(cycle(batch_sentences), batch_size))
 
         encoded_input = tokenizer(
-            batch_sentences, padding="max_length", max_length=384, truncation=True, return_tensors="pt"
+            batch_sentences, padding="max_length", max_length=BGE_SEQ_LENGTH, truncation=True, return_tensors="pt"
         )
         input_ids = encoded_input["input_ids"]
         attention_mask = encoded_input["attention_mask"]
@@ -169,11 +170,13 @@ def run_interactive_demo_inference(device, model_name, sequence_length, batch_si
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "model_name, sequence_length, batch_size, kb_file",
-    [("BAAI/bge-large-en-v1.5", 384, 8, "knowledge_base.txt")],
+    [("BAAI/bge-large-en-v1.5", BGE_SEQ_LENGTH, 8, "knowledge_base.txt")],
 )
 def test_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file, model_location_generator):
     return run_interactive_demo_inference(
@@ -182,11 +185,13 @@ def test_interactive_demo_inference(device, model_name, sequence_length, batch_s
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "model_name, sequence_length, device_batch_size, kb_file",
-    [("BAAI/bge-large-en-v1.5", 384, 8, "knowledge_base.txt")],
+    [("BAAI/bge-large-en-v1.5", BGE_SEQ_LENGTH, 8, "knowledge_base.txt")],
 )
 def test_interactive_demo_inference_dp(
     mesh_device, model_name, sequence_length, device_batch_size, kb_file, model_location_generator

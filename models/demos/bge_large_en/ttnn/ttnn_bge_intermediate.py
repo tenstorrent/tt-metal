@@ -24,7 +24,7 @@ class TtnnBGEIntermediate:
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             program_config=ff1_matmul_program_config,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 packer_l1_acc=False,
             ),

@@ -44,7 +44,7 @@ class TtnnBGESelfAttention:
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             program_config=query_key_value_matmul_program_config,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 fp32_dest_acc_en=True,  # FP32 accumulation per engineering guidance (attention weights)
             ),
             dtype=ttnn.bfloat8_b,  # Keep BF8 for storage; compute will use BF16 with FP32 accumulation

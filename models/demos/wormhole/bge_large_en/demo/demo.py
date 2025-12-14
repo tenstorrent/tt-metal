@@ -13,6 +13,7 @@ import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.runner.performant_runner import BGEPerformantRunner
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH
 
 # Sample English texts for BGE demonstration
 # BGE models work best with instruction prefix for retrieval tasks
@@ -102,18 +103,22 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
 
 @pytest.mark.parametrize("inputs", inputs)
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
-@pytest.mark.parametrize("model_name, sequence_length", [("BAAI/bge-large-en-v1.5", 384)])
+@pytest.mark.parametrize("model_name, sequence_length", [("BAAI/bge-large-en-v1.5", BGE_SEQ_LENGTH)])
 def test_bge_demo_inference(device, inputs, model_name, sequence_length, model_location_generator):
     return run_bge_demo_inference(device, inputs, model_name, sequence_length, model_location_generator)
 
 
 @pytest.mark.parametrize("inputs", inputs)
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
-@pytest.mark.parametrize("model_name, sequence_length", [("BAAI/bge-large-en-v1.5", 384)])
+@pytest.mark.parametrize("model_name, sequence_length", [("BAAI/bge-large-en-v1.5", BGE_SEQ_LENGTH)])
 def test_bge_demo_inference_dp(mesh_device, inputs, model_name, sequence_length, model_location_generator):
     return run_bge_demo_inference(mesh_device, inputs, model_name, sequence_length, model_location_generator)
 
@@ -165,9 +170,11 @@ def run_bge_vllm_demo(device, inputs, model_name, sequence_length, model_locatio
 
 @pytest.mark.parametrize("inputs", inputs)
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": BGE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
-@pytest.mark.parametrize("model_name, sequence_length", [("BAAI/bge-large-en-v1.5", 384)])
+@pytest.mark.parametrize("model_name, sequence_length", [("BAAI/bge-large-en-v1.5", BGE_SEQ_LENGTH)])
 def test_bge_vllm_demo(device, inputs, model_name, sequence_length, model_location_generator):
     """
     Test the vLLM integration for BGE embedding model.

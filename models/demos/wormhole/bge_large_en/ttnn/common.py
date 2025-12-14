@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
 
@@ -15,8 +16,14 @@ import ttnn
 core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
 
 BGE_L1_SMALL_SIZE = 0
+BGE_SEQ_LENGTH = 512
 
-seqL = 512
+seqL = BGE_SEQ_LENGTH
+if seqL <= 384:
+    seqL_factor = 1
+else:
+    seqL_factor = 2
+
 TILE_HEIGHT = 32
 seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
 seqL_t = seqL_padded // TILE_HEIGHT  # 12
@@ -50,9 +57,9 @@ ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-    in0_block_w=dim_t__x * 2,  # Increase from 8 to 16 for better reuse (4096 / 32 / 8 = 16)
+    in0_block_w=(dim_t__x * 4) // seqL_factor,  # Increase from 8 to 16 for better reuse (4096 / 32 / 8 = 16)
     out_subblock_h=1,  # Keep 1 (per_core_M=12, so 1 divides evenly)
-    out_subblock_w=dim_t__x // 2,  # Try 4 (max for FP32: 1*4=4, divides per_core_N=4)
+    out_subblock_w=dim_t__x // seqL_factor,  # Try 4 (max for FP32: 1*4=4, divides per_core_N=4)
     per_core_M=seqL_t,
     per_core_N=dim_t__x,  # Calculated: ceil(1024 / (32 * 8)) = 4
     transpose_mcast=False,
@@ -61,9 +68,9 @@ ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-    in0_block_w=dim_t__x // 2,  # Revert to 4 (must divide K evenly: 1024/32=32, 32/8=4)
+    in0_block_w=dim_t__x // seqL_factor,  # Revert to 4 (must divide K evenly: 1024/32=32, 32/8=4)
     out_subblock_h=1,
-    out_subblock_w=dim_t__x // 2,  # Keep 4 for FP32 accumulation (1*4=4 <= 4, max for FP32)
+    out_subblock_w=dim_t__x // seqL_factor,  # Keep 4 for FP32 accumulation (1*4=4 <= 4, max for FP32)
     per_core_M=seqL_t,
     per_core_N=dim_t__x * 3,
     transpose_mcast=False,
@@ -136,6 +143,13 @@ def custom_preprocessor(torch_model, name):
         parameters["query_key_value"]["bias"] = ttnn.from_torch(
             qkv_bias_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
         )
+
+    elif isinstance(torch_model, torch.nn.Linear):
+        parameters["weight"] = preprocess_linear_weight(torch_model.weight, dtype=ttnn.bfloat8_b)
+        if torch_model.bias is not None:
+            parameters["bias"] = preprocess_linear_bias(torch_model.bias, dtype=ttnn.bfloat8_b)
+        else:
+            parameters["bias"] = None
 
     return parameters
 
