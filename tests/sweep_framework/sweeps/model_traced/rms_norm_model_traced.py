@@ -65,10 +65,8 @@ def run(
         weight_tensor_shape = input_shape["other"]
 
         # Use the traced weight shape directly - it's already in the correct format
-        # The traced configs have weight as [1, 1, H, 32] where H*32 equals the actual weight size
-        # TTNN validation requires weight's last dimension to be TILE_WIDTH (32) and
-        # weight's volume/TILE_WIDTH to equal input's last dim/TILE_WIDTH
-        # This format is already correct in the traced configs
+        # The traced configs have weight as [1, 1, 64, 32] which represents a 2048-element weight
+        # in a 4D tensor format (64 * 32 = 2048)
     else:
         # This is sample suite - use simple shapes
         input_tensor_shape = input_shape if isinstance(input_shape, (tuple, list)) else tuple(input_shape)
@@ -136,34 +134,10 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
-    # Create weight tensor - handle layout-specific requirements
-    # TTNN validation has two paths:
-    # 1. TILE layout: requires weight's last dim == input's last dim
-    # 2. ROW_MAJOR layout: requires weight's last dim == TILE_WIDTH (32) and volume alignment
-    # For TILE layout, reshape weight to match input's last dimension
-    # For ROW_MAJOR layout, keep the original traced shape [1,1,H,32]
-    if input_b_layout == ttnn.TILE_LAYOUT:
-        # Reshape weight to [1, 1, 1, input_last_dim] for TILE layout
-        input_last_dim = input_tensor_shape[-1]
-        if len(weight_tensor_shape) == 4:
-            weight_total_size = weight_tensor_shape[2] * weight_tensor_shape[3]
-        elif len(weight_tensor_shape) == 1:
-            weight_total_size = weight_tensor_shape[0]
-        else:
-            weight_total_size = input_last_dim
-
-        if weight_total_size == input_last_dim:
-            # Reshape to match input's last dimension
-            torch_weight_reshaped = torch_weight.flatten()[:input_last_dim].reshape([1, 1, 1, input_last_dim])
-        else:
-            # Fallback: use original shape
-            torch_weight_reshaped = torch_weight
-    else:
-        # ROW_MAJOR layout: use original traced shape
-        torch_weight_reshaped = torch_weight
-
+    # Create weight tensor - use the shape as traced
+    # The traced configs have weight in shape [1,1,64,32] with ROW_MAJOR layout
     weight_tensor = ttnn.from_torch(
-        torch_weight_reshaped,
+        torch_weight,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,

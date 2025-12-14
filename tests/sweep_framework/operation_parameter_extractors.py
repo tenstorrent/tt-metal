@@ -2104,6 +2104,140 @@ OperationParameterExtractors.register_extractor(
 )
 
 
+# Add subtract extractor method
+def _extract_subtract_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for subtract operation
+
+    Subtract has 2 tensor inputs but may be traced with 3 in some configs.
+    This extractor ensures we only extract the 2 needed inputs.
+    """
+    try:
+        params = {}
+        # Extract first 2 tensor configs only (input_a and input_b)
+        tensor_configs = []
+        for arg in config:
+            if isinstance(arg, dict):
+                for key in sorted(arg.keys()):  # Process in order: arg0, arg1, arg2...
+                    if key.startswith("arg"):
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg[key])
+                        if tensor_config:
+                            tensor_configs.append(tensor_config)
+                            if len(tensor_configs) >= 2:  # Only need first 2
+                                break
+                if len(tensor_configs) >= 2:
+                    break
+
+        if len(tensor_configs) >= 2:
+            params["input_shape"] = {"self": tensor_configs[0].shape, "other": tensor_configs[1].shape}
+            params["input_a_dtype"] = tensor_configs[0].dtype
+            params["input_b_dtype"] = tensor_configs[1].dtype
+            params["input_a_layout"] = tensor_configs[0].layout
+            params["input_b_layout"] = tensor_configs[1].layout
+            params["input_a_memory_config"] = tensor_configs[0].memory_config
+            params["input_b_memory_config"] = tensor_configs[1].memory_config
+
+            # Extract output memory config if present
+            output_memory_config = None
+            for arg in config:
+                if isinstance(arg, dict):
+                    for key, val in arg.items():
+                        if "output" in key.lower() or (
+                            key.startswith("arg") and isinstance(val, dict) and "MemoryConfig" in str(val)
+                        ):
+                            if isinstance(val, dict) and "MemoryConfig" in val:
+                                output_memory_config = val["MemoryConfig"]
+                                break
+
+            # Default to input_a memory config if no output specified
+            if output_memory_config is None:
+                output_memory_config = tensor_configs[0].memory_config
+
+            params["output_memory_config"] = output_memory_config
+
+            return params
+        return None
+    except Exception as e:
+        return None
+
+
+def _transform_subtract_parameters(
+    configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+) -> List[Dict]:
+    """Transform subtract traced configs to run function format"""
+    transformed_configs = []
+
+    for config in configs:
+        try:
+            if not isinstance(config, dict):
+                continue
+
+            input_shape_dict = config.get("input_shape", {})
+            if not input_shape_dict or "self" not in input_shape_dict or "other" not in input_shape_dict:
+                continue
+
+            shape_a = input_shape_dict["self"]
+            shape_b = input_shape_dict["other"]
+
+            # Parse dtypes and layouts
+            input_a_dtype_str = config.get("input_a_dtype", "DataType::BFLOAT16")
+            input_b_dtype_str = config.get("input_b_dtype", "DataType::BFLOAT16")
+            input_a_layout_str = config.get("input_a_layout", "Layout::TILE")
+            input_b_layout_str = config.get("input_b_layout", "Layout::TILE")
+
+            # Parse memory configs
+            input_a_mem_config = config.get("input_a_memory_config", {})
+            input_b_mem_config = config.get("input_b_memory_config", {})
+            output_mem_config = config.get("output_memory_config", input_a_mem_config)
+
+            transformed_config = {
+                "input_shape": input_shape_dict,  # Keep as dict with 'self' and 'other'
+                "input_a_dtype": input_a_dtype_str,
+                "input_b_dtype": input_b_dtype_str,
+                "input_a_layout": input_a_layout_str,
+                "input_b_layout": input_b_layout_str,
+                "input_a_memory_config": input_a_mem_config,
+                "input_b_memory_config": input_b_mem_config,
+                "output_memory_config": output_mem_config,
+            }
+
+            # Apply parsers if provided
+            if parse_dtype:
+                transformed_config["input_a_dtype"] = parse_dtype(input_a_dtype_str)
+                transformed_config["input_b_dtype"] = parse_dtype(input_b_dtype_str)
+            if parse_layout:
+                transformed_config["input_a_layout"] = parse_layout(input_a_layout_str)
+                transformed_config["input_b_layout"] = parse_layout(input_b_layout_str)
+            if parse_memory_config:
+                transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, shape_a)
+                transformed_config["input_b_memory_config"] = parse_memory_config(input_b_mem_config, shape_b)
+                transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, shape_a)
+
+            transformed_configs.append(transformed_config)
+
+        except Exception as e:
+            print(f"Error transforming subtract config: {e}")
+            continue
+
+    return transformed_configs
+
+
+# Add methods to class
+OperationParameterExtractors._extract_subtract_parameters = staticmethod(_extract_subtract_parameters)
+OperationParameterExtractors._transform_subtract_parameters = staticmethod(_transform_subtract_parameters)
+
+# Register subtract extractor
+OperationParameterExtractors.register_extractor(
+    "subtract",
+    extract_func=OperationParameterExtractors._extract_subtract_parameters,
+    transform_func=OperationParameterExtractors._transform_subtract_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::subtract",
+    extract_func=OperationParameterExtractors._extract_subtract_parameters,
+    transform_func=OperationParameterExtractors._transform_subtract_parameters,
+)
+
+
 # Example: How users can easily add their own operation extractors
 def example_custom_operation_setup():
     """
