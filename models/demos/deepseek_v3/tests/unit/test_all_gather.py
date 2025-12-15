@@ -77,7 +77,9 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, cluster_axis, topology, enable_trace):
+def test_deepseek(
+    mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, cluster_axis, topology, enable_trace, repeat_batches
+):
     shape, dtype, buffer_type, shard_spec = shape_dtype_buffer_type_shard_spec
 
     tt_input, torch_reference, output_mem_config = _get_tensors(
@@ -89,8 +91,12 @@ def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, 
             tt_input, dim, cluster_axis=cluster_axis, topology=topology, memory_config=output_mem_config
         )
 
-    tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
-    tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_output_tensor)])
+    for _ in range(repeat_batches):
+        tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+        tt_output_tensor_torch = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_output_tensor)])
+        ttnn.deallocate(tt_output_tensor)
 
-    eq, mess = comp_equal(torch_reference, tt_output_tensor)
-    assert eq, mess
+        eq, mess = comp_equal(torch_reference, tt_output_tensor_torch)
+        assert eq, mess
+
+    ttnn.deallocate(tt_input)

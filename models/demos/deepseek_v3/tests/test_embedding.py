@@ -52,6 +52,7 @@ def test_embedding_forward_pass(
     mode,
     batch_size_or_seq_len,
     generate_reference_io,
+    repeat_batches,
     mesh_device,
     ccl,
     model_path,
@@ -89,42 +90,43 @@ def test_embedding_forward_pass(
     model_state = EmbeddingClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    # Convert input to TTNN
-    logger.info("Preparing TTNN inputs")
-    tt_input_ids = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.uint32,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+    for _ in range(repeat_batches):
+        # Convert input to TTNN
+        logger.info("Preparing TTNN inputs")
+        tt_input_ids = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
-    # TTNN forward pass
-    logger.info("Running TTNN forward pass")
-    tt_output = run_module_forward(EmbeddingClass, mode, tt_input_ids, run_config)
+        # TTNN forward pass
+        logger.info("Running TTNN forward pass")
+        tt_output = run_module_forward(EmbeddingClass, mode, tt_input_ids, run_config)
 
-    # Convert output back to torch
-    logger.info("Validating output")
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            dims=(0, -1),
-            mesh_shape=tuple(mesh_device.shape),
-        ),
-    )
-    if EmbeddingClass is Embedding1D:
-        tt_output_torch = tt_output_torch[:1]
-    else:
-        tt_output_torch = tt_output_torch.reshape(1, batch_size_or_seq_len, hf_config.hidden_size)
+        # Convert output back to torch
+        logger.info("Validating output")
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device,
+                dims=(0, -1),
+                mesh_shape=tuple(mesh_device.shape),
+            ),
+        )
+        if EmbeddingClass is Embedding1D:
+            tt_output_torch = tt_output_torch[:1]
+        else:
+            tt_output_torch = tt_output_torch.reshape(1, batch_size_or_seq_len, hf_config.hidden_size)
 
-    # Cleanup
-    ttnn.deallocate(tt_input_ids)
-    ttnn.deallocate(tt_output)
+        # Cleanup
+        ttnn.deallocate(tt_input_ids)
+        ttnn.deallocate(tt_output)
 
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+        # Check PCC
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ DEEPSEEK_SHAPE_DTYPE_FILL_LIST = [
 @pytest.mark.parametrize("shape_dtype_fill", DEEPSEEK_SHAPE_DTYPE_FILL_LIST)
 @pytest.mark.parametrize("mem_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_fill_pad_deepseek(mesh_device, shape_dtype_fill, mem_config, enable_trace):
+def test_fill_pad_deepseek(mesh_device, shape_dtype_fill, mem_config, enable_trace, repeat_batches):
     shape, dtype, fill_value = shape_dtype_fill
 
     torch.manual_seed(1234)
@@ -57,8 +57,13 @@ def test_fill_pad_deepseek(mesh_device, shape_dtype_fill, mem_config, enable_tra
     def run_op():
         return ttnn.fill_implicit_tile_padding(input_tensor, fill_value)
 
-    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    for _ in range(repeat_batches):
+        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for t in ttnn.get_device_tensors(tt_out_tensors):
-        padded_torch_output_tensor = ttnn.from_device(t).to_torch_with_padded_shape()
-        assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+        for t in ttnn.get_device_tensors(tt_out_tensors):
+            padded_torch_output_tensor = ttnn.from_device(t).to_torch_with_padded_shape()
+            assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+
+        ttnn.deallocate(tt_out_tensors)
+
+    ttnn.deallocate(input_tensor)

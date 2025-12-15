@@ -27,7 +27,7 @@ def _linear_coord(coord, mesh_shape):
 @pytest.mark.parametrize("test_config", DEEPSEEK_REC_SEND_SHAPE_DTYPE_MEM)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
-def test_point_to_point_deepseek(mesh_device, test_config, layout, enable_trace):
+def test_point_to_point_deepseek(mesh_device, test_config, layout, enable_trace, repeat_batches):
     # send, sreceive
     coord0, coord1, shape, dtype, memory_config = test_config
 
@@ -59,7 +59,15 @@ def test_point_to_point_deepseek(mesh_device, test_config, layout, enable_trace)
             topology=ttnn.Topology.Linear,
         )
 
-    sent_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    for _ in range(repeat_batches):
+        sent_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
+        sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        assert_equal(
+            input_tensor_torch[idx_start0:idx_end0, :, :, :],
+            sent_tensor_torch[idx_start1:idx_end1, :, :, :],
+        )
+
+        ttnn.deallocate(sent_tensor)
+
+    ttnn.deallocate(input_tensor)

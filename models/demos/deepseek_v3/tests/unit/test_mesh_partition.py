@@ -61,15 +61,20 @@ CLUSTER_AXIS = 1
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("cluster_axis", [CLUSTER_AXIS])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_mesh_partition_deepseek(mesh_device, shape, dim, dtype, mem_config, layout, cluster_axis, enable_trace):
+def test_mesh_partition_deepseek(mesh_device, shape, dim, dtype, mem_config, layout, cluster_axis, enable_trace, repeat_batches):
     tt_input, torch_references = _get_tensors(shape, dim, dtype, mem_config, layout, cluster_axis, mesh_device)
 
     def run_op():
         return ttnn.mesh_partition(tt_input, dim=dim, cluster_axis=cluster_axis)
 
-    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    for _ in range(repeat_batches):
+        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for tt_out, torch_ref in zip(ttnn.get_device_tensors(tt_out_tensors), torch_references):
-        torch_out = ttnn.to_torch(tt_out)
-        eq, output = comp_equal(torch_out, torch_ref)
-        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+        for tt_out, torch_ref in zip(ttnn.get_device_tensors(tt_out_tensors), torch_references):
+            torch_out = ttnn.to_torch(tt_out)
+            eq, output = comp_equal(torch_out, torch_ref)
+            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+
+        ttnn.deallocate(tt_out_tensors)
+
+    ttnn.deallocate(tt_input)

@@ -60,6 +60,7 @@ def test_forward_pass(
     mesh_device: ttnn.Device,
     ccl: CCL,
     cache_path: Path,
+    repeat_batches,
     set_deterministic_env: Any,
 ):
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
@@ -87,38 +88,39 @@ def test_forward_pass(
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    # Convert input to TTNN
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
-        layout=ttnn.TILE_LAYOUT,
-    )
+    for _ in range(repeat_batches):
+        # Convert input to TTNN
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            memory_config=run_config["input_memory_config"],
+            layout=ttnn.TILE_LAYOUT,
+        )
 
-    # TTNN forward pass
-    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(LMHead, mode, tt_input, run_config)
+        # TTNN forward pass
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = run_module_forward(LMHead, mode, tt_input, run_config)
 
-    expected_output_memory_config = run_config["output_memory_config"]
+        expected_output_memory_config = run_config["output_memory_config"]
 
-    # Verify output memory config matches expected
-    actual_output_memory_config = tt_output.memory_config()
-    assert (
-        actual_output_memory_config == expected_output_memory_config
-    ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+        # Verify output memory config matches expected
+        actual_output_memory_config = tt_output.memory_config()
+        assert (
+            actual_output_memory_config == expected_output_memory_config
+        ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    logger.info("running ttnn.to_torch")
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
-    logger.info("finished ttnn.to_torch")
+        logger.info("running ttnn.to_torch")
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+        logger.info("finished ttnn.to_torch")
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
+        # Cleanup
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
 
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+        # Check PCC
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

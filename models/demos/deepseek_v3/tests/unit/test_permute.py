@@ -31,7 +31,7 @@ DEEPSEEK_SHAPE_PERM_LAYOUT_MEM = [
 @pytest.mark.parametrize("test_config", DEEPSEEK_SHAPE_PERM_LAYOUT_MEM)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_permute_deepseek(mesh_device, test_config, dtype, enable_trace):
+def test_permute_deepseek(mesh_device, test_config, dtype, enable_trace, repeat_batches):
     torch.manual_seed(2005)
 
     shape, perm, layout, memory_config = test_config
@@ -49,9 +49,14 @@ def test_permute_deepseek(mesh_device, test_config, dtype, enable_trace):
     def run_op():
         return ttnn.permute(tt_input, perm)
 
-    tt_output_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
-
     torch_ref = torch.permute(torch_input, perm)
-    for tt_out_tensor in ttnn.get_device_tensors(tt_output_tensors):
-        torch_out = ttnn.to_torch(tt_out_tensor)
-        assert_equal(torch_ref, torch_out)
+    for _ in range(repeat_batches):
+        tt_output_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+
+        for tt_out_tensor in ttnn.get_device_tensors(tt_output_tensors):
+            torch_out = ttnn.to_torch(tt_out_tensor)
+            assert_equal(torch_ref, torch_out)
+
+        ttnn.deallocate(tt_output_tensors)
+
+    ttnn.deallocate(tt_input)

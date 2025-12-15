@@ -87,6 +87,7 @@ def run_test_forward_pass_decoder1d(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    repeat_batches,
 ):
     # Check params
     if mode == "prefill":
@@ -165,22 +166,38 @@ def run_test_forward_pass_decoder1d(
     # Forward pass
     logger.info("Running TTNN forward pass")
 
-    cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
-    if mode == "prefill":
-        tt_output = DecoderBlockClass.forward_prefill(
-            tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table
-        )
-    else:
-        tt_output = DecoderBlockClass.forward_decode(
-            tt_input, position_ids_tensor, cur_row_idx, run_config, rope_tensors, tt_page_table
-        )
+    for iteration in range(repeat_batches):
+        cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
+        if mode == "prefill":
+            tt_output = DecoderBlockClass.forward_prefill(
+                tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table
+            )
+        else:
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, cur_row_idx, run_config, rope_tensors, tt_page_table
+            )
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    )[cur_row_idx]
+        if iteration == 0:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape
+                ),
+            )[cur_row_idx]
 
-    # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+            # Check output PCC
+            assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+        else:
+            ttnn.synchronize_device(mesh_device)
+
+        ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_page_table)
+    for tt_tensor in rope_tensors.values():
+        ttnn.deallocate(tt_tensor)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
 
 
 def run_test_forward_pass_decoder2d(
@@ -197,6 +214,7 @@ def run_test_forward_pass_decoder2d(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    repeat_batches,
 ):
     # Check params
     if mode == "prefill":
@@ -276,19 +294,35 @@ def run_test_forward_pass_decoder2d(
     # Forward pass
     logger.info("Running TTNN forward pass")
 
-    if mode == "prefill":
-        tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
-    else:
-        tt_output = DecoderBlockClass.forward_decode(
-            tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
-        )
+    for iteration in range(repeat_batches):
+        if mode == "prefill":
+            tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        else:
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+            )
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
-    )
+        if iteration == 0:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape
+                ),
+            )
 
-    # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+            # Check output PCC
+            assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+        else:
+            ttnn.synchronize_device(mesh_device)
+
+        ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_page_table)
+    for tt_tensor in rope_tensors.values():
+        ttnn.deallocate(tt_tensor)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
 
 
 @pytest.mark.parametrize(
@@ -335,6 +369,7 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    repeat_batches,
 ):
     test_closure(
         DecoderBlockClass,
@@ -350,6 +385,7 @@ def test_forward_pass(
         ccl,
         force_recalculate_weight_config,
         state_dict,
+        repeat_batches,
     )
 
 

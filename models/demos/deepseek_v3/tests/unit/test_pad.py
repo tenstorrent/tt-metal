@@ -34,7 +34,7 @@ DEEPSEEK_SHAPE_PADDED_FILL_MEM = [
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace):
+def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace, repeat_batches):
     shape, padded_shape, pad_value, memory_config = test_config
 
     torch_input = torch.rand(shape).bfloat16()
@@ -50,12 +50,17 @@ def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace):
     def run_op():
         return ttnn.pad(tt_input, padded_shape, [0, 0, 0, 0], value=pad_value, use_multicore=True)
 
-    tt_outputs = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
-
     shape_diff = list(map(lambda x, y: x - y, padded_shape, shape))
     torch_ref = torch.nn.functional.pad(torch_input, sum([[0, pd] for pd in reversed(shape_diff)], []), value=pad_value)
 
-    for tt_out in ttnn.get_device_tensors(tt_outputs):
-        torch_out = ttnn.to_torch(tt_out)
-        eq, output = comp_equal(torch_out, torch_ref)
-        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+    for _ in range(repeat_batches):
+        tt_outputs = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+
+        for tt_out in ttnn.get_device_tensors(tt_outputs):
+            torch_out = ttnn.to_torch(tt_out)
+            eq, output = comp_equal(torch_out, torch_ref)
+            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+
+        ttnn.deallocate(tt_outputs)
+
+    ttnn.deallocate(tt_input)

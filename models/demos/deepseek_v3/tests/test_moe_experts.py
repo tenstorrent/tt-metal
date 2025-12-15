@@ -91,6 +91,7 @@ def test_forward_pass(
     seq_len: int,
     hf_config: Any,
     cache_path: Path,
+    repeat_batches,
     mesh_device: Any,
     weight_type: str,
     module_path: str,
@@ -124,54 +125,56 @@ def test_forward_pass(
     model_state = TTExperts.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    # Convert input to TTNN
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    tt_sparsity = ttnn.from_torch(
-        sparsity,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    for _ in range(repeat_batches):
+        # Convert input to TTNN
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        tt_sparsity = ttnn.from_torch(
+            sparsity,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-    # TTNN forward pass
-    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
-    expected_output_memory_config = run_config["output_memory_config"]
+        # TTNN forward pass
+        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+        tt_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
+        expected_output_memory_config = run_config["output_memory_config"]
 
-    # Verify output memory config matches expected
-    actual_output_memory_config = tt_output.memory_config()
-    assert (
-        actual_output_memory_config == expected_output_memory_config
-    ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+        # Verify output memory config matches expected
+        actual_output_memory_config = tt_output.memory_config()
+        assert (
+            actual_output_memory_config == expected_output_memory_config
+        ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    # output shape per device  = [1, experts_per_device, seq_len, hidden_size]
-    # There are 32 groups of unique experts output in case of TG
-    # We first concate rows and then columns to get the final output
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
-    )
-    # example shape (4, experts_per_device*8, seq_len, hidden_size) for TG
-    tt_output_torch = tt_output_torch.reshape(1, -1, seq_len, hf_config.hidden_size)
-    # example shape (1, experts_per_device*8*4, seq_len, hidden_size) for TG
-    tt_output_torch = tt_output_torch[0].unsqueeze(1)
+        # output shape per device  = [1, experts_per_device, seq_len, hidden_size]
+        # There are 32 groups of unique experts output in case of TG
+        # We first concate rows and then columns to get the final output
+        # Convert output back to torch
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+        )
+        # example shape (4, experts_per_device*8, seq_len, hidden_size) for TG
+        tt_output_torch = tt_output_torch.reshape(1, -1, seq_len, hf_config.hidden_size)
+        # example shape (1, experts_per_device*8*4, seq_len, hidden_size) for TG
+        tt_output_torch = tt_output_torch[0].unsqueeze(1)
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
+        # Cleanup
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_sparsity)
+        ttnn.deallocate(tt_output)
 
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+        # Check PCC
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

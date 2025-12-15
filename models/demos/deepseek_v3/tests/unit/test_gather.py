@@ -20,7 +20,7 @@ DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.u
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("mem_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_gather_deepseek(mesh_device, shapes_dtypes, dim, layout, mem_config, enable_trace):
+def test_gather_deepseek(mesh_device, shapes_dtypes, dim, layout, mem_config, enable_trace, repeat_batches):
     torch.manual_seed(0)
 
     input_shape, input_dtype, index_shape, index_dtype = shapes_dtypes
@@ -51,8 +51,14 @@ def test_gather_deepseek(mesh_device, shapes_dtypes, dim, layout, mem_config, en
     def run_op():
         return ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
-    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    for _ in range(repeat_batches):
+        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for ttnn_gather in ttnn.get_device_tensors(tt_out_tensors):
-        assert ttnn_gather.shape == torch_index.shape
-        assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
+        for ttnn_gather in ttnn.get_device_tensors(tt_out_tensors):
+            assert ttnn_gather.shape == torch_index.shape
+            assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
+
+        ttnn.deallocate(tt_out_tensors)
+
+    ttnn.deallocate(ttnn_input)
+    ttnn.deallocate(ttnn_index)

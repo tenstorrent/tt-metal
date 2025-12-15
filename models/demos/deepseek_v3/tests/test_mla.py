@@ -169,6 +169,7 @@ def run_test_forward_pass_mla1d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    repeat_batches,
 ):
     # Check params
     if mode == "prefill":
@@ -236,55 +237,77 @@ def run_test_forward_pass_mla1d(
     # Forward pass
     logger.info("Running TTNN forward pass")
 
-    cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
-    if mode == "prefill":
-        tt_output = MLA1D.forward_prefill(tt_input, user_id, cur_row_idx, run_config, tt_rope_tensors, tt_page_table)
-    else:
-        tt_output = MLA1D.forward_decode(
-            tt_input, position_ids_tensor, cur_row_idx, run_config, tt_rope_tensors, tt_page_table
-        )
+    for iteration in range(repeat_batches):
+        cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
+        if mode == "prefill":
+            tt_output = MLA1D.forward_prefill(
+                tt_input, user_id, cur_row_idx, run_config, tt_rope_tensors, tt_page_table
+            )
+        else:
+            tt_output = MLA1D.forward_decode(
+                tt_input, position_ids_tensor, cur_row_idx, run_config, tt_rope_tensors, tt_page_table
+            )
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    )[cur_row_idx]
-
-    # Check PCC
-    tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["kvpe_cache"], mesh_device), torch_page_table, mesh_device.get_num_devices()
-    )
-    if mode == "prefill":
-        batch_id = user_id + cur_row_idx * USERS_PER_ROW
-        assert (
-            check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
-            and check_cache_matches(
-                tt_cache[batch_id : batch_id + 1, :, :seq_len],
-                output_cache,
-                hf_config_short.kv_lora_rank,
-                pcc_required=PCC_REQUIRED_KVPE,
-            )
-            and check_cache_unchanged(
-                tt_cache, (slice(batch_id, batch_id + 1), slice(None), slice(None, seq_len), slice(None))
-            )
-        ), f"MLA output for prefill {seq_len=} {user_id=} {cur_row_idx=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
-    else:
-        assert (
-            check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
-            and check_cache_matches(
-                tt_cache[torch.arange(batch_size) + cur_row_idx * USERS_PER_ROW, :, position_ids, :].unsqueeze(2),
-                output_cache[:, :, -1:, :],
-                hf_config_short.kv_lora_rank,
-                pcc_required=PCC_REQUIRED_KVPE,
-            )
-            and check_cache_unchanged(
-                tt_cache,
-                (
-                    slice(cur_row_idx * USERS_PER_ROW, (cur_row_idx + 1) * USERS_PER_ROW),
-                    slice(None),
-                    slice(None),
-                    slice(None),
+        if iteration == 0:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape
                 ),
+            )[cur_row_idx]
+
+            # Check PCC
+            tt_cache = torch_cache_from_paged(
+                get_cache_on_host(run_config["kvpe_cache"], mesh_device),
+                torch_page_table,
+                mesh_device.get_num_devices(),
             )
-        ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            if mode == "prefill":
+                batch_id = user_id + cur_row_idx * USERS_PER_ROW
+                assert (
+                    check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
+                    and check_cache_matches(
+                        tt_cache[batch_id : batch_id + 1, :, :seq_len],
+                        output_cache,
+                        hf_config_short.kv_lora_rank,
+                        pcc_required=PCC_REQUIRED_KVPE,
+                    )
+                    and check_cache_unchanged(
+                        tt_cache, (slice(batch_id, batch_id + 1), slice(None), slice(None, seq_len), slice(None))
+                    )
+                ), f"MLA output for prefill {seq_len=} {user_id=} {cur_row_idx=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            else:
+                assert (
+                    check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
+                    and check_cache_matches(
+                        tt_cache[torch.arange(batch_size) + cur_row_idx * USERS_PER_ROW, :, position_ids, :].unsqueeze(
+                            2
+                        ),
+                        output_cache[:, :, -1:, :],
+                        hf_config_short.kv_lora_rank,
+                        pcc_required=PCC_REQUIRED_KVPE,
+                    )
+                    and check_cache_unchanged(
+                        tt_cache,
+                        (
+                            slice(cur_row_idx * USERS_PER_ROW, (cur_row_idx + 1) * USERS_PER_ROW),
+                            slice(None),
+                            slice(None),
+                            slice(None),
+                        ),
+                    )
+                ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+        else:
+            ttnn.synchronize_device(mesh_device)
+
+        ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_page_table)
+    for tt_tensor in tt_rope_tensors.values():
+        ttnn.deallocate(tt_tensor)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
 
 
 def run_test_forward_pass_mla2d(
@@ -300,6 +323,7 @@ def run_test_forward_pass_mla2d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    repeat_batches,
 ):
     # Check params
     if mode == "prefill":
@@ -366,45 +390,63 @@ def run_test_forward_pass_mla2d(
     # Forward pass
     logger.info("Running TTNN forward pass")
 
-    if mode == "prefill":
-        tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
-    else:
-        tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
-
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    ).reshape(
-        -1, seq_len, hf_config_short.hidden_size
-    )  # Concatenate all batches together
-
-    # Check PCC
-    tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
-        torch_page_table,
-        mesh_device.get_num_devices(),
-    )
-    if mode == "prefill":
-        assert (
-            check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
-            and check_cache_matches(
-                tt_cache[user_id : user_id + 1, :, :seq_len],
-                output_cache,
-                hf_config_short.kv_lora_rank,
-                pcc_required=PCC_REQUIRED_KVPE,
+    for iteration in range(repeat_batches):
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            tt_output = MLA2D.forward_decode(
+                tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
             )
-            and check_cache_unchanged(
-                tt_cache, (slice(user_id, user_id + 1), slice(None), slice(None, seq_len), slice(None))
+
+        if iteration == 0:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape
+                ),
+            ).reshape(
+                -1, seq_len, hf_config_short.hidden_size
+            )  # Concatenate all batches together
+
+            # Check PCC
+            tt_cache = torch_cache_from_paged(
+                get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
+                torch_page_table,
+                mesh_device.get_num_devices(),
             )
-        ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
-    else:
-        assert check_output_matches(
-            tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
-        ) and check_cache_matches(
-            tt_cache[torch.arange(batch_size), :, position_ids, :].unsqueeze(2),
-            output_cache[:, :, -1:, :],
-            hf_config_short.kv_lora_rank,
-            pcc_required=PCC_REQUIRED_KVPE,
-        ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            if mode == "prefill":
+                assert (
+                    check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
+                    and check_cache_matches(
+                        tt_cache[user_id : user_id + 1, :, :seq_len],
+                        output_cache,
+                        hf_config_short.kv_lora_rank,
+                        pcc_required=PCC_REQUIRED_KVPE,
+                    )
+                    and check_cache_unchanged(
+                        tt_cache, (slice(user_id, user_id + 1), slice(None), slice(None, seq_len), slice(None))
+                    )
+                ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            else:
+                assert check_output_matches(
+                    tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
+                ) and check_cache_matches(
+                    tt_cache[torch.arange(batch_size), :, position_ids, :].unsqueeze(2),
+                    output_cache[:, :, -1:, :],
+                    hf_config_short.kv_lora_rank,
+                    pcc_required=PCC_REQUIRED_KVPE,
+                ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+        else:
+            ttnn.synchronize_device(mesh_device)
+
+        ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_page_table)
+    for tt_tensor in tt_rope_tensors.values():
+        ttnn.deallocate(tt_tensor)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
 
 
 @pytest.mark.parametrize(
@@ -446,6 +488,7 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    repeat_batches,
 ):
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
@@ -463,6 +506,7 @@ def test_forward_pass(
         module_path,
         force_recalculate_weight_config,
         state_dict,
+        repeat_batches,
     )
 
 

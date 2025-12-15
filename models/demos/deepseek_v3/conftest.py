@@ -15,6 +15,7 @@ from models.demos.deepseek_v3.utils.test_utils import load_state_dict, system_na
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
+REPEAT_BATCHES_OPTION = "--repeat-batches"
 
 
 def pytest_addoption(parser):
@@ -22,6 +23,12 @@ def pytest_addoption(parser):
         RESET_WEIGHT_CACHE_OPTION,
         action="store_true",
         help="Reset weight configs for tests",
+    )
+    parser.addoption(
+        REPEAT_BATCHES_OPTION,
+        type=int,
+        default=1,
+        help="Number of times to repeat the main test loop within a single device session.",
     )
 
 
@@ -138,6 +145,14 @@ def force_recalculate_weight_config(request):
     Fixture to control whether weight configuration files should be recalculated.
     """
     return request.config.getoption(RESET_WEIGHT_CACHE_OPTION)
+
+
+@pytest.fixture(scope="session")
+def repeat_batches(request) -> int:
+    repeat = int(request.config.getoption(REPEAT_BATCHES_OPTION))
+    if repeat < 1:
+        raise ValueError(f"{REPEAT_BATCHES_OPTION} must be >= 1, got {repeat}")
+    return repeat
 
 
 @pytest.fixture(scope="session")

@@ -73,7 +73,7 @@ CLUSTER_AXIS = 1
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("enable_trace", [True, False])
-def test_concat_deepseek(mesh_device, shape_list, dim, dtype, mem_config, layout, enable_trace):
+def test_concat_deepseek(mesh_device, shape_list, dim, dtype, mem_config, layout, enable_trace, repeat_batches):
     if len(set(tuple(x for i, x in enumerate(shape) if i != dim) for shape in shape_list)) != 1:
         pytest.skip("Invalid concat shapes")
 
@@ -82,9 +82,15 @@ def test_concat_deepseek(mesh_device, shape_list, dim, dtype, mem_config, layout
     def run_op():
         return ttnn.concat(tt_inputs, dim=dim)
 
-    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    for _ in range(repeat_batches):
+        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-    for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
-        torch_out = ttnn.to_torch(tt_out_tensor)
-        eq, output = comp_equal(torch_out, torch_reference)
-        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+        for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
+            torch_out = ttnn.to_torch(tt_out_tensor)
+            eq, output = comp_equal(torch_out, torch_reference)
+            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+
+        ttnn.deallocate(tt_out_tensors)
+
+    for tt_input in tt_inputs:
+        ttnn.deallocate(tt_input)

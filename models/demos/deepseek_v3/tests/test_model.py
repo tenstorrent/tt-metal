@@ -103,6 +103,7 @@ def run_test_forward_pass_ppmodel(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    repeat_batches,
 ):
     # Check params
     if mode == "prefill":
@@ -165,20 +166,34 @@ def run_test_forward_pass_ppmodel(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
-    if mode == "prefill":
-        tt_output = RowPipelinedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
-    else:
-        tt_output = RowPipelinedModel.forward_decode(
-            tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
-        )
+    for iteration in range(repeat_batches):
+        if mode == "prefill":
+            tt_output = RowPipelinedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        else:
+            tt_output = RowPipelinedModel.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
+            )
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-    assert (
-        tt_output_torch.shape[-1] == hf_config_short.vocab_size
-    ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
+        if iteration == 0:
+            tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+            assert (
+                tt_output_torch.shape[-1] == hf_config_short.vocab_size
+            ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
 
-    # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
+            # Check output PCC
+            assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
+        else:
+            ttnn.synchronize_device(mesh_device)
+
+        ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
+    for page_table in tt_page_tables:
+        ttnn.deallocate(page_table)
+    for tt_tensor in rope_tensors.values():
+        ttnn.deallocate(tt_tensor)
 
 
 def run_test_forward_pass_dpmodel(
@@ -193,6 +208,7 @@ def run_test_forward_pass_dpmodel(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    repeat_batches,
 ):
     # Check params
     if mode == "prefill":
@@ -258,22 +274,39 @@ def run_test_forward_pass_dpmodel(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
-    if mode == "prefill":
-        tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
-    else:
-        tt_output = RowBatchedModel.forward_decode(
-            tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
-        )
+    for iteration in range(repeat_batches):
+        if mode == "prefill":
+            tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        else:
+            tt_output = RowBatchedModel.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
+            )
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
-    )
-    assert (
-        tt_output_torch.shape[-1] == hf_config_short.vocab_size
-    ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
+        if iteration == 0:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape
+                ),
+            )
+            assert (
+                tt_output_torch.shape[-1] == hf_config_short.vocab_size
+            ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
 
-    # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
+            # Check output PCC
+            assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
+        else:
+            ttnn.synchronize_device(mesh_device)
+
+        ttnn.deallocate(tt_output)
+
+    ttnn.deallocate(tt_input)
+    if position_ids_tensor is not None:
+        ttnn.deallocate(position_ids_tensor)
+    for page_table in tt_page_tables:
+        ttnn.deallocate(page_table)
+    for tt_tensor in rope_tensors.values():
+        ttnn.deallocate(tt_tensor)
 
 
 @pytest.mark.parametrize(
@@ -310,6 +343,7 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    repeat_batches,
 ):
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
@@ -326,6 +360,7 @@ def test_forward_pass(
         ccl,
         force_recalculate_weight_config,
         state_dict,
+        repeat_batches,
     )
 
 

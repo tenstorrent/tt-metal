@@ -33,6 +33,7 @@ def test_embedding(
     mem_config,
     layout,
     enable_trace,
+    repeat_batches,
 ):
     torch.manual_seed(1234)
 
@@ -52,7 +53,11 @@ def test_embedding(
     def run_op():
         return ttnn.embedding(tt_input_tensor, tt_weights, layout=layout)
 
-    output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    for _ in range(repeat_batches):
+        tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+        output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        ttnn.deallocate(tt_output_tensor)
+        assert_with_pcc(torch_reference, output_tensor)
 
-    output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_with_pcc(torch_reference, output_tensor)
+    ttnn.deallocate(tt_input_tensor)
+    ttnn.deallocate(tt_weights)
