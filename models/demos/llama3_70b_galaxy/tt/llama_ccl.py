@@ -182,6 +182,7 @@ class TT_CCL:
         - LAYERNORM: (1, 1, 32, 128)
         - SAMPLING_VALUES: (1, 1, 32, 256)
         - SAMPLING_INDICES: (1, 1, 32, 256)
+        - LOGPROBS_LOGITS: (1, 8, 32, 1)
         - BINARY_MUL: (1, 1, 32, 3584)
 
         """
