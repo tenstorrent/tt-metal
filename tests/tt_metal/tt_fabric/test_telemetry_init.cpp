@@ -54,25 +54,32 @@ TEST_F(TGFabricFixture, TelemetryStaticInfoInitialized) {
         EXPECT_TRUE(static_info.supported_stats & BANDWIDTH_BIT)
             << "BANDWIDTH telemetry not enabled for channel " << static_cast<int>(sample.channel_id);
 
-        // Verify dynamic_info counters are zeroed (not garbage)
+        // Verify dynamic_info counters are initialized (not garbage)
         const auto& tx_bw = sample.snapshot.dynamic_info.tx_bandwidth;
         const auto& rx_bw = sample.snapshot.dynamic_info.rx_bandwidth;
 
-        // Counters should start at zero (or small values after brief activity)
-        // Check they're not uninitialized garbage (> 10^12)
-        constexpr uint64_t GARBAGE_THRESHOLD = 1'000'000'000'000ULL;
+        // IMPORTANT: We check counters are NOT garbage, not that they're exactly zero.
+        // Why? The router starts processing immediately after initialization. By the time
+        // we read telemetry, it may have already processed packets, so counters could be
+        // small non-zero values. Uninitialized memory contains random garbage (often ~10^18).
+        // This threshold distinguishes initialized counters (0 to ~billions) from garbage.
+        constexpr uint64_t GARBAGE_THRESHOLD = 1'000'000'000'000ULL;  // 10^12 cycles ≈ 14 min @ 1.2GHz
 
         EXPECT_LT(tx_bw.elapsed_active_cycles, GARBAGE_THRESHOLD)
-            << "TX elapsed_active_cycles appears uninitialized for channel " << static_cast<int>(sample.channel_id);
+            << "TX elapsed_active_cycles appears uninitialized (value=" << tx_bw.elapsed_active_cycles
+            << ") for channel " << static_cast<int>(sample.channel_id);
 
         EXPECT_LT(tx_bw.elapsed_cycles, GARBAGE_THRESHOLD)
-            << "TX elapsed_cycles appears uninitialized for channel " << static_cast<int>(sample.channel_id);
+            << "TX elapsed_cycles appears uninitialized (value=" << tx_bw.elapsed_cycles << ") for channel "
+            << static_cast<int>(sample.channel_id);
 
         EXPECT_LT(rx_bw.elapsed_active_cycles, GARBAGE_THRESHOLD)
-            << "RX elapsed_active_cycles appears uninitialized for channel " << static_cast<int>(sample.channel_id);
+            << "RX elapsed_active_cycles appears uninitialized (value=" << rx_bw.elapsed_active_cycles
+            << ") for channel " << static_cast<int>(sample.channel_id);
 
         EXPECT_LT(rx_bw.elapsed_cycles, GARBAGE_THRESHOLD)
-            << "RX elapsed_cycles appears uninitialized for channel " << static_cast<int>(sample.channel_id);
+            << "RX elapsed_cycles appears uninitialized (value=" << rx_bw.elapsed_cycles << ") for channel "
+            << static_cast<int>(sample.channel_id);
 
         // Print telemetry info for debugging
         log_info(
