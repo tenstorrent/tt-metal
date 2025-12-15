@@ -110,7 +110,7 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
-    nb::ndarray<nb::array_api> py_ndarray,
+    const nb::ndarray<nb::array_api>& py_ndarray,
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
@@ -820,7 +820,7 @@ void pytensor_module(nb::module_& mod) {
                std::optional<float> pad_value,
                const distributed::TensorToMesh* mesh_mapper) {
                 new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    dlpack_tensor,
+                    std::move(dlpack_tensor),
                     data_type,
                     layout,
                     tile,

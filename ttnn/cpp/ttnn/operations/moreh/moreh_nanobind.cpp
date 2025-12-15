@@ -37,8 +37,6 @@
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.hpp"
 
-namespace nb = nanobind;
-
 namespace ttnn::operations::moreh {
 void bind_moreh_operations(nb::module_& mod) {
     moreh_abs_pow::bind_moreh_abs_pow_operation(mod);

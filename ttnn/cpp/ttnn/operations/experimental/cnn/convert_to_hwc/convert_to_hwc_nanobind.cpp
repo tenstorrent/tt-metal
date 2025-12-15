@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::cnn::detail {
 void bind_convert_to_hwc(nb::module_& mod) {
     using OperationType = decltype(ttnn::experimental::convert_to_hwc);
 
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
     Convert a tensor from CHW channel ordering to HWC channel ordering.
 
     The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM.
