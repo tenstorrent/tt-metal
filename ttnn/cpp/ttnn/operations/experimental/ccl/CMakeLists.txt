@@ -17,6 +17,7 @@ file(
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
     all_to_all_async/device/kernels/*
+    all_to_all_dispatch_selective_tilize/device/kernels/*
     llama_all_gather_matmul_async/device/kernels/*
     llama_reduce_scatter/device/kernels/*
     llama_reduce_scatter_create_heads/device/kernels/*
@@ -80,6 +81,9 @@ target_sources(
         all_to_all_async_generic/all_to_all_async_generic.cpp
         all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp
         all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp
+        all_to_all_dispatch_selective_tilize/all_to_all_dispatch_selective_tilize.cpp
+        all_to_all_dispatch_selective_tilize/device/all_to_all_dispatch_selective_tilize_device_operation.cpp
+        all_to_all_dispatch_selective_tilize/device/all_to_all_dispatch_selective_tilize_program_factory.cpp
         all_reduce_async/all_reduce_async.cpp
         all_gather_concat_heads_fused/all_gather_concat.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
