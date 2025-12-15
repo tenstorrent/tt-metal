@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import csv
 import math
 from datetime import datetime
 from tests.ttnn.utils_for_testing import assert_with_ulp
@@ -260,35 +259,52 @@ def generate_clean_bf16_tensor(dtype=torch.bfloat16):
     good_mask = torch.isfinite(fp32) & ~neg_zero_mask & (fp32.abs() >= tiny)
     fp32 = fp32[good_mask]  # 65024 values
 
-    # Filter bf16 values to [±1e-15, ±1e15]
-    abs_fp32 = fp32.abs()
-    mask = (abs_fp32 >= 1e-15) & (abs_fp32 <= 1e15)
-    fp32 = fp32[mask]  # 25510 values
-
     return fp32.to(dtype)
 
 
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_binary_pow_sweep_BF16_test(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor()
-    num_values = tensor_a.numel()
+def test_binary_pow_sweep(device):
+    """
+    Test binary pow with all configurations.
+    Tests: bf16, bf16-improved, fp32, fp32-improved
+    Each with check_fractional_ulp True and False.
 
-    # CSV and summary file paths based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    csv_file_path = f"binary_pow_bf16_results_{fractional_suffix}.csv"
-    summary_file_path = f"binary_pow_bf16_summary_{fractional_suffix}.txt"
+    Generates separate summary files for each configuration.
+    """
+    # Test configurations: (case_name, ttnn_dtype, torch_dtype, check_fractional_ulp, use_improved)
+    test_configs = [
+        ("bf16-false", ttnn.bfloat16, torch.bfloat16, False, False),
+        ("bf16-true", ttnn.bfloat16, torch.bfloat16, True, False),
+        ("bf16-improved-false", ttnn.bfloat16, torch.bfloat16, False, True),
+        ("bf16-improved-true", ttnn.bfloat16, torch.bfloat16, True, True),
+        ("fp32-false", ttnn.float32, torch.float32, False, False),
+        ("fp32-true", ttnn.float32, torch.float32, True, False),
+        ("fp32-improved-false", ttnn.float32, torch.float32, False, True),
+        ("fp32-improved-true", ttnn.float32, torch.float32, True, True),
+    ]
 
-    print(f"Testing binary pow (BF16) with {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^B operations")
+    for case_name, ttnn_dtype, torch_dtype, check_fractional_ulp, use_improved in test_configs:
+        print(f"\n{'='*60}")
+        print(f"Testing case: {case_name}")
+        print(f"{'='*60}")
 
-    # Collect results for summary
-    all_results = []
+        # Generate clean tensor (tensor A)
+        tensor_a = generate_clean_bf16_tensor(torch_dtype)
+        num_values = tensor_a.numel()
 
-    # Open CSV file for writing results
-    with open(csv_file_path, "w", newline="") as csvfile:
-        csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(["Input_B", "Max_ULP"])
+        # Summary file path
+        summary_file_path = f"binary_pow_{case_name}_summary.txt"
+
+        # Determine data type name for report
+        data_type_name = "BFloat16" if torch_dtype == torch.bfloat16 else "Float32"
+        test_name = f"Binary Power ({data_type_name})"
+        if use_improved:
+            test_name += " - Improved"
+
+        print(f"Testing with {num_values} B values...")
+        print(f"Each iteration tests {num_values} element-wise A^B operations")
+
+        # Collect results for summary
+        all_results = []
 
         # Iterate through each value in tensor_a as the B value
         for i in range(num_values):
@@ -297,19 +313,19 @@ def test_binary_pow_sweep_BF16_test(device, check_fractional_ulp):
             b_scalar = b_val.item()
 
             # Create tensor B filled with this single value
-            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.bfloat16)
+            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch_dtype)
 
             # Convert to ttnn tensors
             tt_a = ttnn.from_torch(
                 tensor_a,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn_dtype,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             tt_b = ttnn.from_torch(
                 tensor_b,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn_dtype,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -317,12 +333,25 @@ def test_binary_pow_sweep_BF16_test(device, check_fractional_ulp):
 
             # Calculate golden result using torch
             if not check_fractional_ulp:
-                golden = torch.pow(tensor_a, tensor_b)  # bf16 vs bf16
+                golden = torch.pow(tensor_a, tensor_b)
             else:
-                golden = torch.pow(tensor_a.to(torch.float32), tensor_b.to(torch.float32))  # bf16 vs fp32
+                if torch_dtype == torch.bfloat16:
+                    golden = torch.pow(tensor_a.to(torch.float32), tensor_b.to(torch.float32))
+                else:
+                    golden = torch.pow(tensor_a.to(torch.float64), tensor_b.to(torch.float64))
 
             # Run ttnn binary pow
-            tt_result = ttnn.pow(tt_a, tt_b)
+            if use_improved:
+                tt_result = ttnn.multiply(
+                    tt_a,
+                    tt_b,
+                    input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
+                    activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
+                    use_legacy=False,
+                )
+            else:
+                tt_result = ttnn.pow(tt_a, tt_b)
+
             result = ttnn.to_torch(tt_result)
 
             # Run comp_ulp_check to get max ULP
@@ -332,345 +361,23 @@ def test_binary_pow_sweep_BF16_test(device, check_fractional_ulp):
                 allow_nonfinite=True,
             )
 
-            # Write to CSV
-            csv_writer.writerow([b_scalar, max_ulp])
             all_results.append((b_scalar, max_ulp))
 
             # Print progress every 1000 iterations
             if (i + 1) % 1000 == 0:
                 print(f"Processed {i + 1}/{num_values} B values...")
 
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Binary Power (BF16)",
-        data_type="BFloat16",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
+        # Generate summary report
+        _generate_summary_report(
+            results=all_results,
+            summary_file_path=summary_file_path,
+            test_name=test_name,
+            data_type=data_type_name,
+            num_a_values=num_values,
+            num_b_values=num_values,
+        )
 
-    print(f"\nResults saved to {csv_file_path}")
-    print(f"Summary report saved to {summary_file_path}")
-
-
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_binary_pow_sweep_FP32_test(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor(torch.float32)
-    num_values = tensor_a.numel()
-
-    # CSV and summary file paths based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    csv_file_path = f"binary_pow_fp32_results_{fractional_suffix}.csv"
-    summary_file_path = f"binary_pow_fp32_summary_{fractional_suffix}.txt"
-
-    print(f"Testing binary pow (FP32) with {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^B operations")
-
-    # Collect results for summary
-    all_results = []
-
-    # Open CSV file for writing results
-    with open(csv_file_path, "w", newline="") as csvfile:
-        csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(["Input_B", "Max_ULP"])
-
-        # Iterate through each value in tensor_a as the B value
-        for i in range(num_values):
-            # Get the i-th value from tensor_a to use as B
-            b_val = tensor_a[i]
-            b_scalar = b_val.item()
-
-            # Create tensor B filled with this single value
-            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.float32)
-
-            # Convert to ttnn tensors
-            tt_a = ttnn.from_torch(
-                tensor_a,
-                dtype=ttnn.float32,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            tt_b = ttnn.from_torch(
-                tensor_b,
-                dtype=ttnn.float32,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            # Calculate golden result using torch (fp64 for higher precision reference)
-            if not check_fractional_ulp:
-                golden = torch.pow(tensor_a, tensor_b)  # fp32 vs fp32
-            else:
-                golden = torch.pow(tensor_a.to(torch.float64), tensor_b.to(torch.float64))  # fp32 vs fp64
-
-            # Run ttnn binary pow
-            tt_result = ttnn.pow(tt_a, tt_b)
-            result = ttnn.to_torch(tt_result)
-
-            # Run comp_ulp_check to get max ULP
-            max_ulp = comp_ulp_check(
-                golden=golden,
-                calculated=result,
-                allow_nonfinite=True,
-            )
-
-            # Write to CSV
-            csv_writer.writerow([b_scalar, max_ulp])
-            all_results.append((b_scalar, max_ulp))
-
-            # Print progress every 1000 iterations
-            if (i + 1) % 1000 == 0:
-                print(f"Processed {i + 1}/{num_values} B values...")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Binary Power (FP32)",
-        data_type="Float32",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nResults saved to {csv_file_path}")
-    print(f"Summary report saved to {summary_file_path}")
-
-
-# **************************************************
-# **************************************************
-
-# Check with new exp, log
-# Exp Improved for fp32
-# Log improved for both dtypes
-
-# **************************************************
-# **************************************************
-
-
-def test_pow_arange_masking_binary_improved(device):
-    # Generate all possible bit pattern for bf16
-    tt_input = generate_clean_bf16_tensor()
-
-    tt_in = ttnn.from_torch(
-        tt_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden = torch.pow(tt_input, tt_input)
-
-    # tt_result = ttnn.pow(tt_in, tt_in)
-    tt_result = ttnn.multiply(
-        tt_in,
-        tt_in,
-        input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
-        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
-        use_legacy=False,
-    )
-    result = ttnn.to_torch(tt_result)
-    print(f"Result: {result}")
-
-    # Run comp_ulp_check to get max ULP
-    max_ulp = comp_ulp_check(
-        golden=golden,
-        calculated=result,
-        allow_nonfinite=True,
-    )
-    print(f"Max ULP: {max_ulp}")
-
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
-
-
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_binary_pow_sweep_BF16_test_improved(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor()
-    num_values = tensor_a.numel()
-
-    # CSV and summary file paths based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    csv_file_path = f"binary_pow_bf16_improved_results_{fractional_suffix}.csv"
-    summary_file_path = f"binary_pow_bf16_improved_summary_{fractional_suffix}.txt"
-
-    print(f"Testing binary pow (BF16) with {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^B operations")
-
-    # Collect results for summary
-    all_results = []
-
-    # Open CSV file for writing results
-    with open(csv_file_path, "w", newline="") as csvfile:
-        csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(["Input_B", "Max_ULP"])
-
-        # Iterate through each value in tensor_a as the B value
-        for i in range(num_values):
-            # Get the i-th value from tensor_a to use as B
-            b_val = tensor_a[i]
-            b_scalar = b_val.item()
-
-            # Create tensor B filled with this single value
-            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.bfloat16)
-
-            # Convert to ttnn tensors
-            tt_a = ttnn.from_torch(
-                tensor_a,
-                dtype=ttnn.bfloat16,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            tt_b = ttnn.from_torch(
-                tensor_b,
-                dtype=ttnn.bfloat16,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            # Calculate golden result using torch
-            if not check_fractional_ulp:
-                golden = torch.pow(tensor_a, tensor_b)  # bf16 vs bf16
-            else:
-                golden = torch.pow(tensor_a.to(torch.float32), tensor_b.to(torch.float32))  # bf16 vs fp32
-
-            # Run ttnn binary pow
-            # tt_result = ttnn.pow(tt_a, tt_b)
-            tt_result = ttnn.multiply(
-                tt_a,
-                tt_b,
-                input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
-                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
-                use_legacy=False,
-            )
-            result = ttnn.to_torch(tt_result)
-
-            # Run comp_ulp_check to get max ULP
-            max_ulp = comp_ulp_check(
-                golden=golden,
-                calculated=result,
-                allow_nonfinite=True,
-            )
-
-            # Write to CSV
-            csv_writer.writerow([b_scalar, max_ulp])
-            all_results.append((b_scalar, max_ulp))
-
-            # Print progress every 1000 iterations
-            if (i + 1) % 1000 == 0:
-                print(f"Processed {i + 1}/{num_values} B values...")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Binary Power (BF16)",
-        data_type="BFloat16",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nResults saved to {csv_file_path}")
-    print(f"Summary report saved to {summary_file_path}")
-
-
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_binary_pow_sweep_FP32_test_improved(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor(torch.float32)
-    num_values = tensor_a.numel()
-
-    # CSV and summary file paths based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    csv_file_path = f"binary_pow_fp32_improved_results_{fractional_suffix}.csv"
-    summary_file_path = f"binary_pow_fp32_improved_summary_{fractional_suffix}.txt"
-
-    print(f"Testing binary pow (FP32) with {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^B operations")
-
-    # Collect results for summary
-    all_results = []
-
-    # Open CSV file for writing results
-    with open(csv_file_path, "w", newline="") as csvfile:
-        csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(["Input_B", "Max_ULP"])
-
-        # Iterate through each value in tensor_a as the B value
-        for i in range(num_values):
-            # Get the i-th value from tensor_a to use as B
-            b_val = tensor_a[i]
-            b_scalar = b_val.item()
-
-            # Create tensor B filled with this single value
-            tensor_b = torch.full_like(tensor_a, b_scalar, dtype=torch.float32)
-
-            # Convert to ttnn tensors
-            tt_a = ttnn.from_torch(
-                tensor_a,
-                dtype=ttnn.float32,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            tt_b = ttnn.from_torch(
-                tensor_b,
-                dtype=ttnn.float32,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            # Calculate golden result using torch (fp64 for higher precision reference)
-            if not check_fractional_ulp:
-                golden = torch.pow(tensor_a, tensor_b)  # fp32 vs fp32
-            else:
-                golden = torch.pow(tensor_a.to(torch.float64), tensor_b.to(torch.float64))  # fp32 vs fp64
-
-            # Run ttnn binary pow
-            # tt_result = ttnn.pow(tt_a, tt_b)
-            tt_result = ttnn.multiply(
-                tt_a,
-                tt_b,
-                input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
-                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
-                use_legacy=False,
-            )
-            result = ttnn.to_torch(tt_result)
-
-            # Run comp_ulp_check to get max ULP
-            max_ulp = comp_ulp_check(
-                golden=golden,
-                calculated=result,
-                allow_nonfinite=True,
-            )
-
-            # Write to CSV
-            csv_writer.writerow([b_scalar, max_ulp])
-            all_results.append((b_scalar, max_ulp))
-
-            # Print progress every 1000 iterations
-            if (i + 1) % 1000 == 0:
-                print(f"Processed {i + 1}/{num_values} B values...")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Binary Power (FP32)",
-        data_type="Float32",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nResults saved to {csv_file_path}")
-    print(f"Summary report saved to {summary_file_path}")
+        print(f"Summary report saved to {summary_file_path}")
 
 
 # **************************************************
