@@ -200,6 +200,8 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+            if is_decode:
+                print(f"layer {i} hidden_states shape: {hidden_states.shape}")
 
             hidden_states = decoder_layer(
                 hidden_states,
@@ -209,6 +211,8 @@ class Model:
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
             )
+        if is_decode:
+            breakpoint()
         logits = hidden_states
 
         if get_last_token != -1:

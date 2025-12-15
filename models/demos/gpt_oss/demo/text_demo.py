@@ -161,6 +161,8 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 8 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            False,
+            False,
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
