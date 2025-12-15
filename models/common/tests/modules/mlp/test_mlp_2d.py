@@ -16,7 +16,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.mlp.mlp_2d import MLP2D
 from models.common.utility_functions import comp_allclose, comp_pcc
 
@@ -275,18 +274,186 @@ def test_mlp_2d_rejects_non_galaxy(cluster_shape):
     logger.info("MLP2D correctly rejects non-Galaxy devices")
 
 
+# ============================================================================
+# TTNN Topology Bug Tests - Document known issues with 2D mesh tensor topology
+# ============================================================================
+
+
+def _check_topology_has_duplicate_shard_dims(placements: list) -> tuple[bool, str]:
+    """
+    Check if placements have duplicate shard dimensions (the known bug pattern).
+
+    Args:
+        placements: List of placement objects from tensor_topology().placements()
+
+    Returns:
+        (has_duplicate, message): Tuple of (True if duplicate dims found, descriptive message)
+    """
+
+    def normalize_dim(d: int, ndim: int = 4) -> int:
+        return d if d >= 0 else d + ndim
+
+    axis0_dim = placements[0].dim if isinstance(placements[0], ttnn.PlacementShard) else None
+    axis1_dim = placements[1].dim if isinstance(placements[1], ttnn.PlacementShard) else None
+
+    if axis0_dim is not None and axis1_dim is not None:
+        norm_axis0 = normalize_dim(axis0_dim)
+        norm_axis1 = normalize_dim(axis1_dim)
+
+        if norm_axis0 == norm_axis1:
+            return True, (
+                f"Both mesh axes shard the same tensor dimension: "
+                f"axis0={axis0_dim} (norm={norm_axis0}), axis1={axis1_dim} (norm={norm_axis1})"
+            )
+
+    return False, "Topology appears correct"
+
+
+@pytest.fixture(scope="function")
+def ttnn_linear_2d_mesh_has_topology_bug(ttnn_mesh_device):
+    """
+    Fixture that checks if the ttnn.linear 2D mesh topology bug exists.
+
+    This fixture runs a minimal topology check and returns the result.
+    Other tests can use this to decide whether to apply workarounds.
+
+    Note: scope="function" because ttnn_mesh_device may vary per test parametrization.
+    The check is fast so the overhead is minimal.
+
+    Returns:
+        bool: True if the bug is present, False if fixed
+    """
+    mesh_device = ttnn_mesh_device
+    cluster_shape = list(mesh_device.shape)
+
+    # Skip if not a 2D mesh
+    if len(cluster_shape) != 2 or cluster_shape[0] == 1 or cluster_shape[1] == 1:
+        logger.info("Not a 2D mesh, skipping topology bug check")
+        return False
+
+    dim, hidden_dim, seq_len = 4096, 14336, 32
+
+    # Create minimal test tensors
+    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=cluster_shape),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    torch_weight = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)
+    tt_weight = ttnn.from_torch(
+        torch_weight,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, -2), mesh_shape=cluster_shape),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # Run linear and check topology
+    tt_output = ttnn.linear(tt_input, tt_weight)
+    output_placements = list(tt_output.tensor_topology().placements())
+
+    has_bug, msg = _check_topology_has_duplicate_shard_dims(output_placements)
+    if has_bug:
+        logger.warning(f"ttnn.linear 2D mesh topology bug detected: {msg}")
+    else:
+        logger.info("ttnn.linear 2D mesh topology bug NOT detected - may be fixed!")
+
+    # Cleanup
+    ttnn.deallocate(tt_output)
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_weight)
+
+    return has_bug
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(8, 4)],
+    ids=["8x4"],
+    indirect=True,
+)
+@pytest.mark.xfail(
+    reason="TTNN bug: ttnn.linear produces invalid topology where both mesh axes shard the same dimension. "
+    "See test docstring for details. Remove xfail once TTNN issue is fixed.",
+    strict=True,  # Fail if the bug is accidentally fixed (so we know to update)
+)
+def test_ttnn_linear_2d_mesh_topology_bug(ttnn_linear_2d_mesh_has_topology_bug: bool):
+    """
+    Document the TTNN bug where ttnn.linear produces incorrect topology metadata
+    for 2D mesh matmul operations.
+
+    Setup (in fixture):
+        - Input x: shape [1, 1, 32, 4096], topology [Replicated, Shard(3)]
+        - Weight w: shape [4096, 14336], topology [Shard(-1), Shard(-2)]
+
+    Expected output topology after x @ w:
+        - [Shard(3), PartialSum] or similar
+
+    Actual (buggy) output topology:
+        - [Shard(-1), Shard(3)] - both axes claim to shard the same dimension!
+
+    TODO: File TTNN issue and remove xfail once fixed.
+    """
+    if ttnn_linear_2d_mesh_has_topology_bug:
+        pytest.fail(
+            "ttnn.linear produces invalid topology: both mesh axes shard the same dimension. "
+            "Expected different dimensions or [Shard, PartialSum/Replicate]."
+        )
+
+
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
+        (4, 8),
         (8, 4),
     ],
     ids=[
+        "4x8",
         "8x4",
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", (512, 32))
-def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
+@pytest.mark.parametrize(
+    "dtype,batch_size,dim,hidden_dim,hf_model_name",
+    [
+        pytest.param(
+            ttnn.bfloat8_b,
+            1,
+            4096,
+            14336,
+            "meta-llama/Llama-3.1-8B-Instruct",
+            id="bf8b-bs1-default-hf",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "seq_len,mode",
+    [
+        (512, "prefill"),
+        (32, "decode"),
+    ],
+    ids=[
+        "prefill-512",
+        "decode-32",
+    ],
+)
+def test_mlp_2d_vs_reference(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    ttnn_linear_2d_mesh_has_topology_bug: bool,
+    seq_len,
+    mode,
+    dtype,
+    batch_size,
+    dim,
+    hidden_dim,
+    hf_model_name,
+):
     """
     Test MLP2D constructed via direct APIs (MLP2DConfig) matches HF reference MLP.
 
@@ -297,49 +464,44 @@ def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     from functools import cached_property
 
     from transformers import AutoConfig, AutoModelForCausalLM
+    from transformers.modeling_utils import no_init_weights
 
     from models.common.modules.lazy_weight import LazyWeight
     from models.common.modules.mlp.mlp_2d import MeshContext2D, MLP2DConfig
     from models.tt_transformers.tt.ccl import TT_CCL
 
-    dtype = ttnn.bfloat8_b
-    batch_size = 1
-    mode = "decode" if seq_len <= 32 else "prefill"
+    seed = 1234
+    torch.manual_seed(seed)
 
     # Get HF model from env (default to small model for fast testing)
-    hf_model_name = os.getenv("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
+    hf_model_name = os.getenv("HF_MODEL", hf_model_name)
 
     # Load HF config and create model with dummy weights
     config = AutoConfig.from_pretrained(hf_model_name)
     config.num_hidden_layers = 1  # Only need 1 layer for MLP test
-    hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    with no_init_weights():
+        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
     reference_mlp = hf_model.model.layers[0].mlp
 
+    # Initialize only the MLP submodule deterministically.
+    with torch.no_grad():
+        for param in reference_mlp.parameters():
+            param.copy_(torch.randn_like(param))
+
     # Extract dimensions from HF config
-    dim = config.hidden_size
-    hidden_dim = config.intermediate_size
+    # [INFO] we included dim and hidden_dim as parameters to increase visibility of them
+    assert dim == config.hidden_size
+    assert hidden_dim == config.intermediate_size
     cluster_shape = list(ttnn_mesh_device.shape)
 
-    # Deterministic random weights + input (match test_mlp_2d_dim_ge_8192_paths pattern).
     # TT expects weights in (input_dim, output_dim) layout.
-    torch.manual_seed(1234)
-    w1_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
-    w3_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
-    w2_torch = torch.randn(hidden_dim, dim, dtype=torch.bfloat16)  # (hidden_dim, dim)
+    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
     torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
-
-    # HF Linear weights are stored as (output_dim, input_dim); copy transposed.
-    with torch.no_grad():
-        reference_mlp.gate_proj.weight.copy_(w1_torch.T.contiguous())
-        reference_mlp.up_proj.weight.copy_(w3_torch.T.contiguous())
-        reference_mlp.down_proj.weight.copy_(w2_torch.T.contiguous())
 
     # Create TT_CCL and MeshContext2D directly
     mesh_ctx = MeshContext2D(mesh_device=ttnn_mesh_device, tt_ccl=TT_CCL(ttnn_mesh_device))
-
-    # Shard dims for 2D mesh (TG style)
-    w1_shard_dims = (-1, -2)
-    w2_shard_dims = (-2, -1)
 
     # Create LazyWeight instances
     def make_lazy_weight(tensor: torch.Tensor, shard_dims: tuple[int, int]) -> LazyWeight:
@@ -352,23 +514,19 @@ def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    lazy_w1 = make_lazy_weight(w1_torch, w1_shard_dims)
-    lazy_w2 = make_lazy_weight(w2_torch, w2_shard_dims)
-    lazy_w3 = make_lazy_weight(w3_torch, w1_shard_dims)
-
     # Create MLP2DConfig subclass with lazy weights
     class TestMLP2DConfig(MLP2DConfig):
         @cached_property
         def lazy_w1(self) -> LazyWeight:
-            return lazy_w1
+            return make_lazy_weight(w1_torch, self.w1_shard_dims)
 
         @cached_property
         def lazy_w2(self) -> LazyWeight:
-            return lazy_w2
+            return make_lazy_weight(w2_torch, self.w2_shard_dims)
 
         @cached_property
         def lazy_w3(self) -> LazyWeight:
-            return lazy_w3
+            return make_lazy_weight(w3_torch, self.w1_shard_dims)
 
     mlp_config = TestMLP2DConfig(
         dim=dim,
@@ -384,6 +542,8 @@ def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     with torch.no_grad():
         reference_output = reference_mlp(torch_input)
 
+    input_mem_config = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
     # Run TT model
     tt_input = ttnn.from_torch(
         torch_input,
@@ -392,13 +552,28 @@ def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
         # and produce replicated outputs with an extra mesh-axis dimension.
         mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, 3), mesh_shape=cluster_shape),
         dtype=ttnn.bfloat8_b,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_mem_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
     tt_output = tt_model.forward(tt_input, mode)
 
-    tt_output_torch = to_torch_auto_compose(tt_output)
+    # WORKAROUND: ttnn.linear produces incorrect topology metadata for 2D mesh matmul.
+    # The output topology shows [Shard(-1), Shard(3)] but the correct data layout after
+    # the final all-reduce on axis 0 is [Replicated, Shard(3)]:
+    #   - Axis 0 (size 8): Replicated (all-reduced/gathered)
+    #   - Axis 1 (size 4): Sharded on dim 3
+    # The fixture `ttnn_linear_2d_mesh_has_topology_bug` checks this once per module.
+    if ttnn_linear_2d_mesh_has_topology_bug:
+        # Bug present: use explicit mesh_composer with correct topology
+        expected_composer_cfg = ttnn.MeshComposerConfig(
+            dims=[0, 3],  # axis 0: replicated (dim ignored), axis 1: shard on dim 3
+            mesh_shape_override=ttnn.MeshShape([1, cluster_shape[1]]),  # [1, 4]: skip axis 0, concat axis 1
+        )
+        mesh_composer = ttnn.create_mesh_composer(ttnn_mesh_device, expected_composer_cfg)
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+    else:
+        raise RuntimeError("Bug fixed: use auto_compose: tt_output_torch = to_torch_auto_compose(tt_output)")
 
     # Compare
     pcc_required = 0.99
@@ -420,7 +595,9 @@ def test_mlp_2d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (512, 32))
-def test_mlp_2d_dim_ge_8192_paths(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
+def test_mlp_2d_dim_ge_8192_paths(
+    ttnn_mesh_device: ttnn.MeshDevice, ttnn_linear_2d_mesh_has_topology_bug: bool, seq_len
+):
     """
     Exercise the dim >= 8192 TG execution paths (reduce_scatter + all_gather, composite all-reduce).
 
@@ -510,7 +687,20 @@ def test_mlp_2d_dim_ge_8192_paths(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     )
 
     tt_output = tt_model.forward(tt_input, mode)
-    tt_output_torch = to_torch_auto_compose(tt_output)
+
+    # WORKAROUND: ttnn.linear produces incorrect topology metadata for 2D mesh matmul.
+    # See comment in test_mlp_2d_vs_reference for details.
+    # The fixture `ttnn_linear_2d_mesh_has_topology_bug` checks this once per module.
+    if ttnn_linear_2d_mesh_has_topology_bug:
+        # Bug present: use explicit mesh_composer with correct topology
+        expected_composer_cfg = ttnn.MeshComposerConfig(
+            dims=[0, 3],
+            mesh_shape_override=ttnn.MeshShape([1, cluster_shape[1]]),
+        )
+        mesh_composer = ttnn.create_mesh_composer(ttnn_mesh_device, expected_composer_cfg)
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+    else:
+        raise RuntimeError("Bug fixed: use auto_compose: tt_output_torch = to_torch_auto_compose(tt_output)")
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
@@ -524,7 +714,7 @@ def test_mlp_2d_dim_ge_8192_paths(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
 # ============================================================================
 
 
-# [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
+# todo)) retire this test once models/tt_transformers/tt/model_config.py retires
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
