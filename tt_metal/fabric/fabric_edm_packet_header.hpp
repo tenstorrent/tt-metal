@@ -9,6 +9,7 @@
 #include <climits>
 #include <initializer_list>
 #include <limits>
+#include <type_traits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "debug/assert.h"
@@ -581,7 +582,7 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
     // and pad their own CBs conditionally when reading from DRAM. It'll be up to the users to
     // manage this complexity.
-    uint8_t padding0[18];
+    uint8_t padding0[2];
 
     static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
@@ -620,38 +621,78 @@ public:
     }
 };
 
-struct LowLatencyRoutingFields {
+// Helper that keeps zero-byte padding truly empty; std::array<uint8_t, 0> still forces
+// the parent object to have a member subobject, which bloats sizeof() for the 32-bit header.
+template <size_t NumBytes>
+struct LowLatencyPacketHeaderPadding {
+    uint8_t bytes[NumBytes]{};
+};
+
+template <>
+struct LowLatencyPacketHeaderPadding<0> {};
+
+template <typename StorageT>
+struct LowLatencyRoutingFieldsBase {
+private:
+    static constexpr StorageT make_two_bit_pattern(uint32_t pattern) {
+        static_assert(std::is_unsigned_v<StorageT>, "LowLatencyRoutingFields storage must be unsigned");
+        StorageT value = 0;
+        const StorageT masked_pattern = static_cast<StorageT>(pattern & 0b11);
+        constexpr size_t iterations = (sizeof(StorageT) * CHAR_BIT) / 2;
+        for (size_t i = 0; i < iterations; ++i) {
+            value |= masked_pattern << (i * 2);
+        }
+        return value;
+    }
+
+public:
+    static_assert(std::is_unsigned_v<StorageT>, "LowLatencyRoutingFields storage must be unsigned");
     static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint64_t FIELD_MASK = 0b11;
+    static constexpr StorageT FIELD_MASK = static_cast<StorageT>(0b11);
     static constexpr uint32_t NOOP = 0b00;
     static constexpr uint32_t WRITE_ONLY = 0b01;
     static constexpr uint32_t FORWARD_ONLY = 0b10;
     static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint64_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
-    static constexpr uint64_t WR_ONLY_FIELD = 0x5555555555555555ULL;
-    uint64_t value;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(StorageT) * CHAR_BIT / FIELD_WIDTH;
+    static constexpr StorageT FWD_ONLY_FIELD = make_two_bit_pattern(FORWARD_ONLY);  // 0xAAAA.....
+    static constexpr StorageT WR_ONLY_FIELD = make_two_bit_pattern(WRITE_ONLY);     // 0x5555.....
+    StorageT value;
 };
 
-struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
+using LowLatencyRoutingFields = LowLatencyRoutingFieldsBase<uint32_t>;
+using BigLowLatencyRoutingFields = LowLatencyRoutingFieldsBase<uint64_t>;
+
+template <typename RoutingStorageT>
+struct LowLatencyPacketHeaderImpl : public PacketHeaderBase<LowLatencyPacketHeaderImpl<RoutingStorageT>> {
+    using LowLatencyRoutingFields = LowLatencyRoutingFieldsBase<RoutingStorageT>;
+    static constexpr bool isBigHeader = sizeof(RoutingStorageT) == sizeof(uint64_t);
+    static constexpr size_t desiredSizeBytes = isBigHeader ? 64 : 48;
+    static constexpr size_t baseHeaderBytes = sizeof(PacketHeaderBase<LowLatencyPacketHeaderImpl<RoutingStorageT>>);
+    static constexpr size_t sizeWithoutPadding = baseHeaderBytes + sizeof(LowLatencyRoutingFields);
+    static constexpr size_t paddingBytes = desiredSizeBytes > sizeWithoutPadding
+                                               ? (desiredSizeBytes - sizeWithoutPadding)
+                                               : 0;
     LowLatencyRoutingFields routing_fields;
-    uint8_t padding0[4];
+    [[no_unique_address]]
+    LowLatencyPacketHeaderPadding<paddingBytes> padding0{};
 
 private:
-    static uint64_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
+    static RoutingStorageT calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         // Example of unicast 3 hops away
-        // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
+        // First line will do pattern & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
         // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
         // the 3rd chip, we will write only. Together this means the final encoding is 0b011010
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
-        const uint64_t shift_amount =
-            static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
-               (static_cast<uint64_t>(LowLatencyRoutingFields::WRITE_ONLY) << shift_amount);
+        const uint32_t shift_amount =
+            static_cast<uint32_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
+        const RoutingStorageT forward_mask =
+            shift_amount == 0 ? static_cast<RoutingStorageT>(0) : (static_cast<RoutingStorageT>(1) << shift_amount) - 1;
+        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & forward_mask) |
+               (static_cast<RoutingStorageT>(LowLatencyRoutingFields::WRITE_ONLY) << shift_amount);
     }
-    static uint64_t calculate_chip_multicast_routing_fields_value(
+    static RoutingStorageT calculate_chip_multicast_routing_fields_value(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         // Example of starting 3 hops away mcasting to 2 chips
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
@@ -666,38 +707,45 @@ private:
             chip_multicast_command_header.start_distance_in_hops > 0 &&
             distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
-        const uint64_t total_shift = static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
-        const uint64_t start_shift = static_cast<uint64_t>(chip_multicast_command_header.start_distance_in_hops - 1) *
+        const uint32_t total_shift = static_cast<uint32_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
+        const uint32_t start_shift = static_cast<uint32_t>(chip_multicast_command_header.start_distance_in_hops - 1) *
                                      LowLatencyRoutingFields::FIELD_WIDTH;
-        const uint64_t range_bits =
-            static_cast<uint64_t>(chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH;
+        const uint32_t range_bits =
+            static_cast<uint32_t>(chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH;
 
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << total_shift) - 1ULL)) |
-               ((LowLatencyRoutingFields::WR_ONLY_FIELD & ((1ULL << range_bits) - 1ULL)) << start_shift);
+        const RoutingStorageT forward_mask =
+            total_shift == 0 ? static_cast<RoutingStorageT>(0) : (static_cast<RoutingStorageT>(1) << total_shift) - 1;
+        const RoutingStorageT write_mask =
+            range_bits == 0 ? static_cast<RoutingStorageT>(0) : (static_cast<RoutingStorageT>(1) << range_bits) - 1;
+
+        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & forward_mask) |
+               ((LowLatencyRoutingFields::WR_ONLY_FIELD & write_mask) << start_shift);
     }
 
 public:
-    // Specialized implementations for LowLatencyPacketHeader
     void set_routing_fields(LowLatencyRoutingFields& fields) { this->routing_fields = fields; }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) {
         this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+            LowLatencyPacketHeaderImpl::calculate_chip_unicast_routing_fields_value(distance_in_hops);
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+            LowLatencyPacketHeaderImpl::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+            LowLatencyPacketHeaderImpl::calculate_chip_unicast_routing_fields_value(distance_in_hops);
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
         this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+            LowLatencyPacketHeaderImpl::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
 };
+
+using LowLatencyPacketHeader = LowLatencyPacketHeaderImpl<uint32_t>;
+using BigLowLatencyPacketHeader = LowLatencyPacketHeaderImpl<uint64_t>;
 
 struct LowLatencyMeshRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 8;
@@ -770,11 +818,12 @@ struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
 static_assert(sizeof(UDMHybridMeshPacketHeader) == 112, "sizeof(UDMHybridMeshPacketHeader) is not equal to 112B");
 // NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
-// TODO: When we remove the 32B padding requirement, reduce to 16B size check
-static_assert(sizeof(PacketHeader) == 64, "sizeof(PacketHeader) is not equal to 64B");
+static_assert(sizeof(PacketHeader) == 48, "sizeof(PacketHeader) is not equal to 48B");
 static_assert(
-    sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader),
-    "sizeof(LowLatencyPacketHeader) is expected to be 64B after expanding routing fields storage");
+    sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 48B");
+static_assert(
+    sizeof(BigLowLatencyPacketHeader) == LowLatencyPacketHeaderImpl<uint64_t>::desiredSizeBytes,
+    "sizeof(BigLowLatencyPacketHeader) is not equal to 64B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -815,9 +864,15 @@ static_assert(false, "non supported ROUTING_MODE with UDM: " TOSTRING(ROUTING_MO
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
 #if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
-
+#if ((ROUTING_MODE & ROUTING_MODE_1D_BIG_PACKET_HEADER) != 0)
+#define LOW_LATENCY_PACKET_HEADER_TYPE tt::tt_fabric::BigLowLatencyPacketHeader
+#define LOW_LATENCY_ROUTING_FIELDS_TYPE tt::tt_fabric::BigLowLatencyRoutingFields
+#else
+#define LOW_LATENCY_PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
+#define LOW_LATENCY_ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#endif
+#define PACKET_HEADER_TYPE LOW_LATENCY_PACKET_HEADER_TYPE
+#define ROUTING_FIELDS_TYPE LOW_LATENCY_ROUTING_FIELDS_TYPE
 #else
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields

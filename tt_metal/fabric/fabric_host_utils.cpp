@@ -138,7 +138,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane.set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, uint32_t dimension, bool use_big_low_latency_header /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -159,6 +159,9 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     }
 
     mode |= ROUTING_MODE_LOW_LATENCY;
+    if (use_big_low_latency_header) {
+        mode |= ROUTING_MODE_1D_BIG_PACKET_HEADER;
+    }
     set_routing_mode(mode);
 }
 

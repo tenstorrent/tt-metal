@@ -90,7 +90,7 @@ public:
 #endif
         } else {
             auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
-            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)header, num_hops);
+            fabric_set_unicast_route<false>(header, num_hops);
         }
 #else
         init_write_state_only<noc_index, downstream_cmd_buf>(downstream_noc_addr);

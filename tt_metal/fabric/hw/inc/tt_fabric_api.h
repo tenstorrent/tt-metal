@@ -279,8 +279,12 @@ bool fabric_set_unicast_route(
 // 1D need to choose between target_as_dev true/false and compressed true/false
 // TODO: compare performance of compressed true/false
 //       https://github.com/tenstorrent/tt-metal/issues/29449
-template <bool target_as_dev = true, bool compressed = true>
-bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, uint16_t target_num) {
+template <bool target_as_dev = true, bool compressed = true, typename PacketHeaderT>
+bool fabric_set_unicast_route(volatile tt_l1_ptr PacketHeaderT* packet_header, uint16_t target_num) {
+    static_assert(
+        std::is_same_v<PacketHeaderT, tt::tt_fabric::LowLatencyPacketHeader> ||
+            std::is_same_v<PacketHeaderT, tt::tt_fabric::BigLowLatencyPacketHeader>,
+        "fabric_set_unicast_route only supports low latency packet headers");
     if constexpr (compressed) {
         if constexpr (target_as_dev) {
             return decode_route_to_buffer_by_dev(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
