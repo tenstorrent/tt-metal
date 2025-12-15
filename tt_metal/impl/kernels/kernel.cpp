@@ -752,7 +752,7 @@ namespace experimental {
 
 uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
-    return enchantum::to_underlying(this->config_.processors[index]);
+    return enchantum::to_underlying(this->dm_cores_[index]);
 }
 
 void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
@@ -762,7 +762,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     std::vector<JitBuildState> build_states;
-    for (const DataMovementProcessor& processor : this->config_.processors) {
+    for (const DataMovementProcessor& processor : this->dm_cores_) {
         const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(processor);
         build_states.push_back(BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id));
@@ -776,7 +776,7 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    for (const DataMovementProcessor& processor : this->config_.processors) {
+    for (const DataMovementProcessor& processor : this->dm_cores_) {
         const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
@@ -814,7 +814,7 @@ bool QuasarDataMovementKernel::configure(
             device_id,
             worker_core,
             base_address +
-                offsets[static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processors[i])]);
+                offsets[static_cast<std::underlying_type<DataMovementProcessor>::type>(this->dm_cores_[i])]);
     }
 
     return true;
@@ -827,11 +827,12 @@ std::string_view QuasarDataMovementKernel::get_compiler_opt_level() const {
 std::string_view QuasarDataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
 std::string QuasarDataMovementKernel::config_hash() const {
-    // TODO: make sure that processors are sorted
-    return fmt::format("{}", fmt::join(this->config_.processors, "_"));
+    // DataMovementProcessor values must be sorted to ensure consistent ordering for hash generation
+    TT_ASSERT(std::is_sorted(this->dm_cores_.begin(), this->dm_cores_.end()));
+    return fmt::format("{}", fmt::join(this->dm_cores_, "_"));
 }
 
-uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->config_.processors.size(); }
+uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->dm_cores_.size(); }
 
 }  // namespace experimental
 
