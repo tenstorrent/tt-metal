@@ -721,11 +721,6 @@ void read_block(
                 src_slice.d0, src_slice.d1, src_slice.d2_start + row, src_slice.d3_start + col, write_ptr);
 
             write_ptr += inner_ptr_stride;
-            barrier_count += did_read;
-            if (barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
         }
     }
     noc_async_read_barrier();
