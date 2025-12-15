@@ -82,7 +82,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        hf_weights_repo_name, "model.language_model.layers.{layer_idx}.cross_attn."
+        hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
     )
     reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4
