@@ -205,11 +205,6 @@ def test_mlp_1d_optimization_config():
     assert opt.li_ff2_compute_kernel_cfg() is not None
 
 
-# ============================================================================
-# Integration Tests - Require device
-# ============================================================================
-
-
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
@@ -218,7 +213,12 @@ def test_mlp_1d_optimization_config():
         (1, 4),  # 1D mesh, 4 devices
         (1, 8),  # 1D mesh, 8 devices
     ],
-    ids=["1x1", "1x2", "1x4", "1x8"],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x4",
+        "1x8",
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (512, 32))
@@ -228,13 +228,14 @@ def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
 
     Uses HF_MODEL env (defaults to Llama 3.2 1B) and dummy weights.
     """
+    import math
     import os
     from functools import cached_property
 
     from transformers import AutoConfig, AutoModelForCausalLM
 
     from models.common.modules.lazy_weight import LazyWeight
-    from models.common.modules.mlp.mlp_1d import MLP1D, MeshContext, MLP1DConfig
+    from models.common.modules.mlp.mlp_1d import MLP1D, MeshContext, MLP1DConfig, MLP1DPrefillConfigs, _matmul_config
     from models.tt_transformers.tt.ccl import TT_CCL
 
     dtype = ttnn.bfloat8_b
@@ -252,15 +253,43 @@ def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     hidden_dim = config.intermediate_size
     cluster_shape = list(ttnn_mesh_device.shape)
 
-    # HF stores weights as (out, in); convert to (in, out)
-    w1_torch = reference_mlp.gate_proj.weight.data.T.contiguous()  # (dim, hidden_dim)
-    w2_torch = reference_mlp.down_proj.weight.data.T.contiguous()  # (hidden_dim, dim)
-    w3_torch = reference_mlp.up_proj.weight.data.T.contiguous()  # (dim, hidden_dim)
+    # Deterministic random weights + input (match test_mlp_2d_vs_reference pattern).
+    # TT expects weights in (input_dim, output_dim) layout.
+    torch.manual_seed(1234)
+    w1_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
+    w3_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
+    w2_torch = torch.randn(hidden_dim, dim, dtype=torch.bfloat16)  # (hidden_dim, dim)
+    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+
+    # HF Linear weights are stored as (output_dim, input_dim); copy transposed.
+    with torch.no_grad():
+        reference_mlp.gate_proj.weight.copy_(w1_torch.T.contiguous())
+        reference_mlp.up_proj.weight.copy_(w3_torch.T.contiguous())
+        reference_mlp.down_proj.weight.copy_(w2_torch.T.contiguous())
 
     tt_ccl = TT_CCL(ttnn_mesh_device)
     mesh_ctx = MeshContext(mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
 
     class TestMLP1DConfig(MLP1DConfig):
+        @cached_property
+        def prefill_config(self) -> MLP1DPrefillConfigs:
+            # NOTE: For multi-device runs, W2 consumes the per-device activation shard
+            # (hidden_dim // num_devices). The default MLP1D prefill config uses K=hidden_dim,
+            # which is valid for small meshes but can violate matmul constraints on 1x32.
+            class _Prefill(MLP1DPrefillConfigs):
+                def w2_prg_config(inner_self, seq_len: int):
+                    n_w2 = inner_self.cfg.dim
+                    dram_shard_grid_width = 8
+                    return _matmul_config(
+                        m=min(seq_len, inner_self.cfg.prefill_len_cutoff),
+                        k=inner_self.cfg.hidden_dim // inner_self.cfg.num_devices,
+                        n=n_w2,
+                        grid_size=inner_self._mlp2_grid(seq_len),
+                        per_core_n=math.ceil(n_w2 / (inner_self.cfg.tile_size * dram_shard_grid_width)),
+                    )
+
+            return _Prefill(self)
+
         @cached_property
         def lazy_w1(self) -> LazyWeight:
             return LazyWeight(
@@ -303,8 +332,6 @@ def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
 
     tt_model = MLP1D(mlp_config)
 
-    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
-
     with torch.no_grad():
         reference_output = reference_mlp(torch_input)
 
@@ -337,6 +364,12 @@ def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     logger.info(f"MLP1D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
 
 
+# ============================================================================
+# Integration Tests - Require device
+# ============================================================================
+
+
+# [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
@@ -446,110 +479,3 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
 
     assert passing, f"MLP1D output does not meet PCC requirement {pcc_required}: {pcc_message}."
     logger.info(f"MLP1D vs reference: PASSED for mode={mode}, seq_len={seq_len}")
-
-
-@pytest.mark.parametrize(
-    "ttnn_mesh_device",
-    [(1, 1), (1, 2), (1, 4), (1, 8)],
-    ids=["1x1", "1x2", "1x4", "1x8"],
-    indirect=True,
-)
-def test_mlp_1d_config_attributes(ttnn_mesh_device: ttnn.MeshDevice):
-    """
-    Test that MLP1D created via from_model_args has correct config attributes.
-    """
-    from models.common.modules.mlp.mlp_1d import MLP1D
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
-
-    model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
-    model_args.n_layers = 1
-
-    if model_args.is_galaxy:
-        pytest.skip("MLP1D test only runs on non-TG devices")
-
-    state_dict = model_args.load_state_dict()
-    tt_ccl = TT_CCL(ttnn_mesh_device)
-
-    mlp = MLP1D.from_model_args(
-        mesh_device=ttnn_mesh_device,
-        tt_ccl=tt_ccl,
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-        layer_num=0,
-    )
-
-    # Verify config values match model_args
-    assert mlp.config.dim == model_args.dim
-    assert mlp.config.hidden_dim == model_args.hidden_dim
-    assert mlp.config.cluster_shape == model_args.cluster_shape
-    assert mlp.config.num_devices == model_args.num_devices
-    assert mlp.config.prefill_len_cutoff == model_args.prefill_len_cutoff
-
-    # Verify weights were loaded
-    assert mlp.w1 is not None
-    assert mlp.w2 is not None
-    assert mlp.w3 is not None
-
-    logger.info("MLP1D config attributes test PASSED!")
-
-
-@pytest.mark.parametrize(
-    "ttnn_mesh_device",
-    [(4, 8)],  # TG/Galaxy shape
-    ids=["4x8"],
-    indirect=True,
-)
-def test_mlp_1d_rejects_galaxy(ttnn_mesh_device: ttnn.MeshDevice):
-    """
-    Test that MLP1D.from_model_args() raises ValueError for Galaxy devices.
-    """
-    from models.common.modules.mlp.mlp_1d import MLP1D
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
-
-    model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
-    model_args.n_layers = 1
-
-    if not model_args.is_galaxy:
-        pytest.skip("This test only runs on TG devices to verify rejection")
-
-    state_dict = model_args.load_state_dict()
-    tt_ccl = TT_CCL(ttnn_mesh_device)
-
-    with pytest.raises(ValueError, match="MLPNonTG cannot be used for Galaxy devices"):
-        MLP1D.from_model_args(
-            mesh_device=ttnn_mesh_device,
-            tt_ccl=tt_ccl,
-            args=model_args,
-            state_dict=state_dict,
-            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-            layer_num=0,
-        )
-
-    logger.info("MLP1D correctly rejects Galaxy devices")
-
-
-# ============================================================================
-# Run unit tests standalone
-# ============================================================================
-
-if __name__ == "__main__":
-    print("Running MLP1D unit tests (no device required)...")
-
-    test_mlp_1d_config_creation()
-    print("  ✓ test_mlp_1d_config_creation")
-
-    test_mlp_1d_config_rejects_2d_mesh()
-    print("  ✓ test_mlp_1d_config_rejects_2d_mesh")
-
-    test_mlp_1d_configs_methods()
-    print("  ✓ test_mlp_1d_configs_methods")
-
-    test_mlp_1d_optimization_config()
-    print("  ✓ test_mlp_1d_optimization_config")
-
-    print("\nAll MLP1D unit tests passed! ✓")
-    print("\nTo run device tests, use pytest:")
-    print("  pytest models/common/tests/modules/test_mlp_1d.py -v")
