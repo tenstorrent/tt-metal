@@ -22,12 +22,13 @@ void MAIN {
     cb_wait_front(kernel_communication_cb_index, one_tile);
 
     // Read core ID from message
-    const uint32_t message_core_id = read_tile_value(kernel_communication_cb_index, 0, 0);
+    const uint32_t message_core_id =
+        read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/0);
     const bool is_core_id = (message_core_id != 0) ? true : false;
 
     if (is_core_id) {
         // Read seed from message
-        const uint32_t seed = read_tile_value(kernel_communication_cb_index, 0, 1);
+        const uint32_t seed = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/1);
 
         // Set random generator with seed
         rand_tile_init(seed);
