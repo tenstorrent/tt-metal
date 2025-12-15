@@ -135,6 +135,7 @@ class ModelArgs:
         for seq_len in to_warmup_seq_lens:
             if seq_len >= 64 * 1024:
                 to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
+                break
         return to_warmup_seq_lens
 
     @property
