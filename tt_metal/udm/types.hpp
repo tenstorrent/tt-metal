@@ -145,4 +145,10 @@ using MeshKernelHandle = std::unordered_map<uint32_t, tt::tt_metal::KernelHandle
  */
 using MeshCBHandle = std::unordered_map<uint32_t, tt::tt_metal::CBHandle>;
 
+/**
+ * @brief Handle for a mesh semaphore
+ * Maps grid_id to the semaphore address on that grid
+ */
+using MeshSemaphoreHandle = std::unordered_map<uint32_t, uint32_t>;
+
 }  // namespace tt::tt_metal::experimental::udm
