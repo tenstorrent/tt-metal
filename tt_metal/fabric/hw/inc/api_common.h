@@ -230,8 +230,7 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
         if constexpr (update_addresses || update_chunk_sizes) {
             ASSERT(
                 command_header.chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS &&
-                    command_header.chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS,
-                "scatter chunk_count must be between 2 and 4");
+                    command_header.chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS);
             packet_header->command_fields.unicast_scatter_write.chunk_count = command_header.chunk_count;
         }
     }
