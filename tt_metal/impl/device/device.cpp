@@ -27,6 +27,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <mutex>
 
 #include "allocator.hpp"
 #include <tt_stl/assert.hpp>
@@ -257,7 +258,13 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::init_command_queue_host() {
+    // SystemMemoryManager now has internal stubs for mock devices
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+
+    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
@@ -657,6 +664,19 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     return *command_queues_[actual_cq_id];
 }
 
+SystemMemoryManager& Device::sysmem_manager() {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        static std::unordered_map<chip_id_t, std::unique_ptr<SystemMemoryManager>> mock_sysmem_managers;
+        static std::mutex mock_sysmem_mutex;
+        std::lock_guard<std::mutex> lock(mock_sysmem_mutex);
+        if (mock_sysmem_managers.find(this->id_) == mock_sysmem_managers.end()) {
+            mock_sysmem_managers[this->id_] = std::make_unique<SystemMemoryManager>(this->id_, 1);
+        }
+        return *mock_sysmem_managers[this->id_];
+    }
+    return *sysmem_manager_;
+}
+
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
     program_cache_.enable();
@@ -762,9 +782,12 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_dram_banks = this->num_dram_channels();
 
         const auto& hal = MetalContext::instance().hal();
-        bool noc_translation_enabled =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
-                this->id());
+        bool noc_translation_enabled = true;
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+            noc_translation_enabled =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                    this->id());
+        }
         bool dram_is_virtualized =
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d =
