@@ -28,8 +28,6 @@ void run_kernel()
     {
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(buffer_A[i]), formats.unpack_src, formats.unpack_dst);
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(buffer_B[i]), formats.unpack_src, formats.unpack_dst);
     }
 }
 
@@ -39,51 +37,13 @@ void run_kernel()
 
 #include "ckernel_defs.h"
 #include "ckernel_sfpu.h"
-#include "ckernel_sfpu_add_top_row.h"
-#include "ckernel_sfpu_binary.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
+#include "sfpu_operations.h"
 
 using namespace ckernel::sfpu;
-
-namespace
-{
-void call_binary_sfpu_operation(BinaryOp operation)
-{
-    switch (operation)
-    {
-        case BinaryOp::ADD:
-        case BinaryOp::SUB:
-        case BinaryOp::MUL:
-        case BinaryOp::XLOGY:
-            _sfpu_binary_init_<false, SFPU_BINARY_OPERATION>();
-            _calculate_sfpu_binary_<false, SFPU_BINARY_OPERATION, 32>(0, 1, 0);
-            break;
-        case BinaryOp::RSHFT:
-            _calculate_binary_right_shift_<false, 32, INT32, false>(0, 1, 0);
-            break;
-        case BinaryOp::LSHFT:
-            _calculate_binary_left_shift_<false, 32, INT32, false>(0, 1, 0);
-            break;
-        case BinaryOp::LOGICAL_RSHFT:
-            _calculate_logical_right_shift_<false, 32, INT32, false>(0, 1, 0);
-            break;
-        case BinaryOp::ADD_TOP_ROW:
-            _init_add_top_row_();
-            // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
-            {
-                constexpr DataFormat add_top_row_format =
-                    (SFPU_BINARY_OPERATION == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(formats.math) : DataFormat::Float32;
-                _calculate_add_top_row_<add_top_row_format>(0, 1, 0);
-            }
-            break;
-        default:
-            return;
-    }
-}
-} // namespace
 
 void run_kernel()
 {
@@ -101,25 +61,20 @@ void run_kernel()
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (int i = 0; i < TILE_CNT; i++)
     {
-        // copy first input to tile 0 in dest
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            0, formats.math, formats.math);
-
-        // copy second input to tile 1 in dest
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            1, formats.math, formats.math);
-
-        _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
-
-        // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of first operand, and
-        // argument passed of _calculate_sfpu_binary_ is dest index of the second operand
-
-        _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);
-        call_binary_sfpu_operation(SFPU_BINARY_OPERATION);
-
-        _llk_math_eltwise_binary_sfpu_done_();
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            i, formats.math, formats.math);
     }
+
+    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
+
+    // Note: argument passed to _llk_math_eltwise_binary_sfpu_start_ is dest index of first operand, and
+    // argument passed of _calculate_sfpu_binary_ is dest index of the second operand
+
+    _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);
+    test_utils::call_binary_sfpu_operation<APPROX_MODE, SFPU_BINARY_OPERATION, 32, formats.math>(0, 1, 0);
+
+    _llk_math_eltwise_binary_sfpu_done_();
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -146,12 +101,12 @@ void run_kernel()
     _llk_pack_dest_init_<DstSync::SyncHalf, false, DstTileFaceLayout::RowMajor, false>();
 #endif
 
+    _llk_packer_wait_for_math_done_();
     for (int i = 0; i < TILE_CNT; i++)
     {
-        _llk_packer_wait_for_math_done_();
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(buffer_Res[i]));
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(buffer_Res[i]));
     }
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif

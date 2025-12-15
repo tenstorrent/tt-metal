@@ -5,6 +5,8 @@
 #pragma once
 
 #include "ckernel_sfpu.h"
+#include "ckernel_sfpu_add_top_row.h"
+#include "ckernel_sfpu_binary.h"
 #include "llk_sfpu_types.h"
 
 using namespace ckernel;
@@ -17,11 +19,13 @@ namespace test_utils
  * Template function to call SFPU operations with parameterized iteration count
  * and optional math format for type-specific behavior.
  *
+ * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
+ * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
  * @param operation The SFPU operation type to execute
  * @param math_format Optional math format for operations that need format-specific behavior
  */
-template <int ITERATIONS>
+template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
 {
     switch (operation)
@@ -67,7 +71,7 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
             }
             else
             {
-                _calculate_fill_<APPROX_MODE, ITERATIONS>(1.0f);
+                _calculate_fill_<APPROX_MODE, ITERATIONS>(5.0f);
             }
             break;
         case SfpuType::gelu:
@@ -117,17 +121,49 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
         case SfpuType::threshold:
             _calculate_threshold_<APPROX_MODE, ITERATIONS>(5.0f, 10.0f);
             break;
+        case SfpuType::relu_max:
+            ckernel::sfpu::_relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
+            break;
+        case SfpuType::relu_min:
+            ckernel::sfpu::_relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
+            break;
         default:
             return; // Unsupported op – should never happen
     }
 }
 
-/**
- * Convenience function for the common case of 32 iterations (full tile)
- */
-inline void call_sfpu_operation_32(SfpuType operation, uint32_t math_format = 0)
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, uint32_t MATH_FORMAT = 0>
+void call_binary_sfpu_operation(const uint dst_index_in0 = 0, const uint dst_index_in1 = 1, const uint dst_index_out = 0)
 {
-    call_sfpu_operation<32>(operation, math_format);
+    switch (BINOP)
+    {
+        case BinaryOp::ADD:
+        case BinaryOp::SUB:
+        case BinaryOp::MUL:
+        case BinaryOp::XLOGY:
+            _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
+            _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+            break;
+        case BinaryOp::RSHFT:
+            _calculate_binary_right_shift_<APPROXIMATION_MODE, ITERATIONS, INT32, false>(dst_index_in0, dst_index_in1, dst_index_out);
+            break;
+        case BinaryOp::LSHFT:
+            _calculate_binary_left_shift_<APPROXIMATION_MODE, ITERATIONS, INT32, false>(dst_index_in0, dst_index_in1, dst_index_out);
+            break;
+        case BinaryOp::LOGICAL_RSHFT:
+            _calculate_logical_right_shift_<APPROXIMATION_MODE, ITERATIONS, INT32, false>(dst_index_in0, dst_index_in1, dst_index_out);
+            break;
+        case BinaryOp::ADD_TOP_ROW:
+            _init_add_top_row_();
+            // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
+            {
+                constexpr DataFormat add_top_row_format = (BINOP == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(MATH_FORMAT) : DataFormat::Float32;
+                _calculate_add_top_row_<add_top_row_format>(dst_index_in0, dst_index_in1, dst_index_out);
+            }
+            break;
+        default:
+            return;
+    }
 }
 
 } // namespace test_utils

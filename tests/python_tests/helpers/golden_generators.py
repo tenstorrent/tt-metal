@@ -14,7 +14,7 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.tilize_untilize import tilize_block
+from helpers.tilize_untilize import tilize_block, untilize_block
 
 # Tile and face dimension constants
 FACE_DIM = 16
@@ -912,6 +912,8 @@ class UnarySFPUGolden:
         data_format,
         dest_acc,
         input_format,
+        dimensions: tuple[int, int],
+        iterations: int = None,
         reduce_pool: Optional[ReducePool] = None,
     ):
         self.data_format = data_format
@@ -943,7 +945,23 @@ class UnarySFPUGolden:
 
         tensor = to_tensor(operand1, dst_format)
 
-        result = [self.ops[operation](x) for x in tensor.tolist()]
+        if iterations is None or iterations * 32 > tensor.numel():
+            iterations = tensor.numel() // 32
+
+        if iterations <= 0:
+            raise ValueError(f"Invalid iterations: {iterations}")
+
+        result = tensor.clone().flatten()
+
+        result = tilize_block(result, dimensions, input_format).flatten()
+
+        op_res = [self.ops[operation](x) for x in result.tolist()[0 : 32 * iterations]]
+
+        result[0 : 32 * iterations] = torch.tensor(
+            op_res, dtype=format_dict[dst_format]
+        )
+
+        result = untilize_block(result, input_format, dimensions).flatten()
 
         if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
@@ -1227,16 +1245,93 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         )
 
     def __call__(
-        self, operation: MathOperation, operand1, operand2, data_format: DataFormat
+        self,
+        operation: MathOperation,
+        tensor,
+        src1_idx: int,
+        src2_idx: int,
+        dst_idx: int,
+        num_iterations: int,
+        dimensions: tuple[int, int],
+        data_format: DataFormat,
     ):
         if operation not in self.ops:
             raise ValueError(f"Unsupported SFPU operation: {operation}")
 
-        t1 = to_tensor(operand1, data_format)
-        t2 = to_tensor(operand2, data_format)
+        if num_iterations < 1:
+            raise ValueError(f"num_iterations must be at least 1, got {num_iterations}")
 
-        result = [self.ops[operation](t1[i], t2[i]) for i in range(len(t1))]
-        return torch.tensor(result, dtype=format_dict[data_format])
+        total_elements = dimensions[0] * dimensions[1]
+        elements_per_tile = ELEMENTS_PER_TILE
+        elements_per_row = 32
+
+        num_tiles = total_elements // elements_per_tile
+
+        src1_start = src1_idx * elements_per_tile
+        src2_start = src2_idx * elements_per_tile
+        dst_start = dst_idx * elements_per_tile
+
+        if operation == MathOperation.SfpuAddTopRow:
+            return self._add_top_row(
+                tensor.flatten(),
+                src1_idx,
+                src2_idx,
+                dst_idx,
+            )
+
+        if data_format != DataFormat.Bfp8_b:
+            result = tilize_block(tensor.flatten(), dimensions, data_format).flatten()
+        else:
+            result = tensor.flatten()
+
+        for name, idx in [
+            ("src1_idx", src1_idx),
+            ("src2_idx", src2_idx),
+            ("dst_idx", dst_idx),
+        ]:
+            if not 0 <= idx < num_tiles:
+                raise ValueError(
+                    f"{name} {idx} is out of bounds. Tensor has {num_tiles} tiles."
+                )
+
+        elements_to_process = num_iterations * elements_per_row
+
+        for name, start in [
+            ("src1_idx", src1_start),
+            ("src2_idx", src2_start),
+            ("dst_idx", dst_start),
+        ]:
+            if start + elements_to_process > total_elements:
+                raise ValueError(
+                    f"Processing {num_iterations} iterations from {name} "
+                    f"would exceed tensor bounds (trying to access element {start + elements_to_process}, "
+                    f"but tensor has only {total_elements} elements)"
+                )
+
+        for iteration in range(num_iterations):
+            row_offset = iteration * elements_per_row
+
+            src1_row_start = src1_start + row_offset
+            src2_row_start = src2_start + row_offset
+            dst_row_start = dst_start + row_offset
+
+            src1_row = result[src1_row_start : src1_row_start + elements_per_row]
+            src2_row = result[src2_row_start : src2_row_start + elements_per_row]
+
+            result_row = torch.tensor(
+                [
+                    self.ops[operation](src1_row[i], src2_row[i])
+                    for i in range(elements_per_row)
+                ],
+                dtype=format_dict[data_format],
+            )
+
+            result[dst_row_start : dst_row_start + elements_per_row] = result_row
+
+        if data_format != DataFormat.Bfp8_b:
+            result = untilize_block(result, data_format, dimensions)
+
+        return result
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
@@ -1260,12 +1355,55 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         result = (t1_uint >> t2).to(torch.int32)
         return result
 
-    def _add_top_row(self, t1, t2):
+    def _add_top_row(
+        self,
+        tensor,
+        src1_idx,
+        src2_idx,
+        dst_idx,
+    ):
         """
-        Add top row operation for tile pairs.
-        Takes the element t1 of top row of tile 0 and adds it with element t2 of top row of tile 1.
+        Add top row operation for tile pairs in untilized format.
         """
-        return t1 + t2
+        src1_idx_start = src1_idx * ELEMENTS_PER_TILE
+        src2_idx_start = src2_idx * ELEMENTS_PER_TILE
+        dst_idx_start = dst_idx * ELEMENTS_PER_TILE
+
+        result = tensor.clone()
+
+        # Untilized format: row-wise layout
+        ROWS_0_1_OFFSET = 0  # Rows 0-1 start at element 0
+        ROWS_8_9_OFFSET = 256  # Rows 8-9 start at element 256
+        # Two consecutive rows = 2 rows × 32 columns = 64 elements
+        TWO_ROWS_ELEMENTS = 64
+
+        # Add rows 0-1 (elements 0-63)
+        rows_0_1_dst_start = dst_idx_start + ROWS_0_1_OFFSET
+        rows_0_1_dst_end = rows_0_1_dst_start + TWO_ROWS_ELEMENTS
+        rows_0_1_src1_start = src1_idx_start + ROWS_0_1_OFFSET
+        rows_0_1_src1_end = rows_0_1_src1_start + TWO_ROWS_ELEMENTS
+        rows_0_1_src2_start = src2_idx_start + ROWS_0_1_OFFSET
+        rows_0_1_src2_end = rows_0_1_src2_start + TWO_ROWS_ELEMENTS
+
+        result[rows_0_1_dst_start:rows_0_1_dst_end] = (
+            tensor[rows_0_1_src1_start:rows_0_1_src1_end]
+            + tensor[rows_0_1_src2_start:rows_0_1_src2_end]
+        )
+
+        # Add rows 8-9 (elements 256-319)
+        rows_8_9_dst_start = dst_idx_start + ROWS_8_9_OFFSET
+        rows_8_9_dst_end = rows_8_9_dst_start + TWO_ROWS_ELEMENTS
+        rows_8_9_src1_start = src1_idx_start + ROWS_8_9_OFFSET
+        rows_8_9_src1_end = rows_8_9_src1_start + TWO_ROWS_ELEMENTS
+        rows_8_9_src2_start = src2_idx_start + ROWS_8_9_OFFSET
+        rows_8_9_src2_end = rows_8_9_src2_start + TWO_ROWS_ELEMENTS
+
+        result[rows_8_9_dst_start:rows_8_9_dst_end] = (
+            tensor[rows_8_9_src1_start:rows_8_9_src1_end]
+            + tensor[rows_8_9_src2_start:rows_8_9_src2_end]
+        )
+
+        return result
 
 
 @register_golden
