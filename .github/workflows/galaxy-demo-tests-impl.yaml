@@ -68,6 +68,8 @@ jobs:
             { "name": "Galaxy Motif-Image-6B-Preview demo tests", "arch": "wormhole_b0", "model": "motif", "timeout": 20, "owner_id": "U08TED0JM9D" },
             { "name": "Galaxy Wan2.2 demo tests", "arch": "wormhole_b0", "model": "wan22", "timeout": 25, "owner_id": "U03FJB5TM5Y" },
             { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" },
+            { "name": "Galaxy Qwen3-32B demo tests", "arch": "wormhole_b0", "model": "qwen3_32b", "timeout": 30, "owner_id": "U067LBSV9QP" },
+            { "name": "Galaxy Qwen3-32B long context demo tests", "arch": "wormhole_b0", "model": "qwen3_32b_long_context", "timeout": 45, "owner_id": "U067LBSV9QP" },
             { "name": "Galaxy DeepSeek v3 demo tests", "arch": "wormhole_b0", "model": "deepseek_v3", "timeout": 10, "owner_id": "U08H32XUS9W" }
           ]'
 
