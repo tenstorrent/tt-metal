@@ -96,7 +96,7 @@ def test_motif_pipeline(
         topology=topology,
         width=width,
         height=height,
-        model_checkpoint_path=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+        checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
     )
 
     # Setup CI environment

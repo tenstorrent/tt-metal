@@ -243,7 +243,11 @@ class MotifPipeline:
         width=1024,
         height=1024,
         checkpoint_name="Motif-Technologies/Motif-Image-6B-Preview",
+        model_checkpoint_path=None,
     ):
+        if model_checkpoint_path is not None:
+            checkpoint_name = model_checkpoint_path
+            logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
         default_config = {
             (2, 4): {
                 "cfg_config": (2, 0),

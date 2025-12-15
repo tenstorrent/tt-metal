@@ -345,8 +345,11 @@ class StableDiffusion3Pipeline:
         tp_config=None,
         num_links=None,
         checkpoint_name=f"stabilityai/stable-diffusion-3.5-large",
-        use_cache=False,
+        model_checkpoint_path=None,
     ):
+        if model_checkpoint_path is not None:
+            checkpoint_name = model_checkpoint_path
+            logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
         # defatult config per mesh shape
         default_config = {
             (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
@@ -388,7 +391,6 @@ class StableDiffusion3Pipeline:
             height=image_h,
             width=image_w,
             checkpoint_name=checkpoint_name,
-            use_cache=use_cache,
         )
 
         pipeline.prepare(

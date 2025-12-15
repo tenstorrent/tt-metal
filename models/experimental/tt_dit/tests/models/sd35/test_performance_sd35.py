@@ -35,7 +35,6 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_sd35_new_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -50,17 +49,12 @@ def test_sd35_new_pipeline_performance(
     topology,
     num_links,
     model_location_generator,
-    use_cache,
     is_ci_env,
     galaxy_type,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
-
-    # Process skips
-    if is_ci_env and use_cache:
-        pytest.skip("use_cache not necessary for performance test in CI. See pipeline test.")
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -91,10 +85,9 @@ def test_sd35_new_pipeline_performance(
         sp_config=sp,
         tp_config=tp,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(
+        checkpoint_name=model_location_generator(
             f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
         ),
-        use_cache=use_cache,
     )
 
     # Test prompts - diverse set for comprehensive performance testing
