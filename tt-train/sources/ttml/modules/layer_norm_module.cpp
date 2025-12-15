@@ -31,7 +31,7 @@ autograd::TensorPtr LayerNormLayer::operator()(const autograd::TensorPtr& tensor
     if (m_use_composite_op) {
         return ops::composite_layernorm(tensor, m_gamma, m_beta, m_eps, m_enable_hardware_clamp, m_min_safe_eps);
     }
-    return ops::layernorm(tensor, m_gamma, m_beta, m_eps, m_enable_hardware_clamp, m_min_safe_eps);
+    return ops::layernorm_moreh(tensor, m_gamma, m_beta, m_eps, m_enable_hardware_clamp, m_min_safe_eps);
 }
 
 }  // namespace ttml::modules

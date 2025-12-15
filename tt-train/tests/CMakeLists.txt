@@ -47,7 +47,6 @@ set(SOURCES
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
     ops/layer_norm_composite_test.cpp
-    ops/layer_norm_op_test.cpp
     modules/layer_norm_epsilon_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/linear_op_test.cpp

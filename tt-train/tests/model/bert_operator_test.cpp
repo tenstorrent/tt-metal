@@ -388,7 +388,7 @@ TEST_F(BERTOperatorTest, LayerNorm) {
     auto beta = autograd::create_tensor(beta_tensor);
 
     // Call layernorm with hardware clamp disabled
-    auto output = ops::layernorm(input, gamma, beta, eps, false);
+    auto output = ops::layernorm_moreh(input, gamma, beta, eps, false);
 
     // Verify shape
     auto output_shape = output->get_value().logical_shape();

@@ -124,7 +124,7 @@ void py_module(nb::module_& m) {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
         py_layernorm.def(
             "layernorm",
-            &ttml::ops::layernorm,
+            &ttml::ops::layernorm_moreh,
             nb::arg("tensor"),
             nb::arg("gamma"),
             nb::arg("beta"),
