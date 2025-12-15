@@ -85,6 +85,9 @@ std::vector<std::uint32_t> create_constant_vector_of_bfloat16(size_t num_bytes, 
 // each 2 cols will be packed as a single uint32_t
 std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones);
 
+// TODO(AP): duplication with above
+std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed);
+
 std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in);
 
 std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in);

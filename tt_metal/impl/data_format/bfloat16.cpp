@@ -190,6 +190,26 @@ std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones) {
     return vec;
 }
 
+// TODO(AP): duplication with above
+std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed) {
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, 1), std::mt19937(seed));
+
+    std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
+    for (size_t i = 0; i < vec.size(); i++) {
+        float num_1_float = rand_float();
+        float num_2_float = rand_float();
+
+        num_1_float = (num_1_float > 0.5);
+        num_2_float = (num_2_float > 0.5);
+
+        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
+        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+
+        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+    }
+    return vec;
+}
+
 std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
     std::vector<uint16_t> result(in.size() * 2);
     for (size_t i = 0; i < in.size(); i++) {
