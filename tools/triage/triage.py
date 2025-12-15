@@ -549,7 +549,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     except Exception:
         skip_check = False
 
-    scripts_dir = os.path.dirname(find_install_debugger_script())
+    install_script = find_install_debugger_script()
+    scripts_dir = os.path.dirname(install_script)
     ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
 
     try:
@@ -572,23 +573,24 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         utils.DEBUG(f"Installed tt-exalens version: {installed_version}")
     except importlib_metadata.PackageNotFoundError:
         utils.WARN(
-            "Required debugger component is not installed. Please run scripts/install_debugger.sh to install debugger dependencies."
+            f"Required debugger component is not installed. Please run {install_script} to install debugger dependencies."
         )
-        raise TTTriageError("Debugger dependency is not installed")
+        print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
+        print(f"  {utils.GREEN}{install_script}{utils.RST}")
+        exit(1)
 
-    # Match by prefix to allow short-vs-long
+    # Check if installed version matches approved version
     if approved_version != installed_version:
-        message = (
-            "Debugger version mismatch.\n"
-            f"  Installed: {installed_version}\n"
-            f"  Approved:  {approved_version}\n"
-            "Use scripts/install_debugger.sh to install the approved version, or run with --skip-version-check"
-        )
+        message = f"Debugger version mismatch.\n  Installed: {installed_version}\n  Approved:  {approved_version}"
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
-            raise TTTriageError(message)
+            print(message)
+            print(f"Please install tt-exalens by running:")
+            print(f"  {utils.GREEN}{install_script}{utils.RST}")
+            print(f"Or disable this check by running with {utils.RED}--skip-version-check{utils.RST} argument.")
+            exit(1)
 
 
 def _init_ttexalens(args: ScriptArguments) -> Context:
