@@ -11,8 +11,8 @@ on:
         options:
           - all
           - llama3
-          - llama3_long_context
-          - llama3_evals
+          # - llama3_long_context
+          # - llama3_evals
           - llama3_8b_dp
           - llama3_70b_dp
           - falcon7b
