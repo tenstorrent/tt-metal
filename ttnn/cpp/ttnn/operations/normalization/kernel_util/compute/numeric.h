@@ -48,7 +48,7 @@ inline void scale_dest(uint32_t dst, uint32_t scalar) {
  * @brief The compute logic for accumulating a CB. Does
  * no src configuring or packing
  */
-template <bool FLOAT32_REDUCTION, typename pop_input_policy, typename... AdditionalCBs>
+template <bool FLOAT32_REDUCTION, typename input_policy, typename... AdditionalCBs>
 inline void accumulate_compute_loop(
     uint32_t cb_in,
     uint32_t cb_scalar,
@@ -59,26 +59,22 @@ inline void accumulate_compute_loop(
     static_assert(
         (std::conjunction_v<std::is_same<AdditionalCBs, uint32_t>...>), "All additional CBs must be uint32_t");
 
-    constexpr bool pop_input = pop_input_policy::pop;
-    constexpr bool pop_remainder = pop_input_policy::pop_remainder;
+    constexpr bool pop_input = input_policy::pop;
+    constexpr bool sync_full_block = input_policy::sync_full_block;
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
-            const uint32_t num_tiles_to_wait =
-                num_previous_tiles + block.size() + (pop_remainder ? block.remainder() : 0);
+            const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
+            const uint32_t num_tiles_to_wait = num_previous_tiles + curr_block_size;
             cb_wait_front(cb, num_tiles_to_wait);
             for (auto j : block.local()) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
-                if constexpr (pop_remainder) {
-                    cb_wait_front(cb, block.remainder());
-                }
-                const uint32_t num_tiles_to_pop = block.size() + (pop_remainder ? block.remainder() : 0);
-                cb_pop_front(cb, num_tiles_to_pop);
+                cb_pop_front(cb, curr_block_size);
             }
         }
     };
@@ -114,7 +110,7 @@ inline void accumulate_compute_loop(
  * are committed and packed
  * @param additional_cbs Optional additional input CBs to accumulate
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
- * @tparam pop_input_policy The policy for whether to pop the input CB after processing
+ * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  * @tparam Epilogue The type of the epilogue functor
  * @tparam AdditionalCBs The types of the additional input CBs (must be uint32_t)
@@ -136,7 +132,7 @@ inline void accumulate_compute_loop(
  */
 template <
     bool FLOAT32_REDUCTION,
-    typename pop_input_policy = policies::NoPopInputPolicy,
+    typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
@@ -148,13 +144,12 @@ inline void row_wise_accumulate_with_epilogue(
     uint32_t block_size,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
-    constexpr bool pop_input = pop_input_policy::pop;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
     cb_wait_front(cb_scalar, 1);
     reconfig_data_format(cb_in, cb_scalar);
     tile_regs_acquire();
 
-    detail::accumulate_compute_loop<FLOAT32_REDUCTION, pop_input_policy>(
+    detail::accumulate_compute_loop<FLOAT32_REDUCTION, input_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, additional_cbs...);
 
     epilogue();
@@ -184,18 +179,18 @@ inline void row_wise_accumulate_with_epilogue(
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
- * @tparam pop_input_policy The policy for whether to pop the input CB after processing
+ * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  *
  * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs
  */
 template <
     bool FLOAT32_REDUCTION,
-    typename pop_input_policy = policies::NoPopInputPolicy,
+    typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
             detail::scale_dest(detail::dst0, one_over_N);
         });
@@ -213,14 +208,14 @@ inline void row_wise_mean(
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
- * @tparam pop_input_policy The policy for whether to pop the input CB after processing
+ * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  *
  * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs
  */
 template <
     bool FLOAT32_REDUCTION,
-    typename pop_input_policy = policies::NoPopInputPolicy,
+    typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean_with_pre_add(
     uint32_t cb_in0,
@@ -230,7 +225,7 @@ inline void row_wise_mean_with_pre_add(
     uint32_t one_over_N,
     uint32_t num_tiles,
     uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
         cb_in0,
         cb_scalar,
         cb_out,

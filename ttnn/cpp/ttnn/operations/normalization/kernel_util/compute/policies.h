@@ -18,22 +18,26 @@ namespace norm::kernel_util::compute::policies {
 enum class WaitAtEndPolicy { WAIT, NO_WAIT };
 
 /**
- * @brief Control whether to pop an input CB after
- * processing it in a function and how to pop it
+ * @brief Policies to control how handle data fed
+ * into input CBs for a compute operation
  */
-struct PopInputWithRemainderPolicy {
+struct PartialBlockWithPopPolicy {
     static constexpr bool pop = true;
-    static constexpr bool pop_remainder = true;
+    static constexpr bool sync_full_block = false;
 };
-
-struct PopInputWithoutRemainderPolicy {
-    static constexpr bool pop = true;
-    static constexpr bool pop_remainder = false;
-};
-
-struct NoPopInputPolicy {
+struct PartialBlockWithoutPopPolicy {
     static constexpr bool pop = false;
-    static constexpr bool pop_remainder = false;
+    static constexpr bool sync_full_block = false;
+};
+
+struct FullBlockWithPopPolicy {
+    static constexpr bool pop = true;
+    static constexpr bool sync_full_block = true;
+};
+
+struct FullBlockWithoutPopPolicy {
+    static constexpr bool pop = false;
+    static constexpr bool sync_full_block = true;
 };
 
 }  // namespace norm::kernel_util::compute::policies

@@ -80,38 +80,4 @@ inline void adjust_variance_for_overaccumulation(uint32_t cb_var, uint32_t cb_me
         cb_pop_front(cb_var, 1);
     }
 }
-
-/**
- * @brief Keep a CB in sync with the producer (reader)
- * by waiting for and popping excess tiles to fill a block
- *
- * @tparam Block The block type
- * @param cb CB to sync
- * @param block Block to sync
- */
-template <typename Block>
-inline void sync_remainder_block_tiles(uint32_t cb, const Block& block) {
-    const auto remainder = block.remainder();
-    if (remainder > 0) {
-        cb_wait_front(cb, remainder);
-        cb_pop_front(cb, remainder);
-    }
-}
-
-/**
- * @brief A special pop function that keeps the CB
- * in sync with the reader by making sure
- * that a full pass over the CB blocks puts
- * the read/write pointers back at the beginning
- * of the CB
- *
- * @tparam Block The block type
- * @param cb CB to pop
- * @param block Block to pop
- */
-template <typename Block>
-inline void pop_block(uint32_t cb, const Block& block) {
-    cb_pop_front(cb, block.size() + block.remainder());
-    // sync_remainder_block_tiles(cb, block);
-}
 }  // namespace norm::layernorm::device::kernels::compute

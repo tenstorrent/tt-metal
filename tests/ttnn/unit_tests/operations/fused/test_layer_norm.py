@@ -441,14 +441,4 @@ def test_layer_norm_with_padding(device, use_welford, dtype):
     golden = ttnn.get_golden_function(ttnn.layer_norm)
     golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
 
-    print(f"output_ttnn: {output_ttnn}")
-    print(f"golden_output: {golden_output}")
-
-    # Assert that the output is close to the golden output
-    # rtol = 1e-2  # 1%, ~1-2 ULP
-    # atol = 0     # Output doesn't have small values so we don't need this
-    assert_allclose(golden_output, output_ttnn, rtol=1e-2, atol=0.01)
-    # assert_output_accuracy(golden_output, output_ttnn)
-    # passed, message = assert_allclose(golden_output, output_ttnn, rtol=rtol, atol=atol)
-    # print(f"Message: {message}")
-    # assert passed, message
+    assert_output_accuracy(golden_output, output_ttnn)

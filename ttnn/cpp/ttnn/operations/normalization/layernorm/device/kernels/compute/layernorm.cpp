@@ -100,17 +100,21 @@ void MAIN {
         add_tiles_init(cb_in, cb_inb);
         for (auto block : generic::blocks(Wt, blk)) {
             ACQ();
-            cb_wait_front(cb_in, block.size());
-            cb_wait_front(cb_inb, block.size());
-            cb_reserve_back(cb_x, block.size());
+            // In/inb come from the reader and need to be
+            // synced on full block size. Keep cb_x aligned
+            // to full block size as well so pre-add/no-pre-add
+            // can be handled the same way.
+            cb_wait_front(cb_in, block.full_block_size());
+            cb_wait_front(cb_inb, block.full_block_size());
+            cb_reserve_back(cb_x, block.full_block_size());
             for (auto i : block.local()) {
                 add_tiles(cb_in, cb_inb, block.to_global(i), block.to_global(i), i);
                 pack_tile(i, cb_x);
             }
             REL();
-            cb_push_back(cb_x, block.size());  // push the sum into the same buffer
-            layernorm_compute_utils::pop_block(cb_in, block);
-            layernorm_compute_utils::pop_block(cb_inb, block);
+            cb_push_back(cb_x, block.full_block_size());  // push the sum into the same buffer
+            cb_pop_front(cb_in, block.full_block_size());
+            cb_pop_front(cb_inb, block.full_block_size());
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -140,12 +144,7 @@ void MAIN {
                 pack_tile(i, cb_xmm);
             }
             cb_push_back(cb_xmm, block.size());
-#ifdef FUSE_PRE_ADD
-            cb_pop_front(cb_x, block.size());
-#else
-            layernorm_compute_utils::pop_block(cb_x, block);
-#endif
-
+            cb_pop_front(cb_x, block.full_block_size());
             REL();
         }
 #ifndef FUSE_PRE_ADD
@@ -174,7 +173,7 @@ void MAIN {
 #endif
 
         // Var[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputWithoutRemainderPolicy>(
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PartialBlockWithPopPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
 
         // Adjust variance for possible overaccumulation in the last tile
@@ -209,7 +208,7 @@ void MAIN {
             } else {
                 pack_reconfig_data_format(cb_fusion);
             }
-            cb_reserve_back(cb_im_or_out, block.size());
+            cb_reserve_back(cb_im_or_out, block.full_block_size());
 #if defined RMSNORM and not defined FUSE_PRE_ADD
             reconfig_data_format_srca(cb_fusion, cb_xmm);
 #endif
@@ -220,7 +219,8 @@ void MAIN {
                 pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             cb_push_back(
-                cb_im_or_out, block.size());  // if no gamma/beta are provided, this will be passed on to the writer
+                cb_im_or_out,
+                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
             REL();
 
             if constexpr (!(do_gamma == 0 && do_beta == 0)) {
@@ -237,16 +237,17 @@ void MAIN {
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_reserve_back(cb_outg, block.size());
-                cb_wait_front(cb_gamma, block.start() + block.size());  // we don't pop, TODO: only wait on first ht
-                cb_wait_front(cb_fusion, block.size());
+                cb_reserve_back(cb_outg, block.full_block_size());
+                cb_wait_front(
+                    cb_gamma, block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                     pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
-                cb_pop_front(cb_fusion, block.size());
+                cb_pop_front(cb_fusion, block.full_block_size());
                 // we don't pop gamma
-                cb_push_back(cb_outg, block.size());
+                cb_push_back(cb_outg, block.full_block_size());
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 REL();
             }
@@ -259,16 +260,17 @@ void MAIN {
                 }
                 ACQ();
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_reserve_back(cb_out, block.size());
-                cb_wait_front(cb_beta, block.start() + block.size());  // TODO: optimization - only wait on first ht
-                cb_wait_front(cb_fusion, block.size());
+                cb_reserve_back(cb_out, block.full_block_size());
+                cb_wait_front(
+                    cb_beta, block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
+                cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                     pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
-                cb_pop_front(cb_fusion, block.size());
+                cb_pop_front(cb_fusion, block.full_block_size());
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
-                cb_push_back(cb_out, block.size());
+                cb_push_back(cb_out, block.full_block_size());
                 REL();
             }
         }

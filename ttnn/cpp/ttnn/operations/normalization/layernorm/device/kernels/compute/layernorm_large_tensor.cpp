@@ -83,10 +83,10 @@ void MAIN {
         //      --------
         //         n
 #ifdef FUSE_PRE_ADD
-        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputWithRemainderPolicy>(
+        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #else
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputWithRemainderPolicy>(
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #endif
 #endif  // !RMS ifdef end
@@ -97,7 +97,7 @@ void MAIN {
         //              n
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
-            cb_wait_front(cb_in, block.size());
+            cb_wait_front(cb_in, block.full_block_size());
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
             copy_tile_init(cb_in);
@@ -112,15 +112,15 @@ void MAIN {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
 #endif
-            layernorm_compute_utils::pop_block(cb_in, block);
+            cb_pop_front(cb_in, block.full_block_size());
 #ifdef FUSE_PRE_ADD
-            cb_wait_front(cb_inb, block.size());
+            cb_wait_front(cb_inb, block.full_block_size());
             reconfig_data_format_srca(cb_in, cb_inb);
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
             }
-            layernorm_compute_utils::pop_block(cb_inb, block);
+            cb_pop_front(cb_inb, block.full_block_size());
 #endif
             // (x-E[x])^2. Pack to CB
             square_tile_init();
@@ -238,7 +238,7 @@ void MAIN {
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
             cb_wait_front(cb_ex, 1);
-            cb_wait_front(cb_in, block.size());
+            cb_wait_front(cb_in, block.full_block_size());
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
             copy_tile_init(cb_in);
@@ -253,15 +253,15 @@ void MAIN {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
 #endif
-            layernorm_compute_utils::pop_block(cb_in, block);
+            cb_pop_front(cb_in, block.full_block_size());
 #ifdef FUSE_PRE_ADD
-            cb_wait_front(cb_inb, block.size());
+            cb_wait_front(cb_inb, block.full_block_size());
             reconfig_data_format_srca(cb_inb);
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
             }
-            layernorm_compute_utils::pop_block(cb_inb, block);
+            cb_pop_front(cb_inb, block.full_block_size());
 #endif
             tile_regs_commit();
             tile_regs_wait();
@@ -292,13 +292,13 @@ void MAIN {
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_fusion = cb_out;
             }
-            cb_reserve_back(cb_fusion, block.size());
+            cb_reserve_back(cb_fusion, block.full_block_size());
             pack_reconfig_data_format(cb_fusion);
             for (auto i : block.local()) {
                 pack_tile(i, cb_fusion);
             }
             tile_regs_release();
-            cb_push_back(cb_fusion, block.size());
+            cb_push_back(cb_fusion, block.full_block_size());
             cb_pop_front(cb_xmm, block.size());
 
             if constexpr (do_gamma == 1) {
@@ -308,27 +308,27 @@ void MAIN {
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(cb_out);
                 }
-                cb_wait_front(cb_gamma, block.size());
-                cb_wait_front(cb_fusion, block.size());
+                cb_wait_front(cb_gamma, block.full_block_size());
+                cb_wait_front(cb_fusion, block.full_block_size());
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
-                layernorm_compute_utils::pop_block(cb_gamma, block);
-                cb_pop_front(cb_fusion, block.size());
+                cb_pop_front(cb_gamma, block.full_block_size());
+                cb_pop_front(cb_fusion, block.full_block_size());
                 if constexpr (!do_beta) {
-                    cb_reserve_back(cb_out, block.size());
+                    cb_reserve_back(cb_out, block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_out);
                     }
-                    cb_push_back(cb_out, block.size());
+                    cb_push_back(cb_out, block.full_block_size());
                 } else {
-                    cb_reserve_back(cb_fusion, block.size());
+                    cb_reserve_back(cb_fusion, block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_fusion);
                     }
-                    cb_push_back(cb_fusion, block.size());
+                    cb_push_back(cb_fusion, block.full_block_size());
                 }
 
                 tile_regs_release();
@@ -338,21 +338,21 @@ void MAIN {
                 tile_regs_wait();
                 reconfig_data_format(cb_fusion, cb_beta);
                 pack_reconfig_data_format(cb_out);
-                cb_wait_front(cb_beta, block.size());
-                cb_wait_front(cb_fusion, block.size());
+                cb_wait_front(cb_beta, block.full_block_size());
+                cb_wait_front(cb_fusion, block.full_block_size());
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
-                layernorm_compute_utils::pop_block(cb_beta, block);
-                cb_pop_front(cb_fusion, block.size());
-                cb_reserve_back(cb_out, block.size());
+                cb_pop_front(cb_beta, block.full_block_size());
+                cb_pop_front(cb_fusion, block.full_block_size());
+                cb_reserve_back(cb_out, block.full_block_size());
                 for (auto i : block.local()) {
                     pack_tile(i, cb_out);
                 }
                 tile_regs_release();
-                cb_push_back(cb_out, block.size());
+                cb_push_back(cb_out, block.full_block_size());
             }
         }
         // End of

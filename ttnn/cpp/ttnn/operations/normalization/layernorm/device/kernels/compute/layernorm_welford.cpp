@@ -88,23 +88,27 @@ void MAIN {
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
             for (auto block : generic::blocks(Wt, blk)) {
-                cb_wait_front(cb_in, block.size());
-                cb_wait_front(cb_inb, block.size());
+                // In/inb come from the reader and need to be
+                // synced on full block size. Keep cb_x aligned
+                // to full block size as well so pre-add/no-pre-add
+                // can be handled the same way.
+                cb_wait_front(cb_in, block.full_block_size());
+                cb_wait_front(cb_inb, block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
                     add_tiles(cb_in, cb_inb, i, i, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_in, block.size());
-                cb_pop_front(cb_inb, block.size());
+                cb_pop_front(cb_in, block.full_block_size());
+                cb_pop_front(cb_inb, block.full_block_size());
 
-                cb_reserve_back(cb_x, block.size());
+                cb_reserve_back(cb_x, block.full_block_size());
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, cb_x);
                 }
                 tile_regs_release();
-                cb_push_back(cb_x, block.size());  // push the sum into the same buffer
+                cb_push_back(cb_x, block.full_block_size());  // push the sum into the same buffer
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
         }
@@ -180,7 +184,7 @@ void MAIN {
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
             for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, block.to_global(i), 0, i);
+                sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -189,9 +193,9 @@ void MAIN {
             }
             tile_regs_release();
             cb_push_back(cb_xmm, block.size());
+            cb_pop_front(cb_x, block.full_block_size());
         }
         cb_pop_front(cb_ex, 1);
-        cb_pop_front(cb_x, Wt);
         cb_wait_front(cb_xmm, Wt);
 
         if constexpr (!fuse_pre_add) {
@@ -238,14 +242,15 @@ void MAIN {
             }
             tile_regs_commit();
 
-            cb_reserve_back(cb_im_or_out, block.size());
+            cb_reserve_back(cb_im_or_out, block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             tile_regs_release();
             cb_push_back(
-                cb_im_or_out, block.size());  // if no gamma/beta are provided, this will be passed on to the writer
+                cb_im_or_out,
+                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
 
             if constexpr (do_gamma) {
                 if constexpr (do_beta == 0) {
@@ -254,23 +259,24 @@ void MAIN {
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_wait_front(cb_gamma, block.start() + block.size());  // we don't pop, TODO: only wait on first ht
-                cb_wait_front(cb_fusion, block.size());
+                cb_wait_front(
+                    cb_gamma, block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                cb_wait_front(cb_fusion, block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                 }
                 tile_regs_commit();
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                cb_pop_front(cb_fusion, block.size());
+                cb_pop_front(cb_fusion, block.full_block_size());
 
-                cb_reserve_back(cb_outg, block.size());
+                cb_reserve_back(cb_outg, block.full_block_size());
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
                 tile_regs_release();
-                cb_push_back(cb_outg, block.size());
+                cb_push_back(cb_outg, block.full_block_size());
             }
             if constexpr (do_beta) {
                 pack_reconfig_data_format(cb_out);
@@ -281,23 +287,24 @@ void MAIN {
                 }
 
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_wait_front(cb_beta, block.start() + block.size());  // TODO: optimization - only wait on first ht
-                cb_wait_front(cb_fusion, block.size());
+                cb_wait_front(
+                    cb_beta, block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
+                cb_wait_front(cb_fusion, block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_fusion, block.size());
+                cb_pop_front(cb_fusion, block.full_block_size());
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
 
-                cb_reserve_back(cb_out, block.size());
+                cb_reserve_back(cb_out, block.full_block_size());
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
                 tile_regs_release();
-                cb_push_back(cb_out, block.size());
+                cb_push_back(cb_out, block.full_block_size());
             }
         }
         cb_pop_front(cb_ex2pe, onetile);

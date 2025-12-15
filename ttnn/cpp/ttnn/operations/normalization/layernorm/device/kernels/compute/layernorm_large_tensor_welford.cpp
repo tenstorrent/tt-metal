@@ -22,7 +22,6 @@
 
 namespace generic = norm::kernel_util::generic;
 namespace layernorm_compute_utils = norm::layernorm::device::kernels::compute;
-
 namespace NAMESPACE {
 
 template <
@@ -64,15 +63,15 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Fused pre-add
         reconfig_data_format(cb_in, cb_inb);
         add_tiles_init(cb_in, cb_inb);
-        cb_wait_front(cb_in, block.size());
-        cb_wait_front(cb_inb, block.size());
+        cb_wait_front(cb_in, block.full_block_size());
+        cb_wait_front(cb_inb, block.full_block_size());
         tile_regs_acquire();
         for (auto i : block.local()) {
             add_tiles(cb_in, cb_inb, i, i, i);
         }
         tile_regs_commit();
-        layernorm_compute_utils::pop_block(cb_inb, block);
-        layernorm_compute_utils::pop_block(cb_in, block);
+        cb_pop_front(cb_in, block.full_block_size());
+        cb_pop_front(cb_inb, block.full_block_size());
 
         // Pack to intermediate CB (needed
         // to workaround transpose_wh_dest bug)
@@ -203,10 +202,12 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     welford_finalize_to_row<W>(mean_dst, W - 1, reciprocal_lut);
 
     tile_regs_commit();
-    cb_pop_front(cb_in, 1);
 
-    // Sync any remaining block tiles with the reader
-    layernorm_compute_utils::sync_remainder_block_tiles(cb_in, generic::blocks(Wt, blk).back());
+    // Reader is sending full blocks that evenly divide the CB size,
+    // so we need to pop the entire last block to stay in sync
+    const auto last_block_is_partial = generic::blocks(Wt, blk).back().is_partial();
+    const auto num_to_pop = last_block_is_partial ? generic::blocks(Wt, blk).back().full_block_size() : 1;
+    cb_pop_front(cb_in, num_to_pop);
 }
 
 void MAIN {
@@ -365,7 +366,10 @@ void MAIN {
         cb_wait_front(cb_ex, onetile);
 
         for (auto block : generic::blocks(Wt, blk)) {
-            cb_wait_front(cb_in, block.size());
+            // Last block may only be partially-filled,
+            // and only tiles that have data in them are
+            // processed, but need to sync with reader on full blocks
+            cb_wait_front(cb_in, block.full_block_size());
             tile_regs_acquire();
             reconfig_data_format(cb_in, cb_ex);
             sub_bcast_cols_init_short(cb_in, cb_ex);
@@ -373,18 +377,18 @@ void MAIN {
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
-            layernorm_compute_utils::pop_block(cb_in, block);
+            cb_pop_front(cb_in, block.full_block_size());
 
             reconfig_data_format_srca(cb_in, cb_ex2pe);
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
                 reconfig_data_format_srca(cb_ex2pe, cb_inb);
                 binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                cb_wait_front(cb_inb, block.size());
+                cb_wait_front(cb_inb, block.full_block_size());
                 for (auto i : block.local()) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
                 }
-                layernorm_compute_utils::pop_block(cb_inb, block);
+                cb_pop_front(cb_inb, block.full_block_size());
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
@@ -400,44 +404,45 @@ void MAIN {
             }
 
             pack_reconfig_data_format(cb_xmm);
-            cb_reserve_back(cb_xmm, block.size());
+            // Sync with writer on full blocks
+            cb_reserve_back(cb_xmm, block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, cb_xmm);
             }
-            cb_push_back(cb_xmm, block.size());
+            cb_push_back(cb_xmm, block.full_block_size());
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
                 // Multiply by gamma
                 reconfig_data_format(cb_xmm, cb_gamma);
                 tile_regs_acquire();
-                cb_wait_front(cb_gamma, block.size());
-                cb_wait_front(cb_xmm, block.size());
+                cb_wait_front(cb_gamma, block.full_block_size());
+                cb_wait_front(cb_xmm, block.full_block_size());
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
-                layernorm_compute_utils::pop_block(cb_gamma, block);
-                cb_pop_front(cb_xmm, block.size());
+                cb_pop_front(cb_gamma, block.full_block_size());
+                cb_pop_front(cb_xmm, block.full_block_size());
 
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(cb_out);
                 }
                 tile_regs_wait();
                 if constexpr (!do_beta) {
-                    cb_reserve_back(cb_out, block.size());
+                    cb_reserve_back(cb_out, block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_out);
                     }
-                    cb_push_back(cb_out, block.size());
+                    cb_push_back(cb_out, block.full_block_size());
                 } else {
-                    cb_reserve_back(cb_xmm, block.size());
+                    cb_reserve_back(cb_xmm, block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_xmm);
                     }
-                    cb_push_back(cb_xmm, block.size());
+                    cb_push_back(cb_xmm, block.full_block_size());
                 }
                 tile_regs_release();
             }
@@ -447,23 +452,23 @@ void MAIN {
                 tile_regs_acquire();
                 reconfig_data_format(cb_xmm, cb_beta);
                 add_bcast_rows_init_short(cb_xmm, cb_beta);
-                cb_wait_front(cb_xmm, block.size());
-                cb_wait_front(cb_beta, block.size());
+                cb_wait_front(cb_xmm, block.full_block_size());
+                cb_wait_front(cb_beta, block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
-                layernorm_compute_utils::pop_block(cb_beta, block);
-                cb_pop_front(cb_xmm, block.size());
+                cb_pop_front(cb_beta, block.full_block_size());
+                cb_pop_front(cb_xmm, block.full_block_size());
 
                 pack_reconfig_data_format(cb_out);
-                cb_reserve_back(cb_out, block.size());
+                cb_reserve_back(cb_out, block.full_block_size());
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, cb_out);
                 }
                 tile_regs_release();
-                cb_push_back(cb_out, block.size());
+                cb_push_back(cb_out, block.full_block_size());
             }
         }
 

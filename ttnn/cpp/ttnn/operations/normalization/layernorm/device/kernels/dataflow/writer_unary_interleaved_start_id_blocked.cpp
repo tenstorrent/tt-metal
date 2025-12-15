@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -25,7 +26,7 @@ void kernel_main() {
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {
         for (auto block : generic::blocks(Wt, blk)) {
-            cb_wait_front(cb_id_out0, block.size());
+            cb_wait_front(cb_id_out0, block.full_block_size());
             uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
             for (auto i : block.local()) {
                 noc_async_write_tile(tile_id, s, l1_read_addr);
@@ -33,7 +34,7 @@ void kernel_main() {
                 l1_read_addr += tile_bytes;
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_id_out0, block.size());
+            cb_pop_front(cb_id_out0, block.full_block_size());
         }
     }
 }

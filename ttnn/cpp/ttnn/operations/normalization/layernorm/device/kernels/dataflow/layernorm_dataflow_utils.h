@@ -148,36 +148,6 @@ inline void compute_single_stage_noc_addrs(
 }
 
 /**
- * @brief Keep a CB aligned with CB size by pushing
- * any excess tiles in the last block
- * @param cb CB to sync
- * @param block Block to sync
- */
-template <typename Block>
-inline void sync_remainder_block_tiles(uint32_t cb, const Block& block) {
-    const auto remainder = block.remainder();
-    if (remainder > 0) {
-        cb_reserve_back(cb, remainder);
-        cb_push_back(cb, remainder);
-    }
-}
-
-/**
- * @brief A special push function that keeps the CB
- * in aligned with the CB size (assuming the CB is
- * an even nultiple of block.block_size())
- *
- * @tparam Block The block type
- * @param cb CB to pop
- * @param block Block to pop
- */
-template <typename Block>
-inline void push_block(uint32_t cb, const Block& block) {
-    cb_push_back(cb, block.size() + block.remainder());
-    // sync_remainder_block_tiles(cb, block);
-}
-
-/**
  * @brief Read a block of tiles from remote memory
  * to L1 for an input CB. Does a dummy reserve/push
  * to fill out reminder tiles in a block to keep the
@@ -194,13 +164,17 @@ inline void push_block(uint32_t cb, const Block& block) {
 template <typename T, typename Block>
 void read_block_to_cb(
     const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
-    cb_reserve_back(cb_id, block.size() + block.remainder());
+    // Need to reserve/push on intervals that nicely
+    // divide the CB size. The CB and block size has been
+    // configured to ensure this in the program setup
+    cb_reserve_back(cb_id, block.full_block_size());
     uint32_t l1_write_addr = get_write_ptr(cb_id);
+    // Only read in the part of the block that has data
     for (uint32_t r = 0; r < block.size(); r++) {
         noc_async_read_tile(offset + r, addr, l1_write_addr);
         l1_write_addr += tile_bytes;
     }
     noc_async_read_barrier();
-    push_block(cb_id, block);
+    cb_push_back(cb_id, block.full_block_size());
 }
 }  // namespace norm::layernorm::device::kernels::dataflow

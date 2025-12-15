@@ -117,10 +117,12 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         },
         operation_attributes.program_config);
 
-    const auto& shape = a.logical_shape();
-    uint32_t W = shape[-1], H = shape[-2];
-    uint32_t HW = H * W;
-    uint32_t NC = a.physical_volume() / HW;
+    const auto& logical_shape = a.logical_shape();
+    const auto& padded_shape = a.padded_shape();
+    uint32_t W = logical_shape[-1];
+    uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
+    uint32_t HWp = Hp * Wp;
+    uint32_t NC = a.physical_volume() / HWp;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
@@ -138,13 +140,12 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     // Data span in tiles, rounded up to tile boundaries
-    uint32_t Wt = tt::div_up(W, TILE_WIDTH);
-    uint32_t Ht = tt::div_up(H, TILE_HEIGHT);
+    uint32_t Wt = Wp / TILE_WIDTH;
+    uint32_t Ht = Hp / TILE_HEIGHT;
 
     // Block size that maximizes dest usage depending on
     // whether fp32 accumulation is enabled
-    uint32_t block_size =
-        fp32_dest_acc_en ? std::min(static_cast<uint32_t>(4), Wt) : std::min(static_cast<uint32_t>(8), Wt);
+    uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -255,14 +256,14 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         }
     }
     if (large_tensor_needed) {
-        in0_t = block_size;
-        im0_t = block_size;  // buffer for saving xmm
-        im3_t = block_size;  // buffer for xmm^2
-        in5_t = block_size;  // buffer for gamma
-        in6_t = block_size;  // buffer for beta
+        in0_t = 2 * block_size;
+        im0_t = 2 * block_size;  // buffer for saving xmm
+        im3_t = 2 * block_size;  // buffer for xmm^2
+        in5_t = 2 * block_size;  // buffer for gamma
+        in6_t = 2 * block_size;  // buffer for beta
         if (b) {
-            im6_t = block_size;
-            in0_t = block_size;
+            im6_t = 2 * block_size;
+            in0_t = 2 * block_size;
         }
     }
 

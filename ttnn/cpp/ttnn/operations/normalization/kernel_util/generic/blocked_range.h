@@ -69,6 +69,7 @@ public:
         bool is_first() const { return start_ == 0; }
         SizeT start() const { return start_; }
         SizeT remainder() const { return block_size_ - size(); }
+        SizeT full_block_size() const { return block_size_; }
 
         GlobalRange global() const { return GlobalRange{start_, end_}; }
         LocalRange local() const { return LocalRange{size()}; }

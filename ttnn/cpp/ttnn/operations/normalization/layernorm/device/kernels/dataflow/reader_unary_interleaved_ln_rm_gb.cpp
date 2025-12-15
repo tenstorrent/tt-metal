@@ -7,9 +7,9 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "layernorm_dataflow_utils.h"
+
 namespace generic = norm::kernel_util::generic;
-namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
+
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
@@ -66,7 +66,7 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         for (auto block : generic::blocks(Wt, blk)) {
-            cb_reserve_back(cb_id_in0, block.size());
+            cb_reserve_back(cb_id_in0, block.full_block_size());
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
             for (auto r : block.local()) {
@@ -74,18 +74,18 @@ void kernel_main() {
                 l1_write_addr += src0_tile_bytes;
             }
             noc_async_read_barrier();
-            layernorm_dataflow_utils::push_block(cb_id_in0, block);
+            cb_push_back(cb_id_in0, block.full_block_size());
 
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
-            cb_reserve_back(cb_id_in1, block.size());
+            cb_reserve_back(cb_id_in1, block.full_block_size());
             l1_write_addr = get_write_ptr(cb_id_in1);
             for (auto r : block.local()) {
                 noc_async_read_tile(offs + block.start() + r + tile_offset, src_b, l1_write_addr);
                 l1_write_addr += src1_tile_bytes;
             }
             noc_async_read_barrier();
-            layernorm_dataflow_utils::push_block(cb_id_in1, block);
+            cb_push_back(cb_id_in1, block.full_block_size());
 #endif
         }  // wt loop
 
@@ -94,7 +94,7 @@ void kernel_main() {
             for (auto block : generic::blocks(Wt, blk)) {
 #ifdef FUSE_GAMMA
                 {
-                    cb_reserve_back(cb_id_gamma, block.size());
+                    cb_reserve_back(cb_id_gamma, block.full_block_size());
                     uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
                     for (auto r : block.local()) {
                         uint64_t gamma_noc_addr = get_noc_addr(block.start() + r, addrg);
@@ -105,13 +105,13 @@ void kernel_main() {
                         l1_write_addr += gamma_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    layernorm_dataflow_utils::push_block(cb_id_gamma, block);
+                    cb_push_back(cb_id_gamma, block.full_block_size());
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    cb_reserve_back(cb_id_beta, block.size());
+                    cb_reserve_back(cb_id_beta, block.full_block_size());
                     uint32_t l1_write_addr = get_write_ptr(cb_id_beta);
                     for (auto r : block.local()) {
                         uint64_t beta_noc_addr = get_noc_addr(block.start() + r, addrb);
@@ -122,7 +122,7 @@ void kernel_main() {
                         l1_write_addr += beta_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    layernorm_dataflow_utils::push_block(cb_id_beta, block);
+                    cb_push_back(cb_id_beta, block.full_block_size());
                 }
 #endif
             }  // wt loop
