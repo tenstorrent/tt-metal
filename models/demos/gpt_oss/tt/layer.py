@@ -91,6 +91,7 @@ class DecoderLayer:
         page_table=None,
         kv_cache=None,
         is_decode=True,
+        user_id=0,
     ):
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
@@ -105,6 +106,7 @@ class DecoderLayer:
             page_table=page_table,
             kv_cache=kv_cache,
             is_decode=is_decode,
+            user_id=user_id,
         )
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)

@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_rope
+from .operations import apply_rope, get_mesh_coords
 from .weights import AttentionWeights
 
 

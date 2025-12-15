@@ -179,7 +179,7 @@ class Model:
         return instance
 
     def _forward_layers_and_head(
-        self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True
+        self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True, user_id=0
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -200,8 +200,8 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-            if is_decode:
-                print(f"layer {i} hidden_states shape: {hidden_states.shape}")
+            # if is_decode:
+            #     print(f"layer {i} hidden_states shape: {hidden_states.shape}")
 
             hidden_states = decoder_layer(
                 hidden_states,
@@ -210,6 +210,7 @@ class Model:
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
+                user_id=user_id,
             )
         logits = hidden_states
 
@@ -312,6 +313,7 @@ class Model:
             kv_cache=kv_cache,
             get_last_token=get_last_token,
             is_decode=False,
+            user_id=user_id,
         )
 
         return logits
