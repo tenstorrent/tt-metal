@@ -129,6 +129,10 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
+    // Mock devices don't have actual completion queues, skip validation
+    bool is_mock =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+
     if (in_use_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
@@ -139,15 +143,17 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         this->clear_expected_num_workers_completed();
     }
 
-    TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
+    if (!is_mock) {
+        TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
 
-    for (auto& queue : read_descriptors_) {
-        TT_FATAL(queue.second->empty(), "No buffer read requests should be outstanding when closing devices.");
+        for (auto& queue : read_descriptors_) {
+            TT_FATAL(queue.second->empty(), "No buffer read requests should be outstanding when closing devices.");
+        }
+
+        TT_FATAL(
+            num_outstanding_reads_ == 0,
+            "Mismatch between num_outstanding reads and number of entries in completion reader queue.");
     }
-
-    TT_FATAL(
-        num_outstanding_reads_ == 0,
-        "Mismatch between num_outstanding reads and number of entries in completion reader queue.");
 
     {
         std::lock_guard lock(reader_thread_cv_mutex_);
@@ -165,6 +171,11 @@ void FDMeshCommandQueue::populate_read_descriptor_queue() {
 }
 
 void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        this->dispatch_core_ = CoreCoord{0, 0};
+        return;
+    }
+
     int device_idx = 0;
     for (auto* device : mesh_device_->get_devices()) {
         if (device_idx) {
@@ -457,6 +468,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
     auto lock = lock_api_function_();
+
     if (!mesh_device_->is_local(address.device_coord)) {
         return;
     }
@@ -491,6 +503,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
+
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
@@ -829,6 +842,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 }
 
 void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
+    // For mock devices, sysmem_manager() returns a stubbed singleton
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->get_device(coord);
@@ -871,7 +885,7 @@ void FDMeshCommandQueue::reset_worker_state(
     uint32_t num_sub_devices,
     const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
     cq_shared_state_->sub_device_cq_owner.clear();

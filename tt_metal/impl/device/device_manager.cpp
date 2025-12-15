@@ -398,7 +398,10 @@ void DeviceManager::initialize_active_devices() {
     // Activate fabric (must be before FD)
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        if (has_flag(
+        // Mock devices don't have real fabric hardware, skip fabric initialization
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+            log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
+        } else if (has_flag(
                 tt::tt_metal::MetalContext::instance().get_fabric_manager(),
                 tt_fabric::FabricManagerMode::INIT_FABRIC)) {
             log_info(tt::LogMetal, "Initializing Fabric");
@@ -422,6 +425,11 @@ void DeviceManager::initialize_active_devices() {
     // Activate FD kernels
     // Remaining steps are for setting up FD
     if (!using_fast_dispatch_) {
+        return;
+    }
+
+    // Mock devices don't have real command queues or sysmem managers, skip FD kernel setup
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -736,6 +744,12 @@ void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
 }
 
 void DeviceManager::init_firmware_on_active_devices() {
+    // Skip firmware initialization for mock devices
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogMetal, "Skipping firmware initialization for mock devices");
+        return;
+    }
+
     const auto& active_devices = this->get_all_active_devices();
     for (const auto& dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -827,6 +841,11 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceManager::teardown_fd(const std::unordered_set<ChipId>& devices_to_close) {
+    // Mock devices don't have sysmem_manager, skip FD teardown
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
         auto* dev = this->get_active_device(dev_id);
