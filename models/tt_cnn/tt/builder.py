@@ -629,15 +629,17 @@ class TtConv2d:
             slice_kwargs = self.get_conv2d_kwargs()
             slice_kwargs["in_channels"] = channels_per_slice
 
-            output_slice, self.weight_slices[i] = ttnn.conv2d(
+            output_slice, (h_out, w_out), (weight, bias) = ttnn.conv2d(
                 input_tensor=input_slices[i],
                 weight_tensor=self.weight_slices[i],
                 bias_tensor=None,
-                return_output_dim=False,
+                return_output_dim=True,
                 return_weights_and_bias=True,
                 compute_config=self.compute_config,
                 **slice_kwargs,
             )
+            # Store only the weight, not the tuple
+            self.weight_slices[i] = weight
             # Without this, some edge case convs OOM
             output_slice = ttnn.move(output_slice)
             if i == 0:
@@ -655,22 +657,25 @@ class TtConv2d:
 
             accumulated_output = ttnn.add(accumulated_output, self.bias, output_tensor=accumulated_output)
 
-        return accumulated_output
+        return accumulated_output, (h_out, w_out)
 
-    def __call__(self, x):
+    def __call__(self, x, return_output_dim: bool = False):
         if not self.weight_slices:
             # No slicing
-            x, [self.weight, self.bias] = ttnn.conv2d(
+            x, [h_out, w_out], [self.weight, self.bias] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.weight,
                 bias_tensor=self.bias,
-                return_output_dim=False,
+                return_output_dim=True,
                 return_weights_and_bias=True,
                 compute_config=self.compute_config,
                 **self.get_conv2d_kwargs(),
             )
         else:
-            x = self._apply_channel_slicing(x)
+            x, (h_out, w_out) = self._apply_channel_slicing(x)
+
+        if return_output_dim:
+            return x, (h_out, w_out)
 
         return x
 

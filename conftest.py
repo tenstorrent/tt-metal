@@ -21,6 +21,7 @@ from datetime import datetime
 
 from loguru import logger
 
+from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
@@ -400,6 +401,11 @@ def mesh_device(request, silicon_arch_name, device_params):
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(1, param)
 
+    override_trace_region_size = get_supported_trace_region_size(request, param)
+    if override_trace_region_size:
+        device_params["trace_region_size"] = override_trace_region_size
+        logger.info(f"Overriding trace region size to {override_trace_region_size}")
+
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
@@ -528,8 +534,6 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
-        pytest.skip("Skipping 1D ring on blackhole")
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
 
     mesh_device = ttnn.open_mesh_device(
@@ -561,8 +565,6 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
-        pytest.skip("Skipping 1D ring on blackhole")
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
@@ -993,7 +995,6 @@ def _watchdog_main(parent_pid, cmd_queue):
             expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
             if expired:
                 logger.debug(f"Watchdog detected timeout for {expired}")
-                run_debug_script()
                 logger.debug(f"Watchdog killing parent process {parent_pid}")
                 os.kill(parent_pid, signal.SIGKILL)
                 break
@@ -1091,41 +1092,6 @@ def pytest_timeout_set_timer(item, settings):
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
-
-
-def run_debug_script():
-    """Run the tt-triage.py debug script to check system state before cleanup."""
-
-    # Check if ttexalens module is available
-    try:
-        import ttexalens
-    except ImportError:
-        logger.warning(
-            "ttexalens module not found. Debug script requires ttexalens to be installed. Skipping debug collection."
-        )
-        return
-
-    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
-
-    if not os.path.exists(debug_script_path):
-        logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
-        return
-
-    try:
-        logger.info("Running debug script to check system state")
-        # Remove LD_LIBRARY_PATH to avoid conflicts with prebuilt libraries
-        extra_env = {
-            "LD_LIBRARY_PATH": None,
-        }
-        debug_result = run_process_and_get_result(f"python {debug_script_path}", extra_env)
-
-        logger.info(f"Debug script status: {debug_result.returncode}")
-        if debug_result.stdout:
-            logger.info(f"Debug script output: {debug_result.stdout.decode('utf-8')}")
-        if debug_result.stderr:
-            logger.info(f"Debug script stderr: {debug_result.stderr.decode('utf-8')}")
-    except Exception as e:
-        logger.error(f"Failed to run debug script: {e}")
 
 
 def reset_tensix(tt_open_devices=None):

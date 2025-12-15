@@ -241,7 +241,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             out_subblock_h,
             out_subblock_w);
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program_ = workload.get_programs().at(device_range);

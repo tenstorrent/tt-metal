@@ -39,7 +39,7 @@ jobs:
             arch: blackhole,
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
             # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
+            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1" --max_seq_len 131072,
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           { # This should be moved to a BH perf regression pipeline in the future
@@ -78,8 +78,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -87,9 +92,6 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
-          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
-            pip install -r /work/models/tt_transformers/requirements.txt
-          fi
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         id: save-environment-data

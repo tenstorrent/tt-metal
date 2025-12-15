@@ -62,7 +62,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node1[1] == "1"
     assert node1[2] == "2"
     assert node1[3] == "nullopt"
-    assert node1[4] == "0"
+    assert node1[4] == "nullopt"
 
     # ttnn::prim::permute
     node4 = captured_graph[4]["arguments"]
@@ -279,7 +279,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert item0["arguments"][1]["arg1"] == "1"
     assert item0["arguments"][2]["arg2"] == "2"
     assert item0["arguments"][3]["arg3"] == "nullopt"
-    assert item0["arguments"][4]["arg4"] == "0"
+    assert item0["arguments"][4]["arg4"] == "nullopt"
 
     # Content item 1
     item1 = data["content"][1]
@@ -590,3 +590,45 @@ def test_graph_capture_without_dtype_json_output(device):
     assert mem_config_item3["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
     assert mem_config_item3["buffer_type"] == "BufferType::DRAM"
     assert mem_config_item3["shard_spec"] == "std::nullopt"
+
+
+def test_extract_levelized_graph(device):
+    """Test extract_levelized_graph API"""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((64,), dtype=torch.bfloat16)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = input_tensor + 3
+    output_tensor = ttnn.to_torch(output_tensor, torch_rank=1)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Test with default max_level (1)
+    levelized_graph = ttnn.graph.extract_levelized_graph(captured_graph)
+    assert isinstance(levelized_graph, list)
+    assert len(levelized_graph) > 0
+
+    # Verify structure of first vertex
+    if len(levelized_graph) > 0:
+        vertex = levelized_graph[0]
+        assert "counter" in vertex
+        assert "stacking_level" in vertex
+        assert "name" in vertex
+        assert "in_edges" in vertex
+        assert "out_edges" in vertex
+        assert "internals" in vertex
+        assert "output_shape" in vertex
+        assert isinstance(vertex["in_edges"], list)
+        assert isinstance(vertex["out_edges"], list)
+        assert isinstance(vertex["internals"], list)
+
+    # Test with explicit max_level = 1
+    levelized_graph_1 = ttnn.graph.extract_levelized_graph(captured_graph, max_level=1)
+    assert isinstance(levelized_graph_1, list)
+    assert len(levelized_graph_1) == len(levelized_graph)  # Should be same as default
+
+    # Test with max_level = 2
+    levelized_graph_2 = ttnn.graph.extract_levelized_graph(captured_graph, max_level=2)
+    assert isinstance(levelized_graph_2, list)
+    # Level 2 should have at least as many vertices as level 1 (possibly more)
+    assert len(levelized_graph_2) >= len(levelized_graph_1)

@@ -7,6 +7,7 @@
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
+#include "fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::quasar::active_eth;
 
 #include <cstdint>
@@ -28,6 +29,10 @@ namespace tt::tt_metal::quasar {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace active_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace active_eth_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_active_eth_mem_map() {
@@ -59,13 +64,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
-        MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
-        MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
-        MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
@@ -92,13 +92,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
-        MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
-        MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
-        MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
@@ -141,7 +136,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         std::move(processor_classes_names),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        active_eth_dev_msgs::create_factory()};
+        active_eth_dev_msgs::create_factory(),
+        active_eth_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::quasar

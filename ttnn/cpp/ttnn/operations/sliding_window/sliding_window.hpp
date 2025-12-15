@@ -56,7 +56,6 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
-    bool is_avg_pool = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;
@@ -142,6 +141,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size);
+
+void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,

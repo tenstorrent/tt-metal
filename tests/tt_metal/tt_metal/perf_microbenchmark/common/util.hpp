@@ -14,6 +14,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
+#include <llrt/tt_cluster.hpp>
 
 // Access to internal API: ProgramImpl::logical_cores
 #include "impl/program/program_impl.hpp"

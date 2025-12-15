@@ -45,13 +45,6 @@ void bind_complex_unary_backward(
 
         Note:
             {3}
-
-        Example:
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, tensor)
-
-
         )doc",
 
         operation.base_name(),
@@ -101,13 +94,6 @@ void bind_complex_unary_backward_tensor(
 
         Note:
             {3}
-
-        Example:
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, tensor)
-
-
         )doc",
 
         operation.base_name(),

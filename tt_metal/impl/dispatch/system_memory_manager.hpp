@@ -35,6 +35,8 @@ public:
 
     uint32_t get_last_completed_event(uint8_t cq_id);
 
+    uint32_t get_current_event(uint8_t cq_id);
+
     void reset(uint8_t cq_id);
 
     void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
@@ -86,7 +88,13 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
+    // Boths CQs on the device must be idle when this is called.
+    void set_current_and_last_completed_event(
+        uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
+
 private:
+    void on_timeout_detected() const;
+
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
@@ -95,7 +103,7 @@ private:
     uint32_t channel_offset = 0;
     std::vector<uint32_t> cq_to_event;
     std::vector<uint32_t> cq_to_last_completed_event;
-    std::vector<std::mutex> cq_to_event_locks;
+    mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<umd::Writer> prefetch_q_writers;
     std::vector<umd::Writer> completion_q_writers;

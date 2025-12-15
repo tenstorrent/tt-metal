@@ -6,8 +6,54 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import round_up
+
+
+def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_config, tile_size):
+    """
+    Create a sharded memory config from a parallel config.
+    tensor_shape is expected to be [N, H, W, C] where N=1 and H=1.
+    """
+    grid = parallel_config.grid
+    shard_scheme = parallel_config.shard_scheme
+    shard_orientation = parallel_config.shard_orientation
+
+    grid_size = grid.bounding_box().grid_size()
+    num_cores = grid.num_cores()
+
+    # Calculate num_cores_nhw
+    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        num_cores_nhw = 1
+    elif shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        num_cores_nhw = num_cores
+    elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+        num_cores_nhw = grid_size.x
+    else:  # ROW_MAJOR
+        num_cores_nhw = grid_size.y
+
+    # Calculate num_cores_channels
+    if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        num_cores_channels = 1
+    elif shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        num_cores_channels = num_cores
+    elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+        num_cores_channels = grid_size.y
+    else:  # ROW_MAJOR
+        num_cores_channels = grid_size.x
+
+    channels = tensor_shape[3]
+    nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2]
+
+    if shard_scheme != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size)
+    else:
+        nhw_padded = nhw_shape
+
+    nhw_shard = nhw_padded // num_cores_nhw
+    channel_shard = channels // num_cores_channels
+
+    shard_spec = ttnn.ShardSpec(grid, (nhw_shard, channel_shard), shard_orientation)
+    return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
 
 
 def num_to_core_range_set(x):
@@ -86,7 +132,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
         )
         this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
         this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
-        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+        memory_config = create_sharded_memory_config_from_parallel_config(
             this_ttnn_input.shape,
             parallel_config,
             32 if layout == ttnn.TILE_LAYOUT else 1,
@@ -157,7 +203,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
         )
         this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
         this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
-        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+        memory_config = create_sharded_memory_config_from_parallel_config(
             this_ttnn_input.shape,
             parallel_config,
             32 if layout == ttnn.TILE_LAYOUT else 1,
@@ -228,7 +274,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
         core_grid = ttnn.CoreGrid(x=core_x, y=core_y)
 
         this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
-        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+        memory_config = create_sharded_memory_config_from_parallel_config(
             this_ttnn_input.shape,
             parallel_config,
             32 if layout == ttnn.TILE_LAYOUT else 1,
@@ -299,9 +345,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         output_shape = this_torch_output.shape
         output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], pad_value)]
 
-        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            output_shape, parallel_config, 1
-        )
+        memory_config = create_sharded_memory_config_from_parallel_config(output_shape, parallel_config, 1)
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
         output = torch.reshape(output, this_torch_output.shape)
@@ -373,9 +417,7 @@ def test_slice_block_sharded_for_conv2d(
             output_shape[0] * output_shape[1] * output_shape[2],
             round_up(output_shape[3], core_x * pad_value),
         ]
-        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            output_shape, parallel_config, 1
-        )
+        memory_config = create_sharded_memory_config_from_parallel_config(output_shape, parallel_config, 1)
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()
         this_torch_output = this_torch_output[:, :, :, : output.shape[-1]]
@@ -438,9 +480,7 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
             round_up(output_shape[3], pad_value * cores),
         ]
 
-        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            output_shape, parallel_config, 1
-        )
+        memory_config = create_sharded_memory_config_from_parallel_config(output_shape, parallel_config, 1)
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()
         output = torch.reshape(output, this_torch_output.shape)

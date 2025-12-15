@@ -5,7 +5,6 @@
 #include "ttnn/async_runtime.hpp"
 
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
@@ -14,7 +13,7 @@ namespace ttnn {
 
 void write_buffer(
     QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
-    auto mesh_device = dst.device();
+    auto* mesh_device = dst.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
     auto& cq = mesh_device->mesh_command_queue(*cq_id);
     auto device_tensors = ttnn::distributed::get_device_tensors(dst);
@@ -31,7 +30,7 @@ void read_buffer(
     size_t src_offset,
     bool blocking) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
-    auto mesh_device = src.device();
+    auto* mesh_device = src.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
     auto& cq = mesh_device->mesh_command_queue(*cq_id);
     auto device_tensors = ttnn::distributed::get_device_tensors(src);

@@ -1,16 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_minimal_async.hpp"
-#include <utility>
-#include "ttnn/operations/ccl/mesh_partition/device/mesh_partition_device_operation.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
+#include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -24,34 +17,58 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
-    if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
-        log_debug(tt::LogOp, "DEBUG: using composite_reduce_scatter");
-        return composite_common::composite_reduce_scatter(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
-    } else {
-        log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
-        return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-            input_tensor,
-            persistent_output_buffers,
-            dim,
-            multi_device_global_semaphore,
-            barrier_semaphore,
-            num_links,
-            memory_config,
-            intermediate_memory_config,
-            topology_,
-            subdevice_id,
-            cluster_axis,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel);
+    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
+    // Calculate ring size based on cluster_axis
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    TT_FATAL(
+        num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
+
+    log_debug(tt::LogOp, "reduce_scatter_minimal_async: num_devices = {}", num_devices);
+
+    bool using_persistent_buffers = persistent_output_buffers.has_value();
+
+    std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
+    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
+
+    if (using_persistent_buffers) {
+        const auto& buffers = persistent_output_buffers.value();
+        if (!buffers.empty()) {
+            optional_intermediate_tensor = buffers[0];
+        }
+        if (buffers.size() >= 2) {
+            optional_output_tensor = buffers[1];
+        }
     }
+
+    // Call the prim operation
+    auto result = ttnn::prim::reduce_scatter_minimal_async(
+        input_tensor,
+        optional_intermediate_tensor,
+        optional_output_tensor,
+        scatter_dim,
+        num_links,
+        num_devices,
+        memory_config.value_or(input_tensor.memory_config()),
+        intermediate_memory_config,
+        topology,
+        multi_device_global_semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        cluster_axis,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel);
+
+    // Return the output tensor (index 1, intermediate is at index 0)
+    return result.at(1);
 }
+
 }  // namespace ttnn::operations::experimental::ccl

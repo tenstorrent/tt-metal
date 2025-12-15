@@ -12,10 +12,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation.hpp"
 
-namespace ttnn {
-
-namespace operations {
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 namespace detail {
 
@@ -75,11 +72,15 @@ Tensor handle_zero_volume_matmul(
 
 }  // namespace detail
 
-std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
+std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
     if (!activation.has_value()) {
         return std::nullopt;
     }
-    return ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
+    const auto& act = activation.value();
+    if (std::holds_alternative<std::string>(act)) {
+        return ttnn::operations::unary::utils::string_to_unary_with_param(std::get<std::string>(act));
+    }
+    return std::get<UnaryWithParam>(act);
 }
 
 static bool get_post_process_bias(
@@ -93,7 +94,17 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
-        if (program_config.has_value()) {
+        // Check if bias shape is compatible with kernel fusion
+        // Bias fusion requires bias_shape_aligned[-2] == tile_height
+        const auto& bias_tensor = bias.value();
+        const auto& bias_padded_shape = bias_tensor.padded_shape();
+        const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
+        uint32_t tile_height = tile_shape[0];
+
+        // If bias second-to-last dimension doesn't match tile height, must post-process
+        if (bias_padded_shape[-2] != tile_height) {
+            post_process_bias = true;
+        } else if (program_config.has_value()) {
             // Check if the provided program config is MatmulMultiCoreProgramConfig
             post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
         } else if (!user_core_coord.has_value()) {
@@ -133,6 +144,14 @@ ttnn::Tensor bound_matmul(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
             input_tensor_a.logical_shape(),
             input_tensor_b.logical_shape());
+    }
+
+    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+        TT_FATAL(
+            !parameters.user_fused_activation.has_value(),
+            "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
+            "field",
+            parameters.user_fused_activation.value().op_type);
     }
 
     // Check for zero volume tensors
@@ -214,7 +233,7 @@ Tensor MatmulOperation::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
+    const std::optional<const Activation>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -262,7 +281,7 @@ Tensor LinearOperation::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
+    const std::optional<const Activation>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -306,7 +325,7 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
+    const std::optional<const Activation>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -468,6 +487,4 @@ Tensor SparseMatmulOperation::invoke(
         optional_output_tensor);
 }
 
-}  // namespace matmul
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

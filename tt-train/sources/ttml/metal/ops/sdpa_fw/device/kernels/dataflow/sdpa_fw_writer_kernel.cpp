@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -62,14 +62,7 @@ void kernel_main() {
         // First tile index where we place this head's row
         // uint32_t out_start_idx = out_row_base_tiles + head_offset_tiles;
 
-        cb_wait_front(cb_output, tiles_per_head);
-        uint32_t l1_read_addr = get_read_ptr(cb_output);
-        for (uint32_t col = 0; col < tiles_per_head; ++col) {
-            noc_async_write_tile(out_start_idx + col, output_addr_generator, l1_read_addr);
-            l1_read_addr += tile_bytes;
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_output, tiles_per_head);
+        write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
 
 #ifdef RETURN_INTERMEDIATES
         // -------- Intermediates: (B, qNH, S, 64) = 2 tiles wide --------
@@ -99,6 +92,7 @@ void kernel_main() {
         // noc_async_write_tile(intermediate_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         // noc_async_write_barrier();
         // cb_pop_front(cb_intermediates, onetile);
+
 #endif
     }
 }

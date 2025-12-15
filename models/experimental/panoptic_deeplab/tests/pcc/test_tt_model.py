@@ -138,6 +138,8 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
             exp_pcc=0.986,
+            exp_abs_err=1.3,
+            exp_rel_err=0.4,
         )
     )
     if model_category == PANOPTIC_DEEPLAB:
@@ -149,6 +151,8 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
                 exp_pcc=0.805,
+                exp_abs_err=0.1,
+                exp_rel_err=2.0,
             )
         )
         all_passed.append(
@@ -159,9 +163,11 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
                 exp_pcc=0.990,
+                exp_abs_err=10.4,
+                exp_rel_err=0.6,
             )
         )
 
     # Fail test based on PCC results
-    assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"
-    logger.info("All PCC tests passed!")
+    assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
+    logger.info("All PCC and tolerance tests passed!")

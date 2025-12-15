@@ -19,7 +19,7 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## How to Run
 - Use the following command to run the ViT model:
 ```sh
-pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_sharded_vit_bh.py::test_vit[224-3-224-10-google/vit-base-patch16-224]
+pytest --disable-warnings models/demos/blackhole/vit/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit[224-3-224-10-google/vit-base-patch16-224]
 ```
 
 ### Demo
@@ -45,7 +45,7 @@ pytest --disable-warnings models/demos/blackhole/vit/demo/demo_vit_performant_im
 
 ## Details
 - Entry point for the model is `vit` in `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
-- Batch Size: 8
+- Batch Size: 10
 - Sequence size: 224
 - Dataset Used: `ImageNet-21k dataset`.
 - The Imagenet-21K inference accuracy is `80%`

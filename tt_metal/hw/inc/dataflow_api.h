@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #if __has_include("chlkc_unpack_data_format.h")
 #include "chlkc_pack_data_format.h"
 #include "chlkc_unpack_data_format.h"
@@ -27,6 +28,7 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/sanitize.h"
 
 // clang-format off
 /**
@@ -100,7 +102,7 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -114,7 +116,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) { return (uintptr_t)&crta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -314,7 +316,7 @@ uint32_t get_read_ptr(uint32_t operand) {
     return rd_ptr_bytes;
 }
 
-inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
+inline void wait_for_sync_register_value(uintptr_t addr, int32_t val) {
     volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
     int32_t reg_value;
     WAYPOINT("SW");
@@ -341,7 +343,7 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
 // clang-format on
 FORCE_INLINE
 bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -371,7 +373,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -418,7 +420,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     return num_pages <= pages_received;
@@ -451,7 +453,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received;
 
@@ -576,7 +578,8 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
         Read responses - assigned VCs dynamically
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? vc : -1);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
@@ -608,7 +611,10 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read responses - assigned VCs dynamically
     */
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? vc : -1);
+        NocEventType::READ_WITH_STATE,
+        static_cast<uint64_t>(src_local_l1_addr),
+        0,
+        (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NATW");
 
@@ -2039,7 +2045,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 // clang-format off
 /**
  * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Must first set the transaction id using \a noc_async_read_tile_dram_sharded_set_trid and the stateful registers
+ * Must first set the transaction id using \a noc_async_read_set_trid and the stateful registers
  * using an API such as \a noc_async_read_one_packet_set_state.
  *
  * Return value: None
@@ -2054,13 +2060,13 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  * | skip_ptr_update (template argument) | Whether to skip updating counters              | bool      | true or false | False    |
  */
 // clang-format on
-template <bool skip_ptr_update = false>
-FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
+FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
+    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
     WAYPOINT("NRDW");
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update, skip_cmdbuf_chk>(
         noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
     WAYPOINT("NRDD");
 }
@@ -2078,7 +2084,7 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
  */
 // clang-format on
 FORCE_INLINE
-void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+void noc_async_read_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
@@ -2345,11 +2351,32 @@ void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ
 
 namespace experimental {
 
-struct MulticastEndpoint;  // Forward declaration can be removed when 2.0 objects are split into different headers
+// Forward declaration can be removed when 2.0 objects are split into different headers
+struct MulticastEndpoint;
 
 template <typename T>
 struct noc_traits_t {
     static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
+};
+
+/**
+ * @brief RAII style wrapper for a scoped lock
+ *
+ * @tparam ReleaseFunc The function to call when this instance goes out of scope.
+ */
+template <typename ReleaseFunc>
+class Lock {
+public:
+    inline __attribute__((always_inline)) Lock(ReleaseFunc release_func) : release_func_(release_func) {}
+    inline __attribute__((always_inline)) ~Lock() { release_func_(); }
+
+    Lock(const Lock&) = delete;
+    Lock(Lock&&) = delete;
+    Lock& operator=(const Lock&) = delete;
+    Lock& operator=(Lock&&) = delete;
+
+private:
+    ReleaseFunc release_func_;
 };
 
 /**
@@ -2367,6 +2394,10 @@ public:
 
     enum class BarrierMode { TXN_ID, FULL };
 
+    enum class McastMode { INCLUDE_SRC, EXCLUDE_SRC };
+
+    enum class VcSelection { DEFAULT, CUSTOM };
+
     static constexpr uint32_t INVALID_TXN_ID = 0xFFFFFFFF;
 
 private:
@@ -2374,9 +2405,11 @@ private:
     using src_args_t = typename noc_traits_t<T>::src_args_type;
     template <typename T>
     using dst_args_t = typename noc_traits_t<T>::dst_args_type;
+    template <typename T>
+    using dst_args_mcast_t = typename noc_traits_t<T>::dst_args_mcast_type;
 
     template <AddressType address_type>
-    using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uint32_t, uint64_t>;
+    using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uintptr_t, uint64_t>;
 
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
@@ -2388,6 +2421,12 @@ private:
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
         return addr_underlying_t<address_type>{
             noc_traits_t<Dst>::template dst_addr<address_type>(dst, *this, dst_args)};
+    }
+
+    template <AddressType address_type, typename Dst>
+    auto get_dst_ptr_mcast(const Dst& dst, const dst_args_mcast_t<Dst>& dst_args) const {
+        return addr_underlying_t<address_type>{
+            noc_traits_t<Dst>::template dst_addr_mcast<address_type>(dst, *this, dst_args)};
     }
 
 public:
@@ -2419,6 +2458,7 @@ public:
      * @param src_args Additional arguments for source address calculation
      * @param dst_args Additional arguments for destination address calculation
      * @param read_req_vc Virtual channel to use for the read request (default: NOC_UNICAST_WRITE_VC)
+     * @param trid Transaction ID to use when transaction id mode is enabled (default: INVALID_TXN_ID)
      * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
      * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
      * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
@@ -2437,14 +2477,108 @@ public:
         const dst_args_t<Dst>& dst_args,
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC,
         uint32_t trid = INVALID_TXN_ID) const {
-        // TODO (#31407): Add support for read with transaction id
-        static_assert(txn_id_mode == TxnIdMode::DISABLED);
-        noc_async_read<max_page_size, enable_noc_tracing>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+        if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
+            noc_async_read_set_trid(trid, noc_id_);
+            uint64_t src_noc_addr = get_src_ptr<AddressType::NOC>(src, src_args);
+            static_assert(
+                max_page_size <= NOC_MAX_BURST_SIZE,
+                "Read with transaction id is not supported for page sizes greater than NOC_MAX_BURST_SIZE");
+            noc_async_read_one_packet_set_state(src_noc_addr, size_bytes, read_req_vc, noc_id_);
+            noc_async_read_one_packet_with_state_with_trid(
+                static_cast<uint32_t>((src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK),
+                static_cast<uint32_t>(src_noc_addr),
+                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+                trid,
+                noc_id_);
+        } else {
+            noc_async_read<max_page_size, enable_noc_tracing>(
+                get_src_ptr<AddressType::NOC>(src, src_args),
+                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+                size_bytes,
+                noc_id_,
+                read_req_vc);
+        }
+    }
+
+    /**
+     * @brief Sets the stateful registers for an asynchronous read from a specified source
+     *
+     * This is used to set up state for async_read_with_state, use async_read instead if state preservation is not
+     * needed.
+     *
+     * @see async_read_with_state and async_read_barrier.
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param vc Virtual channel to use for the read request when vc_selection is CUSTOM (default: 0)
+     * @tparam vc_selection Whether to use a custom specified virtual channel (default: DEFAULT)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     */
+    template <
+        VcSelection vc_selection = VcSelection::DEFAULT,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        typename Src>
+    void set_async_read_state(
+        const Src& src, uint32_t size_bytes, const src_args_t<Src>& src_args, uint8_t vc = 0) const {
+        auto src_noc_addr = get_src_ptr<AddressType::NOC>(src, src_args);
+        DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
+        RECORD_NOC_EVENT_WITH_ADDR(
+            NocEventType::READ_SET_STATE,
+            src_noc_addr,
             size_bytes,
-            noc_id_,
-            read_req_vc);
+            (vc_selection == VcSelection::CUSTOM) ? static_cast<int8_t>(vc) : -1);
+
+        WAYPOINT("NASW");
+        ncrisc_noc_read_set_state<noc_mode, max_page_size <= NOC_MAX_BURST_SIZE, vc_selection == VcSelection::CUSTOM>(
+            noc_id_, read_cmd_buf, src_noc_addr, size_bytes, vc);
+        WAYPOINT("NASD");
+    }
+
+    /**
+     * @brief Initiates an asynchronous read from a specified source based on previously set state
+     *
+     * This must be preceded by a call to set_async_read_state where Src is at same noc location as the one used in
+     * set_async_read_state
+     *
+     * @see set_async_read_state and async_read_barrier.
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param size_bytes Size of the data transfer in bytes, this must be equal to the value set in set_async_read_state
+     * if max_page_size <= NOC_MAX_BURST_SIZE
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the read request when vc_selection is CUSTOM (default: 0)
+     * @tparam vc_selection Whether to use a custom specified virtual channel (default: DEFAULT)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     */
+    template <
+        VcSelection vc_selection = VcSelection::DEFAULT,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        typename Src,
+        typename Dst>
+    void async_read_with_state(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args,
+        uint8_t vc = 0) const {
+        // TODO (#33966): Need to make sure set state was called and with same template params
+        if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+            noc_async_read_one_packet_with_state<true, vc_selection == VcSelection::CUSTOM>(
+                (uint32_t)get_src_ptr<AddressType::NOC>(src, src_args),
+                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+                vc,
+                noc_id_);
+        } else {
+            noc_async_read_with_state(
+                (uint32_t)get_src_ptr<AddressType::NOC>(src, src_args),
+                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+                size_bytes,
+                noc_id_);
+        }
     }
 
     /** @brief Initiates an asynchronous write.
@@ -2457,10 +2591,11 @@ public:
      * @param src_args Additional arguments for source address calculation
      * @param dst_args Additional arguments for destination address calculation
      * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @param trid Transaction ID to use when transaction id mode is enabled (default: INVALID_TXN_ID)
      * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
-     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
      * @tparam response_mode Posted noc transactions do not get ack from receiver, non-posted ones do (default:
      * NON_POSTED)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
      * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
      */
     template <
@@ -2479,7 +2614,8 @@ public:
         uint32_t vc = NOC_UNICAST_WRITE_VC,
         uint32_t trid = INVALID_TXN_ID) const {
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
-            // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction register does not overflow
+            // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction
+            // register does not overflow
             WAYPOINT("NAWW");
             ASSERT(trid != INVALID_TXN_ID);
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
@@ -2510,6 +2646,144 @@ public:
                 size_bytes,
                 noc_id_,
                 vc);
+        }
+    }
+
+    /** @brief Initiates an asynchronous write from a source address in memory on the core executing this function call
+     * to a rectangular destination grid.
+     *
+     * The destination nodes must be a set of Tensix cores and must form a rectangular grid.
+     *
+     * @see async_write_barrier.
+     *
+     * @param src Source object (e.g., local L1 memory)
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param num_dsts Number of destinations that the multicast source is targeting
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param linked
+     * @param trid Transaction ID to use when transaction id mode is enabled (default: INVALID_TXN_ID)
+     * @tparam mcast_mode Indicates whether the sender is included in the multicast destinations
+     * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
+     * @tparam response_mode Posted noc transactions do not get ack from receiver, non-posted ones do (default:
+     * NON_POSTED)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     */
+    template <
+        McastMode mcast_mode = McastMode::EXCLUDE_SRC,
+        TxnIdMode txn_id_mode = TxnIdMode::DISABLED,
+        ResponseMode response_mode = ResponseMode::NON_POSTED,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        bool enable_noc_tracing = true,
+        typename Src,
+        typename Dst>
+    void async_write_multicast(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        uint32_t num_dsts,
+        const src_args_t<Src>& src_args,
+        const dst_args_mcast_t<Dst>& dst_args,
+        bool linked = false,
+        uint32_t trid = INVALID_TXN_ID) const {
+        static_assert(txn_id_mode == TxnIdMode::DISABLED, "Mcasts with transaction id are not supported yet");
+        static_assert(
+            response_mode == ResponseMode::NON_POSTED,
+            "Mcasts with posted transactions are not supported");  // TODO: Make this an arch specific assertion
+
+        auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+        auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
+        if constexpr (mcast_mode == McastMode::INCLUDE_SRC) {
+            noc_async_write_multicast_loopback_src(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
+        } else if constexpr (mcast_mode == McastMode::EXCLUDE_SRC) {
+            noc_async_write_multicast<max_page_size>(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
+        }
+    }
+
+    /**
+     * @brief Sets the stateful registers for an asynchronous write
+     *
+     * This function is used to set up the state for async_write_with_state, async_write can be used if state
+     * preservation is not needed
+     *
+     * @see async_write_with_state and async_write_barrier.
+     *
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the write request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam response_mode Whether the write is posted or non-posted (default: NON_POSTED)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     */
+    template <
+        ResponseMode response_mode = ResponseMode::NON_POSTED,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        typename Dst>
+    void set_async_write_state(
+        const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& dst_args, uint8_t vc = NOC_UNICAST_WRITE_VC) const {
+        DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
+        auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size_bytes, vc);
+
+        WAYPOINT("NWPW");
+        ncrisc_noc_write_set_state<response_mode == ResponseMode::POSTED, max_page_size <= NOC_MAX_BURST_SIZE>(
+            noc_id_, write_cmd_buf, dst_noc_addr, size_bytes, vc);
+        WAYPOINT("NWPD");
+    }
+
+    /**
+     * @brief Initiates an asynchronous write to a specified destination based on previously set state
+     *
+     * This must be preceded by a call to set_async_write_state where Dst is at same noc location as the one used in
+     * set_async_write_state
+     *
+     * @see set_async_write_state and async_write_barrier.
+     *
+     * @param src Source object (e.g., local L1 memory)
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes, this must be equal to the value set in
+     * set_async_write_state if max_page_size <= NOC_MAX_BURST_SIZE
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the write request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam response_mode Whether the write is posted or non-posted (default: NON_POSTED)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     */
+    template <
+        ResponseMode response_mode = ResponseMode::NON_POSTED,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        typename Src,
+        typename Dst>
+    void async_write_with_state(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args,
+        uint8_t vc = NOC_UNICAST_WRITE_VC) const {
+        if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+            noc_async_write_one_packet_with_state<response_mode == ResponseMode::POSTED>(
+                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
+                (uint32_t)get_dst_ptr<AddressType::NOC>(dst, dst_args),
+                noc_id_);
+        } else {
+            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
+            // In order to sanitize, need to grab full noc addr + xfer size from state.
+            auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto dst_addr =
+                get_dst_ptr<AddressType::NOC>(dst, dst_args);  // NoC target was programmed in set_async_write_state
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id_, dst_addr, src_addr);
+
+            WAYPOINT("NWPW");
+            ncrisc_noc_write_any_len_with_state<noc_mode, response_mode == ResponseMode::POSTED>(
+                noc_id_,
+                write_cmd_buf,
+                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
+                (uint32_t)get_dst_ptr<AddressType::NOC>(dst, dst_args),
+                size_bytes);
+            WAYPOINT("NWPD");
         }
     }
 
@@ -2613,17 +2887,30 @@ public:
      *
      * This blocking call waits for all the outstanding enqueued write transactions
      * issued on the current Tensix core to depart, but will not wait for them to complete.
+     * Can wait on posted or non-posted transactions.
+     *
+     * @param trid Transaction ID to wait on for outstanding writes (default: INVALID_TXN_ID for full barrier)
+     * @tparam response_mode Indicates whether to wait for outstanding posted or non-posted transactions (default:
+     * NON_POSTED)
+     * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
     // TODO (#31405): there is no variant of this for transaction ids. Use
     // ncrisc_noc_nonposted_write_with_transaction_id_sent but none for dynamic noc version exists atm.
-    void async_writes_flushed() const { noc_async_writes_flushed(noc_id_); }
-
-    /** @brief Waits for all outstanding posted write transactions to be flushed.
-     *
-     * This blocking call waits for all the outstanding enqueued posted write transactions
-     * issued on the current Tensix core to depart, but will not wait for them to complete.
-     */
-    void async_posted_writes_flushed() const { noc_async_posted_writes_flushed(noc_id_); }
+    template <ResponseMode response_mode = ResponseMode::NON_POSTED, BarrierMode barrier_type = BarrierMode::FULL>
+    void async_writes_flushed(uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (response_mode == ResponseMode::POSTED) {
+            static_assert(barrier_type == BarrierMode::FULL);
+            noc_async_posted_writes_flushed(noc_id_);
+        } else {  // ResponseMode::NON_POSTED
+            if constexpr (barrier_type == BarrierMode::FULL) {
+                noc_async_writes_flushed(noc_id_);
+            } else if constexpr (barrier_type == BarrierMode::TXN_ID) {
+                static_assert(noc_mode != DM_DYNAMIC_NOC);  // TODO make an issue for this
+                ASSERT(trid != INVALID_TXN_ID);
+                noc_async_write_flushed_with_trid(trid, noc_id_);
+            }
+        }
+    }
 
     /** @brief Initiates an atomic barrier for synchronization.
      *
@@ -2649,6 +2936,8 @@ private:
 
 class CircularBuffer {
 public:
+    enum class AddrSelector { WRITE_PTR, READ_PTR };
+
     explicit CircularBuffer(uint32_t cb_id) : cb_id_(cb_id) {}
 
     uint32_t get_cb_id() const { return cb_id_; }
@@ -2682,23 +2971,119 @@ public:
         return rd_ptr_bytes;
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        // TODO: Register with the debugger to track the lock
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     uint32_t cb_id_;
 };
 
 template <>
 struct noc_traits_t<CircularBuffer> {
-    struct src_args_type {};
-    struct dst_args_type {};
+    struct src_args_type {
+        uint32_t offset_bytes{};
+    };
+    struct dst_args_type {
+        uint32_t offset_bytes{};
+    };
+    struct dst_args_mcast_type {
+        uint32_t noc_x_start{};
+        uint32_t noc_y_start{};
+        uint32_t noc_x_end{};
+        uint32_t noc_y_end{};
+        uint32_t offset_bytes{};
+    };
     template <Noc::AddressType address_type>
-    static auto src_addr(const CircularBuffer& src, const Noc&, const src_args_type&) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CircularBuffer can only be used as L1 source");
-        return src.get_read_ptr();
+    static auto src_addr(const CircularBuffer& src, const Noc&, const src_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
+        return src.get_read_ptr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr(const CircularBuffer& dst, const Noc&, const dst_args_type&) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CircularBuffer can only be used as L1 destination");
-        return dst.get_write_ptr();
+    static auto dst_addr(const CircularBuffer& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
+        return dst.get_write_ptr() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(const CircularBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::NOC, "CircularBuffer with mcast range cannot be used as L1 source");
+        auto local_addr = dst.get_write_ptr() + args.offset_bytes;
+        return ::get_noc_multicast_addr(
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+    }
+};
+
+template <CircularBuffer::AddrSelector AddrSel>
+struct CircularBufferView {
+    const CircularBuffer& cb;
+    explicit constexpr CircularBufferView(const CircularBuffer& c) : cb(c) {}
+};
+
+// Convenience helper: use<CircularBuffer::AddrSelector::READ_PTR>(cb)
+// This allows user to indicate whether the read or write pointer should be used as the source or destination address
+// depending on whether the CircularBuffer is src or dst in the Noc apis
+template <CircularBuffer::AddrSelector AddrSel>
+constexpr auto use(const CircularBuffer& cb) {
+    return CircularBufferView<AddrSel>(cb);
+}
+
+template <CircularBuffer::AddrSelector AddrSel>
+class noc_traits_t<CircularBufferView<AddrSel>> {
+public:
+    struct src_args_type {
+        uint32_t offset_bytes{};
+    };
+    struct dst_args_type {
+        uint32_t offset_bytes{};
+    };
+    struct dst_args_mcast_type {
+        uint32_t noc_x_start{};
+        uint32_t noc_y_start{};
+        uint32_t noc_x_end{};
+        uint32_t noc_y_end{};
+        uint32_t offset_bytes{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const CircularBufferView<AddrSel>& view, const Noc&, const src_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
+        return get_local_addr(view) + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const CircularBufferView<AddrSel>& view, const Noc& noc, const dst_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast rangecan only be used as L1 source");
+        return get_local_addr(view) + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(
+        const CircularBufferView<AddrSel>& view, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::NOC, "CircularBuffer with mcast range cannot be used as L1 source");
+        auto local_addr = get_local_addr(view) + args.offset_bytes;
+        return ::get_noc_multicast_addr(
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+    }
+
+private:
+    static constexpr auto get_local_addr(const CircularBufferView<AddrSel>& view) {
+        if constexpr (AddrSel == CircularBuffer::AddrSelector::READ_PTR) {
+            return view.cb.get_read_ptr();
+        } else {
+            return view.cb.get_write_ptr();
+        }
     }
 };
 
@@ -2747,13 +3132,13 @@ public:
     /**
      * @brief Atomically increment the semaphore by the specified value on a remote core.
      *
-     * @param value The value to increment the semaphore by.
+     * @param noc The Noc object representing the NoC to use for the transaction.
      * @param noc_x The X coordinate of the remote core in the NoC.
      * @param noc_y The Y coordinate of the remote core in the NoC.
-     * @param noc The Noc object representing the NoC to use for the transaction.
+     * @param value The value to increment the semaphore by.
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
-    void up(uint32_t value, uint32_t noc_x, uint32_t noc_y, const Noc& noc, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
         uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_);
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
@@ -2814,7 +3199,9 @@ public:
      * @param noc_y_end The ending Y coordinate of the region (inclusive).
      * @param num_dests The number of destination cores in the region.
      * @param linked Whether to link this operation with the next (default is false).
+     * @tparam mcast_mode Indicates whether to include the sender in the multicast (default is EXCLUDE_SRC)
      */
+    template <Noc::McastMode mcast_mode = Noc::McastMode::EXCLUDE_SRC>
     void set_multicast(
         const Noc& noc,
         uint32_t noc_x_start,
@@ -2825,32 +3212,12 @@ public:
         bool linked = false) {
         uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
-        noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
-    }
-
-    /**
-     * @brief Set the semaphore value on multiple cores in a specified rectangular region of the NoC, including the
-     * sender.
-     *
-     * @param noc The Noc object representing the NoC to use for the transaction.
-     * @param noc_x_start The starting X coordinate of the region (inclusive).
-     * @param noc_y_start The starting Y coordinate of the region (inclusive).
-     * @param noc_x_end The ending X coordinate of the region (inclusive).
-     * @param noc_y_end The ending Y coordinate of the region (inclusive).
-     * @param num_dests The number of destination cores in the region.
-     * @param linked Whether to link this operation with the next (default is false).
-     */
-    void set_multicast_loopback_src(
-        const Noc& noc,
-        uint32_t noc_x_start,
-        uint32_t noc_y_start,
-        uint32_t noc_x_end,
-        uint32_t noc_y_end,
-        uint32_t num_dests,
-        bool linked = false) {
-        uint64_t multicast_addr =
-            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
-        noc_semaphore_set_multicast_loopback_src(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+        if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
+            noc_semaphore_set_multicast_loopback_src(
+                local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+        } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
+            noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+        }
     }
 
 private:
@@ -2858,7 +3225,8 @@ private:
 };
 
 /**
- * @brief Experimental wrapper around calculating unicast noc address given x, y, and address. This allows direct address to be supplied to NoC apis
+ * @brief Experimental wrapper around calculating unicast noc address given x, y, and address. This allows direct
+ * address to be supplied to NoC apis
  *
  * @note This API is experimental and subject to change.
  */
@@ -2869,7 +3237,8 @@ struct UnicastEndpoint {
 };
 
 /**
- * @brief Experimental wrapper around calculating multicast noc address given 2D multicast rectangle and address. This allows direct address to be supplied to NoC apis
+ * @brief Experimental wrapper around calculating multicast noc address given 2D multicast rectangle and address. This
+ * allows direct address to be supplied to NoC apis
  *
  * @note This API is experimental and subject to change.
  */
@@ -2910,28 +3279,27 @@ struct noc_traits_t<UnicastEndpoint> {
     };
     template <Noc::AddressType address_type>
     static auto src_addr(const UnicastEndpoint& src, const Noc& noc, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const UnicastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
-        return noc_addr;
+        if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
+            return args.addr;
+        } else {
+            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            return noc_addr;
+        }
     }
 };
 
 template <>
 struct noc_traits_t<MulticastEndpoint> {
-    struct src_args_type {
-        uint32_t noc_x_start{};
-        uint32_t noc_y_start{};
-        uint32_t noc_x_end{};
-        uint32_t noc_y_end{};
-        uint32_t addr{};
-    };
-    struct dst_args_type {
+    struct dst_args_mcast_type {
         uint32_t noc_x_start{};
         uint32_t noc_y_start{};
         uint32_t noc_x_end{};
@@ -2939,14 +3307,7 @@ struct noc_traits_t<MulticastEndpoint> {
         uint32_t addr{};
     };
     template <Noc::AddressType address_type>
-    static auto src_addr(const MulticastEndpoint& src, const Noc& noc, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC);
-        uint64_t noc_addr = src.get_noc_multicast_addr(
-            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, args.addr, noc.get_noc_id());
-        return noc_addr;
-    }
-    template <Noc::AddressType address_type>
-    static auto dst_addr(const MulticastEndpoint& dst, const Noc& noc, const dst_args_type& args) {
+    static auto dst_addr_mcast(const MulticastEndpoint& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
         uint64_t noc_addr = dst.get_noc_multicast_addr(
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, args.addr, noc.get_noc_id());
@@ -3105,6 +3466,185 @@ struct noc_traits_t<tensor_accessor::Page> {
         } else {
             return noc_addr;
         }
+    }
+};
+
+/**
+ * @brief Provides a safe pointer to a structure of type T in the core's local memory
+ *
+ * Pointers are tagged with tt_l1_ptr to give the compiler latency information.
+ *
+ * Usage:
+ * - For non-volatile access with compiler optimizations: CoreLocalMem<uint32_t>
+ * - For volatile access (prevents optimization): CoreLocalMem<volatile uint32_t>
+ *
+ * Note: When using non-volatile types with NOC operations, you must ensure proper
+ * memory ordering with compiler barriers (e.g., asm volatile("" ::: "memory"))
+ * or L1 cache invalidation as needed.
+ */
+template <typename T, typename AddressType = uintptr_t>
+class CoreLocalMem {
+    using difference_type = std::ptrdiff_t;
+
+    static_assert(std::is_integral<AddressType>::value, "AddressType must be an integral type");
+    static_assert(std::is_unsigned<AddressType>::value, "AddressType must be unsigned for address representation");
+    static_assert(
+        sizeof(AddressType) >= sizeof(difference_type),
+        "AddressType must be large enough to hold difference_type for safe pointer arithmetic");
+
+public:
+    /** @brief Construct a CoreLocalMem instance from a raw address
+     *
+     * @param address The raw address of the structure in the core's local memory
+     */
+    CoreLocalMem(AddressType address) : address_(address) {}
+
+    /** @brief Construct a CoreLocalMem instance from a raw pointer
+     *
+     * @param ptr The pointer to the structure in the core's local memory
+     */
+    CoreLocalMem(T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
+
+    /** @brief Copy constructor
+     *
+     * @param other The other CoreLocalMem to copy from
+     */
+    CoreLocalMem(const CoreLocalMem&) = default;
+
+    /** @brief Copy assignment operator
+     *
+     * @param other The other CoreLocalMem to copy from
+     * @return A reference to the assigned CoreLocalMem
+     */
+    CoreLocalMem& operator=(const CoreLocalMem&) = default;
+
+    /** @brief Get the raw pointer to the structure in the core's local memory
+     *
+     * @return The raw pointer to the structure in the core's local memory
+     */
+    tt_l1_ptr T* get_unsafe_ptr() const { return reinterpret_cast<tt_l1_ptr T*>(address_); }
+
+    /** @brief Get the memory address
+     *
+     * @return The address
+     */
+    AddressType get_address() const { return address_; }
+
+    /** @brief Get the element at the given index
+     *
+     * @param index The index of the element to get
+     * @return Reference to the element at the given index
+     */
+    T& operator[](uint32_t index) const {
+        DEBUG_SANITIZE_L1_ADDR(address_ + (index + 1) * sizeof(T), sizeof(T));
+        return get_unsafe_ptr()[index];
+    }
+
+    /** @brief Dereference operator to get reference to the value
+     *
+     * @return Reference to the value at the address
+     */
+    T& operator*() const {
+        DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
+        return get_unsafe_ptr()[0];
+    }
+
+    /** @brief Arrow operator for struct/class member access
+     *
+     * @return Pointer to the structure in the core's local memory
+     */
+    tt_l1_ptr T* operator->() const {
+        DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
+        return get_unsafe_ptr();
+    }
+
+    CoreLocalMem& operator+=(difference_type offset) {
+        address_ += offset * sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem& operator-=(difference_type offset) {
+        address_ -= offset * sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem& operator++() {
+        address_ += sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem& operator--() {
+        address_ -= sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem operator++(int) {
+        CoreLocalMem tmp = *this;
+        operator++();
+        return tmp;
+    }
+
+    CoreLocalMem operator--(int) {
+        CoreLocalMem tmp = *this;
+        operator--();
+        return tmp;
+    }
+
+    CoreLocalMem operator+(difference_type offset) const { return CoreLocalMem(address_ + offset * sizeof(T)); }
+
+    CoreLocalMem operator-(difference_type offset) const { return CoreLocalMem(address_ - offset * sizeof(T)); }
+
+    difference_type operator-(const CoreLocalMem& other) const {
+        difference_type byte_diff =
+            static_cast<difference_type>(address_) - static_cast<difference_type>(other.address_);
+        // Compiler automatically optimizes division to a shift if T is pow2
+        return byte_diff / sizeof(T);
+    }
+
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
+    bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
+    bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
+    bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
+    bool operator<=(const CoreLocalMem& other) const { return address_ <= other.address_; }
+    bool operator>(const CoreLocalMem& other) const { return address_ > other.address_; }
+    bool operator>=(const CoreLocalMem& other) const { return address_ >= other.address_; }
+    explicit operator bool() const { return address_ != 0; }
+
+private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
+    AddressType address_;
+};
+
+template <typename T, typename AddressType>
+struct noc_traits_t<CoreLocalMem<T, AddressType>> {
+    struct src_args_type {
+        AddressType offset_bytes = 0;
+    };
+    struct dst_args_type {
+        AddressType offset_bytes = 0;
+    };
+    struct dst_args_mcast_type {};
+
+    template <Noc::AddressType address_type>
+    static auto src_addr(const CoreLocalMem<T, AddressType>& src, const Noc&, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 source");
+        return src.get_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 dest");
+        return dst.get_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(
+        const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
 

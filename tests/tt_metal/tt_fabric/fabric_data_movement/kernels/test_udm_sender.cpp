@@ -15,28 +15,25 @@ constexpr uint32_t source_l1_buffer_address = get_compile_time_arg_val(5);
 constexpr uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_compile_time_arg_val(6));
 constexpr uint32_t num_packets = get_compile_time_arg_val(7);
 constexpr uint32_t time_seed_init = get_compile_time_arg_val(8);
-constexpr uint32_t noc_x_start = get_compile_time_arg_val(9);
-constexpr uint32_t noc_y_start = get_compile_time_arg_val(10);
-constexpr uint32_t dst_dev_id = get_compile_time_arg_val(11);
-constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(12);
-constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(13);
+constexpr uint32_t dst_dev_id = get_compile_time_arg_val(9);
+constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(10);
+constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(11);
 
 void kernel_main() {
     // TODO: move this into fw once consolidated
     tt::tt_fabric::udm::fabric_local_state_init();
 
-    // Runtime args are set up by append_fabric_connection_rt_args and used internally by fabric_fast_write
-    // We don't need to read them explicitly here
+    // Per-core receiver coordinates from runtime args
+    uint32_t arg_index = 0;
+    uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);
+    uint32_t noc_y_start = get_arg_val<uint32_t>(arg_index);
+
     uint32_t time_seed = time_seed_init;
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
     uint64_t start_timestamp = get_timestamp();
-
-    uint32_t local_notification_addr = notification_mailbox_address;  // Where we prepare notifications
-    uint32_t remote_notification_addr =
-        notification_mailbox_address;  // Where to send notifications (same offset on receiver)
 
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
@@ -67,18 +64,6 @@ void kernel_main() {
                 ASSERT(false);
             } break;
         }
-
-        uint32_t notification_buffer_addr = local_notification_addr + i * req_notification_size_bytes;
-        uint32_t remote_notification_dest = remote_notification_addr + i * req_notification_size_bytes;
-        notify_receiver(
-            dst_dev_id,
-            dst_mesh_id,
-            noc_x_start,
-            noc_y_start,
-            notification_buffer_addr,
-            remote_notification_dest,
-            time_seed,
-            req_notification_size_bytes);
 
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE:

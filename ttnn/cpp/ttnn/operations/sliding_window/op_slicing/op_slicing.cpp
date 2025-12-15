@@ -11,7 +11,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 namespace ttnn::operations::op_slicing {
 
 void run_sliced_op(
@@ -146,7 +145,6 @@ void run_sliced_op(
             sliced_input_tensor,
             {output_slice_height_start, output_slice_width_start},
             {output_slice_height_end, output_slice_width_end});
-
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
         // supported.
         if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&

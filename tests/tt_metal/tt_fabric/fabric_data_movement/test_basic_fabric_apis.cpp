@@ -5,7 +5,6 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <tt-metalium/device_pool.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <algorithm>
 #include <map>
@@ -22,8 +21,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -35,7 +33,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -44,8 +42,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 // hack to let topology.cpp to know the binary is a unit test
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -613,6 +610,63 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocInlineWriteWithState) {
         true);
 }
 
+// Nightly Mux Mode Tests - test mux extension for 1D
+TEST_F(NightlyFabric1DTensixFixture, TestLinearFabricMulticastNocMux) {
+    std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>> configs = {
+        std::make_tuple(RoutingDirection::E, 1, 2),
+        std::make_tuple(RoutingDirection::E, 1, 3),
+        std::make_tuple(RoutingDirection::W, 1, 2),
+        std::make_tuple(RoutingDirection::W, 1, 3),
+        std::make_tuple(RoutingDirection::N, 1, 1),
+        std::make_tuple(RoutingDirection::S, 1, 1)};
+    for (const auto& config : configs) {
+        auto [dir, start, range] = config;
+        log_info(tt::LogTest, "Testing Multicast Mux 1D: Dir={}, Start={}, Range={}", dir, start, range);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_WRITE");
+        FabricMulticastCommon(this, NOC_UNICAST_WRITE, {config});
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_INLINE_WRITE");
+        FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, {config});
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_ATOMIC_INC");
+        FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {config});
+    }
+}
+// Nightly Mux Mode Tests - test mux extension for 2D
+TEST_F(NightlyFabric2DTensixFixture, TestMeshFabricMulticastNocMux) {
+    std::vector<std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>> all_multicast_configs = {
+        // North + East + West combination
+        {
+            {std::make_tuple(RoutingDirection::N, 0, 1), std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::W, 0, 1)},
+        },
+        {
+            {std::make_tuple(RoutingDirection::N, 0, 1), std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::W, 0, 2)},
+        },
+        // South + East + West combination
+        {
+            {std::make_tuple(RoutingDirection::S, 0, 1), std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::W, 0, 1)},
+        },
+        {
+            {std::make_tuple(RoutingDirection::S, 0, 1), std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::W, 0, 2)},
+        },
+    };
+    for (const auto& multicast_configs : all_multicast_configs) {
+        log_info(tt::LogTest, "Testing Mesh Multicast Mux 2D - Config {}", multicast_configs);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_WRITE");
+        Fabric2DMulticastCommon(this, NOC_UNICAST_WRITE, multicast_configs, false);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_INLINE_WRITE");
+        Fabric2DMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, multicast_configs, false);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_ATOMIC_INC");
+        Fabric2DMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, multicast_configs, false);
+    }
+}
+
 // UDM Mode Tests - test udm api changes for 2D
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
@@ -693,6 +747,422 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadNorth) {
 }
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadSouth) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::S, 1));
+}
+
+// UDM Mode Write Tests with explicit src/dest node IDs - test specific node pairs that has traffic turns
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode0) {
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(0u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(0u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode1) {
+    for (uint32_t dst : {4u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(1u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(1u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode2) {
+    for (uint32_t dst : {4u, 5u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(2u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(2u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode3) {
+    for (uint32_t dst : {4u, 5u, 6u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(3u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(3u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(3u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode4) {
+    for (uint32_t dst : {1u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(4u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(4u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(4u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode5) {
+    for (uint32_t dst : {0u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(5u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(5u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode6) {
+    for (uint32_t dst : {0u, 1u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(6u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(6u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode7) {
+    for (uint32_t dst : {0u, 1u, 2u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(7u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(7u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(7u, dst));
+    }
+}
+// UDM Mode Read Tests with explicit src/dest node IDs - test specific node pairs that has traffic turns
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode0) {
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode1) {
+    for (uint32_t dst : {4u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode2) {
+    for (uint32_t dst : {4u, 5u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode3) {
+    for (uint32_t dst : {4u, 5u, 6u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(3u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode4) {
+    for (uint32_t dst : {1u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(4u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode5) {
+    for (uint32_t dst : {0u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode6) {
+    for (uint32_t dst : {0u, 1u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode7) {
+    for (uint32_t dst : {0u, 1u, 2u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(7u, dst));
+    }
+}
+
+// Helper to generate all worker coordinate pairs in the compute grid (sender coord == receiver coord)
+std::vector<std::pair<CoreCoord, CoreCoord>> GetAllWorkerCoordPairs(CoreCoord grid_size) {
+    std::vector<std::pair<CoreCoord, CoreCoord>> pairs;
+    for (size_t x = 0; x < grid_size.x; x++) {
+        for (size_t y = 0; y < grid_size.y; y++) {
+            CoreCoord coord{x, y};
+            pairs.push_back({coord, coord});
+        }
+    }
+    return pairs;
+}
+
+// UDM Mode Worker Coordinate Tests - test fabric communication with all workers simultaneously
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllWorkerCoords) {
+    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
+    log_info(tt::LogTest, "Testing {} worker pairs for write operations", all_worker_pairs.size());
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
+    }
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoords) {
+    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
+    log_info(tt::LogTest, "Testing {} worker pairs for read operations", all_worker_pairs.size());
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
+    }
+}
+
+// UDM Mode All-to-All Tests - all devices send to all other devices simultaneously
+// Senders are on top half of compute grid, receivers are on bottom half
+// Each receiver receives from N-1 senders at different L1 locations
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_WRITE);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_INLINE_WRITE);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllToAll) {
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_READ);
+}
+
+// Mux-to-Mux Forwarding Tests - test the mux's ability to forward packets to the correct downstream mux
+// These tests intentionally send packets with a non-optimal initial direction to verify mux forwarding works
+// Test cases cover scenarios where the worker sends a packet to a mux in a different direction,
+// and the mux must forward it to the correct downstream mux based on the packet's initial_direction field
+
+// Node 0 has neighbors in E and S directions
+// Forwarding to East destinations (1, 2, 3) via non-East initial direction (S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode0ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 0: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 0->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 0->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to South destinations (4, 5, 6, 7) via non-South initial direction (E)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode0ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::E}) {
+        log_info(tt::LogTest, "Node 0: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 0->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 0->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 1 has neighbors in E, W, and S directions - test all 9 combinations
+// Forwarding to East destinations (2, 3) via non-East initial directions (W, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode1ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 1: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {2u, 3u}) {
+            log_info(tt::LogTest, "  Node 1->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 1->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to West destinations (0) via non-West initial directions (E, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode1ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 1: Testing forward to West via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 1->Node 0: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, 0u), initial_dir);
+        log_info(tt::LogTest, "  Node 1->Node 0: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, 0u), initial_dir);
+    }
+}
+
+// Forwarding to South destinations (4, 5, 6, 7) via non-South initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode1ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 1: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 1->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 1->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 2 has neighbors in E, W, and S directions - test all 9 combinations
+// Forwarding to East destinations (3) via non-East initial directions (W, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode2ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 2: Testing forward to East via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 2->Node 3: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, 3u), initial_dir);
+        log_info(tt::LogTest, "  Node 2->Node 3: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, 3u), initial_dir);
+    }
+}
+
+// Forwarding to West destinations (0, 1) via non-West initial directions (E, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode2ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 2: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u}) {
+            log_info(tt::LogTest, "  Node 2->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 2->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to South destinations (6, 7) via non-South initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode2ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 2: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {6u, 7u}) {
+            log_info(tt::LogTest, "  Node 2->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 2->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 3 has neighbors in W and S directions
+// Forwarding to West destinations (0, 1, 2) via non-West initial direction (S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode3ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 3: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u}) {
+            log_info(tt::LogTest, "  Node 3->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(3u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 3->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(3u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to South destinations (4, 5, 6, 7) via non-South initial direction (W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode3ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 3: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 3->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(3u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 3->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(3u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 4 has neighbors in E and N directions
+// Forwarding to East destinations (5, 6, 7) via non-East initial direction (N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode4ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 4: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 4->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(4u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 4->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(4u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial direction (E)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode4ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::E}) {
+        log_info(tt::LogTest, "Node 4: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 4->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(4u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 4->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(4u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 5 has neighbors in E, W, and N directions - test all 9 combinations
+// Forwarding to East destinations (6, 7) via non-East initial directions (W, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode5ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 5: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {6u, 7u}) {
+            log_info(tt::LogTest, "  Node 5->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 5->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to West destinations (4) via non-West initial directions (E, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode5ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 5: Testing forward to West via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 5->Node 4: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, 4u), initial_dir);
+        log_info(tt::LogTest, "  Node 5->Node 4: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, 4u), initial_dir);
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode5ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 5: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 5->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 5->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 6 has neighbors in E, W, and N directions - test all 9 combinations
+// Forwarding to East destinations (7) via non-East initial directions (W, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode6ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 6: Testing forward to East via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 6->Node 7: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, 7u), initial_dir);
+        log_info(tt::LogTest, "  Node 6->Node 7: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, 7u), initial_dir);
+    }
+}
+
+// Forwarding to West destinations (4, 5) via non-West initial directions (E, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode6ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 6: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u}) {
+            log_info(tt::LogTest, "  Node 6->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 6->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode6ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 6: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 6->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 6->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 7 has neighbors in W and N directions
+// Forwarding to West destinations (4, 5, 6) via non-West initial direction (N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode7ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 7: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u}) {
+            log_info(tt::LogTest, "  Node 7->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(7u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 7->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(7u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial direction (W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode7ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 7: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 7->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(7u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 7->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(7u, dst), initial_dir);
+        }
+    }
 }
 
 // Unicast Scatter Write
@@ -1062,310 +1532,20 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricMulticastNocFusedAtomicIncWithSta
         true);
 }
 
-// 2D DYNAMIC topology Linear API tests (using 1D Linear API semantics)
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocUnicastWrite) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocUnicastWriteMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocUnicastWriteWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocInlineWrite) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocInlineWriteMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocInlineWriteWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-// Unicast Scatter Write
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocScatterWrite) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocScatterWriteMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocScatterWriteWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-// Unicast Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocAtomicInc) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocAtomicIncMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocAtomicIncWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-// Unicast Fused Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocFusedAtomicInc) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocFusedAtomicIncMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocFusedAtomicIncWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocUnicastWrite) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_WRITE, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocUnicastWriteMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocUnicastWriteWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Inline Write
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocInlineWrite) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocInlineWriteMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocInlineWriteWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Scatter Write
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocScatterWrite) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocScatterWriteMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocScatterWriteWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocAtomicInc) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocAtomicIncMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocAtomicIncWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Fused Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocFusedAtomicInc) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocFusedAtomicIncMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocFusedAtomicIncWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 
 // 2D Dynamic Routing Unicast Tests
-TEST_F(Fabric2DDynamicFixture, TestUnicastRaw) {
-    for (uint32_t i = 0; i < 10; i++) {
-        RunTestUnicastRaw(this);
-    }
-}
-
-// 2D Dynamic Routing Unicast Tests
-TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestUnicastRaw) {
+TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
-    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+    CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
     }
 }
 
-TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
+TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         GTEST_SKIP() << "Test not applicable for TG cluster type";
     }
@@ -1373,219 +1553,215 @@ TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
 }
 
 // Multi-Mesh Test - Using parameterized test with connected mesh descriptor
-TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionMultiMesh) {
+TEST_P(T3kCustomMeshGraphFabric2DFixture, TestGetNextHopRouterDirectionMultiMesh) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
-    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+    CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     RunGetNextHopRouterDirectionTest(this, true);
 }
 
 // Skipping other t3k configs because multi-mesh in single process isn't supported
 INSTANTIATE_TEST_SUITE_P(
-    T3kCustomMeshGraphFabric2DDynamicTests,
-    T3kCustomMeshGraphFabric2DDynamicFixture,
+    T3kCustomMeshGraphFabric2DTests,
+    T3kCustomMeshGraphFabric2DFixture,
     ::testing::Values(t3k_mesh_descriptor_chip_mappings[0]));
 
-TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
-
-TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
-
-// 2D Dynamic Routing Unidirectional mcast tests (no turns)
-TEST_F(Fabric2DDynamicFixture, TestLineMcastE2Hops) {
+// 2D Routing Unidirectional mcast tests (no turns)
+TEST_F(Fabric2DFixture, TestLineMcastE2Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 2};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastE3Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastE7Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastW2Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastW2Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 2};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastW3Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastW7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastW7Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 7};
     RunTestLineMcast(this, {routing_info});
 }
 
 // 2D Dynamic Routing Unidirectional mcast tests (with turns)
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN1HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN1HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN2HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN2HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN2HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN2HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS1HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS1HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS2HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS2HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS2HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS2HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopW3Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN1HopW7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN1HopW7Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 7};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopW3Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS1HopW7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS1HopW7Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 7};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE1HopW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE1HopW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE1HopW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE1HopW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE2HopsW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE2HopsW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 2};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE2HopsW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE2HopsW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 2};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE1HopW2Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE1HopW2Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 2};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE1HopW2Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE1HopW2Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 2};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS2HopsE4HopsW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS2HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS2HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS2HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS3HopsE4HopsW3Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS3HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS3HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS3HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN2HopsE4HopsW3Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN2HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN2HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN2HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE4HopsW3Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 3};
@@ -1616,5 +1792,4 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
 }
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

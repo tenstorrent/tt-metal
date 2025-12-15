@@ -23,8 +23,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn {
-namespace operations::pool {
+namespace ttnn::operations::pool {
 
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
@@ -87,7 +86,6 @@ static std::vector<Tensor> pool2d_invoke(
         .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
-        .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
@@ -245,7 +243,6 @@ static std::vector<Tensor> pool2d_invoke(
         .core_range_set = parallel_config.grid,
         .snap_to_tile = is_out_tiled,
         .ceil_mode = ceil_mode,
-        .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
     // call the halo uop
@@ -392,5 +389,4 @@ Tensor AvgPool2DOp::invoke(
     return result.at(0);
 }
 
-}  // namespace operations::pool
-}  // namespace ttnn
+}  // namespace ttnn::operations::pool

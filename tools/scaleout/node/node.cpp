@@ -279,23 +279,23 @@ private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
         auto* const qsfp_connections = get_port_connections(node, "QSFP_DD");
-        add_connection(qsfp_connections, 1, 3, 2, 3);
-        add_connection(qsfp_connections, 1, 4, 2, 4);
-        add_connection(qsfp_connections, 1, 5, 2, 5);
-        add_connection(qsfp_connections, 1, 6, 2, 6);
-        add_connection(qsfp_connections, 3, 6, 4, 6);
-        add_connection(qsfp_connections, 3, 5, 4, 5);
-        add_connection(qsfp_connections, 3, 4, 4, 4);
-        add_connection(qsfp_connections, 3, 3, 4, 3);
+        add_connection(qsfp_connections, 1, 3, 3, 3);
+        add_connection(qsfp_connections, 1, 4, 3, 4);
+        add_connection(qsfp_connections, 1, 5, 3, 5);
+        add_connection(qsfp_connections, 1, 6, 3, 6);
+        add_connection(qsfp_connections, 2, 6, 4, 6);
+        add_connection(qsfp_connections, 2, 5, 4, 5);
+        add_connection(qsfp_connections, 2, 4, 4, 4);
+        add_connection(qsfp_connections, 2, 3, 4, 3);
     }
 
     // Add Y-torus QSFP connections
     static void add_y_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
         auto* const qsfp_connections = get_port_connections(node, "QSFP_DD");
-        add_connection(qsfp_connections, 1, 2, 3, 2);
-        add_connection(qsfp_connections, 1, 1, 3, 1);
-        add_connection(qsfp_connections, 2, 1, 4, 1);
-        add_connection(qsfp_connections, 2, 2, 4, 2);
+        add_connection(qsfp_connections, 1, 2, 2, 2);
+        add_connection(qsfp_connections, 1, 1, 2, 1);
+        add_connection(qsfp_connections, 3, 1, 4, 1);
+        add_connection(qsfp_connections, 3, 2, 4, 2);
     }
 
 public:
