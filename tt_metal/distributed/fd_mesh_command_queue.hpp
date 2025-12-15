@@ -19,9 +19,9 @@
 
 // Forward declaration of the FDMeshCQTestAccessor class
 // This is used to access the system memory manager from cq test fixtures
-namespace tt::tt_dispatch_tests::Common {
+namespace tt::tt_metal::tt_dispatch_tests::Common {
 class FDMeshCQTestAccessor;
-}  // namespace tt::tt_dispatch_tests::Common
+}  // namespace tt::tt_metal::tt_dispatch_tests::Common
 
 namespace tt::tt_metal::distributed {
 

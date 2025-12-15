@@ -29,11 +29,12 @@
  *
  * The test flow follows a "Shadow Model" pattern:
  * 1. Plan: Determine transfer sizes, destinations, and command types.
- * 2. Shadow: Update `DeviceData` (the expectation model) to reflect what should happen.
+ * 2. Shadow: Update `Common::DeviceData` (the expectation model) to reflect what should happen.
  * 3. Build: Use `DeviceCommand` and `DeviceCommandCalculator` to construct binary
  *    command packets (HostMemDeviceCommand) exactly as the runtime would.
  * 4. Execute and Validate: Push these raw commands directly into the Issue Queue and notify the hardware.
- *    Read back device memory and compare against `DeviceData` to validate the correctness of the command execution.
+ *    Read back device memory and compare against `Common::DeviceData` to validate the correctness of the command
+ * execution.
  *
  * Key Concepts:
  * - Issue Queue: Host-resident ring buffer where commands are written.
@@ -42,7 +43,7 @@
  * - Dispatcher: Kernel that parses commands and issues writes/signals to Worker cores.
  */
 
-namespace tt::tt_dispatch_tests::prefetcher_tests {
+namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
@@ -67,7 +68,7 @@ namespace DeviceDataUpdater {
 
 void update_paged_dram_read(
     const CoreRange& workers,
-    DeviceData& device_data,
+    Common::DeviceData& device_data,
     const CoreCoord& bank_core,
     uint32_t bank_id,
     uint32_t bank_offset,
@@ -82,7 +83,7 @@ void update_paged_dram_read(
 // This should match the data inside completion queue on the host side
 // The shadow model must have command header + generated payload for validation since dispatch
 // copies both into completion buffer
-void update_host_data(DeviceData& device_data, const std::vector<uint32_t>& data, uint32_t data_size_bytes) {
+void update_host_data(Common::DeviceData& device_data, const std::vector<uint32_t>& data, uint32_t data_size_bytes) {
     uint32_t data_size_words = data_size_bytes / sizeof(uint32_t);
     CQDispatchCmd expected_cmd{};
     expected_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
@@ -107,7 +108,7 @@ void update_host_data(DeviceData& device_data, const std::vector<uint32_t>& data
 // Used when hardware will read from DRAM/L1 and copy whatever is already modeled there
 void update_read(
     const CoreCoord& worker_core,
-    DeviceData& device_data,
+    Common::DeviceData& device_data,
     const CoreCoord& bank_core,
     uint32_t bank_id,
     uint32_t bank_offset,
@@ -162,7 +163,7 @@ protected:
 
     void execute_generated_commands(
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         size_t num_cores_to_log,
         uint32_t num_iterations,
         bool wait_for_completion = true,
@@ -204,7 +205,7 @@ private:
     // 4. execute exec buf start command from issue queue
     void execute_generated_commands_exec_buff(
         const std::vector<HostMemDeviceCommand>& commands_per_iteration,
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         size_t num_cores_to_log,
         uint32_t num_iterations,
         bool wait_for_completion,
@@ -318,8 +319,8 @@ private:
 
 class PrefecherHostTextFixture : virtual public BasePrefetcherTestFixture {
 protected:
-    void pad_host_data(DeviceData& device_data) {
-        one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
+    void pad_host_data(Common::DeviceData& device_data) {
+        Common::one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
 
         int pad =
             dispatch_buffer_page_size_ - ((host_data.data.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_);
@@ -346,7 +347,7 @@ class PrefetcherPackedReadTestFixture : virtual public BasePrefetcherTestFixture
 protected:
     std::vector<CQPrefetchRelayPagedPackedSubCmd> build_sub_cmds(
         const std::vector<uint32_t>& lengths,
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         uint32_t log_packed_read_page_size,
         uint32_t n_sub_cmds) {
         uint32_t count = 0;
@@ -400,7 +401,7 @@ public:
     void populate_ringbuffer_from_dram(
         HostMemDeviceCommand& cmd,
         const std::vector<uint32_t>& lengths,
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         uint32_t ringbuffer_read_page_size_log2,
         uint32_t n_sub_cmds) {
         bool reset = false;
@@ -701,7 +702,7 @@ template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_ringbuffer_relay(
     const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds,
     const std::vector<uint32_t>& lengths,
-    DeviceData& device_data,
+    Common::DeviceData& device_data,
     PrefetcherRingbufferReadTestFixture& fixture,
     uint32_t noc_xy,
     uint32_t addr,
@@ -750,7 +751,7 @@ class RandomTestFixture : public BasePrefetcherTestFixture {
 
 protected:
     std::optional<HostMemDeviceCommand> gen_random_linear_cmd(
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         const CoreCoord& worker_core,
         uint32_t noc_xy,
         uint32_t addr_base,
@@ -787,7 +788,7 @@ protected:
     }
 
     std::optional<HostMemDeviceCommand> gen_random_dram_paged_cmd(
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         const CoreCoord& worker_core,
         const CoreRange& worker_range,
         uint32_t noc_xy,
@@ -831,7 +832,7 @@ protected:
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
             noc_xy, addr, start_page, cmd_base_addr, page_size, pages, length_adjust);
 
-        // Update DeviceData for paged read
+        // Update Common::DeviceData for paged read
         uint32_t page_size_words = page_size / sizeof(uint32_t);
         uint32_t base_addr_words = random_offset / sizeof(uint32_t);
         uint32_t length_adjust_words = length_adjust / sizeof(uint32_t);
@@ -860,7 +861,7 @@ protected:
     }
 
     std::optional<HostMemDeviceCommand> gen_random_inline_cmd(
-        DeviceData& device_data, const CoreRange& worker_range, uint32_t noc_xy, uint32_t& remaining_bytes) {
+        Common::DeviceData& device_data, const CoreRange& worker_range, uint32_t noc_xy, uint32_t& remaining_bytes) {
         // Randomize the dispatcher command we choose to relay
         uint32_t random_dispatch_cmd = payload_generator_->get_rand<uint32_t>(0, 1);
 
@@ -895,7 +896,7 @@ protected:
                     // Generate payload
                     std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
 
-                    // Update DeviceData for linear write
+                    // Update Common::DeviceData for linear write
                     Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, false);
 
                     // Build the command: Dispatch Write Linear (Unicast) wrapped in Prefetch Relay Inline
@@ -990,7 +991,7 @@ struct HelperInfo {
 // TODO: add CQ_PREFETCH_CMD_DEBUG
 class SmokeTestHelper {
     tt_metal::distributed::MeshDevice::IDevice* device_;
-    DeviceData& device_data_;
+    Common::DeviceData& device_data_;
     std::vector<HostMemDeviceCommand>& cmds_;
     std::unique_ptr<Common::DispatchPayloadGenerator> payload_generator_;
 
@@ -999,7 +1000,7 @@ class SmokeTestHelper {
 public:
     SmokeTestHelper(
         tt_metal::distributed::MeshDevice::IDevice* device,
-        DeviceData& device_data,
+        Common::DeviceData& device_data,
         std::vector<HostMemDeviceCommand>& cmds,
         HelperInfo info) :
         device_(device), device_data_(device_data), cmds_(cmds), info_(info) {
@@ -1021,7 +1022,7 @@ public:
         uint32_t addr = device_data_.get_result_data_addr(worker, 0);
         // Generate payload
         std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
-        // Update DeviceData for linear write
+        // Update Common::DeviceData for linear write
         Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_);
         // Create the HostMemDeviceCommand
         HostMemDeviceCommand cmd = Common::CommandBuilder::build_linear_write_command<flush_prefetch, inline_data>(
@@ -1056,7 +1057,7 @@ public:
             uint32_t addr = device_data_.get_result_data_addr(worker, 0);
             // Generate payload
             std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
-            // Update DeviceData for linear write
+            // Update Common::DeviceData for linear write
             Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_);
             // Add the dispatch write linear command
             cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
@@ -1077,7 +1078,7 @@ public:
         const uint32_t log_packed_read_page_size,
         const std::vector<uint32_t>& lengths,
         const std::function<std::vector<CQPrefetchRelayPagedPackedSubCmd>(
-            const std::vector<uint32_t>& lengths, DeviceData&, uint32_t log_page_sz, uint32_t n_sub_cmds)>&
+            const std::vector<uint32_t>& lengths, Common::DeviceData&, uint32_t log_page_sz, uint32_t n_sub_cmds)>&
             build_packed) {
         const auto worker = worker_range.start_coord;
         const CoreCoord last_virt_worker = device_->virtual_core_from_logical_core(worker, CoreType::WORKER);
@@ -1134,7 +1135,7 @@ public:
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
-            // Update DeviceData for paged read
+            // Update Common::DeviceData for paged read
             DeviceDataUpdater::update_paged_dram_read(
                 worker_range, device_data_, bank_core, bank_id, bank_offset, page_size_words);
         }
@@ -1216,7 +1217,7 @@ public:
     }
 
     // Relay inline dispatcher to host writes smoke test helper
-    void add_host_write(uint32_t length, const std::function<void(DeviceData&)>& pad_host_data) {
+    void add_host_write(uint32_t length, const std::function<void(Common::DeviceData&)>& pad_host_data) {
         constexpr bool inline_data = true;
         std::vector<uint32_t> payload = payload_generator_->generate_payload(length);
 
@@ -1235,8 +1236,6 @@ public:
     }
 };
 
-using namespace tt::tt_metal;
-
 // In this we, we test the terminate command by adding a linear write unicast
 // with a small payload followed by commands to terminate prefetcher and dispatcher.
 // exec_buf enabled execution needs special handling
@@ -1254,7 +1253,8 @@ TEST_P(BasePrefetcherTestFixture, TestTerminate) {
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
     uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
@@ -1331,7 +1331,8 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
 
     // No L1 -> Host writes, so pcie_data_addr is nullptr
     // We test DRAM -> L1
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
     uint32_t absolute_start_page = 0;
@@ -1363,7 +1364,7 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
-            // Update DeviceData for paged read
+            // Update Common::DeviceData for paged read
             DeviceDataUpdater::update_paged_dram_read(
                 worker_range, device_data, bank_core, bank_id, bank_offset, page_size_words);
         }
@@ -1416,7 +1417,7 @@ TEST_P(PrefecherHostTextFixture, HostTest) {
     // Pre-filling ensures padding areas retain the sentinel value for validation
     dirty_host_completion_buffer(completion_queue_buffer, completion_queue_size);
 
-    DeviceData device_data(
+    Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
@@ -1476,7 +1477,8 @@ TEST_P(PrefetcherPackedReadTestFixture, PackedReadTest) {
     const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
     const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
 
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
@@ -1547,7 +1549,8 @@ TEST_P(PrefetcherRingbufferReadTestFixture, RingbufferReadTest) {
     const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
     const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
 
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
@@ -1620,7 +1623,8 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
     const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
     const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
 
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
 
@@ -1653,7 +1657,7 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
             std::vector<uint32_t> page_payload =
                 payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
 
-            // Update DeviceData for paged write
+            // Update Common::DeviceData for paged write
             Common::DeviceDataUpdater::update_paged_write(
                 page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
 
@@ -1694,7 +1698,7 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
-            // Update DeviceData for paged read
+            // Update Common::DeviceData for paged read
             DeviceDataUpdater::update_paged_dram_read(
                 worker_range, device_data, bank_core, bank_id, bank_offset, page_size_words);
         }
@@ -1722,7 +1726,8 @@ TEST_P(RandomTestFixture, RandomTest) {
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
@@ -1811,7 +1816,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
 
     // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
     auto mmio_dram_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
-    DeviceData device_data(
+    Common::DeviceData device_data(
         mmio_device_, worker_range, l1_base, mmio_dram_base, nullptr, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
@@ -1867,7 +1872,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
 
         [[maybe_unused]] auto offset = mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, dram_bank_id);
         // Read from DRAM result data address where data is stored
-        // DeviceData uses the logical coordinates as keys
+        // Common::DeviceData uses the logical coordinates as keys
         cmd.relay_linear_h.addr = mmio_dram_base + offset;
         cmd.relay_linear_h.length = length;
         cmd.relay_linear_h.pad1 = 0;
@@ -1907,7 +1912,8 @@ TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
-    DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
@@ -1935,11 +1941,13 @@ TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
     const uint32_t length_to_read = tt::align(2080, dram_alignment);
     const uint32_t length_to_read_sdb = tt::align(DEFAULT_SCRATCH_DB_SIZE / 8, dram_alignment);
     // Create and pass PrefetcherPackedReadTestFixture::build_sub_cmds callable
-    auto build_packed =
-        [this](
-            const std::vector<uint32_t>& lengths, DeviceData& device_data, uint32_t log_page_sz, uint32_t n_sub_cmds) {
-            return PrefetcherPackedReadTestFixture::build_sub_cmds(lengths, device_data, log_page_sz, n_sub_cmds);
-        };
+    auto build_packed = [this](
+                            const std::vector<uint32_t>& lengths,
+                            Common::DeviceData& device_data,
+                            uint32_t log_page_sz,
+                            uint32_t n_sub_cmds) {
+        return PrefetcherPackedReadTestFixture::build_sub_cmds(lengths, device_data, log_page_sz, n_sub_cmds);
+    };
     // Uses last_worker as first_worker is filling up
     helper.add_packed_dram_read(worker_range, log_packed_read_page_size, {256, 512}, build_packed);
     helper.add_packed_dram_read(worker_range, log_packed_read_page_size, {1024, 2048}, build_packed);
@@ -2060,7 +2068,7 @@ TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
     // Pre-filling ensures padding areas retain the sentinel value for validation
     dirty_host_completion_buffer(completion_queue_buffer, completion_queue_size);
 
-    DeviceData device_data(
+    Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, dram_data_size_words, cfg_);
 
     std::vector<HostMemDeviceCommand> commands_per_iteration;
@@ -2070,7 +2078,7 @@ TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
     // Instantiate Helper
     SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
 
-    auto add_host_write_func = [this](DeviceData& device_data) {
+    auto add_host_write_func = [this](Common::DeviceData& device_data) {
         PrefecherHostTextFixture::pad_host_data(device_data);
     };
 
@@ -2226,4 +2234,4 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
-}  // namespace tt::tt_dispatch_tests::prefetcher_tests
+}  // namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests

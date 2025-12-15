@@ -35,7 +35,7 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-using namespace tt::tt_metal;  // test only
+namespace tt::tt_metal::tt_dispatch_tests::Common {
 
 struct DispatchTestConfig {
     bool use_coherent_data = false;
@@ -73,18 +73,18 @@ private:
 
     // Validate a single core's worth of results vs expected
     bool validate_one_core(
-        IDevice* device,
+        distributed::MeshDevice::IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,
         uint32_t start_index,
         uint32_t result_addr);
     bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
 
-    void prepopulate_dram(IDevice* device, uint32_t size_words);
+    void prepopulate_dram(distributed::MeshDevice::IDevice* device, uint32_t size_words);
 
 public:
     DeviceData(
-        IDevice* device,
+        distributed::MeshDevice::IDevice* device,
         CoreRange workers,
         uint32_t l1_data_addr,
         uint32_t dram_data_addr,
@@ -111,8 +111,8 @@ public:
     uint32_t get_base_result_addr(tt::CoreType core_type);
     uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
 
-    bool validate(IDevice* device);
-    void overflow_check(IDevice* device);
+    bool validate(distributed::MeshDevice::IDevice* device);
+    void overflow_check(distributed::MeshDevice::IDevice* device);
 
     int size() { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
@@ -127,7 +127,7 @@ public:
 };
 
 inline DeviceData::DeviceData(
-    IDevice* device,
+    distributed::MeshDevice::IDevice* device,
     CoreRange workers,
     uint32_t l1_data_addr,
     uint32_t dram_data_addr,
@@ -205,7 +205,7 @@ inline DeviceData::DeviceData(
 }
 
 // Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
-inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
+inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* device, uint32_t size_words) {
     uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
@@ -373,7 +373,7 @@ inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
 }
 
 inline bool DeviceData::validate_one_core(
-    IDevice* device,
+    distributed::MeshDevice::IDevice* device,
     std::unordered_set<CoreCoord>& validated_cores,
     const one_core_data_t& one_core_data,
     const uint32_t start_index,
@@ -499,7 +499,7 @@ inline bool DeviceData::validate_host(
     return failed;
 }
 
-inline bool DeviceData::validate(IDevice* device) {
+inline bool DeviceData::validate(distributed::MeshDevice::IDevice* device) {
     bool failed = false;
     std::unordered_set<CoreCoord> validated_cores;
 
@@ -526,7 +526,7 @@ inline bool DeviceData::validate(IDevice* device) {
     return !failed;
 }
 
-inline void DeviceData::overflow_check(IDevice* device) {
+inline void DeviceData::overflow_check(distributed::MeshDevice::IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (const auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.core_type == tt::CoreType::WORKER) {
@@ -545,8 +545,6 @@ inline void DeviceData::overflow_check(IDevice* device) {
         }
     }
 }
-
-namespace tt::tt_dispatch_tests::Common {
 
 // Forward declare the accessor
 // This accessor class provides test access to private members
@@ -868,7 +866,9 @@ private:
 namespace PackedWriteUtils {
 // Build subcmds once - reused for all commands
 inline std::vector<CQDispatchWritePackedUnicastSubCmd> build_sub_cmds(
-    IDevice* device, const std::vector<CoreCoord>& worker_cores, tt::tt_metal::NOC downstream_noc) {
+    distributed::MeshDevice::IDevice* device,
+    const std::vector<CoreCoord>& worker_cores,
+    tt::tt_metal::NOC downstream_noc) {
     std::vector<CQDispatchWritePackedUnicastSubCmd> sub_cmds;
     sub_cmds.reserve(worker_cores.size());
     for (const auto& core : worker_cores) {
@@ -938,7 +938,7 @@ protected:
     // only implement workload-specific planning
     tt_metal::distributed::FDMeshCommandQueue* fdcq_ = nullptr;
     tt_metal::SystemMemoryManager* mgr_ = nullptr;
-    tt_metal::distributed::MeshDevice::IDevice* device_ = nullptr;
+    distributed::MeshDevice::IDevice* device_ = nullptr;
 
     // HW properties
     uint32_t host_alignment_ = 0;
@@ -1157,4 +1157,4 @@ protected:
         }
     }
 };
-}  // namespace tt::tt_dispatch_tests::Common
+}  // namespace tt::tt_metal::tt_dispatch_tests::Common
