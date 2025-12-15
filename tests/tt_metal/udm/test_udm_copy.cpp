@@ -66,20 +66,30 @@ tt::tt_metal::Shape compute_tensor_shape_in_pages(
 
 /**
  * @brief Create mesh mapper for width-sharded distribution
- * Shards tensor along dim 1 (width) across all devices in the mesh (treated as 1D)
+ * Shards tensor along last dimension (width) across all devices in the mesh (treated as 1D)
+ *
+ * @param mesh_device The mesh device
+ * @param tensor_rank The rank of the tensor to be sharded
  */
 std::unique_ptr<ttnn::distributed::TensorToMesh> create_width_sharded_mesh_mapper(
-    tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    return ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device, /*dim=*/1);
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    // Shard on last dimension: for rank N, that's dimension N-1
+    int shard_dim = static_cast<int>(tensor_rank) - 1;
+    return ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device, shard_dim);
 }
 
 /**
  * @brief Create mesh composer for aggregating width-sharded tensors
- * Concatenates shards along dim 1 (width)
+ * Concatenates shards along last dimension (width)
+ *
+ * @param mesh_device The mesh device
+ * @param tensor_rank The rank of the tensor to be composed
  */
 std::unique_ptr<ttnn::distributed::MeshToTensor> create_width_sharded_mesh_composer(
-    tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    return ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/1);
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    // Concat on last dimension: for rank N, that's dimension N-1
+    int concat_dim = static_cast<int>(tensor_rank) - 1;
+    return ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, concat_dim);
 }
 
 /**
@@ -126,7 +136,7 @@ ttnn::Tensor create_width_sharded_tensor(
     auto host_tensor = create_tensor_with_random_values(global_shape, tensor_spec);
 
     // Distribute tensor using width-sharded mapper
-    auto mapper = create_width_sharded_mesh_mapper(mesh_device);
+    auto mapper = create_width_sharded_mesh_mapper(mesh_device, global_shape.rank());
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 
@@ -143,6 +153,101 @@ uint32_t get_max_pages_per_gcore(const tt::tt_metal::experimental::udm::GcoresIn
         max_pages = std::max(max_pages, total_pages);
     }
     return max_pages;
+}
+
+/**
+ * @brief Debug helper to log tensor shape info
+ */
+void log_tensor_shape_info(
+    const tt::tt_metal::experimental::udm::MeshTensorBuilder& tensor_builder, const ttnn::Tensor& tensor) {
+    const auto& mesh_tensor_shape = tensor_builder.get_mesh_tensor_shape_in_pages();
+
+    log_info(tt::LogTest, "=== Tensor Shape Info ===");
+    log_info(tt::LogTest, "Mesh tensor shape in pages (rank={}): [{}]", mesh_tensor_shape.rank(), [&]() {
+        std::string shape_str;
+        for (size_t i = 0; i < mesh_tensor_shape.rank(); ++i) {
+            if (i > 0) {
+                shape_str += ", ";
+            }
+            shape_str += std::to_string(mesh_tensor_shape[i]);
+        }
+        return shape_str;
+    }());
+    log_info(tt::LogTest, "Tensor padded_shape: {}", tensor.padded_shape());
+    log_info(tt::LogTest, "========================");
+}
+
+/**
+ * @brief Debug helper to log gcores info details
+ */
+void log_gcores_info(const tt::tt_metal::experimental::udm::GcoresInfo& gcores_info) {
+    log_info(tt::LogTest, "=== Gcores Info ===");
+    log_info(tt::LogTest, "Total gcores in result: {}", gcores_info.gcores.size());
+    log_info(tt::LogTest, "Gcores with work: {}", gcores_info.num_cores);
+
+    // Build partition dims string
+    std::string partition_dims_str;
+    for (size_t d = 0; d < gcores_info.partition_dims.size(); ++d) {
+        if (d > 0) {
+            partition_dims_str += ", ";
+        }
+        partition_dims_str += std::to_string(gcores_info.partition_dims[d]);
+    }
+    log_info(tt::LogTest, "Partition dims: [{}]", partition_dims_str);
+
+    for (size_t i = 0; i < gcores_info.gcores.size(); ++i) {
+        const auto& gcore = gcores_info.gcores[i];
+
+        // Calculate total pages for this gcore
+        uint32_t total_pages = 1;
+        for (size_t d = 0; d < gcores_info.dim_pages[i].size(); ++d) {
+            total_pages *= gcores_info.dim_pages[i][d];
+        }
+
+        // Only log gcores with work to reduce noise
+        if (total_pages > 0) {
+            log_info(
+                tt::LogTest,
+                "Gcore[{}]: local_id={}, global_id={}, local_coord={}, global_coord={}",
+                i,
+                gcore.local_id,
+                gcore.global_id,
+                gcore.local_coord,
+                gcore.global_coord);
+            log_info(tt::LogTest, "  Total pages: {}", total_pages);
+
+            // Build dim pages string
+            std::string pages_str;
+            for (size_t d = 0; d < gcores_info.dim_pages[i].size(); ++d) {
+                if (d > 0) {
+                    pages_str += ", ";
+                }
+                pages_str += std::to_string(gcores_info.dim_pages[i][d]);
+            }
+            log_info(tt::LogTest, "  Dim pages: [{}]", pages_str);
+
+            // Build dim offsets string
+            std::string offsets_str;
+            for (size_t d = 0; d < gcores_info.dim_offsets[i].size(); ++d) {
+                if (d > 0) {
+                    offsets_str += ", ";
+                }
+                offsets_str += std::to_string(gcores_info.dim_offsets[i][d]);
+            }
+            log_info(tt::LogTest, "  Dim offsets: [{}]", offsets_str);
+
+            // Build dim strides string
+            std::string strides_str;
+            for (size_t d = 0; d < gcores_info.dim_strides[i].size(); ++d) {
+                if (d > 0) {
+                    strides_str += ", ";
+                }
+                strides_str += std::to_string(gcores_info.dim_strides[i][d]);
+            }
+            log_info(tt::LogTest, "  Dim strides: [{}]", strides_str);
+        }
+    }
+    log_info(tt::LogTest, "==================");
 }
 
 /**
@@ -198,6 +303,9 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     // Create MeshProgram
     auto program = tt::tt_metal::experimental::udm::CreateMeshProgram(mesh_builder);
 
+    // Log tensor shape info for debugging
+    log_tensor_shape_info(input_mesh_tensor_builder, input_tensor);
+
     // Map buffer to gcores using UDM API
     // Partition work on dimension 0 (rows) - each worker processes 1 row
     // Data is width-sharded (dim 1), so each row spans multiple devices
@@ -207,6 +315,9 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         mesh_builder,  // Pass mesh_builder which contains mesh and grid dimensions
         partition_dim  // partition_dim = 0 (rows)
     );
+
+    // Log gcores info for debugging
+    log_gcores_info(gcores_info);
 
     // Get compile-time args from both input and output MeshTensorBuilders
     auto input_compile_time_args = input_mesh_tensor_builder.get_compile_time_args();
@@ -221,12 +332,9 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     // Get data format and compute tile size (following pattern from other ops)
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t tile_size = tt::tile_size(data_format);
-    uint32_t max_pages_per_gcore = get_max_pages_per_gcore(gcores_info);
-
     constexpr uint32_t cb_id = 0;
     tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(max_pages_per_gcore * tile_size, {{cb_id, data_format}})
-            .set_page_size(cb_id, tile_size);
+        tt::tt_metal::CircularBufferConfig(2 * tile_size, {{cb_id, data_format}}).set_page_size(cb_id, tile_size);
 
     // Create CB on ALL gcores in mesh to ensure identical L1 layout across devices
     auto mesh_cb_handle = tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_config);
@@ -314,7 +422,7 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
     auto* mesh_device = input_tensor.device();
 
     // Create width-sharded composer for aggregation
-    auto composer = create_width_sharded_mesh_composer(mesh_device);
+    auto composer = create_width_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank());
 
     // Aggregate tensors and convert to vectors
     auto input_data = ttnn::distributed::aggregate_tensor(input_tensor, *composer).to_vector<uint16_t>();
@@ -343,6 +451,34 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
 }
 
 /**
+ * @brief Helper function to run UDM copy test with given tensor shapes
+ *
+ * @param mesh_device The mesh device to use
+ * @param global_shape Global tensor shape across all devices
+ * @param local_shape Local tensor shape per device
+ */
+void run_udm_copy_test(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    const tt::tt_metal::Shape& local_shape) {
+    auto input_tensor = create_width_sharded_tensor(mesh_device, global_shape, local_shape);
+
+    // Create output tensor with same shape and sharding strategy as input
+    auto output_tensor = create_width_sharded_tensor(mesh_device, global_shape, local_shape);
+
+    // Create program
+    auto program = create_program(input_tensor, output_tensor);
+
+    // Run program
+    auto* tensor_mesh_device = input_tensor.device();
+    ASSERT_NE(tensor_mesh_device, nullptr) << "Tensor must be on device";
+    run_program(input_tensor, tensor_mesh_device, program);
+
+    // Validate output matches input
+    validate(input_tensor, output_tensor);
+}
+
+/**
  * @brief Test UDM program with width-sharded tensor
  *
  * Setup:
@@ -367,26 +503,38 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
  */
 using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFixture;
 
-TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy) {
-    // Define tensor shapes
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy2D_Small) {
+    // Small 2D tensor: (4, 16) tiles = (128, 512) elements
     tt::tt_metal::Shape global_shape({128, 512});  // (4, 16) tiles in element count
     tt::tt_metal::Shape local_shape({128, 128});   // (4, 4) tiles per device
 
-    auto input_tensor = create_width_sharded_tensor(mesh_device_.get(), global_shape, local_shape);
+    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape);
+}
 
-    // Create output tensor with same shape and sharding strategy as input
-    auto output_tensor = create_width_sharded_tensor(mesh_device_.get(), global_shape, local_shape);
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy2D_Large) {
+    // Larger 2D tensor: (32, 64) tiles = (1024, 2048) elements
+    tt::tt_metal::Shape global_shape({1024, 2048});  // (32, 64) tiles in element count
+    tt::tt_metal::Shape local_shape({1024, 512});    // (32, 16) tiles per device
 
-    // Create program
-    auto program = create_program(input_tensor, output_tensor);
+    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape);
+}
 
-    // Run program
-    auto* tensor_mesh_device = input_tensor.device();
-    ASSERT_NE(tensor_mesh_device, nullptr) << "Tensor must be on device";
-    run_program(input_tensor, tensor_mesh_device, program);
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy3D) {
+    // 3D tensor: (2, 16, 32) tiles = (2, 512, 8192) elements
+    // Sharded along last dimension (width)
+    tt::tt_metal::Shape global_shape({2, 512, 8192});  // (2, 16, 256) tiles
+    tt::tt_metal::Shape local_shape({2, 512, 2048});   // (2, 16, 64) tiles per device
 
-    // Validate output matches input
-    validate(input_tensor, output_tensor);
+    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape);
+}
+
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy4D) {
+    // 4D tensor: (2, 4, 8, 16) tiles = (2, 4, 256, 512) elements
+    // Sharded along last dimension (width)
+    tt::tt_metal::Shape global_shape({2, 4, 256, 8192});  // (2, 4, 8, 256) tiles
+    tt::tt_metal::Shape local_shape({2, 4, 256, 2048});   // (2, 4, 8, 64) tiles per device
+
+    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape);
 }
 
 }  // namespace tt::tt_metal::experimental::udm_tests
