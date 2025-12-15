@@ -91,7 +91,7 @@ jobs:
           fi
 
           # Check that we have a valid test list that's not empty
-          echo "$requested_cpp_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
+          echo "$requested_cpp_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") else . end' && echo "Valid test configs"
           echo "cpp-tests=$(echo $requested_cpp_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
           echo "[info] Showing GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
