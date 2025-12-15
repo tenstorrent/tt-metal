@@ -174,7 +174,6 @@ target_include_directories(
     PUBLIC
         ${CMAKE_CURRENT_BINARY_DIR}
         ${CMAKE_BINARY_DIR}/tt_metal/fabric
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor
 )
 
 target_link_libraries(
@@ -204,10 +203,10 @@ target_include_directories(
     generate_mgd
     SYSTEM
     PRIVATE
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor
+        ${CMAKE_BINARY_DIR}/tools/scaleout
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
 )
 
-# Link against fabric's protobuf object files only
 target_sources(generate_mgd PRIVATE $<TARGET_OBJECTS:fabric>)
 
 target_link_libraries(
