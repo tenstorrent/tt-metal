@@ -235,6 +235,7 @@ init_packages() {
                 "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
+                "epel-release"
                 "opencv-devel"
                 "wget"
                 "curl"
