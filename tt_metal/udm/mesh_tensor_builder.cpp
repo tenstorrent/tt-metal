@@ -43,9 +43,11 @@ public:
         // 6. mesh_tensor_strides_in_pages[mesh_dspec_rank]
         // 7. tensor_shape_in_pages[mesh_dspec_rank]
         // 8. tensor_strides_in_pages[mesh_dspec_rank]
-        // 9. num_grids
-        // 10. fabric_mesh_ids[num_grids]
-        // 11. fabric_chip_ids[num_grids]
+        // 9. mesh_shape[mesh_dspec_rank]
+        // 10. mesh_strides[mesh_dspec_rank]
+        // 11. num_grids
+        // 12. fabric_mesh_ids[num_grids]
+        // 13. fabric_chip_ids[num_grids]
 
         compile_time_args.push_back(static_cast<uint32_t>(mesh_buffer_.address()));
         compile_time_args.push_back(mesh_buffer_.get_reference_buffer()->aligned_page_size());
@@ -62,6 +64,12 @@ public:
         }
         for (uint32_t i = 0; i < mesh_tensor_rank_; ++i) {
             compile_time_args.push_back(tensor_strides_in_pages_[i]);
+        }
+        for (uint32_t i = 0; i < mesh_tensor_rank_; ++i) {
+            compile_time_args.push_back(mesh_shape_[i]);
+        }
+        for (uint32_t i = 0; i < mesh_tensor_rank_; ++i) {
+            compile_time_args.push_back(mesh_strides_[i]);
         }
 
         // Get fabric node mapping from mesh builder
@@ -165,6 +173,12 @@ private:
         // Compute strides
         compute_strides(mesh_tensor_shape_in_pages_, mesh_tensor_rank_, mesh_tensor_strides_in_pages_);
         compute_strides(tensor_shape_in_pages_, mesh_tensor_rank_, tensor_strides_in_pages_);
+
+        // Compute mesh shape (mesh_tensor_shape / tensor_shape) and mesh strides
+        for (uint32_t i = 0; i < mesh_tensor_rank_; ++i) {
+            mesh_shape_[i] = mesh_tensor_shape_in_pages_[i] / tensor_shape_in_pages_[i];
+        }
+        compute_strides(mesh_shape_, mesh_tensor_rank_, mesh_strides_);
     }
 
     const tt::tt_metal::distributed::MeshBuffer& mesh_buffer_;
@@ -178,6 +192,8 @@ private:
     std::array<uint32_t, MAX_RANK> mesh_tensor_strides_in_pages_{};
     std::array<uint32_t, MAX_RANK> tensor_shape_in_pages_{};
     std::array<uint32_t, MAX_RANK> tensor_strides_in_pages_{};
+    std::array<uint32_t, MAX_RANK> mesh_shape_{};    // mesh device shape (mesh_tensor_shape / tensor_shape)
+    std::array<uint32_t, MAX_RANK> mesh_strides_{};  // strides for mesh device space
 
     // Mesh builder for fabric node id mapping
     std::unique_ptr<MeshBuilder> mesh_builder_;
