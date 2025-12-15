@@ -722,6 +722,10 @@ if(WITH_PYTHON_BINDINGS)
         nanobind_build_library(${NANOBIND_LIBNAME} AS_SYSINCLUDE)
         add_library(TT::Nanobind ALIAS ${NANOBIND_LIBNAME})
 
+        # GCC warns about visibility mismatches when using nanobind with -fvisibility=default
+        # This affects code that uses nanobind types (not just nanobind headers themselves)
+        target_compile_options(${NANOBIND_LIBNAME} INTERFACE "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>")
+
         # find_package(Python3) required for here.
         # nanobind doesn't build otherwise.
         # PUBLIC on the headers also required
