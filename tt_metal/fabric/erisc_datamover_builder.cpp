@@ -1383,7 +1383,8 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         vc);
 
     // Convert to VC-relative for allocator calls (which expect VC-relative indices)
-    uint32_t vc0_sender_count = is_2D_routing ? 4 : 2;
+    uint32_t vc0_sender_count =
+        is_2D_routing ? builder_config::num_sender_channels_2d_mesh : builder_config::num_sender_channels_1d_linear;
     uint32_t vc_relative_channel_id = 0;
 
     if (vc == 0) {
@@ -1395,7 +1396,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
             vc0_sender_count);
     } else if (vc == 1) {
         vc_relative_channel_id = ds_edm - vc0_sender_count;  // VC1: subtract VC0 channels (4-6 → 0-2)
-        uint32_t vc1_sender_count = is_2D_routing ? 3 : 0;
+        uint32_t vc1_sender_count = is_2D_routing ? builder_config::num_downstream_edms_2d_vc1 : 0;
         TT_FATAL(
             vc_relative_channel_id < vc1_sender_count,
             "VC1 channel index {} exceeds maximum channels ({})",
