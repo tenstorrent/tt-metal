@@ -8,9 +8,9 @@
 
 namespace ttml::ops::distributed {
 
-autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim);
-autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_backward = false);
-autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim);
-autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor);
+autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
+autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_backward = false, std::optional<uint32_t> cluster_axis = std::nullopt);
+autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
+autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis = std::nullopt);
 
 }  // namespace ttml::ops::distributed
