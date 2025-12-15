@@ -322,10 +322,6 @@ ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program&
     return program.impl().get_cached_program_command_sequences().at(command_hash);
 }
 
-void MeshWorkloadImpl::set_metadata(const std::string_view name, const std::string_view parameters) {
-    Inspector::mesh_workload_set_metadata(this, name, parameters);
-}
-
 void MeshWorkloadImpl::set_runtime_id(uint64_t runtime_id) {
     Inspector::mesh_workload_set_runtime_id(this, runtime_id);
 }
@@ -443,13 +439,6 @@ std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() {
 const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
     return pimpl_->get_programs();
 }
-
-// For debug purposes
-void MeshWorkload::set_metadata(const std::string_view name, const std::string_view parameters) {
-    pimpl_->set_metadata(name, parameters);
-}
-
-void MeshWorkload::set_runtime_id(uint64_t runtime_id) { pimpl_->set_runtime_id(runtime_id); }
 
 // For testing purposes only
 void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
