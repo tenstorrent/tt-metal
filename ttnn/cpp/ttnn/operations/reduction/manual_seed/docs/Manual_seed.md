@@ -151,7 +151,7 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
    * The match result is communicated to the compute kernel via circular buffer
 
 4. **Seed Initialization**:
-   * The compute kernel reads the match result from the mailbox
+   * The compute kernel reads the match result from the CB message
    * If matched, it calls `rand_tile_init(seed)` to initialize RNG
    * Non-matching cores skip initialization and remain unmodified
 
@@ -206,8 +206,8 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
    * Tensors must have identical shapes and volumes (1-dimensional)
 
 4. **Seed Initialization**:
-   * The compute kernel reads the match result from the mailbox
-   * If matched, it reads the seed value from the mailbox
+   * The compute kernel reads the match result from the CB message
+   * If matched, it reads the seed value from the CB message
    * Calls `rand_tile_init(seed)` with the matched seed value
    * Cores not listed in user_ids remain unmodified
 
