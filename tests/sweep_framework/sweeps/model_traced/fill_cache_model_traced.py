@@ -30,6 +30,17 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """Custom device fixture for fill_cache with DispatchCoreConfig to free up more compute cores"""
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+
+    yield (device, device_name)
+
+    ttnn.close_device(device)
+    del device
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -45,16 +56,24 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    shape_a = input_shape if isinstance(input_shape, (tuple, list)) else (1, 1, 32, 64)
+    # Handle both sample suite (tuple/list) and model_traced suite (dict with 'self'/'other')
+    if isinstance(input_shape, dict):
+        cache_shape = tuple(input_shape.get("self", (1, 1, 32, 64)))
+        input_tensor_shape = tuple(input_shape.get("other", (1, 1, 32, 64)))
+    else:
+        # Convert list to tuple if needed
+        cache_shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+        input_tensor_shape = cache_shape
+
     batch_idx = 0
 
     # Tensor creation
     torch_cache = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
-        shape_a
+        cache_shape
     )
     torch_input = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
-    )(shape_a)
+    )(input_tensor_shape)
     torch_output = torch_cache.clone()
     if len(torch_cache.shape) >= 4 and len(torch_input.shape) >= 4 and torch_cache.shape[0] > batch_idx:
         seq_len = min(torch_input.shape[2], torch_cache.shape[2])

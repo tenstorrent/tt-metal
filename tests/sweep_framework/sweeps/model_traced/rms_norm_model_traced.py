@@ -153,7 +153,7 @@ def run(
     # Fall back to input_a_memory_config if output_memory_config is not provided
     if actual_output_memory_config is None:
         actual_output_memory_config = actual_input_memory_config
-    # Use the actual (possibly converted) output_memory_config
+
     output_tensor = ttnn.rms_norm(
         input_tensor_a, epsilon=eps, weight=weight_tensor, memory_config=actual_output_memory_config
     )
