@@ -504,6 +504,22 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
             .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim, std::optional<int> shard_dim) {
+    if (!shard_dim.has_value()) {
+        return shard_tensor_to_mesh_mapper(mesh_device, dim);
+    }
+    TT_FATAL(mesh_device.shape().dims()==2, "Mesh device shape must be 2D");
+    TT_FATAL(dim >= 0 && shard_dim >= 0 && shard_dim < mesh_device.shape().dims(), "Dimension {} or {} is out of range", dim, shard_dim);
+    tt::stl::SmallVector<MeshMapperConfig::Placement> placements(2);
+    placements[0] = MeshMapperConfig::Replicate{};
+    placements[1] = MeshMapperConfig::Replicate{};
+    placements[shard_dim.value()] = MeshMapperConfig::Shard{dim};
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(
+        mesh_device,
+        MeshMapperConfig{
+            .placements = placements}));
+}
+
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config) {
     return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config));
 }

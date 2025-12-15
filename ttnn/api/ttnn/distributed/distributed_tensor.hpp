@@ -64,6 +64,8 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 // the tensor.
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
 
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim, std::optional<int> shard_dim);
+
 // Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {
 public:
