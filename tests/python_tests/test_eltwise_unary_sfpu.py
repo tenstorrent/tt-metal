@@ -110,7 +110,12 @@ def eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop):
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
-        mathop, src_A, formats.output_format, dest_acc, formats.input_format
+        mathop,
+        src_A,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
     )
 
     unpack_to_dest = (

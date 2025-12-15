@@ -102,7 +102,8 @@ def test_sfpu_reduce(
         formats.output_format,
         dest_acc,
         formats.input_format,
-        reduce_pool,
+        input_dimensions,
+        reduce_pool=reduce_pool,
     )
 
     test_config = {
