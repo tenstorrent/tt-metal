@@ -23,9 +23,8 @@ The former includes a minimal set of tests, to be run always. The latter extends
 
 - [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml) 
   - [ ] `models-mandatory` preset (runs: 
-      [Device perf regressions](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml), 
-      [Frequent model and ttnn tests](https://github.com/tenstorrent/tt-metal/actions/workflows/fast-dispatch-full-regressions-and-models.yaml) and
-      [(internal) C++ unit tests](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/cpp-post-commit.yaml))
+      [Device perf regressions](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml) and
+      [Frequent model and ttnn tests](https://github.com/tenstorrent/tt-metal/actions/workflows/fast-dispatch-full-regressions-and-models.yaml))
   - [ ] `models-extended` preset (runs: 
       the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml)
       and [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml) tests)
