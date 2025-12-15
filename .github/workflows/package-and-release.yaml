@@ -279,7 +279,7 @@ jobs:
 
           # Check if we should create release based on git ref
           should_create_for_ref=false
-          if [[ "${{ github.ref }}" == "refs/heads/dpopov-checkout-repo-for-check-existing-releases" ]] || \
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]] || \
              [[ "${{ github.ref }}" == "refs/heads/stable" ]] || \
              [[ "${{ github.ref }}" == refs/tags/v* ]] || \
              [[ "${{ inputs.dry-run }}" == "true" ]]; then
