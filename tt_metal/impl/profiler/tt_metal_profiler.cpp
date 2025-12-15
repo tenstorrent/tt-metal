@@ -695,14 +695,14 @@ void ProfilerSync(ProfilerSyncState state) {
 #endif
 }
 
-void ClearProfilerControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device) {
+void ClearProfilerControlBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    detail::setControlBuffer(mesh_device, device, control_buffer);
+    detail::setControlBuffer(nullptr, device, control_buffer);
 #endif
 }
 
-void InitDeviceProfiler(distributed::MeshDevice* mesh_device, IDevice* device) {
+void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {
@@ -742,7 +742,7 @@ void InitDeviceProfiler(distributed::MeshDevice* mesh_device, IDevice* device) {
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
-    detail::setControlBuffer(mesh_device, device, control_buffer);
+    detail::setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         profiler.dumpRoutingInfo();

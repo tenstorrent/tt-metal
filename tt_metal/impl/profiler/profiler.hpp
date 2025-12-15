@@ -132,7 +132,7 @@ private:
     void readL1DataBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
     // Read L1 data buffer for a single core
-    void readL1DataBufferForCore(distributed::MeshDevice* mesh_device, 
+    void readL1DataBufferForCore(distributed::MeshDevice* mesh_device,
         IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read device profiler buffer
