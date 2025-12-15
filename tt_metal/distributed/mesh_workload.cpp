@@ -322,10 +322,6 @@ ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program&
     return program.impl().get_cached_program_command_sequences().at(command_hash);
 }
 
-void MeshWorkloadImpl::set_runtime_id(uint64_t runtime_id) {
-    Inspector::mesh_workload_set_runtime_id(this, runtime_id);
-}
-
 // The functions below are for testing purposes only
 void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     last_used_command_queue_ = mesh_cq;
