@@ -26,7 +26,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
     const auto& a = tensor_args.input;
-    auto& output = tensor_return_value;
+    const auto& output = tensor_return_value;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -305,8 +305,8 @@ void UntilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores_with_runtime_args;
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(cached_program.program, reader_kernel_id);
     auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(cached_program.program, writer_kernel_id);
