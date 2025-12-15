@@ -59,15 +59,19 @@ def test_point_to_point_deepseek(mesh_device, test_config, layout, enable_trace,
             topology=ttnn.Topology.Linear,
         )
 
-    for _ in range(repeat_batches):
-        sent_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    sent_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        assert_equal(
-            input_tensor_torch[idx_start0:idx_end0, :, :, :],
-            sent_tensor_torch[idx_start1:idx_end1, :, :, :],
-        )
+    sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_equal(
+        input_tensor_torch[idx_start0:idx_end0, :, :, :],
+        sent_tensor_torch[idx_start1:idx_end1, :, :, :],
+    )
 
+    ttnn.deallocate(sent_tensor)
+
+    for _ in range(repeat_batches - 1):
+        sent_tensor = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(sent_tensor)
 
     ttnn.deallocate(input_tensor)

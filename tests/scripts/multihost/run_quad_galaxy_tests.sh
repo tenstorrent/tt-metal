@@ -55,7 +55,7 @@ run_quad_galaxy_deepseekv3_tests() {
     local MESH_DEVICE="DUAL"
 
     # TODO: For now we just test a single module, we should add all of them here eventually
-    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass[run_test_forward_pass_mla2d-model.layers.0.self_attn-device_params0-decode-1-32]"
+    local TEST_CASE="pytest -svvv --repeat-batches 1000 models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass[run_test_forward_pass_mla2d-model.layers.0.self_attn-device_params0-decode-1-32]"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \

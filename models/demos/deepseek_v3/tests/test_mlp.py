@@ -162,39 +162,44 @@ def test_forward_pass(
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    for _ in range(repeat_batches):
-        # Convert input to TTNN
-        tt_input = ttnn.from_torch(
-            torch_input,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
+    # Convert input to TTNN
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
+    for iteration in range(repeat_batches):
         # TTNN forward pass
         tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
 
-        # Verify output memory config matches expected
-        expected_output_memory_config = run_config["output_memory_config"]
-        actual_output_memory_config = tt_output.memory_config()
-        assert (
-            actual_output_memory_config == expected_output_memory_config
-        ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+        if iteration == 0:
+            # Verify output memory config matches expected
+            expected_output_memory_config = run_config["output_memory_config"]
+            actual_output_memory_config = tt_output.memory_config()
+            assert (
+                actual_output_memory_config == expected_output_memory_config
+            ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-        # Convert output back to torch
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
-        )
+            # Convert output back to torch
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
 
-        # Cleanup
-        ttnn.deallocate(tt_input)
+            # Check PCC
+            assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
+        else:
+            ttnn.synchronize_device(mesh_device)
+
         ttnn.deallocate(tt_output)
 
-        # Check PCC
-        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
+    ttnn.deallocate(tt_input)
 
 
 if __name__ == "__main__":

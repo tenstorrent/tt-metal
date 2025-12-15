@@ -91,12 +91,16 @@ def test_deepseek(
             tt_input, dim, cluster_axis=cluster_axis, topology=topology, memory_config=output_mem_config
         )
 
-    for _ in range(repeat_batches):
-        tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
-        tt_output_tensor_torch = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_output_tensor)])
-        ttnn.deallocate(tt_output_tensor)
+    tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_output_tensor_torch = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_output_tensor)])
+    ttnn.deallocate(tt_output_tensor)
 
-        eq, mess = comp_equal(torch_reference, tt_output_tensor_torch)
-        assert eq, mess
+    eq, mess = comp_equal(torch_reference, tt_output_tensor_torch)
+    assert eq, mess
+
+    for _ in range(repeat_batches - 1):
+        tt_output_tensor = run_op()
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(tt_output_tensor)
 
     ttnn.deallocate(tt_input)

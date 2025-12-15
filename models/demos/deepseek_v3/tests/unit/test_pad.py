@@ -53,14 +53,18 @@ def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace, rep
     shape_diff = list(map(lambda x, y: x - y, padded_shape, shape))
     torch_ref = torch.nn.functional.pad(torch_input, sum([[0, pd] for pd in reversed(shape_diff)], []), value=pad_value)
 
-    for _ in range(repeat_batches):
-        tt_outputs = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_outputs = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for tt_out in ttnn.get_device_tensors(tt_outputs):
-            torch_out = ttnn.to_torch(tt_out)
-            eq, output = comp_equal(torch_out, torch_ref)
-            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+    for tt_out in ttnn.get_device_tensors(tt_outputs):
+        torch_out = ttnn.to_torch(tt_out)
+        eq, output = comp_equal(torch_out, torch_ref)
+        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
 
+    ttnn.deallocate(tt_outputs)
+
+    for _ in range(repeat_batches - 1):
+        tt_outputs = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_outputs)
 
     ttnn.deallocate(tt_input)

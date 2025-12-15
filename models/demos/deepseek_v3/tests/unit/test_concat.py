@@ -82,14 +82,18 @@ def test_concat_deepseek(mesh_device, shape_list, dim, dtype, mem_config, layout
     def run_op():
         return ttnn.concat(tt_inputs, dim=dim)
 
-    for _ in range(repeat_batches):
-        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
-            torch_out = ttnn.to_torch(tt_out_tensor)
-            eq, output = comp_equal(torch_out, torch_reference)
-            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+    for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
+        torch_out = ttnn.to_torch(tt_out_tensor)
+        eq, output = comp_equal(torch_out, torch_reference)
+        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
 
+    ttnn.deallocate(tt_out_tensors)
+
+    for _ in range(repeat_batches - 1):
+        tt_out_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_out_tensors)
 
     for tt_input in tt_inputs:

@@ -105,41 +105,47 @@ def test_forward_pass(
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
-    for _ in range(repeat_batches):
-        # Convert input to TTNN, DP=4 and Replicated
-        tt_input = ttnn.from_torch(
-            torch_input.unsqueeze(1),
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
+    # Convert input to TTNN, DP=4 and Replicated
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(1),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
-        # TTNN forward pass using utility function
-        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    # TTNN forward pass using utility function
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+
+    for iteration in range(repeat_batches):
         tt_output = run_module_forward(MoE, mode, tt_input, run_config)
 
-        # Verify output memory config matches expected
-        expected_output_memory_config = run_config["output_memory_config"]
-        actual_output_memory_config = tt_output.memory_config()
-        assert (
-            actual_output_memory_config == expected_output_memory_config
-        ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+        if iteration == 0:
+            # Verify output memory config matches expected
+            expected_output_memory_config = run_config["output_memory_config"]
+            actual_output_memory_config = tt_output.memory_config()
+            assert (
+                actual_output_memory_config == expected_output_memory_config
+            ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-        # Convert output back to torch
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-        )
+            # Convert output back to torch
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
 
-        # Cleanup
-        ttnn.deallocate(tt_input)
+            # Compare outputs using utility function
+            logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+            assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+        else:
+            ttnn.synchronize_device(mesh_device)
+
         ttnn.deallocate(tt_output)
 
-        # Compare outputs using utility function
-        logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-        assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+    ttnn.deallocate(tt_input)
 
 
 if __name__ == "__main__":

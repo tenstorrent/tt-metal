@@ -51,13 +51,17 @@ def test_gather_deepseek(mesh_device, shapes_dtypes, dim, layout, mem_config, en
     def run_op():
         return ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
-    for _ in range(repeat_batches):
-        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for ttnn_gather in ttnn.get_device_tensors(tt_out_tensors):
-            assert ttnn_gather.shape == torch_index.shape
-            assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
+    for ttnn_gather in ttnn.get_device_tensors(tt_out_tensors):
+        assert ttnn_gather.shape == torch_index.shape
+        assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
+    ttnn.deallocate(tt_out_tensors)
+
+    for _ in range(repeat_batches - 1):
+        tt_out_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_out_tensors)
 
     ttnn.deallocate(ttnn_input)

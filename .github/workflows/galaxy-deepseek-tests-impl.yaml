@@ -75,7 +75,17 @@ jobs:
           start_time=$(date +%s)
 
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --timeout 10 --durations=0 || fail=1
+          # Stress tests: loop inside each test while keeping the device session open.
+          pytest models/demos/deepseek_v3/tests \
+            --ignore=models/demos/deepseek_v3/tests/test_model.py \
+            --repeat-batches 1000 \
+            --timeout 600 \
+            --durations=0 || fail=1
+          # Full-model tests are heavier; use a smaller repeat count.
+          pytest models/demos/deepseek_v3/tests/test_model.py \
+            --repeat-batches 100 \
+            --timeout 600 \
+            --durations=0 || fail=1
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))

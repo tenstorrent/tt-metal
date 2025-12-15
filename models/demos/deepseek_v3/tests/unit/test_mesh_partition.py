@@ -67,14 +67,18 @@ def test_mesh_partition_deepseek(mesh_device, shape, dim, dtype, mem_config, lay
     def run_op():
         return ttnn.mesh_partition(tt_input, dim=dim, cluster_axis=cluster_axis)
 
-    for _ in range(repeat_batches):
-        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for tt_out, torch_ref in zip(ttnn.get_device_tensors(tt_out_tensors), torch_references):
-            torch_out = ttnn.to_torch(tt_out)
-            eq, output = comp_equal(torch_out, torch_ref)
-            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+    for tt_out, torch_ref in zip(ttnn.get_device_tensors(tt_out_tensors), torch_references):
+        torch_out = ttnn.to_torch(tt_out)
+        eq, output = comp_equal(torch_out, torch_ref)
+        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
 
+    ttnn.deallocate(tt_out_tensors)
+
+    for _ in range(repeat_batches - 1):
+        tt_out_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_out_tensors)
 
     ttnn.deallocate(tt_input)

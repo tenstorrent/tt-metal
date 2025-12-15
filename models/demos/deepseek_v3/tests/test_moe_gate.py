@@ -82,66 +82,74 @@ def test_forward_pass(
     reference_model.to(torch.bfloat16)
     reference_topk_indices, reference_topk_weights = reference_model(torch_input)
 
-    for _ in range(repeat_batches):
-        # Convert input to TTNN
-        tt_input = ttnn.from_torch(
-            torch_input.unsqueeze(1),
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
+    # Convert input to TTNN
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(1),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
-        # TTNN forward pass using utility function
-        tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    # TTNN forward pass using utility function
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    reference_topk_indices_sorted = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
+
+    for iteration in range(repeat_batches):
         tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
 
-        # Verify output memory config matches expected
-        expected_output_memory_config = run_config["output_memory_config"]
-        actual_topk_weights_memory_config = tt_topk_weights.memory_config()
-        assert (
-            actual_topk_weights_memory_config == expected_output_memory_config
-        ), f"TopK experts weights memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_weights_memory_config}"
+        if iteration == 0:
+            # Verify output memory config matches expected
+            expected_output_memory_config = run_config["output_memory_config"]
+            actual_topk_weights_memory_config = tt_topk_weights.memory_config()
+            assert (
+                actual_topk_weights_memory_config == expected_output_memory_config
+            ), f"TopK experts weights memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_weights_memory_config}"
 
-        actual_topk_indices_memory_config = tt_topk_indices.memory_config()
-        assert (
-            actual_topk_indices_memory_config == expected_output_memory_config
-        ), f"TopK experts indices memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_indices_memory_config}"
+            actual_topk_indices_memory_config = tt_topk_indices.memory_config()
+            assert (
+                actual_topk_indices_memory_config == expected_output_memory_config
+            ), f"TopK experts indices memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_indices_memory_config}"
 
-        # Convert output back to torch
-        tt_topk_weights_torch = ttnn.to_torch(
-            tt_topk_weights,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].squeeze(0)
-        tt_topk_indices_torch = ttnn.to_torch(
-            tt_topk_indices,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].squeeze(0)
+            # Convert output back to torch
+            tt_topk_weights_torch = ttnn.to_torch(
+                tt_topk_weights,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )[0].squeeze(0)
+            tt_topk_indices_torch = ttnn.to_torch(
+                tt_topk_indices,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)
+                ),
+            )[0].squeeze(0)
 
-        # Cleanup
-        ttnn.deallocate(tt_input)
+            # Compare outputs
+            logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+
+            topk_weights_pcc_required = 0.99
+            passing, pcc_message = comp_pcc(
+                reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required
+            )
+
+            logger.info(f"TopK experts weights PCC: {pcc_message}")
+            assert (
+                passing
+            ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
+
+            tt_topk_indices_sorted = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
+            assert torch.allclose(
+                reference_topk_indices_sorted, tt_topk_indices_sorted
+            ), f"TopK experts indices output does not match"
+        else:
+            ttnn.synchronize_device(mesh_device)
+
         ttnn.deallocate(tt_topk_weights)
         ttnn.deallocate(tt_topk_indices)
 
-        # Compare outputs
-        logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-
-        topk_weights_pcc_required = 0.99
-        passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
-
-        logger.info(f"TopK experts weights PCC: {pcc_message}")
-        assert (
-            passing
-        ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
-
-        topk_indices_pcc_required = 1.0
-        # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
-        reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
-        tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
-        assert (
-            torch.allclose(reference_topk_indices, tt_topk_indices_torch)
-        ), f"TopK experts indices output does not match"
+    ttnn.deallocate(tt_input)
 
 
 if __name__ == "__main__":

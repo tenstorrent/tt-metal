@@ -61,15 +61,20 @@ def test_all_broadcast_deepseek(
             topology=topology,
         )
 
-    for _ in range(repeat_batches):
-        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for tt_out_tensor in tt_out_tensors:
-            for tt_out in ttnn.get_device_tensors(tt_out_tensor):
-                torch_out = ttnn.to_torch(tt_out)
-                eq, output = comp_equal(torch_out, torch_reference)
-                assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+    for tt_out_tensor in tt_out_tensors:
+        for tt_out in ttnn.get_device_tensors(tt_out_tensor):
+            torch_out = ttnn.to_torch(tt_out)
+            eq, output = comp_equal(torch_out, torch_reference)
+            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
 
+    for tt_out_tensor in tt_out_tensors:
+        ttnn.deallocate(tt_out_tensor)
+
+    for _ in range(repeat_batches - 1):
+        tt_out_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         for tt_out_tensor in tt_out_tensors:
             ttnn.deallocate(tt_out_tensor)
 

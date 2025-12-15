@@ -57,13 +57,17 @@ def test_fill_pad_deepseek(mesh_device, shape_dtype_fill, mem_config, enable_tra
     def run_op():
         return ttnn.fill_implicit_tile_padding(input_tensor, fill_value)
 
-    for _ in range(repeat_batches):
-        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for t in ttnn.get_device_tensors(tt_out_tensors):
-            padded_torch_output_tensor = ttnn.from_device(t).to_torch_with_padded_shape()
-            assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+    for t in ttnn.get_device_tensors(tt_out_tensors):
+        padded_torch_output_tensor = ttnn.from_device(t).to_torch_with_padded_shape()
+        assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
+    ttnn.deallocate(tt_out_tensors)
+
+    for _ in range(repeat_batches - 1):
+        tt_out_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_out_tensors)
 
     ttnn.deallocate(input_tensor)

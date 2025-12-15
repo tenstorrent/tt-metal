@@ -134,14 +134,18 @@ def test_concat_deepseek(mesh_device, test_config, layout, enable_trace, repeat_
     def run_op():
         return ttnn.interleaved_to_sharded(tt_input, output_mem_config)
 
-    for _ in range(repeat_batches):
-        tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
-            torch_out = ttnn.to_torch(tt_out_tensor)
-            eq, output = comp_equal(torch_out, torch_input)
-            assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
+    for tt_out_tensor in ttnn.get_device_tensors(tt_out_tensors):
+        torch_out = ttnn.to_torch(tt_out_tensor)
+        eq, output = comp_equal(torch_out, torch_input)
+        assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"
 
+    ttnn.deallocate(tt_out_tensors)
+
+    for _ in range(repeat_batches - 1):
+        tt_out_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_out_tensors)
 
     ttnn.deallocate(tt_input)

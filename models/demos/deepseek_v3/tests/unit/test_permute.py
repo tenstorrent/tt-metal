@@ -50,13 +50,17 @@ def test_permute_deepseek(mesh_device, test_config, dtype, enable_trace, repeat_
         return ttnn.permute(tt_input, perm)
 
     torch_ref = torch.permute(torch_input, perm)
-    for _ in range(repeat_batches):
-        tt_output_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
+    tt_output_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
-        for tt_out_tensor in ttnn.get_device_tensors(tt_output_tensors):
-            torch_out = ttnn.to_torch(tt_out_tensor)
-            assert_equal(torch_ref, torch_out)
+    for tt_out_tensor in ttnn.get_device_tensors(tt_output_tensors):
+        torch_out = ttnn.to_torch(tt_out_tensor)
+        assert_equal(torch_ref, torch_out)
 
+    ttnn.deallocate(tt_output_tensors)
+
+    for _ in range(repeat_batches - 1):
+        tt_output_tensors = run_op()
+        ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_output_tensors)
 
     ttnn.deallocate(tt_input)
