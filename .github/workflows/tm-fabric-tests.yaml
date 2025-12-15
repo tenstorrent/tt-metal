@@ -20,7 +20,7 @@ on:
         required: false
         default: true
         type: boolean
-      run-perf-fabric-bw:
+      run-perf-fabric-bw-latency:
         description: 'Run T3K ubench - Fabric BW && latency performance test'
         required: false
         default: true
