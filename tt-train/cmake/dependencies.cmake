@@ -135,16 +135,12 @@ CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        68b9ae82a3ed1ac34b2b96b141b45554ee79a497 # v2.9.2 + ThisIsFineTM bfloat patch
+        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
-    CUSTOM_CACHE_KEY "2_9_2_with_bfloat"
 )
-if(nanobind_ADDED)
-    # sometimes this option isn't propagated for some reason
-    set(NB_USE_SUBMODULE_DEPS ON PARENT_SCOPE)
-endif()
+
 ####################################################################################################################
 # simd-everywhere
 ####################################################################################################################
