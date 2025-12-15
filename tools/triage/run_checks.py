@@ -25,14 +25,12 @@ Description:
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check
+from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check, create_progress
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
-from utils import ORANGE, RST
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
@@ -163,13 +161,13 @@ def get_devices(
 
             if len(metal_device_ids) == 0:
                 print(
-                    f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
+                    f"  [warning]No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.[/]"
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
             else:
                 device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
         else:
-            print(f"  {ORANGE}Using all available devices.{RST}")
+            print(f"  [warning]Using all available devices.[/]")
             device_ids = [int(id) for id in context.devices.keys()]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
@@ -221,13 +219,7 @@ class RunChecks:
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        with Progress(
-            SpinnerColumn(),
-            TimeElapsedColumn(),
-            BarColumn(),
-            TimeRemainingColumn(),
-            TextColumn("[{task.completed}/{task.total}] {task.description}"),
-        ) as progress:
+        with create_progress() as progress:
             device_task = progress.add_task(
                 "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
             )
@@ -257,13 +249,7 @@ class RunChecks:
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            with Progress(
-                SpinnerColumn(),
-                TimeElapsedColumn(),
-                BarColumn(),
-                TimeRemainingColumn(),
-                TextColumn("[{task.completed}/{task.total}] {task.description}"),
-            ) as progress:
+            with create_progress() as progress:
                 progress_count = 0
                 for block_type in block_types_to_check:
                     for location in self.block_locations[device][block_type]:

@@ -4,6 +4,8 @@
 
 import os
 import sys
+from rich.theme import Theme
+from rich.style import Style
 
 
 def should_use_color() -> bool:
@@ -26,17 +28,33 @@ def should_use_color() -> bool:
     return sys.stdout.isatty()
 
 
-# Cache the result of should_use_color
-_USE_COLOR = should_use_color()
-
-# Colors for terminal output
-RST = "\033[0m" if _USE_COLOR else ""
-BLUE = "\033[34m" if _USE_COLOR else ""  # For good values
-RED = "\033[31m" if _USE_COLOR else ""  # For bad values
-GREEN = "\033[32m" if _USE_COLOR else ""  # For instructions
-GREY = "\033[37m" if _USE_COLOR else ""  # For general information
-ORANGE = "\033[33m" if _USE_COLOR else ""  # For warnings
-VERBOSE_CLR = "\033[94m" if _USE_COLOR else ""  # For verbose output
+def create_console_theme(disable_colors: bool) -> Theme:
+    """Create a Rich theme for console output based on color support."""
+    blue = Style(color="blue")
+    red = Style(color="red")
+    green = Style(color="green")
+    grey = Style(color="grey85")
+    yellow = Style(color="yellow")
+    styles: dict[str, str | Style] = {
+        "command": green,  # Command that user should execute
+        "debug": green,  # Debug messages
+        "info": blue,  # Informational messages
+        "error": red,  # Error messages
+        "status": blue,  # Status messages
+        "warning": yellow,  # Warning messages
+        "verbose": grey,  # Verbose output messages
+        "progress.tasks": "gray50",  # Progress task numbers
+        "progress.description": "cyan",  # Progress description
+        "blue": blue,
+        "red": red,
+        "green": green,
+        "grey": grey,
+        "yellow": yellow,
+    }
+    if disable_colors or not should_use_color():
+        for key in styles.keys():
+            styles[key] = ""
+    return Theme(styles)
 
 
 # Tabulate format for displaying tables
@@ -115,24 +133,34 @@ VERBOSITY_VALUE: Verbosity = Verbosity.INFO
 
 def ERROR(s, **kwargs):
     if Verbosity.supports(Verbosity.ERROR):
-        print(f"{RED}{s}{RST}", **kwargs)
+        from triage import console
+
+        console.print(f"[error]{s}[/]", **kwargs)
 
 
 def WARN(s, **kwargs):
     if Verbosity.supports(Verbosity.WARN):
-        print(f"{ORANGE}{s}{RST}", **kwargs)
+        from triage import console
+
+        console.print(f"[warning]{s}[/]", **kwargs)
 
 
 def DEBUG(s, **kwargs):
     if Verbosity.supports(Verbosity.DEBUG):
-        print(f"{GREEN}{s}{RST}", **kwargs)
+        from triage import console
+
+        console.print(f"[debug]{s}[/]", **kwargs)
 
 
 def INFO(s, **kwargs):
     if Verbosity.supports(Verbosity.INFO):
-        print(f"{BLUE}{s}{RST}", **kwargs)
+        from triage import console
+
+        console.print(f"[info]{s}[/]", **kwargs)
 
 
 def VERBOSE(s, **kwargs):
     if Verbosity.supports(Verbosity.VERBOSE):
-        print(f"{GREY}{s}{RST}", **kwargs)
+        from triage import console
+
+        console.print(f"[verbose]{s}[/]", **kwargs)

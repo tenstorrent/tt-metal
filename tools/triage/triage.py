@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -21,6 +21,7 @@ Options:
                                      Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
+    --disable-colors                 Disable colored output. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -52,19 +53,23 @@ def find_install_debugger_script() -> str:
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
 except ImportError as e:
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     install_script = find_install_debugger_script()
     print(f"Module '{e}' not found. Please install tt-exalens by running:")
-    print(f"  {utils.GREEN}{install_script}{utils.RST}")
+    print(f"  {GREEN}{install_script}{RST}")
     exit(1)
 
 # Check if requirements are installed
 try:
     import capnp
 except ImportError as e:
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {utils.GREEN}pip install -r {requirements_path}{utils.RST}")
+    print(f"  {GREEN}pip install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -72,6 +77,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import importlib
 import importlib.metadata as importlib_metadata
+from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 import sys
 from ttexalens.context import Context
@@ -326,6 +332,46 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
+console: Console
+
+
+def init_console(args: ScriptArguments) -> None:
+    global console
+
+    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False)
+
+
+def create_progress() -> Progress:
+    global console
+
+    return Progress(
+        SpinnerColumn(),
+        TimeElapsedColumn(),
+        BarColumn(),
+        TimeRemainingColumn(),
+        TextColumn("[progress.tasks]{task.completed}/{task.total}[/] [progress.description]{task.description}[/]"),
+        console=console,
+        transient=True,
+    )
+
+
+def process_arguments(args: ScriptArguments) -> None:
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
+
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+
+    # Initialize console
+    init_console(args)
+
+
 def parse_arguments(
     scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
 ) -> ScriptArguments:
@@ -374,7 +420,9 @@ def parse_arguments(
         ao.children = list(set(combined_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if matched and left == []:
-        return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
+        arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
+        process_arguments(arguments)
+        return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
     doc = __doc__ if script_path is None else scripts[script_path].module.__doc__
@@ -532,7 +580,7 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         from tabulate import tabulate
         from utils import DEFAULT_TABLE_FORMAT
 
-        print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+        console.print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -576,8 +624,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         utils.WARN(
             f"Required debugger component is not installed. Please run {install_script} to install debugger dependencies."
         )
-        print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
-        print(f"  {utils.GREEN}{install_script}{utils.RST}")
+        console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
+        console.print(f"  [command]{install_script}[/]")
         exit(1)
 
     # Check if installed version matches approved version
@@ -587,10 +635,10 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
-            print(message)
-            print(f"Please install tt-exalens by running:")
-            print(f"  {utils.GREEN}{install_script}{utils.RST}")
-            print(f"Or disable this check by running with {utils.RED}--skip-version-check{utils.RST} argument.")
+            console.print(message)
+            console.print(f"Please install tt-exalens by running:")
+            console.print(f"  [command]{install_script}[/]")
+            console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
             exit(1)
 
 
@@ -634,18 +682,6 @@ def run_script(
     # Parse arguments
     if args is None:
         args = parse_arguments(scripts, script_path, argv)
-
-        # Set verbose level from -v count (controls which columns are displayed)
-        verbose_level = args["-v"]
-        set_verbose_level(verbose_level)
-
-        # Setting verbosity level
-        try:
-            verbosity = int(args["--verbosity"])
-            utils.Verbosity.set(verbosity)
-        except:
-            utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-        utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
 
     # Initialize context if not provided
     if context is None:
@@ -717,29 +753,11 @@ def main():
     # Parse common command line arguments
     args = parse_arguments(scripts)
 
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
-    # Setting verbosity level
-    try:
-        verbosity = int(args["--verbosity"])
-        utils.Verbosity.set(verbosity)
-    except:
-        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
-
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
 
-    with Progress(
-        SpinnerColumn(),
-        TimeElapsedColumn(),
-        BarColumn(),
-        TimeRemainingColumn(),
-        TextColumn("[{task.completed}/{task.total}] {task.description}"),
-    ) as progress:
+    with create_progress() as progress:
         scripts_task = progress.add_task("Script execution", total=len(script_queue))
 
         # Check if we should run specific scripts
