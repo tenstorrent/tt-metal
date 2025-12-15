@@ -175,7 +175,8 @@ def test_tt_dit_accuracy(
     It relies on the default configurations set in each pipeline.
     """
 
-    monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+    if os.getenv("TT_DIT_CACHE_DIR") is None:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
     benchmark_profiler = BenchmarkProfiler()
     if ttnn.device.is_blackhole() and device_name == "galaxy":
         device_name = "bh_" + device_name
