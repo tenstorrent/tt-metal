@@ -76,12 +76,14 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     past_key_values = DynamicCache()
     config = AutoConfig.from_pretrained(hf_weights_repo_name)
     config.text_config._attn_implementation = "sdpa"
-    config.text_config.rms_norm_eps = norm_eps
+
     # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
     layer_idx = config.text_config.cross_attention_layers[0]
     reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(hf_weights_repo_name, "model.language_model.layers.3.cross_attn.")
+    partial_state_dict = load_partial_weights(
+        hf_weights_repo_name, "model.language_model.layers.{layer_idx}.cross_attn."
+    )
     reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
@@ -107,10 +109,8 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
 
-    """
-    Test compute_xattn_kv_cache
-    """
-    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute only store the Key and Value projections in memory
+    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute only and store the Key and Value projections in memory
+    # see link on how the cache is used: https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/mllama/modeling_mllama.py#L484-L496
     reference_model.forward(
         torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
     )
@@ -167,7 +167,8 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query intput is passed to compute its projection and proceed to attention computation.
+        # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
+        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st ouput of the subclass method indexed as [0].
         pt_out = reference_model.forward(
             pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
         )[0] * full_text_mask.squeeze(1)
