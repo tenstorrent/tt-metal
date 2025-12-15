@@ -214,7 +214,6 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
               "use-vllm-v1": true,
-              "structured-output": true,
               "multimodal": false,
               "additional-server-args": "--enable-prefix-caching",
               "additional-benchmark-args": "--random-prefix-len 128",
