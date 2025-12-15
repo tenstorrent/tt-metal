@@ -10,6 +10,7 @@ This test suite verifies:
 3. MLP1D correctly rejects TG/Galaxy devices
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -221,33 +222,59 @@ def test_mlp_1d_optimization_config():
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("seq_len", (512, 32))
-def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
+@pytest.mark.parametrize(
+    "dtype,batch_size,hf_model_name",
+    [
+        pytest.param(
+            ttnn.bfloat8_b,
+            1,
+            "meta-llama/Llama-3.2-1B-Instruct",
+            id="bf8b-bs1-default-hf",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "seq_len,mode",
+    [
+        (512, "prefill"),
+        (32, "decode"),
+    ],
+    ids=[
+        "prefill-512",
+        "decode-32",
+    ],
+)
+def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len, mode, dtype, batch_size, hf_model_name):
     """
     Test MLP1D constructed via direct APIs (MLP1DConfig) matches HF reference MLP.
 
     Uses HF_MODEL env (defaults to Llama 3.2 1B) and dummy weights.
     """
     import math
-    import os
     from functools import cached_property
 
     from transformers import AutoConfig, AutoModelForCausalLM
+    from transformers.modeling_utils import no_init_weights
 
     from models.common.modules.lazy_weight import LazyWeight
     from models.common.modules.mlp.mlp_1d import MLP1D, MeshContext, MLP1DConfig, MLP1DPrefillConfigs, _matmul_config
     from models.tt_transformers.tt.ccl import TT_CCL
 
-    dtype = ttnn.bfloat8_b
-    batch_size = 1
-    mode = "decode" if seq_len <= 32 else "prefill"
+    seed = 1234
+    torch.manual_seed(seed)
 
-    # HF model (default small) for reference
-    hf_model_name = os.getenv("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
+    # HF model (default small) for reference; skip global init to only seed MLP.
     config = AutoConfig.from_pretrained(hf_model_name)
     config.num_hidden_layers = 1
-    hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
-    reference_mlp = hf_model.model.layers[0].mlp
+    with no_init_weights():
+        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    first_layer = hf_model.model.layers[0]
+    reference_mlp = first_layer.mlp
+
+    # Initialize only the MLP submodule deterministically.
+    with torch.no_grad():
+        for param in reference_mlp.parameters():
+            param.copy_(torch.randn_like(param))
 
     dim = config.hidden_size
     hidden_dim = config.intermediate_size
@@ -255,17 +282,10 @@ def test_mlp_1d_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
 
     # Deterministic random weights + input (match test_mlp_2d_vs_reference pattern).
     # TT expects weights in (input_dim, output_dim) layout.
-    torch.manual_seed(1234)
-    w1_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
-    w3_torch = torch.randn(dim, hidden_dim, dtype=torch.bfloat16)  # (dim, hidden_dim)
-    w2_torch = torch.randn(hidden_dim, dim, dtype=torch.bfloat16)  # (hidden_dim, dim)
+    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
     torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
-
-    # HF Linear weights are stored as (output_dim, input_dim); copy transposed.
-    with torch.no_grad():
-        reference_mlp.gate_proj.weight.copy_(w1_torch.T.contiguous())
-        reference_mlp.up_proj.weight.copy_(w3_torch.T.contiguous())
-        reference_mlp.down_proj.weight.copy_(w2_torch.T.contiguous())
 
     tt_ccl = TT_CCL(ttnn_mesh_device)
     mesh_ctx = MeshContext(mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
