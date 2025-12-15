@@ -35,7 +35,20 @@ cp "$SCRIPT_DIR/subagent_breakdown.md" "$REPO_ROOT/.claude/"
 
 # Copy CLAUDE.md to repo root
 echo "Installing CLAUDE.md..."
-cp "$SCRIPT_DIR/CLAUDE.md" "$REPO_ROOT/"
+if [ -f "$REPO_ROOT/CLAUDE.md" ]; then
+    echo "CLAUDE.md already exists in $REPO_ROOT"
+    read -p "Do you want to overwrite it? (y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        cp "$SCRIPT_DIR/CLAUDE.md" "$REPO_ROOT/"
+        echo "CLAUDE.md overwritten"
+    else
+        echo "Skipping CLAUDE.md installation"
+    fi
+else
+    cp "$SCRIPT_DIR/CLAUDE.md" "$REPO_ROOT/"
+    echo "CLAUDE.md installed"
+fi
 
 # Configure Claude Code settings
 echo "Configuring Claude Code settings..."
