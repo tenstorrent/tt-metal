@@ -711,6 +711,8 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {

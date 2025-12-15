@@ -336,7 +336,7 @@ void MetalContext::initialize(
             fut.wait();
         }
     }
-    
+
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
     watcher_server_->attach_devices();
