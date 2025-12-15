@@ -14,8 +14,10 @@ std::tuple<CopyDeviceOperation::operation_attributes_t, CopyDeviceOperation::ten
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
-    const std::optional<Tensor>& preallocated_output) {
-    return {operation_attributes_t{output_mem_config, output_dtype}, tensor_args_t{input, preallocated_output}};
+    const std::optional<Tensor>& preallocated_output,
+    bool backwards) {
+    return {
+        operation_attributes_t{output_mem_config, output_dtype, backwards}, tensor_args_t{input, preallocated_output}};
 }
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
