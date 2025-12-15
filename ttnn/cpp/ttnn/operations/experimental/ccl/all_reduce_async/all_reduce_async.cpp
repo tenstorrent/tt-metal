@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "device/all_reduce_async_device_operation.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -217,7 +217,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
-    ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+    ttnn::Tensor scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
         interleaved_tensor,
         std::nullopt,
         dim,
@@ -329,7 +329,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
-        scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+        scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
             dim,
