@@ -30,9 +30,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
-            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
-            TTI_NOP;
-            TTI_NOP;
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
@@ -72,13 +69,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             // restore fp32 mode
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             TTI_CLEARDVALID(0b10, 0);
-            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
-            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
-            TTI_NOP;
-            TTI_NOP;
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
@@ -116,13 +109,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             // restore fp32 mode
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             TTI_CLEARDVALID(0b10, 0);
-            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         }
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
-            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
-            TTI_NOP;
-            TTI_NOP;
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
@@ -154,7 +143,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             TTI_CLEARDVALID(0b10, 0);
-            TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         }
     }
     else
@@ -188,6 +176,13 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod(const uint dst_format)
 {
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_3);
+
     // Use srcA for data movement
     if constexpr (type == A2D)
     {
@@ -381,6 +376,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
 
     TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

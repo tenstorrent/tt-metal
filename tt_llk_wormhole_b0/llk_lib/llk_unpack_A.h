@@ -204,7 +204,6 @@ inline void _llk_unpack_A_init_(
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
-    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
 
     // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
     // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) == static_cast<uint>(DataFormat::UInt16));
