@@ -332,7 +332,7 @@ jobs:
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_command="$build_command --build-umd-tests"
           fi
-
+          echo "build-artifact.yaml running: $build_command"
           $build_command
 
       - name: 🛠️ Compile
