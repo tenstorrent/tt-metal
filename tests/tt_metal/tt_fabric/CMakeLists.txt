@@ -75,6 +75,32 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
+# Telemetry Initialization Test
+add_executable(test_telemetry_init ${CMAKE_CURRENT_SOURCE_DIR}/test_telemetry_init.cpp)
+
+target_link_libraries(
+    test_telemetry_init
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    test_telemetry_init
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+set_target_properties(
+    test_telemetry_init
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 # Fabric Elastic Channels Test
 add_executable(fabric_elastic_channels_host_test)
 

@@ -21,6 +21,7 @@ TEST_F(TGFabricFixture, TelemetryStaticInfoInitialized) {
 
     // Test on first device
     auto device = devices[0];
+    ASSERT_FALSE(device->get_devices().empty()) << "Device has no sub-devices";
     auto physical_chip_id = device->get_devices()[0]->id();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 
@@ -34,7 +35,7 @@ TEST_F(TGFabricFixture, TelemetryStaticInfoInitialized) {
         const auto& static_info = sample.snapshot.static_info;
 
         // Check mesh_id is populated (should match fabric_node_id)
-        EXPECT_EQ(static_info.mesh_id, fabric_node_id.mesh_id.value())
+        EXPECT_EQ(static_info.mesh_id, fabric_node_id.mesh_id.get())
             << "mesh_id not correctly initialized for channel " << static_cast<int>(sample.channel_id);
 
         // Check device_id is populated (should match fabric_node_id)
@@ -51,8 +52,9 @@ TEST_F(TGFabricFixture, TelemetryStaticInfoInitialized) {
 
         // Verify BANDWIDTH bit is set (bit 1, value 0x02)
         constexpr uint8_t BANDWIDTH_BIT = 0x02;
-        EXPECT_TRUE(static_info.supported_stats & BANDWIDTH_BIT)
-            << "BANDWIDTH telemetry not enabled for channel " << static_cast<int>(sample.channel_id);
+        EXPECT_NE(static_info.supported_stats & BANDWIDTH_BIT, 0)
+            << "BANDWIDTH telemetry not enabled for channel " << static_cast<int>(sample.channel_id)
+            << " (supported_stats=0x" << std::hex << static_cast<int>(static_info.supported_stats) << std::dec << ")";
 
         // Verify dynamic_info counters are initialized (not garbage)
         const auto& tx_bw = sample.snapshot.dynamic_info.tx_bandwidth;
