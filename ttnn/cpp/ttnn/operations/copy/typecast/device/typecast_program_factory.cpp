@@ -89,12 +89,12 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
@@ -269,8 +269,8 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles // per_core_block_size
+        static_cast<uint32_t>(nblocks_per_core),  // per_core_block_cnt
+        static_cast<uint32_t>(ntiles_per_block),  // per_block_ntiles // per_core_block_size
         src0_cb_index,
         output_cb_index};
 
@@ -284,12 +284,12 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
