@@ -27,7 +27,7 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     TT_FATAL(output_indices.dtype() == DataType::UINT16, "Output indices tensor must be UINT16");
     TT_FATAL(output_indices.layout() == Layout::TILE, "Output indices tensor must be TILE layout");
 
-    auto device = scores.device();
+    auto* device = scores.device();
     TT_FATAL(device != nullptr, "Device must be non-null");
     // Create program
     tt::tt_metal::Program program{};
