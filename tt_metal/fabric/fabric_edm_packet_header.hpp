@@ -137,12 +137,11 @@ struct NocUnicastScatterCommandHeader {
 
     // Requires: addresses[num_addresses], chunk_sizes[num_addresses - 1].
     NocUnicastScatterCommandHeader(
-        const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) {
+        const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) :
+        chunk_count(num_addresses) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         ASSERT(num_addresses > 0 && num_addresses <= NOC_SCATTER_WRITE_MAX_CHUNKS);
 #endif
-
-        this->chunk_count = num_addresses;
 
         uint8_t idx = 0;
         for (; idx < num_addresses; idx++) {
