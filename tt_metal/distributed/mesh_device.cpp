@@ -56,6 +56,7 @@
 #include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
 class CommandQueue;
@@ -495,8 +496,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
     for (const auto& coord : submesh_range) {
-        if (view_->is_local(coord)) {
-            submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->get_device(coord)));
+        if (view_->impl().is_local(coord)) {
+            submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->impl().get_device(coord)));
         } else {
             submesh_devices.push_back(MaybeRemote<IDevice*>::remote());
         }
@@ -592,7 +593,7 @@ IDevice* MeshDeviceImpl::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{static_cast<uint32_t>(row_idx), static_cast<uint32_t>(col_idx)});
 }
 
-IDevice* MeshDeviceImpl::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
+IDevice* MeshDeviceImpl::get_device(const MeshCoordinate& coord) const { return view_->impl().get_device(coord); }
 
 tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate& coord) const {
     return view_->get_fabric_node_id(coord);
@@ -630,7 +631,7 @@ size_t MeshDeviceImpl::num_cols() const { return view_->num_cols(); }
 
 const MeshShape& MeshDeviceImpl::shape() const { return view_->shape(); }
 
-bool MeshDeviceImpl::is_local(const MeshCoordinate& coord) const { return view_->is_local(coord); }
+bool MeshDeviceImpl::is_local(const MeshCoordinate& coord) const { return view_->impl().is_local(coord); }
 
 void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     const auto num_devices = view_->shape().mesh_size();
@@ -667,8 +668,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
         auto line_coords = view_->get_line_coordinates();
         for (const auto& coord : line_coords) {
             new_device_order.push_back(
-                view_->is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device(coord))
-                                       : MaybeRemote<IDevice*>::remote());
+                view_->impl().is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device(coord))
+                                              : MaybeRemote<IDevice*>::remote());
             new_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
         }
     } else {

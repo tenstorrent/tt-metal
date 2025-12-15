@@ -5,6 +5,7 @@
 
 #include <tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include <tt_metal/impl/profiler/profiler_state.hpp>
 #include <tt_metal/impl/profiler/profiler_state_manager.hpp>
 
@@ -59,7 +60,7 @@
         for (auto& [device_range, program] : (mesh_workload).get_programs()) {                                \
             if ((trace_id).has_value()) {                                                                     \
                 for_each_local((mesh_device), device_range, [&](const auto& coord) {                          \
-                    auto device = (mesh_device)->get_device(coord);                                           \
+                    auto device = (mesh_device)->impl().get_device(coord);                                    \
                     tt::tt_metal::MetalContext::instance().profiler_state_manager()->add_runtime_id_to_trace( \
                         device->id(), *((trace_id).value()), program.get_runtime_id());                       \
                     if (TracyTTMetalTraceTrackingEnabled()) {                                                 \
