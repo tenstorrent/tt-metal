@@ -25,7 +25,7 @@ Description:
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
-from rich.progress import Progress
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check
@@ -221,8 +221,16 @@ class RunChecks:
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        with Progress() as progress:
-            device_task = progress.add_task("Devices", total=len(self.devices), visible=len(self.devices) > 1)
+        with Progress(
+            SpinnerColumn(),
+            TimeElapsedColumn(),
+            BarColumn(),
+            TimeRemainingColumn(),
+            TextColumn("[{task.completed}/{task.total}] {task.description}"),
+        ) as progress:
+            device_task = progress.add_task(
+                "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
+            )
             try:
                 for device in self.devices:
                     check_result = check(device)
@@ -249,12 +257,18 @@ class RunChecks:
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            with Progress() as progress:
+            with Progress(
+                SpinnerColumn(),
+                TimeElapsedColumn(),
+                BarColumn(),
+                TimeRemainingColumn(),
+                TextColumn("[{task.completed}/{task.total}] {task.description}"),
+            ) as progress:
                 progress_count = 0
                 for block_type in block_types_to_check:
                     for location in self.block_locations[device][block_type]:
                         progress_count += 1
-                device_task = progress.add_task("Locations", total=progress_count)
+                device_task = progress.add_task(f"Processing NOC locations", total=progress_count)
                 try:
                     for block_type in block_types_to_check:
                         for location in self.block_locations[device][block_type]:

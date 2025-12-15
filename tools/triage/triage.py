@@ -72,7 +72,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import importlib
 import importlib.metadata as importlib_metadata
-from rich.progress import Progress
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -733,7 +733,13 @@ def main():
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
 
-    with Progress() as progress:
+    with Progress(
+        SpinnerColumn(),
+        TimeElapsedColumn(),
+        BarColumn(),
+        TimeRemainingColumn(),
+        TextColumn("[{task.completed}/{task.total}] {task.description}"),
+    ) as progress:
         scripts_task = progress.add_task("Script execution", total=len(script_queue))
 
         # Check if we should run specific scripts
