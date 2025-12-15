@@ -12,8 +12,6 @@
 #include "repeat_and_interleave_eltwise_mul.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 
-namespace nb = nanobind;
-
 namespace ttnn::operations::experimental::ssm::detail {
 
 void bind_repeat_and_interleave_eltwise_mul(nb::module_& mod) {

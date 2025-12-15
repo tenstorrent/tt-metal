@@ -19,6 +19,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
 
+// NOLINTBEGIN(bugprone-unused-raii)
+
 namespace ttnn::operations::core {
 
 struct DeviceComputeKernelConfigPlaceholder {};
@@ -401,3 +403,5 @@ void py_module(nb::module_& mod) {
 }
 
 }  // namespace ttnn::operations::core
+
+// NOLINTEND(bugprone-unused-raii)

@@ -14,6 +14,8 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "layernorm.hpp"
 
+// NOLINTBEGIN(bugprone-unused-raii)
+
 namespace ttnn::operations::normalization::detail {
 
 struct LayerNormProgramConfigPlaceholder {};
@@ -150,3 +152,5 @@ void bind_normalization_layernorm(nb::module_& mod) {
 }
 
 }  // namespace ttnn::operations::normalization::detail
+
+// NOLINTEND(bugprone-unused-raii)

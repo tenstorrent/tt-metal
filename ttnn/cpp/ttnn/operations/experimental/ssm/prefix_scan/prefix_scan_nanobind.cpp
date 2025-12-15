@@ -14,8 +14,6 @@
 
 namespace ttnn::operations::experimental::ssm::detail {
 
-namespace py = nanobind;
-
 void bind_prefix_scan(nb::module_& mod) {
     using OperationType = decltype(ttnn::experimental::prefix_scan);
 

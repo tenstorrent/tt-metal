@@ -12,6 +12,8 @@
 
 using tt::tt_metal::distributed::MeshDevice;
 
+// NOLINTBEGIN(bugprone-unused-raii)
+
 namespace ttnn::reports {
 
 void py_module_types(nb::module_& mod) {
@@ -88,3 +90,5 @@ void py_module(nb::module_& mod) {
 }
 
 }  // namespace ttnn::reports
+
+// NOLINTEND(bugprone-unused-raii)
