@@ -54,9 +54,10 @@ on:
         description: 'Result of All post-commit C++ tests (status:url format)'
         value: ${{ jobs.setup-and-test.outputs.tt-metal-l2-nightly-result }}
 
-concurrency:
-  group: llk-integration-${{ inputs.mirrored_branch }}
-  cancel-in-progress: true
+# NOTE: Concurrency is intentionally NOT set here.
+# When called via workflow_call, the caller (tt-llk) manages concurrency.
+# This workflow's proactive cancellation step handles cleanup of spawned workflows.
+# Setting concurrency here would conflict with the caller's concurrency settings.
 
 env:
   PARENT_BRANCH_NAME: test-llk-${{ inputs.mirrored_branch }}-${{ github.run_id }}
@@ -103,6 +104,62 @@ jobs:
         run: |
           git config --global user.name "LLK Integration Tester [bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Cancel any previous spawned workflows
+        env:
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+        run: |
+          echo "🔍 Proactively cancelling any previous spawned workflows for this branch..."
+          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
+          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml")
+          STATUSES=("queued" "in_progress")
+
+          for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
+            for status in "${STATUSES[@]}"; do
+              echo "🔍 Checking for $status instances of $workflow..."
+              # Get all runs and filter by branch pattern (test-llk-<mirrored_branch>-*)
+              run_data=$(gh run list \
+                --workflow "$workflow" \
+                --status "$status" \
+                --limit 100 \
+                --json databaseId,headBranch \
+                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "[]")
+
+              # Filter runs matching our branch pattern and extract IDs
+              run_ids=$(echo "$run_data" | jq -r --arg pattern "test-llk-$MIRRORED_BRANCH-" \
+                '.[] | select(.headBranch | startswith($pattern)) | .databaseId')
+
+              if [ -n "$run_ids" ]; then
+                for run_id in $run_ids; do
+                  echo "🛑 Cancelling previous spawned workflow run $run_id ($workflow)..."
+                  if gh run cancel "$run_id" --repo "${{ env.METAL_REPO }}"; then
+                    echo "✅ Successfully cancelled run $run_id"
+                  else
+                    echo "⚠️ Failed to cancel run $run_id (may have already completed)"
+                  fi
+                done
+              else
+                echo "ℹ️ No $status instances of $workflow found for branch pattern test-llk-$MIRRORED_BRANCH-*"
+              fi
+            done
+          done
+
+          # Also clean up old parent branches from previous runs to avoid git conflicts
+          echo "🧹 Cleaning up old parent branches..."
+          OLD_BRANCHES=$(gh api "repos/${{ env.METAL_REPO }}/branches" --paginate --jq \
+            --arg pattern "test-llk-$MIRRORED_BRANCH-" \
+            '.[] | select(.name | startswith($pattern)) | .name' 2>/dev/null || echo "")
+
+          if [ -n "$OLD_BRANCHES" ]; then
+            for branch in $OLD_BRANCHES; do
+              echo "🗑️ Deleting old parent branch: $branch"
+              gh api --method DELETE "repos/${{ env.METAL_REPO }}/git/refs/heads/$branch" 2>/dev/null || \
+                echo "⚠️ Failed to delete branch $branch (may not exist)"
+            done
+          else
+            echo "ℹ️ No old parent branches found"
+          fi
+
+          echo "✅ Proactive cleanup completed"
       - name: Setup test branch and parent repository
         id: check-branch
         run: |
