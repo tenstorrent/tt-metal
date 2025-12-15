@@ -34,6 +34,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
 #include "fabric_telemetry_msgs.h"
+#include "eth_l1_address_map.h"
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif
@@ -2141,8 +2142,48 @@ void initialize_state_for_txq1_active_mode_sender_side() {
     }
 }
 
+// Initialize fabric telemetry structure in L1
+// This must be called early in kernel_main to ensure telemetry is properly initialized
+FORCE_INLINE void initialize_fabric_telemetry() {
+    // Get pointer to telemetry structure in L1
+    volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
+        reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+
+    // Zero the entire telemetry structure to clear any garbage values
+    // Using volatile pointer writes to ensure compiler doesn't optimize away
+    volatile tt_l1_ptr uint32_t* telemetry_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fabric_telemetry);
+    constexpr size_t num_words = sizeof(FabricTelemetry) / sizeof(uint32_t);
+    for (size_t i = 0; i < num_words; i++) {
+        telemetry_words[i] = 0;
+    }
+
+    // Populate static_info fields with compile-time topology information
+    fabric_telemetry->static_info.mesh_id = fabric_telemetry_mesh_id;
+    fabric_telemetry->static_info.device_id = fabric_telemetry_device_id;
+    fabric_telemetry->static_info.direction = static_cast<uint8_t>(my_direction);
+    fabric_telemetry->static_info.fabric_config = 0;  // Reserved for future use
+
+    // Set supported_stats bitmask to enable all telemetry features
+    fabric_telemetry->static_info.supported_stats = static_cast<DynamicStatistics>(
+        DynamicStatistics::BANDWIDTH | DynamicStatistics::ROUTER_STATE | DynamicStatistics::HEARTBEAT_TX |
+        DynamicStatistics::HEARTBEAT_RX);
+
+    // Initialize router_state to STANDBY (will transition to ACTIVE when router starts)
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        // In dual-ERISC mode, each ERISC initializes its own entry
+        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = RouterState::STANDBY;
+    } else {
+        // In single-ERISC mode, initialize both entries (only [0] will be used)
+        fabric_telemetry->dynamic_info.erisc[0].router_state = RouterState::STANDBY;
+        fabric_telemetry->dynamic_info.erisc[1].router_state = RouterState::STANDBY;
+    }
+}
+
 void kernel_main() {
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+
+    // Initialize fabric telemetry early to ensure valid values before router starts
+    initialize_fabric_telemetry();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
