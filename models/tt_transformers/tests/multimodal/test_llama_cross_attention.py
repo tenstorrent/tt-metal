@@ -109,7 +109,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
 
-    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute only and store the Key and Value projections in memory
+    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute and store the Key and Value projections in memory
     # see link on how the cache is used: https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/mllama/modeling_mllama.py#L484-L496
     reference_model.forward(
         torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
