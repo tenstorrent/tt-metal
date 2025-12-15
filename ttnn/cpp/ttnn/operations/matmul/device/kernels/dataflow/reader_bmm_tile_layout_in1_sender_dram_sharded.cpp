@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
+    asm volatile("ebreak");
     // RUNTIME ARGS
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
     // if not worker core, skip
