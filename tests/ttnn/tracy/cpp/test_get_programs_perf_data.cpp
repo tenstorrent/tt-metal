@@ -172,8 +172,6 @@ TEST_F(GetProgramsPerfDataFixture, TestGetProgramsPerfDataAfterSingleReadMeshDev
 
     uint32_t expected_runtime_id = 1;
     for (const experimental::ProgramAnalysisData& program_analysis_data : latest_programs_perf_data.at(0)) {
-        std::cout << "core_count: " << program_analysis_data.core_count << std::endl;
-        std::cout << "num_available_cores: " << program_analysis_data.num_available_cores << std::endl;
         EXPECT_EQ(
             detail::DecodePerDeviceProgramID(program_analysis_data.program_execution_uid.runtime_id).base_program_id,
             expected_runtime_id++);
