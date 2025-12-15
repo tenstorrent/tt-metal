@@ -54,8 +54,17 @@ struct MeshTensorAccessor {
         std::array<uint32_t, MAX_DIMS> mesh_tensor_strides;  // strides for global tensor
         std::array<uint32_t, MAX_DIMS> tensor_shape;         // local shape on single device
         std::array<uint32_t, MAX_DIMS> tensor_strides;       // strides for local tensor
+        std::array<uint32_t, MAX_DIMS> mesh_shape;           // mesh device shape (mesh_tensor_shape / tensor_shape)
+        std::array<uint32_t, MAX_DIMS> mesh_strides;         // strides for mesh device space
 
-        constexpr MeshDSpec() : rank(0), mesh_tensor_shape{}, mesh_tensor_strides{}, tensor_shape{}, tensor_strides{} {}
+        constexpr MeshDSpec() :
+            rank(0),
+            mesh_tensor_shape{},
+            mesh_tensor_strides{},
+            tensor_shape{},
+            tensor_strides{},
+            mesh_shape{},
+            mesh_strides{} {}
     };
 
     /**
@@ -155,7 +164,8 @@ public:
         size_t local_page_id = 0;
 
         for (size_t i = 0; i < mesh_dspec_.rank; ++i) {
-            grid_id += (global_page_coord[i] / mesh_dspec_.tensor_shape[i]) * mesh_dspec_.mesh_tensor_strides[i];
+            // Use mesh_strides (from compile-time args) to map to grid_id correctly
+            grid_id += (global_page_coord[i] / mesh_dspec_.tensor_shape[i]) * mesh_dspec_.mesh_strides[i];
             local_page_id += (global_page_coord[i] % mesh_dspec_.tensor_shape[i]) * mesh_dspec_.tensor_strides[i];
         }
 
@@ -299,7 +309,9 @@ struct MeshTensorAccessorArgs {
     static constexpr uint32_t MeshTensorStridesOffset = MeshTensorShapeOffset + mesh_dspec_rank;
     static constexpr uint32_t TensorShapeOffset = MeshTensorStridesOffset + mesh_dspec_rank;
     static constexpr uint32_t TensorStridesOffset = TensorShapeOffset + mesh_dspec_rank;
-    static constexpr uint32_t NumGridsOffset = TensorStridesOffset + mesh_dspec_rank;
+    static constexpr uint32_t MeshShapeOffset = TensorStridesOffset + mesh_dspec_rank;
+    static constexpr uint32_t MeshStridesOffset = MeshShapeOffset + mesh_dspec_rank;
+    static constexpr uint32_t NumGridsOffset = MeshStridesOffset + mesh_dspec_rank;
 
     // Helper to get num_grids at compile time
     static constexpr uint32_t get_num_grids() { return get_compile_time_arg_val(NumGridsOffset); }
@@ -335,6 +347,8 @@ struct MeshTensorAccessorArgs {
             dspec.mesh_tensor_strides[i] = kernel_compile_time_args[MeshTensorStridesOffset + i];
             dspec.tensor_shape[i] = kernel_compile_time_args[TensorShapeOffset + i];
             dspec.tensor_strides[i] = kernel_compile_time_args[TensorStridesOffset + i];
+            dspec.mesh_shape[i] = kernel_compile_time_args[MeshShapeOffset + i];
+            dspec.mesh_strides[i] = kernel_compile_time_args[MeshStridesOffset + i];
         }
     }
 
