@@ -7,7 +7,6 @@ from time import time
 
 import numpy as np
 import ttml
-from ttml.common.config import load_config, TransformerConfig
 from data import get_batch, build_causal_mask
 
 
