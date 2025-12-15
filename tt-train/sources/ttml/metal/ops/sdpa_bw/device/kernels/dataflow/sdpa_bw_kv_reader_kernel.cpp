@@ -11,7 +11,7 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 template <typename AddrGen>
 void read_row(
@@ -54,7 +54,6 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
-
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles

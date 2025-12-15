@@ -106,6 +106,7 @@ void MAIN {
                 // Step 1: Recompute attention weights(we will produce column of attention weights matrix while
                 // streaming through Q, dO, O)
                 reconfig_data_format(cb_query, cb_key);
+                // This call is required to set up the matmul correctly
                 mm_init(cb_query, cb_key, cb_attention_weights, /* transpose */ 1);
                 // mm_init_short(cb_query, cb_key, /* transpose */ 1);
                 tile_regs_acquire();
@@ -115,8 +116,7 @@ void MAIN {
                         cb_key,
                         /* tile_idx */ tile_idx,
                         /* tile_idx */ tile_idx,
-                        /* dst_reg_idx*/ matmul_accum_reg,
-                        /* transpose */ 1);  // accumulate in dest_reg 0
+                        /* dst_reg_idx*/ matmul_accum_reg);  // accumulate in dest_reg 0
                 }
 
                 /*

@@ -9,7 +9,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
@@ -172,9 +172,9 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // causal(triangular).
     uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
     uint32_t NC = kB * kNH;
-    uint32_t total_rows_to_process = NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
-    uint32_t kv_heads = kNH;                           // number of heads in Key and Value
-    uint32_t heads_per_group = qNH / kv_heads;         // we read heads_per_group heads from Q for one group of K and V
+    uint32_t total_rows_to_process = NC * St;   // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+    uint32_t kv_heads = kNH;                    // number of heads in Key and Value
+    uint32_t heads_per_group = qNH / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
     uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
     uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
     uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;

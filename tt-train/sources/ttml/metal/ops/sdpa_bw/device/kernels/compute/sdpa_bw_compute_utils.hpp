@@ -161,6 +161,8 @@ void compute_u_scalar_row(
     cb_wait_front(cb_u_scalar_row, onetile);
     tile_regs_acquire();
     reconfig_data_format(cb_u_scalar_row, cb_mat_mul_reduction);
+
+    // This call is required to set up the matmul correctly
     mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
     // mm_init(cb_u_scalar_row, cb_mat_mul_reduction, cb_u_scalar_row, /* transpose */ 0);
     matmul_tiles(
@@ -168,8 +170,7 @@ void compute_u_scalar_row(
         cb_mat_mul_reduction,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* dst_reg_idx*/ accum_register,
-        /* transpose */ 0);
+        /* dst_reg_idx*/ accum_register);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -189,8 +190,8 @@ void compute_grad_attn_weights(
     uint32_t cb_grad_attn_weights,
     uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
+    // This call is required to set up the matmul correctly
     mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
-    // mm_init(cb_grad_output, cb_value, cb_grad_attn_weights, /* transpose */ 1);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         matmul_tiles(
@@ -198,8 +199,7 @@ void compute_grad_attn_weights(
             cb_value,
             /* tile_idx */ tile_idx,
             /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ 0,
-            /* transpose */ 1);
+            /* dst_reg_idx*/ 0);
     }
     tile_regs_commit();
 
@@ -281,14 +281,14 @@ void update_grad_value(
         tile_regs_acquire();
         // reconfig_data_format(cb_transpose_wh, cb_grad_output);
         // mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
+        // This call is required to set up the matmul correctly
         mm_init_short_with_dt(cb_transpose_wh, cb_grad_output, cb_prev_grad_value, /*transpose*/ 0);
         matmul_tiles(
             cb_transpose_wh,
             cb_grad_output,
             /* tile_idx */ 0,
             /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ 0,
-            /* transpose */ 0);
+            /* dst_reg_idx*/ 0);
 
         if (do_accumulate) {
             copy_tile_to_dst_init_short_with_dt(cb_transpose_wh, cb_prev_grad_value);
@@ -334,14 +334,14 @@ void update_grad_key(
         tile_regs_acquire();
         // reconfig_data_format(cb_transpose_wh, cb_query);
         // mm_init_short(cb_transpose_wh, cb_query, /* transpose */ 0);
+        // This call is required to set up the matmul correctly
         mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_prev_grad_key, /*transpose*/ 0);
         matmul_tiles(
             cb_transpose_wh,
             cb_query,
             /* tile_idx */ 0,
             /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ 0,
-            /* transpose */ 0);
+            /* dst_reg_idx*/ 0);
 
         // apply scaler factor to the result before matmul accumulation
         // maybe will achive better accuracy
@@ -388,14 +388,14 @@ void update_grad_query(
         tile_regs_acquire();
         // reconfig_data_format(cb_grad_scores, cb_key);
         // mm_init_short(cb_grad_scores, cb_key, /* transpose */ 0);
+        // This call is required to set up the matmul correctly
         mm_init_short_with_dt(cb_grad_scores, cb_key, cb_prev_grad_query, /*transpose*/ 0);
         matmul_tiles(
             cb_grad_scores,
             cb_key,
             /* tile_idx */ 0,
             /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ 0,
-            /* transpose */ 0);
+            /* dst_reg_idx*/ 0);
 
         // apply scaler factor to the result before matmul accumulation
         // maybe will achive better accuracy
