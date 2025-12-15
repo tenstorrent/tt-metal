@@ -719,7 +719,7 @@ if(WITH_PYTHON_BINDINGS)
         # -abi3   Perform a stable ABI build targeting Python v3.12+.
         # -ft     Perform a build that opts into the Python 3.13+ free-threaded behavior.
 
-        set(NANOBIND_LIBNAME "nanobind-static")
+        set(NANOBIND_LIBNAME "nanobind-static-abi3")
         nanobind_build_library(${NANOBIND_LIBNAME})
         get_target_property(NANOBIND_INCLUDES ${NANOBIND_LIBNAME} INTERFACE_INCLUDE_DIRECTORIES)
         set_target_properties(
