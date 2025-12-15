@@ -720,6 +720,13 @@ if(WITH_PYTHON_BINDINGS)
 
         set(NANOBIND_LIBNAME "nanobind-static")
         nanobind_build_library(${NANOBIND_LIBNAME})
+        get_target_property(NANOBIND_INCLUDES ${NANOBIND_LIBNAME} INTERFACE_INCLUDE_DIRECTORIES)
+        set_target_properties(
+            ${NANOBIND_LIBNAME}
+            PROPERTIES
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                    "${NANOBIND_INCLUDES}"
+        )
         add_library(TT::Nanobind ALIAS ${NANOBIND_LIBNAME})
 
         # find_package(Python3) required for here.
