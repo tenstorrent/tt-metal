@@ -199,6 +199,25 @@ CPMAddPackage(
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
+# nanobind : https://github.com/wjakob/nanobind
+############################################################################################################################
+
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG
+        68b9ae82a3ed1ac34b2b96b141b45554ee79a497 # v2.9.2 + ThisIsFineTM bfloat patch
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
+    CUSTOM_CACHE_KEY "2_9_2_with_bfloat"
+)
+if(nanobind_ADDED)
+    # sometimes this option isn't propagated for some reason
+    set(NB_USE_SUBMODULE_DEPS ON PARENT_SCOPE)
+endif()
+
+############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 

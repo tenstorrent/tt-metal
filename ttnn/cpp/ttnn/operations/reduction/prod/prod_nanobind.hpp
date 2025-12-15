@@ -1,0 +1,118 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "prod_nanobind.hpp"
+
+#include <cstdint>
+#include <optional>
+
+#include <fmt/format.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/small_vector_caster.hpp"
+#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
+
+namespace ttnn::operations::reduction::detail {
+
+template <typename unary_operation_t>
+void bind_reduction_prod_operation(nb::module_& mod, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+            Computes the product of all elements on specified :attr:`dim` of the :attr:`input_tensor` tensor.
+
+            If no :attr:`dim` is provided (or :attr:`dim` is set to `None`), it will compute the full product of every element in the :attr:`input_tensor` tensor.
+
+            If :attr:`keepdim` is `True`, the resulting tensor will have the same rank as the :attr:`input_tensor` tensor, but with the specified :attr:`dim` reduced to 1.
+            Otherwise, the target :attr:`dim` will be squeezed, resulting in an output tensor with one less dimension than the :attr:`input_tensor` tensor.
+
+
+            {0} is also overloaded with a niche NC version of this function, with the following definition:
+
+            ``{1}(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
+
+            This version allows for a list of :attr:`dims` to be specified instead of a :attr:`dim`, requires an :attr:`output_tensor` tensor, and does not support :attr:`keepdim`.
+            It is only intended for use with the NC dimensions (0, 1).
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                dim (int, optional): Dimension to perform prod. Defaults to `None`.
+                dims (List[int], optional): Dimensions to perform prod. Defaults to `None`. Mutually exclusive with `dim`.
+                keepdim (bool, optional): keep original dimension size. Defaults to `False`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
+
+            Note:
+                The :attr:`input_tensor` supports the following data type and layout:
+
+                .. list-table:: input_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                      - layout
+                    * - BFLOAT16
+                      - TILE, ROW_MAJOR
+
+                The :attr:`output_tensor` will be in the following data type and layout:
+
+                .. list-table:: output_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                      - layout
+                    * - BFLOAT16
+                      - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+
+            Limitations:
+                - All input tensors must be on-device.
+                - When :attr:`dim` is not specified (i.e. full product), the :attr:`input_tensor` must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).
+                - Sharding is not supported for this operation
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        mod,
+        operation,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<int64_t> dim,
+               const bool keepdim,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, dim, keepdim, memory_config);
+            },
+            nb::arg("input_tensor"),
+            nb::arg("dim") = nb::none(),
+            nb::arg("keepdim") = false,
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()},
+        // prod along nc dimensions
+        ttnn::nanobind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const Tensor& output_tensor,
+               ttnn::SmallVector<int64_t>& dims,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, output_tensor, dims, memory_config);
+            },
+            nb::arg("input_tensor"),
+            nb::arg("output_tensor"),
+            nb::kw_only(),
+            nb::arg("dims"),
+            nb::arg("memory_config") = nb::none()});
+}
+
+}  // namespace ttnn::operations::reduction::detail
