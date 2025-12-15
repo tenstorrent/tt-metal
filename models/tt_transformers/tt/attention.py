@@ -5,6 +5,7 @@
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -545,6 +546,7 @@ class Attention(LightweightModule):
 
             # Fused AGMM only valid for ring topology
             if self.ccl_topology == ttnn.Topology.Ring:
+                logger.info(f"Attention Decode: MATMUL_ALL_GATHER, input shape: {attn_output_cat.shape}")
                 _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
                     attn_output_cat,
                     self.wo,
@@ -563,6 +565,7 @@ class Attention(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
+                logger.info(f"Attention Decode: ALL_GATHER, input shape: {attn_output_cat.shape}")
                 all_gather_output = ttnn.experimental.all_gather_async(
                     attn_output_cat,
                     persistent_output_buffer=None,
@@ -628,6 +631,7 @@ class Attention(LightweightModule):
             ttnn.deallocate(attn_output_cat)
 
             # All reduce
+            logger.info(f"Attention Decode: ALL_REDUCE, input shape: {dense_out_sharded.shape}")
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
@@ -858,6 +862,7 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
+            logger.info(f"Attention Prefill: ALL_GATHER, input shape: {attn_output_11SH.shape}")
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,

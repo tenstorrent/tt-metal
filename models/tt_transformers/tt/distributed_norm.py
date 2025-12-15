@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
@@ -12,6 +14,7 @@ class DistributedNorm(LightweightModule):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.ccl_config_key = ccl_config_key
         self.ccl_config = args.ccl_config(ccl_config_key)
 
         if TG:
@@ -74,6 +77,7 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            logger.info(f"DistributedNorm: {self.ccl_config_key}, input shape: {x.shape}")
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,

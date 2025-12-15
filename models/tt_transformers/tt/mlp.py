@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -254,6 +255,7 @@ class MLP(LightweightModule):
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+        logger.info(f"MLP: ALL_REDUCE_MLP, input shape: {w2_out.shape}")
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,

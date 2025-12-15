@@ -116,7 +116,8 @@ class Transformer(LightweightModule):
             ),
             args,
             self.tt_ccl,
-            args.is_galaxy,
+            ccl_config_key="PRE_LM_HEAD_NORM",
+            TG=args.is_galaxy,
         )
 
         self.lm_head = LMHead(
