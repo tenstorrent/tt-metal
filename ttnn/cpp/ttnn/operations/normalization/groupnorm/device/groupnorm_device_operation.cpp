@@ -60,6 +60,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
+    TT_FATAL(
+        (a.padded_shape()[1] * a.padded_shape()[2]) % TILE_SIZE == 0,
+        "H*W ({}*{}) must be a multiple of the tile size ({})",
+        a.padded_shape()[1],
+        a.padded_shape()[2],
+        TILE_SIZE);
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
