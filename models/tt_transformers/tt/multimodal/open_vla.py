@@ -36,7 +36,14 @@ from transformers.modeling_outputs import ModelOutput
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.grayskull.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
+from models.common.utility_functions import is_blackhole
+
+# Use Blackhole-optimized ViT if on P150, otherwise use Grayskull version
+if is_blackhole():
+    from models.demos.blackhole.vit.tt import ttnn_optimized_vit_highres_bh as ttnn_optimized_vit_highres
+else:
+    from models.demos.grayskull.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
+
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
 from models.tt_transformers.tt.common import (
     create_tt_model,
@@ -262,14 +269,13 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 
 class OpenVLALanguageModel(GenerationMixin):
-    def __init__(self, device, local_state_dict=None, aggressive_perf=False, jit_warmup=False):
+    def __init__(self, device, local_state_dict=None, aggressive_perf=False):
         self.device = device  # Store device reference for profiler flushing
-        self.jit_warmup = jit_warmup  # Whether to run JIT warmup at init
-        
+
         # Use aggressive performance mode to maximize FPS (may affect accuracy slightly)
         # This uses LOFI for decode operations where most time is spent
         optimization_mode = "performance"  # Default performance mode
-        
+
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
@@ -300,7 +306,7 @@ class OpenVLALanguageModel(GenerationMixin):
         self.num_actions = 1
 
         # Apply aggressive performance overrides if requested
-        # This uses LOFI for all decode operations to maximize throughput
+        # This uses LOFI for decode operations to maximize throughput
         if self.aggressive_perf:
             from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
 
@@ -326,11 +332,6 @@ class OpenVLALanguageModel(GenerationMixin):
         # Pre-cache common seq_lens for OpenVLA (512, 1024 are typical after padding)
         self._precompute_caches(device)
 
-        # JIT warmup: Run a dummy decode pass to compile kernels ahead of time
-        # This moves the ~500ms JIT compilation cost from first inference to init
-        if self.jit_warmup:
-            self._run_jit_warmup()
-
     def _precompute_caches(self, device):
         """Pre-compute page tables and rope slices for common seq_lens to avoid repeated work."""
         # Common padded seq_lens for OpenVLA after get_padded_prefill_len()
@@ -352,37 +353,6 @@ class OpenVLALanguageModel(GenerationMixin):
                 self.model[0].rope_setup.cos_matrix[:, :, :seq_len, :],
                 self.model[0].rope_setup.sin_matrix[:, :, :seq_len, :],
             ]
-
-    def _run_jit_warmup(self):
-        """Run a dummy decode pass to JIT compile kernels ahead of time.
-        
-        This moves the ~500ms JIT compilation cost from the first inference
-        to model initialization, making all inference calls consistently fast.
-        """
-        import time
-
-        print("[JIT WARMUP] Starting decode kernel warmup...")
-        warmup_start = time.time()
-
-        # Create dummy inputs for decode
-        dummy_token = torch.tensor([[1]], dtype=torch.long)  # BOS token
-        dummy_pos = torch.tensor([10])  # Arbitrary position
-
-        # Run one decode pass to compile all decode kernels
-        try:
-            _ = self.generator.decode_forward_text(
-                dummy_token,
-                dummy_pos,
-                page_table=self.page_table,
-                kv_cache=self.tt_kv_cache,
-                sampling_params=None,
-                enable_trace=False,
-            )
-            ttnn.synchronize_device(self.device)
-            warmup_time = time.time() - warmup_start
-            print(f"[JIT WARMUP] Decode kernels compiled in {warmup_time*1000:.1f}ms")
-        except Exception as e:
-            print(f"[JIT WARMUP] Warning: Warmup failed with {e}, will JIT on first inference")
 
     def _get_cached_page_table(self, seq_len, padded_seq_len, device):
         """Get cached page table or create new one if not cached."""
@@ -1060,12 +1030,9 @@ class PrismaticPreTrainedModel(PreTrainedModel):
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
-    def __init__(
-        self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False, jit_warmup=False
-    ) -> None:
+    def __init__(self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False) -> None:
         super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
         self.aggressive_perf = aggressive_perf
-        self.jit_warmup = jit_warmup
 
         # [Validation] Lightweight Validate on `config` Fields + Dependency Versions
         if config.use_fused_vision_backbone is None:
@@ -1129,7 +1096,6 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 ttnn_device,
                 local_state_dict=local_state_dict,
                 aggressive_perf=self.aggressive_perf,
-                jit_warmup=self.jit_warmup,
             )
             CHECKPOINTS.checkpoint("end_LLama2INIT")
         else:
@@ -1458,15 +1424,12 @@ def get_final_action(generated_ids, action_dims, bin_centers, vocab_size, action
 class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, GenerationMixin):
     config_class: PretrainedConfig = OpenVLAConfig
 
-    def __init__(
-        self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False, jit_warmup=False
-    ) -> None:
+    def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False) -> None:
         super().__init__(
             config,
             ttnn_device=ttnn_device,
             local_state_dict=local_state_dict,
             aggressive_perf=aggressive_perf,
-            jit_warmup=jit_warmup,
         )
         self.norm_stats = config.norm_stats
         self.ttnn_device = ttnn_device
@@ -1607,13 +1570,12 @@ def test_language_model(mesh_device, prompt):
 )
 @pytest.mark.parametrize(
     "iterations",
-    [1],  # Default: 1 iteration for profiling/testing
-    # [5],  # Use 5+ iterations for steady-state FPS measurement
-    # Performance notes:
-    #   - 1st iteration: ~897ms (cold start - JIT kernel compilation)
-    #   - Subsequent iterations: ~262ms each (warm - kernels cached)
-    #   - Steady-state FPS: ~3.8 FPS (after warmup)
-    #   - For real-world robotics: first frame is slow, then ~3.8 FPS
+    [5],  # Run 5 iterations for steady-state FPS measurement
+    # [1],  # Use 1 iteration for Tracy profiling (avoid buffer overflow)
+    # Performance baseline (7-DoF, full model):
+    #   - Steady-state: ~257ms per iteration (5 iter)
+    #   - Sustained: ~318ms per iteration (100 iter)
+    #   - Device FPS: 3.27 (305ms device kernel time)
 )
 def test_openvla_model(mesh_device, iterations):
     ##  Download model checkpoints HuggingFace
@@ -1659,20 +1621,15 @@ def test_openvla_model(mesh_device, iterations):
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
     # Enable aggressive performance mode via environment variable for maximum FPS
     # Set OPENVLA_AGGRESSIVE_PERF=1 to enable LOFI for decode operations
-    # Set OPENVLA_JIT_WARMUP=1 to run JIT warmup at init (moves ~500ms cost from first inference to init)
     aggressive_perf = os.environ.get("OPENVLA_AGGRESSIVE_PERF", "0") == "1"
-    jit_warmup = os.environ.get("OPENVLA_JIT_WARMUP", "0") == "1"
     vla = TTOpenVLAForActionPrediction(
         vla_config,
         ttnn_device=mesh_device,
         local_state_dict=merged_tensors,
         aggressive_perf=aggressive_perf,
-        jit_warmup=jit_warmup,
     ).to("cpu", dtype=torch.bfloat16)
     if aggressive_perf:
         print("[INFO] Aggressive performance mode ENABLED - using LOFI for decode ops")
-    if jit_warmup:
-        print("[INFO] JIT warmup ENABLED - decode kernels pre-compiled at init")
 
     # Full model: 32 layers, 7 actions (no reduction)
     print(f"Running FULL MODEL: 32 layers, 7 action tokens")

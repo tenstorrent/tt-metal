@@ -1887,70 +1887,78 @@ class ModelArgs:
 
     def initialize_mixture_of_experts_configs(self):
         # Porting mixtral to llama
+        # FIXED: Use correct grid size for Blackhole (13x10) vs Wormhole (8x8)
+        decode_grid = (13, 10) if is_blackhole() else (8, 8)
+        decode_grid_x = decode_grid[0]
+
+        # Calculate per_core_N based on actual grid (P150: 172/13=13, N150: 172/8=21)
+        ff13_per_core_N = 13 if is_blackhole() else 21  # Hidden_per_device tiles / grid_x
+        ff2_per_core_N = 4 if is_blackhole() else 8  # Dim_per_device tiles / grid_x
+
         self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=decode_grid,
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            per_core_N=ff13_per_core_N,  # Dynamic: 172 tiles / grid_x
             fuse_batch=True,
             fused_activation=ttnn.UnaryOpType.SILU,
             mcast_in0=True,
         )
         self.model_config["FF3_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=decode_grid,
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            per_core_N=ff13_per_core_N,  # Dynamic: 172 tiles / grid_x
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
         )
         self.model_config["FF2_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=7,  # K = 14336 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            compute_with_storage_grid_size=decode_grid,
+            in0_block_w=7,  # K = 11008/2 / 32 / grid
             out_subblock_h=1,  # Must be divisible by per_core_M
             # Issue #8959: Increasing subblock to 2 results in hangs -> Potentially related to di/dt hangs.
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            per_core_N=ff2_per_core_N,  # Dynamic: 64 tiles / grid_x
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=True,
         )
         self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=decode_grid,
             in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56 if not is_blackhole() else 13,  # Dynamic based on grid
             transpose_mcast=False,
             fused_activation=ttnn.UnaryOpType.SILU,
             fuse_batch=False,
         )
         self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=decode_grid,
             in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            per_core_N=56 if not is_blackhole() else 13,  # Dynamic based on grid
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
         )
 
         self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=decode_grid,
             in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            per_core_N=16 if not is_blackhole() else 4,  # Dynamic based on grid
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
