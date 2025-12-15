@@ -62,12 +62,12 @@ std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(
         // B was used as is.
         // grad_B = ( (transpose_a ? A^T : A) )^T * d_out.
         // If transpose_a is false: (A)^T = A^T, if true: (A^T)^T = A.
-        reshaped_b_grad = matmul(a, reshaped_grad, !transpose_a, false);
+        reshaped_b_grad = matmul(reshaped_a, reshaped_grad, !transpose_a, false);
     } else {
         // B was transposed in the forward pass (i.e. we used B^T).
         // Compute dB_eff = ( (transpose_a ? A^T : A) )^T * d_out,
         // then grad_B = (dB_eff)^T = d_out^T * (transpose_a ? A^T : A).
-        reshaped_b_grad = matmul(reshaped_grad, a, true, transpose_a);
+        reshaped_b_grad = matmul(reshaped_grad, reshaped_a, true, transpose_a);
     }
     auto a_grad = ttnn::reshape(reshaped_a_grad, a_shape);
     auto b_grad = ttnn::reshape(reshaped_b_grad, b_shape);

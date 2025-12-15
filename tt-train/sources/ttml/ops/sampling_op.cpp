@@ -30,8 +30,7 @@ autograd::TensorPtr sample_op(
         throw std::runtime_error("Sampling operation backward pass is not implemented.");
     };
 
-    auto links = autograd::get_links(logits, logits_padding_mask);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, logits, logits_padding_mask));
 
     return out;
 }

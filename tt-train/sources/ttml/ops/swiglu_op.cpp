@@ -77,8 +77,7 @@ autograd::TensorPtr swiglu(
         w3->add_grad(ttnn::sum(dL_dW3, 0, true));
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor, w1, w2, w3));
 
     return out;
 }

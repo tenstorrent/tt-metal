@@ -719,6 +719,14 @@ int main(int argc, char **argv) {
         fmt::println("Remote optimizer configured!");
     }
 
+    // Wrap model with LoRA if config is provided
+    if (lora_config.has_value()) {
+        fmt::print("Wrapping model with LoRA adaptation layers\n");
+        model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
+    }
+
+    print_model_summary(model, device_config.enable_tp);
+
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer = [&model,
@@ -774,14 +782,6 @@ int main(int argc, char **argv) {
                 num_devices));
         }
     }
-
-    // Wrap model with LoRA if config is provided
-    if (lora_config.has_value()) {
-        fmt::print("Wrapping model with LoRA adaptation layers\n");
-        model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
-    }
-
-    print_model_summary(model, device_config.enable_tp);
 
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});

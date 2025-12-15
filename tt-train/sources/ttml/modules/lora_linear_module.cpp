@@ -27,18 +27,24 @@ ttml::autograd::TensorPtr create_weight(uint32_t in_features, uint32_t out_featu
     return weight;
 }
 
-ttml::autograd::TensorPtr create_lora_a(uint32_t rank, uint32_t out_features) {
-    auto weight_shape = ttnn::Shape({1, 1, out_features, rank});
-    auto weight = ttml::autograd::create_tensor();
-    init::constant_init(weight, weight_shape, 0.F);
-    return weight;
-}
-
-ttml::autograd::TensorPtr create_lora_b(uint32_t in_features, uint32_t rank) {
-    auto weight_shape = ttnn::Shape({1, 1, rank, in_features});
+// lora_a: "down" projection from in_features to rank
+// Shape: (1, 1, in_features, rank) for matmul: input @ lora_a -> (B, 1, S, rank)
+// Initialized with Kaiming uniform (standard LoRA)
+ttml::autograd::TensorPtr create_lora_a(uint32_t in_features, uint32_t rank) {
+    auto weight_shape = ttnn::Shape({1, 1, in_features, rank});
     auto weight = ttml::autograd::create_tensor();
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
     init::uniform_init(weight, weight_shape, init::UniformRange{-init_k, init_k});
+    return weight;
+}
+
+// lora_b: "up" projection from rank to out_features
+// Shape: (1, 1, rank, out_features) for matmul: lora_down @ lora_b -> (B, 1, S, out_features)
+// Initialized to zeros (standard LoRA - so LoRA contribution starts as zero)
+ttml::autograd::TensorPtr create_lora_b(uint32_t rank, uint32_t out_features) {
+    auto weight_shape = ttnn::Shape({1, 1, rank, out_features});
+    auto weight = ttml::autograd::create_tensor();
+    init::constant_init(weight, weight_shape, 0.F);
     return weight;
 }
 
@@ -66,50 +72,57 @@ void LoRALinearLayer::register_tensors() {
 LoRALinearLayer::LoRALinearLayer(
     const LoRALayerConfig& config, uint32_t in_features, uint32_t out_features, bool has_bias) {
     m_weight = create_weight(in_features, out_features);
-    m_weight->set_requires_grad(false);
     m_scale = config.alpha / static_cast<float>(config.rank);
-    m_lora_a = create_lora_a(config.rank, out_features);
-    m_lora_b = create_lora_b(in_features, config.rank);
+    m_lora_a = create_lora_a(in_features, config.rank);
+    m_lora_b = create_lora_b(config.rank, out_features);
     m_dropout = std::make_shared<DropoutLayer>(config.dropout);
     if (has_bias) {
         m_bias = create_bias(in_features, out_features);
-        m_bias->set_requires_grad(config.is_bias_trainable);
     }
     register_tensors();
+    // Freeze base weight after registration (register_tensor sets requires_grad=true)
+    m_weight->set_requires_grad(false);
+    if (m_bias != nullptr) {
+        m_bias->set_requires_grad(config.is_bias_trainable);
+    }
 }
 
 LoRALinearLayer::LoRALinearLayer(
     const LoRALayerConfig& config, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) :
     m_weight(weight), m_bias(bias) {
+    m_scale = config.alpha / static_cast<float>(config.rank);
+    auto weight_shape = m_weight->get_value().logical_shape();
+    uint32_t in_features = weight_shape[weight_shape.rank() - 1];
+    uint32_t out_features = weight_shape[weight_shape.rank() - 2];
+    m_lora_a = create_lora_a(in_features, config.rank);
+    m_lora_b = create_lora_b(config.rank, out_features);
+    m_dropout = std::make_shared<DropoutLayer>(config.dropout);
+    register_tensors();
+    // Freeze base weight after registration (register_tensor sets requires_grad=true)
     m_weight->set_requires_grad(false);
     if (m_bias != nullptr) {
         m_bias->set_requires_grad(config.is_bias_trainable);
     }
-    m_scale = config.alpha / static_cast<float>(config.rank);
-    auto weight_shape = m_weight->get_value().logical_shape();
-    uint32_t in_features = weight_shape[weight_shape.rank() - 1];
-    uint32_t out_features = weight_shape[weight_shape.rank() - 2];
-    m_lora_a = create_lora_a(config.rank, out_features);
-    m_lora_b = create_lora_b(in_features, config.rank);
-    m_dropout = std::make_shared<DropoutLayer>(config.dropout);
-    register_tensors();
 }
 
 LoRALinearLayer::LoRALinearLayer(const LoRALayerConfig& config, const autograd::TensorPtr& weight, bool has_bias) :
     m_weight(weight) {
-    m_weight->set_requires_grad(false);
     m_scale = config.alpha / static_cast<float>(config.rank);
     auto weight_shape = m_weight->get_value().logical_shape();
     uint32_t in_features = weight_shape[weight_shape.rank() - 1];
     uint32_t out_features = weight_shape[weight_shape.rank() - 2];
-    m_lora_a = create_lora_a(config.rank, out_features);
-    m_lora_b = create_lora_b(in_features, config.rank);
+    m_lora_a = create_lora_a(in_features, config.rank);
+    m_lora_b = create_lora_b(config.rank, out_features);
     m_dropout = std::make_shared<DropoutLayer>(config.dropout);
     if (has_bias) {
         m_bias = create_bias(in_features, out_features);
-        m_bias->set_requires_grad(config.is_bias_trainable);
     }
     register_tensors();
+    // Freeze base weight after registration (register_tensor sets requires_grad=true)
+    m_weight->set_requires_grad(false);
+    if (m_bias != nullptr) {
+        m_bias->set_requires_grad(config.is_bias_trainable);
+    }
 }
 
 autograd::TensorPtr LoRALinearLayer::operator()(const autograd::TensorPtr& tensor) {

@@ -32,8 +32,7 @@ autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability
         tensor->add_grad(res);
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
 
     return out;
 }

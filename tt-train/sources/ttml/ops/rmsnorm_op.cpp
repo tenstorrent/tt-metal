@@ -58,8 +58,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
         }
     };
 
-    auto links = autograd::get_links(tensor, gamma);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor, gamma));
 
     return out;
 }
@@ -232,8 +231,7 @@ autograd::TensorPtr rmsnorm_composite(
         gamma->add_grad(dL_dg);
     };
 
-    auto links = autograd::get_links(tensor, gamma);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor, gamma));
 
     return out;
 }

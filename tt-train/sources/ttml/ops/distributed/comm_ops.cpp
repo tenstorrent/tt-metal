@@ -18,8 +18,7 @@ autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim) {
     autograd::GradFunction grad = [tensor, out, dim]() {
         tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim));
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
     return out;
 }
 
@@ -28,8 +27,7 @@ autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim) {
     autograd::GradFunction grad = [tensor, out, dim]() {
         tensor->add_grad(ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim));
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
     return out;
 }
 
@@ -42,8 +40,7 @@ autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_back
             tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad()));
         }
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
     return out;
 }
 
@@ -52,8 +49,7 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor) {
     autograd::GradFunction grad = [tensor, out]() {
         tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad()));
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
     return out;
 }
 

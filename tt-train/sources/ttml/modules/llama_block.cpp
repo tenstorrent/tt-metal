@@ -32,11 +32,11 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
-    auto swished = ops::silu((*m_w1)(input));
-    auto gate = (*m_w3)(input);
+    auto swished = ops::silu((*get_module("w1"))(input));
+    auto gate = (*get_module("w3"))(input);
     auto gated = ops::mul(swished, gate);
-    auto x = (*m_w2)(gated);
-    x = (*m_dropout)(x);
+    auto x = (*get_module("w2"))(gated);
+    x = (*get_module("dropout"))(x);
     return x;
 }
 
