@@ -487,6 +487,18 @@ Tensor Softshrink::invoke(
         input_tensor, {UnaryWithParam{op_type, static_cast<float>(lambda)}}, memory_config, optional_output_tensor);
 }
 
+Tensor Logit::invoke(
+    const Tensor& input_tensor,
+    const std::optional<float> eps,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::LOGIT, {eps.value_or(-1.0f)}}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Deg2Rad::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -558,6 +570,14 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
         {EltwiseUnaryWithParam{unary_op_type, parameter}},
         memory_config,
         optional_output_tensor);
+}
+
+Tensor Swish::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::SILU;
+    return detail::unary_impl(input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
