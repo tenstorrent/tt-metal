@@ -179,6 +179,15 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint64_t mcast_flag_noc_addr)
 //
 // Multicasts data from a single sender core to multiple receiver cores.
 // Sender runs on NCRISC, Receiver runs on BRISC.
+//
+// CB States:
+//   NCRISC (Sender):
+//     - Waits: src_cb (src_num_pages)
+//     - Pops: src_cb (src_num_pages) if pop_src=true
+//   BRISC (Receiver):
+//     - Reserves: dst_cb (dst_num_pages)
+//     - Pushes: dst_cb (dst_num_pages)
+//   TRISC: No-op
 // ============================================================================
 struct Mcast {
     // ========================================================================
@@ -238,8 +247,9 @@ struct Mcast {
     // CTArgsT: compile-time args (mcast_num_cores, loopback, is_part_of_receiver_grid)
     // IsSenderCore: compile-time flag to distinguish sender vs receiver cores
     // IsReceiverCore: compile-time flag for receiver cores
+    // pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <typename CTArgsT, bool IsSenderCore = false, bool IsReceiverCore = false>
+    template <typename CTArgsT, bool IsSenderCore, bool IsReceiverCore, bool pop_src>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -303,7 +313,9 @@ struct Mcast {
                     CTArgsT::is_part_of_receiver_grid>(mcast_flag_noc_addr);
 
                 // Pop the source CB after sending
-                cb_pop_front(args.src_cb, args.src_num_pages);
+                if constexpr (pop_src) {
+                    cb_pop_front(args.src_cb, args.src_num_pages);
+                }
             }
             // Receiver cores' NCRISC does nothing
 #elif defined(COMPILE_FOR_BRISC)

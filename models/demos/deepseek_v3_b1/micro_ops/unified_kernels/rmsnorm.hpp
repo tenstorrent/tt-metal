@@ -28,6 +28,20 @@ namespace deepseek_b1_ops {
 //
 // Computes: output = (input / RMS(input)) * gamma
 // Where RMS(x) = sqrt(mean(x^2) + epsilon)
+//
+// CB States:
+//   NCRISC (Reader):
+//     - Reserves: scalars_cb (2 tiles: epsilon + reduction scalar)
+//     - Pushes: scalars_cb (2 tiles)
+//     Note: input_cb and gamma_cb setup done externally via setup_sharded_buffer
+//   BRISC: No-op (next op waits on output if needed)
+//   TRISC (Compute):
+//     - Waits: input_cb (num_tiles), scalars_cb (2), gamma_cb (num_tiles)
+//     - Reserves: interm_cb (num_tiles+1), output_cb (num_tiles)
+//     - Pushes: output_cb (num_tiles)
+//     - Pops: input_cb (num_tiles) if pop_input=true
+//     - Pops: scalars_cb (2) always
+//     - Pops: interm_cb (used internally)
 // ============================================================================
 struct RMSNorm {
     // ========================================================================
@@ -44,28 +58,23 @@ struct RMSNorm {
     // Writer CTArgs: none needed
     struct WriterCTArgs {};
 
-    // Compute CTArgs: fp32_acc (template param), pop_input (constexpr if)
-    template <bool FP32Acc, bool PopInput = true>
+    // Compute CTArgs: fp32_acc (template param)
+    template <bool FP32Acc>
     struct ComputeCTArgs {
         static constexpr bool fp32_acc = FP32Acc;
-        static constexpr bool pop_input = PopInput;
     };
 
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
+    // Reader args (NCRISC): only scalars needed (input_cb and gamma_cb setup done externally)
     struct ReaderArgs {
-        uint32_t input_cb;
         uint32_t scalars_cb;
-        uint32_t gamma_cb;
-        uint32_t num_tiles;
         uint32_t epsilon;
         uint32_t scalar;
     };
-    struct WriterArgs {
-        uint32_t output_cb;
-        uint32_t num_tiles;
-    };
+    // Writer args (BRISC): none (BRISC is no-op)
+    struct WriterArgs {};
     struct ComputeArgs {
         uint32_t input_cb;
         uint32_t scalars_cb;
@@ -80,9 +89,9 @@ struct RMSNorm {
     using RTArgs = SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
     // ========================================================================
-    // Op - the actual operation, templated on CTArgs and IsActiveCore
+    // Op - the actual operation, templated on CTArgs, IsActiveCore, pop_input
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore>
+    template <typename CTArgs, bool IsActiveCore, bool pop_input>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -108,19 +117,6 @@ struct RMSNorm {
 
             generate_reduce_scaler<CTArgs::tiny_tile>(args.scalars_cb, args.scalar);
             cb_push_back(args.scalars_cb, 1);
-
-            // Signal that input and gamma buffers are ready (backed by L1 shards)
-            cb_reserve_back(args.input_cb, args.num_tiles);
-            cb_push_back(args.input_cb, args.num_tiles);
-            cb_reserve_back(args.gamma_cb, args.num_tiles);
-            cb_push_back(args.gamma_cb, args.num_tiles);
-#elif defined(COMPILE_FOR_BRISC)
-            // ================================================================
-            // BRISC (Writer) - WriterConfigDescriptor compiles as BRISC
-            // ================================================================
-            // Wait for all output tiles to be available in CB
-            // Note: output_cb is backed by sharded tensor, data will be written directly to L1
-            cb_wait_front(args.output_cb, args.num_tiles);
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)
@@ -179,6 +175,7 @@ struct RMSNorm {
                 pack_tile(0, args.interm_cb);
                 tile_regs_release();
                 reduce_uninit();
+                cb_pop_front(args.scalars_cb, 2);  // Pop epsilon and scalar tiles
                 cb_pop_front(args.interm_cb, args.num_tiles);
                 cb_push_back(args.interm_cb, 1);  // 1/RMS tile should now be index 0
             }
@@ -193,7 +190,7 @@ struct RMSNorm {
                     // 1, output dst index i
                     mul_tiles_bcast_scalar(args.input_cb, args.interm_cb, i, 0, i);
                 }
-                if constexpr (CTArgs::pop_input) {
+                if constexpr (pop_input) {
                     cb_pop_front(args.input_cb, args.num_tiles);
                 }
             }

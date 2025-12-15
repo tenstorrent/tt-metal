@@ -18,6 +18,15 @@ namespace deepseek_b1_ops {
 //
 // Gathers data from multiple sender cores to a single receiver core.
 // Receiver runs on BRISC, Sender runs on NCRISC.
+//
+// CB States:
+//   NCRISC (Sender):
+//     - Waits: src_cb (src_num_pages)
+//     - Pops: src_cb (src_num_pages) if pop_src=true
+//   BRISC (Receiver):
+//     - Reserves: dst_cb (dst_num_pages)
+//     - Pushes: dst_cb (dst_num_pages)
+//   TRISC: No-op
 // ============================================================================
 struct Gather {
     // ========================================================================
@@ -64,8 +73,9 @@ struct Gather {
     //
     // IsSenderCore: compile-time flag to distinguish sender vs receiver cores
     // IsReceiverCore: compile-time flag for receiver cores
+    // pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <bool IsSenderCore = false, bool IsReceiverCore = false>
+    template <bool IsSenderCore, bool IsReceiverCore, bool pop_src>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -98,7 +108,9 @@ struct Gather {
                 noc_async_posted_writes_flushed();
 
                 // Pop the source CB after sending
-                cb_pop_front(args.src_cb, args.src_num_pages);
+                if constexpr (pop_src) {
+                    cb_pop_front(args.src_cb, args.src_num_pages);
+                }
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================

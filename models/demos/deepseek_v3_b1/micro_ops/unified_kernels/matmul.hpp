@@ -21,22 +21,26 @@ namespace deepseek_b1_ops {
 // Single-tile output Matmul micro-op
 //
 // Computes: output[1,1] = in0[1,K] @ in1[K,1]
+//
+// CB States:
+//   NCRISC: No-op (in1 setup done externally via setup_sharded_buffer)
+//   BRISC: No-op (next op waits on output if needed)
+//   TRISC (Compute):
+//     - Waits: in0 (num_tiles), in1 (num_tiles)
+//     - Reserves: out (1 tile)
+//     - Pushes: out (1 tile)
+//     - Pops: in0 (num_tiles) if pop_in0=true, in1 (num_tiles) if pop_in1=true
 // ============================================================================
 struct Matmul {
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
 
-    // Reader args (NCRISC): [in1, num_tiles]
-    struct ReaderArgs {
-        uint32_t in1;
-        uint32_t num_tiles;
-    };
+    // Reader args (NCRISC): none (NCRISC is no-op, setup done externally)
+    struct ReaderArgs {};
 
-    // Writer args (BRISC): [out]
-    struct WriterArgs {
-        uint32_t out;
-    };
+    // Writer args (BRISC): none (BRISC is no-op)
+    struct WriterArgs {};
 
     // Compute args (TRISC): [in0, in1, out, num_tiles]
     struct ComputeArgs {
@@ -50,8 +54,12 @@ struct Matmul {
 
     // ========================================================================
     // Op - the actual operation, templated on IsActiveCore
+    // Template args:
+    //   IsActiveCore - whether this core runs the matmul
+    //   pop_in0 - whether to pop in0 after compute (default true)
+    //   pop_in1 - whether to pop in1 after compute (default true)
     // ========================================================================
-    template <bool IsActiveCore>
+    template <bool IsActiveCore, bool pop_in0, bool pop_in1>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -62,21 +70,7 @@ struct Matmul {
 
     private:
         void impl(const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
-            // ================================================================
-            // NCRISC (Reader) - ReaderConfigDescriptor compiles as NCRISC
-            // ================================================================
-            // Push weights (in1) - backed by sharded tensor
-            cb_reserve_back(args.in1, args.num_tiles);
-            cb_push_back(args.in1, args.num_tiles);
-#elif defined(COMPILE_FOR_BRISC)
-            // ================================================================
-            // BRISC (Writer) - WriterConfigDescriptor compiles as BRISC
-            // ================================================================
-            // Wait for output tile to be ready
-            // Note: out is backed by sharded tensor, data written directly to L1
-            cb_wait_front(args.out, 1);
-#elif defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)
             // ================================================================
@@ -104,8 +98,12 @@ struct Matmul {
             tile_regs_commit();
 
             // Pop inputs
-            cb_pop_front(args.in0, args.num_tiles);
-            cb_pop_front(args.in1, args.num_tiles);
+            if constexpr (pop_in0) {
+                cb_pop_front(args.in0, args.num_tiles);
+            }
+            if constexpr (pop_in1) {
+                cb_pop_front(args.in1, args.num_tiles);
+            }
 
             // Pack output
             tile_regs_wait();
