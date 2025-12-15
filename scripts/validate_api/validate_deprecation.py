@@ -56,7 +56,10 @@ def find_removed_deprecations(files: List[str], base_ref: str = "origin/main") -
     try:
         merge_base = git_utils.get_merge_base(base_ref)
     except RuntimeError as e:
-        print(f"Warning: Could not find merge-base with {base_ref}: {e}. Falling back to direct comparison with {base_ref}.", file=sys.stderr)
+        print(
+            f"Warning: Could not find merge-base with {base_ref}: {e}. Falling back to direct comparison with {base_ref}.",
+            file=sys.stderr,
+        )
         merge_base = base_ref
 
     # Get all C++ files that changed (including deleted ones) since merge-base
