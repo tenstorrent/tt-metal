@@ -4,7 +4,6 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operation.hpp"
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
@@ -53,7 +52,7 @@ struct SparseMatmulDeviceOperation {
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const matmul::MatmulProgramConfig>& program_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const CoreCoord> user_core_coord = std::nullopt,
+        const std::optional<const CoreCoord>& user_core_coord = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);

@@ -234,7 +234,7 @@ SparseMatmulDeviceOperation::invoke(
     std::optional<const DataType> dtype,
     const std::optional<const matmul::MatmulProgramConfig>& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const CoreCoord> user_core_coord,
+    const std::optional<const CoreCoord>& user_core_coord,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {

@@ -10,26 +10,26 @@
 namespace ttnn::operations::matmul {
 namespace bmm_op_utils {
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
-    const uint32_t per_core_M,
-    const uint32_t per_core_N,
-    const bool per_core_M_equals_subblock_h_constraint,
-    const bool per_core_N_equals_subblock_w_constraint,
-    const bool fp32_dest_acc_en);
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool per_core_M_equals_subblock_h_constraint,
+    bool per_core_N_equals_subblock_w_constraint,
+    bool fp32_dest_acc_en);
 }
 
 MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const uint32_t bias_single_tile_size,
-    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t bias_single_tile_size,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const CoreCoord& compute_with_storage_grid_size,
     const tt::tt_metal::MemoryConfig& mem_config,
-    const tt::tt_metal::DataType output_dtype);
+    tt::tt_metal::DataType output_dtype);
 
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const uint32_t bias_single_tile_size,
+    uint32_t bias_single_tile_size,
     const matmul::operation_attributes_t& attributes);
 
 }  // namespace ttnn::operations::matmul
