@@ -356,26 +356,26 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
     std::vector<Tensor> input_tensors = input_tensors_b;
     input_tensors.insert(input_tensors.begin(), input_tensor_a);
 
-    return matmul_batched_weights(
-        input_tensor_a,
-        input_tensors_b,
-        /*bias=*/std::nullopt,
-        matmul::operation_attributes_t{
-            program_config,
-            /*bcast_batch=*/std::nullopt,
-            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
-            dtype,
-            compute_kernel_config,
-            /*untilize_out=*/false,
-            /*user_core_coord*/ std::nullopt,
-            get_fused_activation(activation),
-            /*user_run_batched=*/false,
-            transpose_a,
-            transpose_b,
-            output_tile,
-            global_cb,
-            sub_device_id},
-        optional_output_tensor);
+    auto parameters = matmul::operation_attributes_t{
+        program_config,
+        /*bcast_batch=*/std::nullopt,
+        memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+        dtype,
+        compute_kernel_config,
+        /*untilize_out=*/false,
+        /*user_core_coord*/ std::nullopt,
+        get_fused_activation(activation),
+        /*user_run_batched=*/false,
+        transpose_a,
+        transpose_b,
+        output_tile,
+        global_cb,
+        sub_device_id};
+
+    return ttnn::prim::matmul(
+        input_tensors,
+        optional_output_tensor,
+        create_matmul_attributes(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}));
 }
 
 void AddmmOperation::validate(
