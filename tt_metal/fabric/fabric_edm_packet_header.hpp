@@ -134,6 +134,32 @@ struct NocUnicastScatterCommandHeader {
             this->chunk_size[idx++] = 0;
         }
     }
+
+    // Requires: addresses[num_addresses], chunk_sizes[num_addresses - 1].
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+    NocUnicastScatterCommandHeader(
+        const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) :
+        chunk_count(num_addresses) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(num_addresses > 0 && num_addresses <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+#endif
+
+        uint8_t idx = 0;
+        for (; idx < num_addresses; idx++) {
+            this->noc_address[idx] = addresses[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS) {
+            this->noc_address[idx++] = 0;
+        }
+
+        idx = 0;
+        for (; idx < num_addresses - 1; idx++) {
+            this->chunk_size[idx] = chunk_sizes[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+            this->chunk_size[idx++] = 0;
+        }
+    }
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
