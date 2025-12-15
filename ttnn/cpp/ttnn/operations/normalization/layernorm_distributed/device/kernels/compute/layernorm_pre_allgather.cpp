@@ -63,10 +63,10 @@ void MAIN {
             REL();
             cb_push_back(cb_x2, blk);
         }
+
         /*
          * sum(x**2)
          */
-
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
@@ -94,7 +94,6 @@ void MAIN {
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
             reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, wtr, 0, dst0);
         }
-
         pack_tile(dst0, cb_out, 1);
         REL();
         cb_push_back(cb_out, onetile);

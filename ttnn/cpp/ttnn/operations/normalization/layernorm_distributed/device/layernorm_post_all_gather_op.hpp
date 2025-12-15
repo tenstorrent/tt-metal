@@ -11,7 +11,6 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "layernorm_distributed_types.hpp"
-#include "layernorm/device/layernorm_types.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -25,19 +24,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     float eps,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid = std::nullopt,
-    LayerNormDefaultProgramConfig program_config = LayerNormDefaultProgramConfig{});
-
-tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_multi_core(
-    const Tensor& a,
-    const Tensor& stats,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    Tensor& output,
-    LayerNormDistributedType norm_type,
-    float eps,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid = std::nullopt,
-    LayerNormDefaultProgramConfig program_config = LayerNormDefaultProgramConfig{});
+    LayerNormDistributedDefaultProgramConfig program_config = LayerNormDistributedDefaultProgramConfig{});
 
 struct LayerNormPostAllGather {
     LayerNormDistributedType norm_type;
@@ -46,7 +33,7 @@ struct LayerNormPostAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<bool> use_2d_core_grid;
-    LayerNormProgramConfig program_config;
+    LayerNormDistributedDefaultProgramConfig program_config;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
