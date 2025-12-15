@@ -136,6 +136,7 @@ struct NocUnicastScatterCommandHeader {
     }
 
     // Requires: addresses[num_addresses], chunk_sizes[num_addresses - 1].
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
     NocUnicastScatterCommandHeader(
         const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) :
         chunk_count(num_addresses) {
