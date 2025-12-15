@@ -5,6 +5,7 @@
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include <iomanip>
 #include <chrono>
 
