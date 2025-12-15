@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.bge_large_en.runner.performant_runner_infra import BGEPerformanceRunnerInfra
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 class BGEPerformantRunner:
@@ -169,7 +169,8 @@ class BGEPerformantRunner:
 
     def _validate(self, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output.post_processed_output
-        assert_with_pcc(torch_output_tensor, result_output_tensor, self.runner_infra.valid_pcc)
+        passing, pcc_message = comp_pcc(torch_output_tensor, result_output_tensor, self.runner_infra.valid_pcc)
+        assert passing, pcc_message
 
     def release(self):
         ttnn.release_trace(self.device, self.tid)

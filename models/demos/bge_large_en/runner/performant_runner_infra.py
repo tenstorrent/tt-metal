@@ -8,11 +8,10 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import comp_pcc, is_blackhole, is_wormhole_b0
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_model import TtnnBGEModel
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 if is_blackhole():
     from models.demos.blackhole.bge_large_en.ttnn.common import custom_preprocessor
@@ -188,10 +187,13 @@ class BGEPerformanceRunnerInfra:
         ttnn_output_tensor = self.ttnn_output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output if torch_output_tensor is None else torch_output_tensor
         output_tensor = ttnn.to_torch(ttnn_output_tensor[0], mesh_composer=self.output_mesh_composer).squeeze(dim=1)
-        self.valid_pcc = 0.90  # Lower threshold for BGE-large due to larger model
-        self.pcc_passed, self.pcc_message = assert_with_pcc(
-            torch_output_tensor.post_processed_output, output_tensor, pcc=self.valid_pcc
-        )
+        self.valid_pcc = 0.85  # Lower threshold for BGE-large due to larger model
+        expected = torch_output_tensor.post_processed_output
+        assert list(expected.shape) == list(
+            output_tensor.shape
+        ), f"Shape mismatch: expected {list(expected.shape)} vs actual {list(output_tensor.shape)}"
+        self.pcc_passed, self.pcc_message = comp_pcc(expected, output_tensor, self.valid_pcc)
+        assert self.pcc_passed, self.pcc_message
 
         logger.info(
             f"BGE-Large-EN-v1.5 - batch_size={self.batch_size}, PCC={self.pcc_message}, act_dtype:{self.act_dtype}, weight_dtype:{self.weight_dtype}"

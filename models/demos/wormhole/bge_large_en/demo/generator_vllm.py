@@ -123,7 +123,7 @@ class BGEForEmbedding:
             max_seq_len = 384  # Default for BGE-large-en-v1.5
 
         logger.info(
-            f"Initializing BGE-Large-EN-v1.5 for vLLM: " f"max_batch_size={max_batch_size}, max_seq_len={max_seq_len}"
+            f"Initializing BGE-Large-EN-v1.5 for vLLM: max_batch_size={max_batch_size}, max_seq_len={max_seq_len}"
         )
 
         # When vLLM wraps the class, it requires vllm_config to be passed
