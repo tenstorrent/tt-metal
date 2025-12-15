@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <optional>
-
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"

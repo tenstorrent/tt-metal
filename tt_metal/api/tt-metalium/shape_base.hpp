@@ -35,7 +35,6 @@ inline int32_t normalized_index(int32_t index, size_t original_size, size_t cont
 // Container wrapper that allows negative indexing
 class ShapeBase {
 public:
-    using coord_type = uint32_t;
     using Container = tt::stl::SmallVector<uint32_t>;
 
     ShapeBase() { init(); };
@@ -70,9 +69,6 @@ public:
 
     Container::const_iterator cbegin() const;
     Container::const_iterator cend() const;
-
-    Container::const_iterator begin() const;
-    Container::const_iterator end() const;
 
     tt::stl::Span<const uint32_t> view() const;
 
