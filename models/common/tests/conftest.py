@@ -91,6 +91,9 @@ def ttnn_mesh_device(request):
             ttnn.close_mesh_device(submesh_device)
         if parent_device is not None:
             ttnn.close_mesh_device(parent_device)
+        if fabric_config:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        del parent_device
 
 
 def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:
