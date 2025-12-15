@@ -95,14 +95,13 @@ void kernel_main() {
             generate_mask<false, false, use_joint_mask, false, 0, cb_mask_in>(
                 Sq_chunk_t,
                 Sk_chunk_t,
-                0,
+                q_chunk,
                 0,
                 ring_id == N_mask_ring_id && mask_chunk_0 != (uint32_t)(-1),
                 ring_id == L_mask_ring_id && mask_chunk_1 != (uint32_t)(-1),
                 0,
                 logical_N,
-                logical_L,
-                0);
+                logical_L);
 
             if (ring_iter > 0) {
                 read_prev_output_and_lse(

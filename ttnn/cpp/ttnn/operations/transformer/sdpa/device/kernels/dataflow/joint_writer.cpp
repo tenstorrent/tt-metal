@@ -69,14 +69,13 @@ void kernel_main() {
                 generate_mask<false, false, use_joint_mask, false, 0, cb_mask_in>(
                     Sq_chunk_t,
                     Sk_chunk_t,
-                    0,
+                    q_chunk,
                     0,
                     mask_chunk_0 != (uint32_t)(-1),
                     mask_chunk_1 != (uint32_t)(-1),
                     0,
                     unpadded_N,
-                    unpadded_L,
-                    0);
+                    unpadded_L);
 
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);

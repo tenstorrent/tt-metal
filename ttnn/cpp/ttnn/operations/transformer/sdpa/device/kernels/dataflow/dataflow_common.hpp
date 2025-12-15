@@ -441,7 +441,7 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
 enum class MaskType { FULLY_ALLOWED, FULLY_MASKED, PARTIAL_MASK };
 
 template <uint32_t cb_mask_in>
-void generate_mask(
+void generate_causal_sliding_window_mask(
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t q_chunk,
@@ -883,7 +883,7 @@ void generate_mask(
             if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
                 // If no sliding window, only generate mask along diagonal
                 // Otherwise, generate mask for all chunks
-                generate_mask<cb_mask_in>(
+                generate_causal_sliding_window_mask<cb_mask_in>(
                     Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
             }
         }

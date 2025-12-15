@@ -1203,39 +1203,33 @@ void sdpa_inner_loop(
              * This gives us scaling for free on the performance-critical exp(x - max) computation.
              */
 
-            // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-            // Q-range = [q_low, q_high)
-            // K-range = [k_low, k_high)
-            // does_overlap = not (q_low >= k_high or k_low >= q_high)
-            // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
+            bool apply_mask = false;
             if constexpr (is_causal || sliding_window_size > 0) {
+                // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
+                // Q-range = [q_low, q_high)
+                // K-range = [k_low, k_high)
+                // does_overlap = not (q_low >= k_high or k_low >= q_high)
+                // Due to loop bounds, we should never have k_low >= q_high.
                 const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                 const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                /* QK += MASK */
-                if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
-                    // If no sliding window - simple causal case - only apply along the diagonal
-                    // Otherwise, apply mask for all chunks
-                    reconfig_data_format(cb_qk_im, cb_mask_in);
-                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-                }
+                // Apply mask if causal overlap or sliding window is active
+                apply_mask = (q_low_idx < k_high_idx) || (sliding_window_size > 0);
+
             } else if constexpr (use_provided_mask) {
+                apply_mask = true;
+            } else if constexpr (use_padded_mask) {
+                // Apply mask only on the last K chunk
+                apply_mask = (k_chunk == iter_k_chunk_end - 1);
+            } else if constexpr (use_joint_mask) {
+                // Apply mask for specific ring and chunk combinations
+                apply_mask = (ring_id == N_mask_ring_id && k_chunk == mask_chunk_0) ||
+                             (ring_id == L_mask_ring_id && k_chunk == mask_chunk_1);
+            }
+
+            if (apply_mask) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-            } else if constexpr (use_padded_mask) {
-                // only uses mask on the last K chunk if it exists at all
-                if (k_chunk == iter_k_chunk_end - 1) {
-                    /* QK += MASK */
-                    reconfig_data_format(cb_qk_im, cb_mask_in);
-                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-                }
-            } else if constexpr (use_joint_mask) {
-                if ((ring_id == N_mask_ring_id && k_chunk == mask_chunk_0) ||
-                    (ring_id == L_mask_ring_id && k_chunk == mask_chunk_1)) {
-                    /* QK += MASK */
-                    reconfig_data_format(cb_qk_im, cb_mask_in);
-                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-                }
             }
 
             /**
