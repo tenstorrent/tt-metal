@@ -328,7 +328,10 @@ namespace experimental {
 class QuasarDataMovementKernel : public Kernel {
 public:
     QuasarDataMovementKernel(
-        const KernelSource& kernel_src, const CoreRangeSet& cr_set, const QuasarDataMovementConfig& config) :
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarDataMovementConfig& config,
+        const std::set<DataMovementProcessor>& dm_cores) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -337,10 +340,15 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
+        config_(config),
+        dm_cores_(dm_cores.begin(), dm_cores.end()) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarDataMovementKernel is only supported on Quasar");
+        TT_FATAL(
+            config.processors.size() == dm_cores.size(),
+            "Number of processors in config must match number of DM cores");
+        TT_FATAL(std::is_sorted(dm_cores_.begin(), dm_cores_.end()), "DM cores must be ordered");
     }
 
     ~QuasarDataMovementKernel() override = default;
@@ -362,6 +370,7 @@ public:
 
 private:
     const QuasarDataMovementConfig config_;
+    const std::vector<DataMovementProcessor> dm_cores_;
 
     uint8_t expected_num_binaries() const override;
 
