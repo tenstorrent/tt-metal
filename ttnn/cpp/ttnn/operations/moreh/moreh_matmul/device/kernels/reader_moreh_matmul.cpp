@@ -114,14 +114,12 @@ void kernel_main() {
     uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
 
 #ifdef FUSE_BIAS
-    if constexpr (is_scalar_bias) {
-        if (num_output_tiles > 0) {
-            cb_reserve_back(cb_id_in4, onetile);
-            uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-            noc_async_read_tile(0, s_bias, l1_write_addr_in4);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in4, onetile);
-        }
+    if (is_scalar_bias && num_output_tiles > 0) {
+        cb_reserve_back(cb_id_in4, onetile);
+        uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
+        noc_async_read_tile(0, s_bias, l1_write_addr_in4);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in4, onetile);
     }
 #endif
 
