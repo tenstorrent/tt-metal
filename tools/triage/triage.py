@@ -72,6 +72,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import importlib
 import importlib.metadata as importlib_metadata
+from rich.progress import Progress
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -732,51 +733,61 @@ def main():
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
 
-    # Check if we should run specific scripts
-    if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
-        for script_name in args["--run"]:
-            run_script(script_name, args, context)
-    else:
-        # Execute all scripts
-        triage_init_end = time()
-        if args["--print-script-times"]:
-            utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
-        total_time = triage_init_end - triage_start
-        serialization_time = 0.0
-        for script in script_queue:
-            if not all(not dep.failed for dep in script.depends):
-                utils.INFO(f"{script.name}:")
-                utils.WARN(f"  Cannot run script due to failed dependencies.")
-                script.failed = True
-                script.failure_message = "Cannot run script due to failed dependencies."
-            else:
-                start_time = time()
-                result = script.run(args=args, context=context)
-                end_time = time()
-                total_time += end_time - start_time
-                execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
-                if script.config.data_provider:
-                    if result is None:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        if script.failure_message is not None:
-                            utils.ERROR(f"  Data provider script failed: {script.failure_message}")
-                        else:
-                            utils.ERROR(f"  Data provider script did not return any data.")
-                    elif execution_time:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        utils.INFO("  pass")
+    with Progress() as progress:
+        scripts_task = progress.add_task("Script execution", total=len(script_queue))
+
+        # Check if we should run specific scripts
+        if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
+            progress.update(scripts_task, total=len(args["--run"]))
+            for script_name in args["--run"]:
+                progress.update(scripts_task, description=f"Running {script.name}")
+                run_script(script_name, args, context)
+                progress.advance(scripts_task)
+        else:
+            # Execute all scripts
+            triage_init_end = time()
+            if args["--print-script-times"]:
+                utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
+            total_time = triage_init_end - triage_start
+            serialization_time = 0.0
+            progress.update(scripts_task, total=len(script_queue))
+            for script in script_queue:
+                progress.update(scripts_task, description=f"Running {script.name}")
+                if not all(not dep.failed for dep in script.depends):
+                    utils.INFO(f"{script.name}:")
+                    utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    script.failed = True
+                    script.failure_message = "Cannot run script due to failed dependencies."
                 else:
                     start_time = time()
-                    serialize_result(script, result, execution_time)
+                    result = script.run(args=args, context=context)
                     end_time = time()
                     total_time += end_time - start_time
-                    serialization_time += end_time - start_time
-        if args["--print-script-times"]:
-            print()
-            utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
-            utils.INFO(f"Total execution time: {total_time:.2f}s")
+                    execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
+                    if script.config.data_provider:
+                        if result is None:
+                            print()
+                            utils.INFO(f"{script.name}{execution_time}:")
+                            if script.failure_message is not None:
+                                utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                            else:
+                                utils.ERROR(f"  Data provider script did not return any data.")
+                        elif execution_time:
+                            print()
+                            utils.INFO(f"{script.name}{execution_time}:")
+                            utils.INFO("  pass")
+                    else:
+                        start_time = time()
+                        serialize_result(script, result, execution_time)
+                        end_time = time()
+                        total_time += end_time - start_time
+                        serialization_time += end_time - start_time
+                progress.advance(scripts_task)
+            if args["--print-script-times"]:
+                print()
+                utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
+                utils.INFO(f"Total execution time: {total_time:.2f}s")
+        progress.remove_task(scripts_task)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ Description:
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
+from rich.progress import Progress
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check
@@ -220,16 +221,22 @@ class RunChecks:
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        for device in self.devices:
-            check_result = check(device)
-            # Use the common result collection helper
-            self._collect_results(
-                result,
-                check_result,
-                PerDeviceCheckResult,
-                device_description=DeviceDescription(device, self._use_unique_id),
-            )
-        return result if len(result) > 0 else None
+        with Progress() as progress:
+            device_task = progress.add_task("Devices", total=len(self.devices), visible=len(self.devices) > 1)
+            try:
+                for device in self.devices:
+                    check_result = check(device)
+                    # Use the common result collection helper
+                    self._collect_results(
+                        result,
+                        check_result,
+                        PerDeviceCheckResult,
+                        device_description=DeviceDescription(device, self._use_unique_id),
+                    )
+                    progress.advance(device_task)
+                return result if len(result) > 0 else None
+            finally:
+                progress.remove_task(device_task)
 
     def run_per_block_check(
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
@@ -242,18 +249,28 @@ class RunChecks:
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            for block_type in block_types_to_check:
-                for location in self.block_locations[device][block_type]:
-                    check_result = check(location)
-                    # Use the common result collection helper
-                    self._collect_results(
-                        result,
-                        check_result,
-                        PerBlockCheckResult,
-                        device_description=DeviceDescription(device, self._use_unique_id),
-                        location=location,
-                    )
-            return result if len(result) > 0 else None
+            with Progress() as progress:
+                progress_count = 0
+                for block_type in block_types_to_check:
+                    for location in self.block_locations[device][block_type]:
+                        progress_count += 1
+                device_task = progress.add_task("Locations", total=progress_count)
+                try:
+                    for block_type in block_types_to_check:
+                        for location in self.block_locations[device][block_type]:
+                            check_result = check(location)
+                            progress.advance(device_task)
+                            # Use the common result collection helper
+                            self._collect_results(
+                                result,
+                                check_result,
+                                PerBlockCheckResult,
+                                device_description=DeviceDescription(device, self._use_unique_id),
+                                location=location,
+                            )
+                    return result if len(result) > 0 else None
+                finally:
+                    progress.remove_task(device_task)
 
         # Reuse the device iteration from run_per_device_check
         return self.run_per_device_check(per_device_blocks_check)
