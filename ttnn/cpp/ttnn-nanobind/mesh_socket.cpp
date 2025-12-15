@@ -11,7 +11,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/shared_ptr.h>
 
 #include <tt-metalium/mesh_socket.hpp>
 

@@ -12,7 +12,6 @@
 #include <set>
 #include <string>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -23,9 +22,9 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/set.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
-#include <nanobind/stl/unordered_map.h>
 
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
@@ -48,21 +47,6 @@ namespace ttnn::tensor {
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
-
-// namespace detail {
-//
-// template <class T>
-// struct DataTypeToFormatType {
-//     using type = T;
-// };
-
-// https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst#nonstandard-arithmetic-types
-
-// template <>
-// struct DataTypeToFormatType<::bfloat16> {
-//     using type = uint16_t;
-// };
-//}  // namespace detail
 
 void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
@@ -147,7 +131,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     // https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst
     nb::class_<tt::tt_metal::HostBuffer>(m_tensor, "HostBuffer")
         .def(nb::init<>())
-        .def(nb::init<const std::shared_ptr<std::vector<std::byte>>>())
+        //.def(nb::init<const std::shared_ptr<std::vector<std::byte>>>()) // broke unity build
         .def(nb::init<std::vector<std::byte>&&>())
         .def(nb::init<const std::vector<std::byte>&>())
         .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
