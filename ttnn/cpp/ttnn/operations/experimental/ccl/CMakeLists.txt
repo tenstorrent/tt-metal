@@ -56,8 +56,7 @@ target_sources(
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         all_reduce_async/device/all_reduce_async_device_operation.cpp
         all_reduce_async/device/all_reduce_async_program_factory.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_experimental_device_operation.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_experimental_device_operation.hpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
@@ -118,7 +117,6 @@ target_sources(
         ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_program.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_experimental_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
 )
 

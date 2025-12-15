@@ -12,13 +12,13 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new {
 
 RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
 RingAttentionAllGatherAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Only one program factory available
-    return program::RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory{};
+    return RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory{};
 }
 
 void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
@@ -144,19 +144,39 @@ std::tuple<
 RingAttentionAllGatherAsyncDeviceOperation::invoke(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& persistent_output_buffer,
-    const int32_t dim,
+    int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    const auto& mesh_view = mesh_device.get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(),
+        "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");
+    uint32_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    int32_t rank = input_tensors[0].logical_shape().rank();
+    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    TT_FATAL(
+        gather_dim >= -rank && gather_dim <= rank - 1,
+        "Dimension input should be in between -{} and {}, but has {}",
+        rank,
+        rank - 1,
+        dim);
+
+    std::vector<std::optional<Tensor>> optional_output_tensors;
+    optional_output_tensors.reserve(persistent_output_buffer.size());
+    for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
+        optional_output_tensors.push_back(persistent_output_buffer[i]);
+    }
+
     return {
         operation_attributes_t{
-            mesh_device.get_devices(),
-            dim,
+            {},
+            gather_dim,
             num_links,
             ring_size,
             memory_config.value_or(input_tensors[0].memory_config()),
@@ -165,7 +185,7 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
             sub_device_id,
             cluster_axis,
         },
-        tensor_args_t{.input_tensor = input_tensors}};
+        tensor_args_t{.input_tensor = input_tensors, .persistent_output_buffer = persistent_output_buffer}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new

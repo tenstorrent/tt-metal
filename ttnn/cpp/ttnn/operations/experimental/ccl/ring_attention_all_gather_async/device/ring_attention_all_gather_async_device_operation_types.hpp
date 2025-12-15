@@ -21,26 +21,27 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_types {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new {
 
 struct operation_attributes_t {
     std::vector<IDevice*> devices;
-    uint32_t dim;
-    uint32_t num_links;
-    uint32_t ring_size;
+    int32_t dim = 0;
+    uint32_t num_links = 1;
+    uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
     ttnn::ccl::Topology topology;
-    const std::vector<GlobalSemaphore> semaphore;
+    std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
 };
 
 struct tensor_args_t {
-    const std::vector<Tensor>& input_tensor;
+    std::vector<Tensor> input_tensor;
+    std::vector<std::optional<Tensor>> persistent_output_buffer;
 };
 
 using tensor_return_value_t = std::vector<Tensor>;
 
 using spec_return_value_t = std::vector<TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_types
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new
