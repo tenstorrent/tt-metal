@@ -40,6 +40,7 @@ jobs:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
+      nanobind: ${{ matrix.config.nanobind || false }}
       publish-artifact: false
       skip-tt-train: true
       tracy: false
