@@ -39,7 +39,6 @@ struct SDPABackwardKVDeviceOperation {
         const ttnn::Tensor& intermediates,
         const float dropout_probability = 0.0F,
         const bool fp32_dest_acc_en = true,
-        const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
         const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
         const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
 };

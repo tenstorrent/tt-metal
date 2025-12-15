@@ -79,22 +79,61 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         kH);
 
     TT_FATAL(kH == vH, "Key and Value must have the same number of heads. Got key_heads={}, value_heads={}", kH, vH);
+
+    // Validate embedding dimensions match
+    TT_FATAL(
+        qE == kE && qE == vE,
+        "Embedding dimensions of Q, K, V must be the same. Got qEmbd={}, kEmbd={}, vEmbd={}",
+        qE,
+        kE,
+        vE);
+
+    // Validate physical volumes are tile-aligned
+    TT_FATAL(
+        grad_output.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            value.physical_volume() % tt::constants::TILE_WIDTH == 0,
+        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got grad_output={}, query={}, key={}, "
+        "value={}",
+        grad_output.physical_volume(),
+        query.physical_volume(),
+        key.physical_volume(),
+        value.physical_volume());
+
+    // Validate mask shape if provided - must be (1, 1, S, S)
+    if (tensor_args.attn_mask.has_value()) {
+        const auto& mask = tensor_args.attn_mask.value();
+        auto mask_shape = mask.logical_shape();
+        auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
+
+        TT_FATAL(
+            mB == 1 && mH == 1,
+            "Attention mask must have shape (1, 1, S, S) for broadcasting. "
+            "Got mask shape ({}, {}, {}, {}). "
+            "Full (B, H, S, S) masks will be supported in a future PR.",
+            mB,
+            mH,
+            mS1,
+            mS2);
+
+        TT_FATAL(
+            mS1 == qS && mS2 == qS,
+            "Attention mask sequence dimensions must match query sequence length. "
+            "Got mask shape ({}, {}, {}, {}), expected (1, 1, {}, {})",
+            mB,
+            mH,
+            mS1,
+            mS2,
+            qS,
+            qS);
+    }
 }
 
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     spec_return_value_t output_specs;
-    output_specs.reserve(3U);  // Always 3 outputs: grad_query, grad_key, grad_value
-
-    // Handle grad_query
-    if (tensor_args.preallocated_grad_query.has_value()) {
-        output_specs.push_back(tensor_args.preallocated_grad_query->tensor_spec());
-    } else {
-        output_specs.emplace_back(
-            tensor_args.query.logical_shape(),
-            tt::tt_metal::TensorLayout(
-                tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
-    }
+    output_specs.reserve(2U);  // 2 outputs: grad_key, grad_value
 
     // Handle grad_key
     if (tensor_args.preallocated_grad_key.has_value()) {
@@ -122,29 +161,22 @@ SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation
 SDPABackwardKVDeviceOperation::tensor_return_value_t SDPABackwardKVDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     tensor_return_value_t output_tensors;
-    output_tensors.reserve(3U);  // Always 3 outputs: grad_query, grad_key, grad_value
+    output_tensors.reserve(2U);  // 2 outputs: grad_key, grad_value
 
     spec_return_value_t output_specs = compute_output_specs(operation_attributes, tensor_args);
-
-    // Handle grad_query
-    if (tensor_args.preallocated_grad_query.has_value()) {
-        output_tensors.push_back(tensor_args.preallocated_grad_query.value());
-    } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.query.device()));
-    }
 
     // Handle grad_key
     if (tensor_args.preallocated_grad_key.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_grad_key.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.key.device()));
+        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.key.device()));
     }
 
     // Handle grad_value
     if (tensor_args.preallocated_grad_value.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_grad_value.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[2], tensor_args.value.device()));
+        output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.value.device()));
     }
 
     return output_tensors;
@@ -174,7 +206,6 @@ SDPABackwardKVDeviceOperation::invoke(
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
     const bool fp32_dest_acc_en,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
     operation_attributes_t operation_attributes{
@@ -188,7 +219,6 @@ SDPABackwardKVDeviceOperation::invoke(
         .value = value_tensor,
         .attn_mask = attn_mask,
         .intermediates = intermediates,
-        .preallocated_grad_query = preallocated_grad_query,
         .preallocated_grad_key = preallocated_grad_key,
         .preallocated_grad_value = preallocated_grad_value,
     };

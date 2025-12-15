@@ -70,8 +70,6 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 
-    // TODO[improve](vmelnykov): add check for mask tensor
-
     auto query_shape = query.logical_shape();
     auto key_shape = key.logical_shape();
     auto value_shape = value.logical_shape();
@@ -103,6 +101,36 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
         "Key and Value must have the same shape. Got Key={}, Value={}",
         key_shape,
         value_shape);
+
+    // Validate mask shape if provided - must be (1, 1, S, S)
+    if (tensor_args.mask.has_value()) {
+        const auto& mask = tensor_args.mask.value();
+        check_tensor(mask, "Attention Mask", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+
+        auto mask_shape = mask.logical_shape();
+        auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
+
+        TT_FATAL(
+            mB == 1 && mH == 1,
+            "Attention mask must have shape (1, 1, S, S) for broadcasting. "
+            "Got mask shape ({}, {}, {}, {}). "
+            "Full (B, H, S, S) masks will be supported in a future PR.",
+            mB,
+            mH,
+            mS1,
+            mS2);
+
+        TT_FATAL(
+            mS1 == qSt && mS2 == qSt,
+            "Attention mask sequence dimensions must match query sequence length. "
+            "Got mask shape ({}, {}, {}, {}), expected (1, 1, {}, {})",
+            mB,
+            mH,
+            mS1,
+            mS2,
+            qSt,
+            qSt);
+    }
 
     if (preallocated_output.has_value()) {
         check_tensor(

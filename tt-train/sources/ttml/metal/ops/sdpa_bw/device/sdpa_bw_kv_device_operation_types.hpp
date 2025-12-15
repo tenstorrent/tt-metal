@@ -23,12 +23,11 @@ struct tensor_args_t {
     const ttnn::Tensor& intermediates;             // From forward pass (1/sum_exp values)
 
     // Preallocated gradient tensors (optional)
-    std::optional<ttnn::Tensor> preallocated_grad_query;
     std::optional<ttnn::Tensor> preallocated_grad_key;
     std::optional<ttnn::Tensor> preallocated_grad_value;
 };
 
-using tensor_return_value_t = std::vector<ttnn::Tensor>;  // [grad_Q, grad_K, grad_V]
+using tensor_return_value_t = std::vector<ttnn::Tensor>;  // [grad_K, grad_V]
 
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 

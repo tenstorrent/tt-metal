@@ -114,7 +114,8 @@ void kernel_main() {
         uint32_t kv_offset =
             (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;  // jump to start of relevant batch/group of K and V
 
-        uint32_t mask_offset = (batch_idx * q_heads + q_head_idx) * Ht * Ht + (global_row_idx % Ht) * Ht;
+        // Mask is (1, 1, S, S) - same mask for all batches/heads, indexed by sequence position only
+        uint32_t mask_offset = (global_row_idx % Ht) * Ht;
 
         for (uint32_t h = 0; h < Ht; ++h) {
             uint32_t kv_start_idx = kv_offset + h * qWt;  // jump to the next row

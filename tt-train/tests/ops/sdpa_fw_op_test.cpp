@@ -41,16 +41,13 @@ protected:
 
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2];
-    xt::xarray<float> mask = xt::zeros<float>({B, H, S, S});
+    size_t S = shape[2];
+    // Create mask with shape (1, 1, S, S) - same mask for all batches/heads
+    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, S, S});
 
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t s = 0; s < S; ++s) {
-                for (size_t w = 0; w <= s; ++w) {
-                    mask(b, h, s, w) = 1.0F;  // causal mask - upper triangular part
-                }
-            }
+    for (size_t s = 0; s < S; ++s) {
+        for (size_t w = 0; w <= s; ++w) {
+            mask(0, 0, s, w) = 1.0F;  // causal mask - lower triangular part
         }
     }
     return mask;
@@ -162,7 +159,7 @@ xt::xarray<float> sdpa_grouped_naive(
                     for (std::size_t t = 0; t < Dh; ++t) {
                         dot += Q(b, 0, i, q_off + t) * K(b, 0, j, kv_off + t);
                     }
-                    const float m = attn_mask(b, 0, i, j);  // expected 0 or 1
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     // float s = dot * scale + attn_mask(b, 0, i, j);
                     scores_row[j] = s;
@@ -239,7 +236,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
                     for (std::size_t t = 0; t < Dh; ++t) {
                         dot += Q(b, 0, i, q_off + t) * K(b, 0, j, kv_off + t);
                     }
-                    const float m = attn_mask(b, 0, i, j);  // expected 0 or 1
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     scores_row[j] = s;
                     rmax = std::max(s, rmax);
@@ -317,7 +314,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                     for (std::size_t t = 0; t < Dh; ++t) {
                         dot += Q_split(b, h, i, t) * K_split(b, g, j, t);
                     }
-                    const float m = attn_mask(b, 0, i, j);  // expected 0 or 1
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     scores_row[j] = s;
                     rmax = std::max(s, rmax);
@@ -520,7 +517,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    // Create attention mask in kernel-expected format (B, qNH, S, S)
+    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
     // Convert to device tensors
@@ -756,7 +753,7 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    // Create attention mask in kernel-expected format (B, qNH, S, S)
+    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
     // Test Case 1: return_intermediates = false

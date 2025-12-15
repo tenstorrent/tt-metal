@@ -240,6 +240,69 @@ autograd::TensorPtr scaled_dot_product_attention(
     return out;
 }
 
+autograd::TensorPtr scaled_dot_product_attention_fused(
+    const autograd::TensorPtr& query,
+    const autograd::TensorPtr& key,
+    const autograd::TensorPtr& value,
+    const std::optional<autograd::TensorPtr>& mask,
+    float dropout_probability,
+    bool fp32_dest_acc_en) {
+    validate_qkv_shapes(query, key, value);
+
+    // Get mask tensor if provided
+    // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
+    std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
+    if (mask.has_value()) {
+        mask_tensor = mask.value()->get_value();
+    }
+
+    // ========== Forward Pass using sdpa_fw kernel ==========
+    auto fw_result = ttml::metal::sdpa_fw(
+        query->get_value(),
+        key->get_value(),
+        value->get_value(),
+        mask_tensor,
+        dropout_probability,
+        /*return_intermediates=*/true,  // Need intermediates for backward pass
+        fp32_dest_acc_en);
+
+    auto attn_output = fw_result[0].value();
+    auto intermediates = fw_result[1].value();
+
+    auto out = ttml::autograd::create_tensor(attn_output);
+
+    // ========== Register Backward Function using sdpa_bw kernel ==========
+    ttml::autograd::GradFunction grad =
+        [query, key, value, mask_tensor, out, attn_output, intermediates, dropout_probability, fp32_dest_acc_en]() {
+            auto grad_output = out->get_grad();
+
+            // Call sdpa_bw kernel
+            auto bw_result = ttml::metal::sdpa_bw(
+                grad_output,
+                attn_output,
+                query->get_value(),
+                key->get_value(),
+                value->get_value(),
+                mask_tensor,
+                intermediates,
+                dropout_probability,
+                fp32_dest_acc_en);
+
+            auto dL_dQ = bw_result[0];  // (B, H, S, D)
+            auto dL_dK = bw_result[1];  // (B, G, S, D) for GQA, (B, H, S, D) for MHA
+            auto dL_dV = bw_result[2];  // (B, G, S, D) for GQA, (B, H, S, D) for MHA
+
+            query->add_grad(dL_dQ);
+            key->add_grad(dL_dK);
+            value->add_grad(dL_dV);
+        };
+
+    auto links = autograd::get_links(query, key, value);
+    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,

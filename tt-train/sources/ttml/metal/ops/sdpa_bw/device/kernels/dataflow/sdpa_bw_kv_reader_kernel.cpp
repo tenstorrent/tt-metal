@@ -54,10 +54,7 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
-    constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_8;
 
-    // [DEBUG]: Used for debug, should be removed later
-    constexpr auto cb_masked_interm = tt::CBIndex::c_22;
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
@@ -67,12 +64,9 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
     constexpr uint32_t num_of_batches = get_compile_time_arg_val(6);   // num of batches
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sdpa scaler factor
-    constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
-    constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-1e9F
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_output_args = TensorAccessorArgs<10>();
+    constexpr auto grad_output_args = TensorAccessorArgs<7>();
     constexpr auto attn_output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto query_args = TensorAccessorArgs<attn_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
@@ -100,24 +94,16 @@ void kernel_main() {
     // [DEBUG]: Use fp32 for intermediates to improve numerical stability
     // const auto intermediates_address_generator =
     //     TensorAccessor(intermediates_args, intermediates_addr, precise_tile_bytes);
-    const auto intermediates_address_generator =
-        TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
-
-    constexpr uint16_t one = 0x00003F80;                          // (bfloat16)1.0 -> uint16_t
-    generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0
+    const auto intermediates_address_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
 
     // generate_matmul_row_reduce_tile(cb_matmul_reduce);            // generate tile for matmul row reduce
     generate_matmul_row_reduce_tile_fp32(cb_matmul_reduce);  // generate tile for matmul row reduce in fp32
 
-    const float scaler = uint32_to_float(scaler_bits);
-    const float minus_one = uint32_to_float(minus_one_bits);
-    const float custom_inf = uint32_to_float(custom_inf_bits);
-
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
     DPRINT << "SDPA BW KV: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row
-           << ", qWt=" << qWt << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads =" << q_heads << ", scaler=" << scaler
-           << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf << ENDL();
+           << ", qWt=" << qWt << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads=" << q_heads
+           << ", heads_per_group=" << heads_per_group << ", num_of_batches=" << num_of_batches << ENDL();
 
     // process rows of K and V assigned to this core
     // stream rows from Q, dO, O(for all heads associated with this group of K and V)
@@ -141,9 +127,9 @@ void kernel_main() {
         // DPRINT << "Reader: batch_idx=" << batch_idx << ", group_idx=" << group_idx
         //        << ", first_q_head_idx=" << first_q_head_idx << ", q_offset=" << q_offset << ENDL();
 
-        // the offset of attn_mask associated with this group of K and V
-        // jump to relevent batch and head, then jump to the row in attn_mask associated with current row of K and V
-        uint32_t mask_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * Ht + (global_row_idx % Ht);
+        // Mask is (1, 1, S, S) - same mask for all batches/heads, indexed by sequence position only
+        // For KV kernel, we read column (global_row_idx % Ht) from each row h of the mask
+        uint32_t mask_offset = (global_row_idx % Ht);
 
         // add change here: multiply by num_of_interm_tiles because we need to read 2 tiles per head row
         uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
@@ -182,16 +168,8 @@ void kernel_main() {
                     cb_intermediates,
                     intermediates_address_generator,
                     tile_bytes);
-
-                // [DEBUG]: Used for debug, should be removed later
-                // cb_wait_front(cb_masked_interm, num_of_interm_tiles);
-                // print_tile(cb_masked_interm, 0);
-                // print_tile(cb_masked_interm, 1);
-                // print_tile(cb_intermediates, 0);
-                // print_tile(cb_intermediates, 1);
             }
-            // update offsets to point to the next head in attn_mask and intermediates
-            mask_offset += Ht * Ht;  // jump to the next head in attn_mask associated with current Q head
+            // update offset for intermediates only (mask is (1,1,S,S) - same for all heads)
             intermediates_offset += Ht * num_of_interm_tiles;  // jump to the head in intermediates
         }
     }

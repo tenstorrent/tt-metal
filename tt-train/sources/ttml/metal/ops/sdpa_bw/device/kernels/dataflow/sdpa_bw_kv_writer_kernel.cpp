@@ -12,17 +12,14 @@
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
-    uint32_t grad_query_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t grad_key_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t grad_value_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices for gradients
-    constexpr uint32_t cb_grad_query = tt::CBIndex::c_18;          // Output: grad_Q
-    constexpr uint32_t cb_grad_key = tt::CBIndex::c_19;            // Output: grad_K
-    constexpr uint32_t cb_grad_value = tt::CBIndex::c_20;          // Output: grad_V
-    constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_21;  // Used to sync with output writer kernel
+    constexpr uint32_t cb_grad_key = tt::CBIndex::c_19;    // Output: grad_K
+    constexpr uint32_t cb_grad_value = tt::CBIndex::c_20;  // Output: grad_V
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
@@ -32,16 +29,14 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
 
-    const uint32_t tile_bytes = get_tile_size(cb_grad_query);
-    const DataFormat data_format = get_dataformat(cb_grad_query);
+    const uint32_t tile_bytes = get_tile_size(cb_grad_key);
+    const DataFormat data_format = get_dataformat(cb_grad_key);
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_query_args = TensorAccessorArgs<6>();
-    constexpr auto grad_key_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
+    constexpr auto grad_key_args = TensorAccessorArgs<6>();
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators for output gradients
-    const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr, tile_bytes);
     const auto grad_key_addr_generator = TensorAccessor(grad_key_args, grad_key_addr, tile_bytes);
     const auto grad_value_addr_generator = TensorAccessor(grad_value_args, grad_value_addr, tile_bytes);
 
@@ -80,11 +75,5 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_grad_key, kWt);
-
-        // cb_wait_front(cb_grad_query, onetile);
-        // uint32_t grad_query_l1_read_addr = get_read_ptr(cb_grad_query);
-        // noc_async_write_tile(r * qWt, grad_query_addr_generator, grad_query_l1_read_addr);
-        // noc_async_write_barrier();
-        // cb_pop_front(cb_grad_query, onetile);
     }
 }

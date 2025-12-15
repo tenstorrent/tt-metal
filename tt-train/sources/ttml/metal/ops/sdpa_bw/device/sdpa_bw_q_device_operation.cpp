@@ -79,6 +79,55 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
         kH);
 
     TT_FATAL(kH == vH, "Key and Value must have the same number of heads. Got key_heads={}, value_heads={}", kH, vH);
+
+    // Validate embedding dimensions match
+    TT_FATAL(
+        qE == kE && qE == vE,
+        "Embedding dimensions of Q, K, V must be the same. Got qEmbd={}, kEmbd={}, vEmbd={}",
+        qE,
+        kE,
+        vE);
+
+    // Validate physical volumes are tile-aligned
+    TT_FATAL(
+        grad_output.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            value.physical_volume() % tt::constants::TILE_WIDTH == 0,
+        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got grad_output={}, query={}, key={}, "
+        "value={}",
+        grad_output.physical_volume(),
+        query.physical_volume(),
+        key.physical_volume(),
+        value.physical_volume());
+
+    // Validate mask shape if provided - must be (1, 1, S, S)
+    if (tensor_args.attn_mask.has_value()) {
+        const auto& mask = tensor_args.attn_mask.value();
+        auto mask_shape = mask.logical_shape();
+        auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
+
+        TT_FATAL(
+            mB == 1 && mH == 1,
+            "Attention mask must have shape (1, 1, S, S) for broadcasting. "
+            "Got mask shape ({}, {}, {}, {}). "
+            "Full (B, H, S, S) masks will be supported in a future PR.",
+            mB,
+            mH,
+            mS1,
+            mS2);
+
+        TT_FATAL(
+            mS1 == qS && mS2 == qS,
+            "Attention mask sequence dimensions must match query sequence length. "
+            "Got mask shape ({}, {}, {}, {}), expected (1, 1, {}, {})",
+            mB,
+            mH,
+            mS1,
+            mS2,
+            qS,
+            qS);
+    }
 }
 
 SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::compute_output_specs(

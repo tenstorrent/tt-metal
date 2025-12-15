@@ -43,7 +43,6 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
-constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_8;
 
 constexpr auto kPrevGradQueryHolderCbIndex = tt::CBIndex::c_9;
 constexpr auto kCurGradQueryHolderCbIndex = tt::CBIndex::c_10;
@@ -55,12 +54,7 @@ constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_16;
 constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_17;
 
 constexpr auto kGradQueryCbIndex = tt::CBIndex::c_18;
-constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_21;
 
-// [DEBUG]: Used for debug, should be removed later
-constexpr auto kMaskedIntermCbIndex = tt::CBIndex::c_22;
-
-constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
 
@@ -172,42 +166,17 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
     auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
 
-    TT_FATAL(
-        grad_output.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
-            query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
-            key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
-            value.physical_volume() % tt::constants::TILE_WIDTH == 0,
-        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got grad_output {}, query {}, key {}, value "
-        "{}",
-        grad_output.physical_volume(),
-        query.physical_volume(),
-        key.physical_volume(),
-        value.physical_volume());
-
-    TT_FATAL(qEmbd == kEmbd && qEmbd == vEmbd, "Embedding dims of grad_output, Q, K, V must be the same");
-    TT_FATAL(qB == kB && qB == vB, "Query,Key and Value batch sizes must be the same");
-    TT_FATAL(qS == kS && qS == vS, "Query, Key and Value sequence lengths must be the same");
-    TT_FATAL(kNH == vNH, "Key and Value number of heads must be the same");
-
     // For query backward pass we split work over rows of Q
     uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
     uint32_t NC = qB * qNH;
     uint32_t total_rows_to_process = NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
     uint32_t q_heads = qNH;                    // number of heads in Query
     uint32_t kv_heads = kNH;
-
-    TT_FATAL(
-        qNH % kv_heads == 0,
-        "Number of heads must be divisible by number of groups, got heads={}, groups={}",
-        qNH,
-        kv_heads);
     uint32_t heads_per_group = qNH / kv_heads;  // we read one group of K and V for every heads_per_group heads from Q
 
     uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
     uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
     uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
-
-    TT_FATAL(qWt == kWt && qWt == vWt, "Query, Key and Value inner dims must be the same");
 
     // Scale factor for attention computation
     // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
@@ -305,10 +274,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     //         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes,
     //         kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_reduction_scaler =  // CBIndex::c_8
-        create_circular_buffer(
-            program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_prev_grad_query =  // CBIndex::c_9
         create_circular_buffer(
@@ -393,37 +358,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         create_circular_buffer(
             program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_sync_output_writer =  // CBIndex::c_21
-        create_circular_buffer(
-            program,
-            all_cores,
-            kSyncOutputWriterCbIndex,
-            data_format,
-            bfloat16_single_tile_size_bytes,
-            kSingleTileBuffer);
-
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    // [[maybe_unused]] auto cb_masked_interm =  // CBIndex::c_22
-    //     create_circular_buffer(
-    //         program,
-    //         all_cores,
-    //         kMaskedIntermCbIndex,
-    //         precise_data_format,
-    //         float32_single_tile_size_bytes,
-    //         kNumOfIntermCBTiles);
-    [[maybe_unused]] auto cb_masked_interm =  // CBIndex::c_22
-        create_circular_buffer(
-            program,
-            all_cores,
-            kMaskedIntermCbIndex,
-            data_format,
-            bfloat16_single_tile_size_bytes,
-            kNumOfIntermCBTiles);
-
-    [[maybe_unused]] auto cb_scaled_key =  // CBIndex::c_23
-        create_circular_buffer(
-            program, all_cores, tt::CBIndex::c_23, data_format, bfloat16_single_tile_size_bytes, kWt);
-
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
@@ -458,9 +392,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         q_heads,          // number of query heads
         heads_per_group,  // heads per group
         qB,               // num of batches
-        scaler,           // sqrt(Et) - sdpa scale factor
-        minus_one,        // used to transform mask from 1/0 to 0/-1
-        custom_inf        // used to transform mask from 0/-1 to 0/-1e9F
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);

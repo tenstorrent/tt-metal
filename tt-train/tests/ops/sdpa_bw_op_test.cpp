@@ -30,16 +30,13 @@ protected:
 
 xt::xarray<float> generate_attn_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2];
-    xt::xarray<float> mask = xt::zeros<float>({B, H, S, S});
+    size_t S = shape[2];
+    // Create mask with shape (1, 1, S, S) - same mask for all batches/heads
+    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, S, S});
 
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t s = 0; s < S; ++s) {
-                for (size_t w = 0; w <= s; ++w) {
-                    mask(b, h, s, w) = 1.0F;  // causal mask - upper triangular part
-                }
-            }
+    for (size_t s = 0; s < S; ++s) {
+        for (size_t w = 0; w <= s; ++w) {
+            mask(0, 0, s, w) = 1.0F;  // causal mask - lower triangular part
         }
     }
     return mask;
@@ -193,6 +190,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     }
 
     // Step 3: Apply attention mask if provided
+    // Mask is (1, 1, S, S) - same mask for all batches/heads
     if (attn_mask.has_value()) {
         const auto& mask = attn_mask.value();
         for (size_t b = 0; b < B; ++b) {
@@ -200,7 +198,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                 for (size_t i = 0; i < S; ++i) {
                     for (size_t j = 0; j < S; ++j) {
                         // mask: 1.0 = keep, 0.0 = mask out
-                        if (mask(b, h, i, j) < 0.5F) {
+                        if (mask(0, 0, i, j) < 0.5F) {
                             scores(b, h, i, j) = -1e9F;
                         }
                     }
@@ -539,12 +537,40 @@ std::vector<ttnn::Tensor> composite_sdpa(
             /*attention_weights*/ qk_scaled};
 }
 
-TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
+// ========== Test Configuration ==========
+struct SDPABackwardTestConfig {
+    uint32_t batch_size;
+    uint32_t sequence_length;
+    uint32_t query_dim;
+    uint32_t key_value_dim;
+    uint32_t num_query_heads;
+    uint32_t num_kv_heads;
+    float dropout_prob = 0.0F;
+    bool fp32_dest_acc_en = true;
+    float atol = 3e-2F;
+    float rtol = 3e-2F;
+    std::string test_name = "SDPA Backward Test";
+};
+
+void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     using namespace ttml;
-    const uint32_t B = 1U, qNH = 6U, kvNH = 6U, S = 256U, qD = 128U, kvD = 128U;
-    const float dropout_probability = 0.0F;
-    const bool fp32_dest_acc_en = true;
-    const float atol = 3e-2F, rtol = 3e-2F;
+
+    fmt::print("\n========== {} ==========\n", config.test_name);
+    fmt::print("Config: B={}, S={}, qD={}, kvD={}, qNH={}, kvNH={}\n",
+               config.batch_size, config.sequence_length, config.query_dim, config.key_value_dim,
+               config.num_query_heads, config.num_kv_heads);
+    fmt::print("Tolerances: atol={:.2e}, rtol={:.2e}\n\n", config.atol, config.rtol);
+
+    const uint32_t B = config.batch_size;
+    const uint32_t qNH = config.num_query_heads;
+    const uint32_t kvNH = config.num_kv_heads;
+    const uint32_t S = config.sequence_length;
+    const uint32_t qD = config.query_dim;
+    const uint32_t kvD = config.key_value_dim;
+    const float dropout_probability = config.dropout_prob;
+    const bool fp32_dest_acc_en = config.fp32_dest_acc_en;
+    const float atol = config.atol;
+    const float rtol = config.rtol;
     const float scale_factor = 1.0F / std::sqrt(static_cast<float>(qD));
 
     auto* device = &autograd::ctx().get_device();
@@ -572,9 +598,8 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    // Create attention mask in kernel-expected format (B, qNH, S, S)
+    // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
-    // xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, qNH, S, S});
 
     xt::xarray<float> grad_output_tensor = xt::empty<float>({B, qNH, S, qD});
     ttml::core::parallel_generate(
@@ -623,7 +648,9 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     xt::xarray<float> recip_cpu = core::to_xtensor(recip_sum_exp);
     fmt::print("\n=== Intermediates for Numerical Stability Check ===\n");
     fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
-    fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
+    if (S > 32) {
+        fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
+    }
 
     // ========== SDPA Forward Kernel (get attn_output and intermediates) ==========
     fmt::print("\nComputing SDPA forward kernel...\n");
@@ -691,35 +718,13 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     fmt::print("kernel_dK shape: {}\n", sdpa_bw_dK.shape());
     fmt::print("kernel_dV shape: {}\n", sdpa_bw_dV.shape());
 
-    // fmt::print("composite_attention_weights shape: {}\n", composite_attention_weights.shape());
     // Verify shapes match
-    if (sdpa_bw_dQ.shape() != composite_dQ.shape()) {
-        fmt::print("ERROR: kernel_dQ shape != composite_dQ shape\n");
-    }
-    if (sdpa_bw_dQ.shape() != float_dQ.shape()) {
-        fmt::print("ERROR: kernel_dQ shape != float_dQ shape\n");
-    }
-    if (composite_dQ.shape() != float_dQ.shape()) {
-        fmt::print("ERROR: composite_dQ shape != float_dQ shape\n");
-    }
-    if (sdpa_bw_dK.shape() != composite_dK.shape()) {
-        fmt::print("ERROR: kernel_dK shape != composite_dK shape\n");
-    }
-    if (sdpa_bw_dK.shape() != float_dK.shape()) {
-        fmt::print("ERROR: kernel_dK shape != float_dK shape\n");
-    }
-    if (composite_dK.shape() != float_dK.shape()) {
-        fmt::print("ERROR: composite_dK shape != float_dK shape\n");
-    }
-    if (sdpa_bw_dV.shape() != composite_dV.shape()) {
-        fmt::print("ERROR: kernel_dV shape != composite_dV shape\n");
-    }
-    if (sdpa_bw_dV.shape() != float_dV.shape()) {
-        fmt::print("ERROR: kernel_dV shape != float_dV shape\n");
-    }
-    if (composite_dV.shape() != float_dV.shape()) {
-        fmt::print("ERROR: composite_dV shape != float_dV shape\n");
-    }
+    ASSERT_EQ(sdpa_bw_dQ.shape(), composite_dQ.shape()) << "kernel_dQ shape != composite_dQ shape";
+    ASSERT_EQ(sdpa_bw_dQ.shape(), float_dQ.shape()) << "kernel_dQ shape != float_dQ shape";
+    ASSERT_EQ(sdpa_bw_dK.shape(), composite_dK.shape()) << "kernel_dK shape != composite_dK shape";
+    ASSERT_EQ(sdpa_bw_dK.shape(), float_dK.shape()) << "kernel_dK shape != float_dK shape";
+    ASSERT_EQ(sdpa_bw_dV.shape(), composite_dV.shape()) << "kernel_dV shape != composite_dV shape";
+    ASSERT_EQ(sdpa_bw_dV.shape(), float_dV.shape()) << "kernel_dV shape != float_dV shape";
 
     // Debug: Check for NaN/Inf values
     fmt::print("\n=== DEBUG: Checking for invalid values ===\n");
@@ -744,19 +749,17 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     has_nan_or_inf(float_dV, "float_dV");
     has_nan_or_inf(composite_dV, "composite_dV");
     has_nan_or_inf(sdpa_bw_dV, "kernel_dV");
+
     // ========== Comparisons ==========
     fmt::print("\n=== COMPARISON RESULTS ===\n\n");
 
     // 0. Forward pass: Kernel vs Composite vs Float
-    fmt::print("------- FORWARD PASS: KERNEL VS COMPOSITE -------\n");
+    fmt::print("------- FORWARD PASS -------\n");
     print_error_analysis(
         kernel_attn_output_cpu, composite_attn_output_cpu, {atol, rtol}, 50, "Attn Output (Kernel FW vs Composite)");
-    print_error_analysis(
-        kernel_intermediates_cpu,
-        composite_intermediates_cpu,
-        {atol, rtol},
-        50,
-        "Intermediates (Kernel FW vs Composite)");
+    // Note: Composite intermediates have broadcast format (value in all 32 positions per tile)
+    // while kernel/float have sparse format (value only at position 0 and 32).
+    // So we compare kernel vs float for intermediates validation.
     print_error_analysis(
         kernel_intermediates_cpu, float_intermediates, {atol, rtol}, 50, "Intermediates (Kernel FW vs Float)");
 
@@ -772,23 +775,14 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     print_error_analysis(sdpa_bw_dK, float_dK, {atol, rtol}, 50, "dK (Kernel vs Float)");
     print_error_analysis(sdpa_bw_dV, float_dV, {atol, rtol}, 50, "dV (Kernel vs Float)");
 
-    // print_error_analysis(
-    //     sdpa_bw_dQ, composite_attention_weights, {2e-2F, 2e-2F}, 50, "Attention Weights (Kernel vs Composite)");
-
-    // 3. Kernel vs Composite (original comparison)
-    // fmt::print("--- Kernel vs Composite ---\n");
-    // print_error_analysis(sdpa_bw_dQ, composite_dQ, {atol, rtol}, 50, "dQ (Kernel vs Composite)");
-    // print_error_analysis(sdpa_bw_dK, composite_dK, {atol, rtol}, 50, "dK (Kernel vs Composite)");
-    // print_error_analysis(sdpa_bw_dV, composite_dV, {atol, rtol}, 50, "dV (Kernel vs Composite)");
-
     // DEBUG: Check xt::isclose to understand second tile issue
     fmt::print("\n=== DEBUG: Analyzing xt::isclose for second tile issue ===\n");
-    // add analysis for the second tile (elements 32-63 in seq dimension) if needed
 
     // Final assertions
-    // Forward pass checks (sdpa_fw kernel vs composite)
+    // Forward pass checks
     bool fw_attn_output_matches = xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, rtol, atol);
-    bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, composite_intermediates_cpu, rtol, atol);
+    // Compare kernel intermediates vs float (same sparse format: values at pos 0 and 32 only)
+    bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, float_intermediates, rtol, atol);
 
     // Backward pass checks
     bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
@@ -801,12 +795,12 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
     bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
 
-    fmt::print("\n=== FINAL RESULTS ===\n");
+    fmt::print("\n=== FINAL RESULTS ({}) ===\n", config.test_name);
 
     // Forward pass results
-    fmt::print("Forward Pass (sdpa_fw kernel vs composite):\n");
-    fmt::print("  Attn Output: {}\n", fw_attn_output_matches ? "PASS" : "FAIL");
-    fmt::print("  Intermediates: {}\n", fw_intermediates_matches ? "PASS" : "FAIL");
+    fmt::print("Forward Pass:\n");
+    fmt::print("  Attn Output (Kernel vs Composite): {}\n", fw_attn_output_matches ? "PASS" : "FAIL");
+    fmt::print("  Intermediates (Kernel vs Float): {}\n", fw_intermediates_matches ? "PASS" : "FAIL");
 
     // Backward pass results
     fmt::print("\nBackward Pass (sdpa_bw kernel using sdpa_fw outputs):\n");
@@ -829,12 +823,100 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     fmt::print("dV: {}\n", composite_dV_matches_float ? "PASS" : "FAIL");
 
     // Assertions
-    EXPECT_TRUE(fw_attn_output_matches);
-    EXPECT_TRUE(fw_intermediates_matches);
-    EXPECT_TRUE(kernel_dQ_matches_float);
-    EXPECT_TRUE(kernel_dK_matches_float);
-    EXPECT_TRUE(kernel_dV_matches_float);
-    EXPECT_TRUE(kernel_dQ_matches_composite);
-    EXPECT_TRUE(kernel_dK_matches_composite);
-    EXPECT_TRUE(kernel_dV_matches_composite);
+    EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output mismatch in " << config.test_name;
+    EXPECT_TRUE(fw_intermediates_matches) << "Forward intermediates mismatch in " << config.test_name;
+    EXPECT_TRUE(kernel_dQ_matches_float) << "Kernel dQ vs Float mismatch in " << config.test_name;
+    EXPECT_TRUE(kernel_dK_matches_float) << "Kernel dK vs Float mismatch in " << config.test_name;
+    EXPECT_TRUE(kernel_dV_matches_float) << "Kernel dV vs Float mismatch in " << config.test_name;
+    EXPECT_TRUE(kernel_dQ_matches_composite) << "Kernel dQ vs Composite mismatch in " << config.test_name;
+    EXPECT_TRUE(kernel_dK_matches_composite) << "Kernel dK vs Composite mismatch in " << config.test_name;
+    EXPECT_TRUE(kernel_dV_matches_composite) << "Kernel dV vs Composite mismatch in " << config.test_name;
+}
+
+// ========== Test Cases ==========
+
+TEST_F(SDPABackwardTest, SmallBatch) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .fp32_dest_acc_en = true,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "SmallBatch (B=2, S=128, D=64, H=4)"};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, NanoGPTConfig) {
+    // Match nano_gpt training config
+    SDPABackwardTestConfig config{
+        .batch_size = 64U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 6U,
+        .num_kv_heads = 6U,
+        .dropout_prob = 0.0F,
+        .fp32_dest_acc_en = true,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "NanoGPTConfig (B=64, S=256, D=128, H=6)"};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, LargerSequence) {
+    SDPABackwardTestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 512U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 8U,
+        .dropout_prob = 0.0F,
+        .fp32_dest_acc_en = true,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "LargerSequence (B=4, S=512, D=128, H=8)"};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, GroupedQueryAttention) {
+    // Test GQA: more query heads than kv heads
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 2U,  // 4 query heads per kv head
+        .dropout_prob = 0.0F,
+        .fp32_dest_acc_en = true,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "GroupedQueryAttention (qH=8, kvH=2)"};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, TinyLlamaConfig) {
+    // Match TinyLlama training config from configs/training_shakespeare_tinyllama.yaml
+    // num_heads: 32, num_groups: 4, embedding_dim: 2048, max_sequence_length: 2048
+    // head_dim = 2048 / 32 = 64
+    // heads_per_group = 32 / 4 = 8
+    SDPABackwardTestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 256U,  // Using smaller seq for faster test (full is 2048)
+        .query_dim = 64U,         // head_dim = embedding_dim / num_heads = 2048 / 32
+        .key_value_dim = 64U,
+        .num_query_heads = 32U,   // num_heads from config
+        .num_kv_heads = 4U,       // num_groups from config (8 query heads per kv head)
+        .dropout_prob = 0.0F,
+        .fp32_dest_acc_en = true,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "TinyLlamaConfig (B=1, S=256, D=64, qH=32, kvH=4)"};
+    run_sdpa_backward_test(config);
 }
