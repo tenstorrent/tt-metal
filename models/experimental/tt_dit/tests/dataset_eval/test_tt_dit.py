@@ -203,7 +203,9 @@ def test_tt_dit_accuracy(
     iter = itertools.cycle(prompts) if is_24hrs_test else prompts
     start_time = time.time()
     for i, prompt in enumerate(iter):
-        logger.info(f"Generating image {i+1}: {prompt[:50]}...")
+        logger.info(
+            f"Generating image {i+1} of {len(prompts) if not is_24hrs_test else '24hrs images'}: {prompt[:50]}..."
+        )
 
         # Generate image using TT-Metal pipeline
         with benchmark_profiler("inference", iteration=i):
