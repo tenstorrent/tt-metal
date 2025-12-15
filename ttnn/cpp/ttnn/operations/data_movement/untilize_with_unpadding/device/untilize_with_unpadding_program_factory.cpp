@@ -165,8 +165,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         uint32_t(output_cb_index)};
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -174,6 +179,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -183,7 +190,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         compute_kernel,
         core,
         tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_args,
+            .defines = compute_kernel_defines});
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});
@@ -371,10 +381,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         WriterDataMovementConfig(writer_ct_args));
 
     // compute
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
     bool use_pack_kernel = true;
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         use_pack_kernel = false;
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     }
     if (!core_range.empty()) {
         CreateKernel(
@@ -385,7 +406,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size, single_block_size, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
@@ -396,7 +419,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_row) {
         CreateKernel(
@@ -407,7 +432,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     if (has_cliff_col) {
@@ -419,7 +446,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     // RUNTIME ARGS
@@ -787,14 +816,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     /** compute
      */
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     }
 
     if (!core_range.empty()) {
@@ -804,6 +840,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
                 .defines = compute_kernel_defines});
     }
@@ -814,6 +851,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
                 .defines = compute_kernel_defines});
     }
@@ -1038,8 +1076,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     };
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -1052,6 +1095,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -1061,7 +1106,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         compute_kernel,
         all_cores,
         ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_args,
+            .defines = compute_kernel_defines});
 
     // reader runtime args
     const std::array reader_rt_args = {
