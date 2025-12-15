@@ -169,6 +169,7 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             py::arg("dtype") = std::nullopt,
             py::arg("use_2d_core_grid") = std::nullopt});
 }
