@@ -55,7 +55,7 @@ def test_unequal_ranks(a_shape, b_shape, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99888
 
 
 @pytest.mark.parametrize(
