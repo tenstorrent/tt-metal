@@ -36,7 +36,7 @@ struct AvgPoolConfig {
     uint32_t pad_b{};
     uint32_t pad_l{};
     uint32_t pad_r{};
-    uint32_t out_nhw_per_core{};
+    uint32_t max_out_nhw_per_core{};
     std::optional<int32_t> divisor_override;
 };
 

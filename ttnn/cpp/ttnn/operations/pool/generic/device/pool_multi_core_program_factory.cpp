@@ -62,7 +62,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
-    for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
+    for (uint32_t i = 0; i < config.max_out_nhw_per_core; i++) {
         // Compute starting and ending indices of the pooling window
         int h_start = (output_stick_x * config.stride_h) - config.pad_t;
         int w_start = (output_stick_y * config.stride_w) - config.pad_l;
@@ -104,7 +104,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         }
     }
 
-    scalars.back().end = config.out_nhw_per_core;
+    scalars.back().end = config.max_out_nhw_per_core;
     return scalars;
 }
 
@@ -126,7 +126,7 @@ static void push_back_scalar_info_or_zero(
 
 // This function creates a scalar config tensor for the AvgPool2D operation. It is entirely made of
 // a vector of ScalarInfo structs, which are used to configure the pooling operation. The config tensor
-// is filled with out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
+// is filled with max_out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
 // Since we don't usually have that many different scalars, we fill the rest of the config tensor with 0s.
 static Tensor create_scalar_config_tensor(
     const AvgPoolConfig& config,
@@ -159,7 +159,7 @@ static Tensor create_scalar_config_tensor(
             // Width sharded layout requires only one iteration, so we can break here
             if (in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                 in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                nhw_linear += config.out_nhw_per_core;
+                nhw_linear += config.max_out_nhw_per_core;
                 output_stick_w = nhw_linear % config.out_w;
                 output_stick_h = (nhw_linear / config.out_w) % config.out_h;
                 output_stick_n = nhw_linear / (config.out_w * config.out_h);
@@ -279,13 +279,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
     const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     // distributing out_hw across the grid
     const auto all_cores = input.shard_spec().value().grid;
     const uint32_t ncores = all_cores.num_cores();
     const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
     const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
-    const uint32_t out_nhw_per_core = outputs[0].shard_spec()->shape[0];
+    const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -554,7 +555,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .pad_b = pad_b,
             .pad_l = pad_l,
             .pad_r = pad_r,
-            .out_nhw_per_core = out_nhw_per_core,
+            .max_out_nhw_per_core = max_out_nhw_per_core,
             .divisor_override = divisor_override};
         config_tensor = create_scalar_config_tensor(
             avg_pool_config, input.memory_config().memory_layout(), in_n, num_shards_c, ncores);
@@ -576,7 +577,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
     }
     std::vector<uint32_t> reader0_ct_args = {
-        out_nhw_per_core,               // 0
+        max_out_nhw_per_core,           // 0
         kernel_h,                       // 1
         kernel_w,                       // 2
         pad_w,                          // 3
@@ -651,7 +652,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         params.in_ntiles_c,             // 0
         kernel_h * kernel_w,            // 1
         params.split_reader,            // 2
-        out_nhw_per_core,               // 3
+        0,                              // 3 - max_out_nhw_per_core, used for grid sample but not for pool
         in_c_per_shard_ceil,            // 4
         in_nblocks_c,                   // 5
         params.max_rows_for_reduction,  // 6
@@ -707,22 +708,35 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     // set the starting indices for each core as runtime args
-    if (return_indices) {
-        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
-        for (uint32_t core_i = 0; core_i < ncores; core_i++) {
-            const uint32_t core_x_i = core_i % rectangular_x;
-            const uint32_t core_y_i = core_i / rectangular_x;
-            const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
+    uint32_t total_out_nhw = in_n * out_h * out_w;
+    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+        const uint32_t core_x_i = core_i % rectangular_x;
+        const uint32_t core_y_i = core_i / rectangular_x;
+        const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
 
+        uint32_t total_out_nhw_processed;
+        if (is_block_sharded) {
+            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
+        } else if (is_width_sharded) {
+            total_out_nhw_processed = 0;
+        } else {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+        }
+        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, total_out_nhw - total_out_nhw_processed);
+        std::vector<uint32_t> args = {out_nhw_this_core};
+
+        if (return_indices) {
+            TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
             const uint32_t start_index = core_starting_indices[core_i];
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
 
-            std::vector<uint32_t> args = {(uint32_t)(start_row), (uint32_t)(start_col)};
-            SetRuntimeArgs(program, reader0_kernel, core, args);
-            SetRuntimeArgs(program, compute_kernel, core, args);
+            args.push_back((uint32_t)(start_row));
+            args.push_back((uint32_t)(start_col));
         }
+        SetRuntimeArgs(program, reader0_kernel, core, args);
+        SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
     auto temporary_size = calculate_total_cb_size(program);
@@ -794,7 +808,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
         log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(tt::LogOp, "ncores: {}", ncores);
-        log_debug(tt::LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
+        log_debug(tt::LogOp, "max_out_nhw_per_core: {}", max_out_nhw_per_core);
         log_debug(tt::LogOp, "split_reader: {}", params.split_reader);
         log_debug(tt::LogOp, "multi_buffering_factor: {}", params.multi_buffering_factor);
         log_debug(tt::LogOp, "is_wide_reduction: {}", params.is_wide_reduction);
