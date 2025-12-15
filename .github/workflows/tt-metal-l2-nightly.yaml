@@ -261,7 +261,7 @@ jobs:
       gtest_filter: "*"
   # FD Model Tests
   models-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bos_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
