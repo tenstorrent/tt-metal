@@ -40,7 +40,9 @@ ttnn::Tensor ExecuteUntilize::invoke(
     bool use_multicore,
     bool use_pack_untilize,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
+    bool fp32_dest_acc_en =
+        input_tensor.dtype() ==
+        DataType::UINT32;  // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
