@@ -895,7 +895,7 @@ bool TestConfigBuilder::should_skip_test_on_topology(const ParsedTestConfig& tes
     return false;
 }
 
-TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {
+TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {
     TestConfig resolved_test;
     resolved_test.name = parsed_test.name;
     resolved_test.parametrized_name = parsed_test.parametrized_name;
@@ -911,7 +911,7 @@ TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t ite
     resolved_test.global_sync = parsed_test.global_sync;
     resolved_test.enable_flow_control = parsed_test.enable_flow_control;
     resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
-    
+
     // Resolve defaults
     if (parsed_test.defaults.has_value()) {
         resolved_test.defaults = resolve_traffic_pattern(parsed_test.defaults.value());
