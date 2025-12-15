@@ -15,8 +15,6 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "create_qkv_heads_from_separate_tensors.hpp"
 
-namespace nb = nanobind;
-
 namespace ttnn::operations::experimental::transformer::detail {
 
 namespace {

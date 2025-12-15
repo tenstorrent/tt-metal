@@ -14,6 +14,8 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "softmax.hpp"
 
+// NOLINTBEGIN(bugprone-unused-raii)
+
 namespace ttnn::operations::normalization::detail {
 
 struct SoftmaxProgramConfigPlaceholder {};
@@ -476,3 +478,5 @@ void bind_normalization_softmax(nb::module_& mod) {
     bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(mod);
 }
 }  // namespace ttnn::operations::normalization::detail
+
+// NOLINTEND(bugprone-unused-raii)

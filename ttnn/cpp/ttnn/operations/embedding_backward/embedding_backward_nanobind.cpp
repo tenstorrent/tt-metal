@@ -15,7 +15,7 @@
 namespace ttnn::operations::embedding_backward {
 
 void bind_embedding_backward(nb::module_& mod) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
         Returns the input gradients of the output gradients tensor with respect to the input indices.
 

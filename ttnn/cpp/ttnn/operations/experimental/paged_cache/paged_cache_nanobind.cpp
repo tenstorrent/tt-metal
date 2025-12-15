@@ -132,7 +132,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("mesh_coords").noconvert() = nb::none(),
         });
 
-    auto paged_fill_cache_doc =
+    const auto* paged_fill_cache_doc =
         R"doc(
         Paged fill cache operation. This operation expects the following inputs: cache_tensor, input_tensor, and page_table.
         It uses either batch_idx_tensor (if provided, kwarg batch_idx_tensor) or batch_idx (kwarg batch_idx) as a fallback to determine the batch index for updating the cache.
