@@ -160,7 +160,11 @@ target_link_libraries(
 # Generate MGD library
 add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
 
-add_dependencies(generate_mgd_lib scaleout_generated_protos)
+add_dependencies(
+    generate_mgd_lib
+    scaleout_generated_protos
+    fabric
+)
 
 target_include_directories(
     generate_mgd_lib
