@@ -26,7 +26,7 @@ void kernel_main() {
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     //
-    uint32_t read_size = stick_size;
+
     constexpr auto dst_args = TensorAccessorArgs<2>();
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
     //
