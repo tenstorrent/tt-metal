@@ -49,7 +49,13 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    shape_q = input_shape if isinstance(input_shape, (tuple, list)) else (1, 8, 1, 64)
+    # Handle both sample suite (tuple/list) and model_traced suite (dict with keys for multi-input ops)
+    if isinstance(input_shape, dict):
+        # Multi-input operation - extract individual shapes
+        shape_q = tuple(input_shape.get("input_a", input_shape.get("self", (1, 8, 1, 64))))
+    else:
+        # Convert list to tuple if needed
+        shape_q = tuple(input_shape) if isinstance(input_shape, list) else input_shape
 
     # Tensor creation
     torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(shape_q)
