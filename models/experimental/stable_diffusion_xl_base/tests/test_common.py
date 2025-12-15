@@ -35,6 +35,28 @@ CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_enc
 CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER = 1280
 
 
+def determine_data_parallel(ttnn_device, use_cfg_parallel):
+    # ttnn_device mesh shape is set to (TP, DP)
+    return list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+
+
+def determine_tensor_parallel(ttnn_device, use_cfg_parallel):
+    # ttnn_device mesh shape is set to (TP, DP)
+    tensor_parallel = list(ttnn_device.shape)[0] if use_cfg_parallel else 1
+    assert tensor_parallel == 1 or tensor_parallel == 2, f"Only TP 1 and 2 are supported, got {tensor_parallel}"
+    return tensor_parallel
+
+
+def determinate_min_batch_size(ttnn_device, use_cfg_parallel):
+    return determine_data_parallel(ttnn_device, use_cfg_parallel)
+
+
+def prepare_device(mesh_device, use_cfg_parallel):
+    if use_cfg_parallel:
+        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
+        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
+
+
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
     ccl_manager = None
     if pipeline.text_encoder is not None:
@@ -51,7 +73,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
             hidden_act=text_encoder_1.config.hidden_act,
         )
 
-        # Note: Factor for SDXL should always be 1; since we don't support TP
+        # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
         parallel_config_1 = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
         )
@@ -76,7 +98,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         hidden_act=text_encoder_2.config.hidden_act,
     )
 
-    # Note: Factor for SDXL should always be 1; since we don't support TP
+    # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
     parallel_config_2 = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
@@ -91,7 +113,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
 
 def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
-    batch_size = ttnn_device.get_num_devices()
+    batch_size = ttnn_device.get_num_devices()  # warmup on all devices; tp/dp config doesn't matter here
     dummy_prompt = ["abc"] * batch_size
     if tt_text_encoder is not None:
         dummy_ids = tokenizer(
@@ -126,6 +148,56 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
     )
     _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
     ttnn.synchronize_device(ttnn_device)
+
+
+def normalize_prompt_for_text_encoder(
+    prompt: Union[str, List[str]],
+    num_devices: int,
+    use_cfg_parallel: bool,
+) -> List[str]:
+    """
+    Normalizes prompt input to match device requirements.
+
+    Args:
+        prompt: Single prompt string or list of prompts
+        num_devices: Total number of devices available
+        use_cfg_parallel: Whether CFG parallelism is enabled (TP=2)
+
+    Returns:
+        List of prompts matching device requirements
+
+    Prompt handling rules:
+    - String inputs are converted to single-element lists
+    - Prompt list length must be either 1 or equal to num_devices
+    - If cfg_parallel is enabled (TP=2): prompts are padded with empty strings to match device count
+    - If cfg_parallel is disabled (DP>=1): a single prompt is broadcasted to all devices
+
+    Raises:
+        ValueError: If prompt list length is invalid
+    """
+    # Convert string to list
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+
+    num_prompts = len(prompt_list)
+
+    # Validate prompt count
+    if num_prompts != 1 and num_prompts != num_devices:
+        raise ValueError(
+            f"Prompt list length must be 1 or equal to number of devices ({num_devices}), "
+            f"but got {num_prompts} prompts"
+        )
+
+    # Handle prompt distribution based on parallelism mode
+    if use_cfg_parallel:
+        # CFG parallel: pad with empty strings if needed
+        if num_prompts < num_devices:
+            prompt_list = prompt_list + [""] * (num_devices - num_prompts)
+    else:
+        # Data parallel: broadcast single prompt to all devices
+        if num_prompts == 1:
+            prompt_list = prompt_list * num_devices
+
+    return prompt_list
 
 
 # encode_prompt function, adapted from sdxl pipeline to work with on device tt text encoders
@@ -192,20 +264,13 @@ def batch_encode_prompt_on_device(
             Number of layers to be skipped from CLIP while computing the prompt embeddings. A value of 1 means that
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
-    prompt = [prompt] if isinstance(prompt, str) else prompt
 
-    prompt_2 = prompt_2 or prompt
-    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
-
-    num_devices = ttnn_device.get_num_devices()
+    prompt = prompt = normalize_prompt_for_text_encoder(prompt, ttnn_device.get_num_devices(), use_cfg_parallel)
     num_prompts = len(prompt)
-    if use_cfg_parallel and num_prompts < num_devices:
-        # Pad prompts by appending empty strings to match num_devices
-        prompt = prompt + [""] * (num_devices - len(prompt))
-        if prompt_2 is not None:
-            prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
+    prompt_2 = prompt_2 or prompt
+    prompt_2 = normalize_prompt_for_text_encoder(prompt_2, ttnn_device.get_num_devices(), use_cfg_parallel)
 
-    assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
+    assert len(prompt) == ttnn_device.get_num_devices(), "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
@@ -217,7 +282,7 @@ def batch_encode_prompt_on_device(
     ), "Non - Classifier free guidance is not supported currently with on device text encoders"
 
     if prompt is not None:
-        batch_size = len(prompt)
+        batch_size = num_prompts
     else:
         batch_size = prompt_embeds.shape[0]
 
@@ -318,9 +383,11 @@ def batch_encode_prompt_on_device(
         negative_prompt_2 = negative_prompt_2 or negative_prompt
 
         # normalize str to list
-        negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-        negative_prompt_2 = (
-            batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+        negative_prompt = normalize_prompt_for_text_encoder(
+            negative_prompt, ttnn_device.get_num_devices(), use_cfg_parallel
+        )
+        negative_prompt_2 = normalize_prompt_for_text_encoder(
+            negative_prompt_2, ttnn_device.get_num_devices(), use_cfg_parallel
         )
 
         uncond_tokens: List[str]
