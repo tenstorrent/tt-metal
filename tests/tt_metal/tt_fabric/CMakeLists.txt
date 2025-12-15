@@ -232,3 +232,63 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# ---- Test: bandwidth telemetry validation ----
+add_executable(test_bandwidth_telemetry_validation ${CMAKE_CURRENT_SOURCE_DIR}/test_bandwidth_telemetry_validation.cpp)
+
+target_link_libraries(
+    test_bandwidth_telemetry_validation
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(test_bandwidth_telemetry_validation tt_metal)
+
+target_include_directories(
+    test_bandwidth_telemetry_validation
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    test_bandwidth_telemetry_validation
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# ---- Tool: gentle fabric workload generator ----
+add_executable(gentle_fabric_workload ${CMAKE_CURRENT_SOURCE_DIR}/gentle_fabric_workload.cpp)
+
+target_link_libraries(
+    gentle_fabric_workload
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+add_dependencies(gentle_fabric_workload tt_metal)
+
+target_include_directories(
+    gentle_fabric_workload
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+
+set_target_properties(
+    gentle_fabric_workload
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
