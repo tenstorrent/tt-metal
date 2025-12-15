@@ -191,5 +191,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-perf-fabric-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-bw != false || github.event_name == 'push' }}
+      run-perf-fabric-bw-latency: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-bw-latency != false || github.event_name == 'push' }}
       run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}
