@@ -2065,11 +2065,9 @@ void
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
-        DPRINT << "wait for conn " << sender_channel_idx << ENDL();
         while (!connect_is_requested(*interface.connection_live_semaphore)) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
-        DPRINT << "conn established " << sender_channel_idx << ENDL();
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
     };
     if constexpr (multi_txq_enabled) {

@@ -1435,40 +1435,6 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     return build_connection_to_fabric_channel(0, channel_id);  // Default to VC0
 }
 
-// Internal implementation for connect_to_downstream_edm
-// Note: this can be deleted after fabric latency tests are ported to new test infrastructure
-// void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder) {
-//     TT_FATAL(
-//         !this->build_in_worker_connection_mode, "Tried to connect EDM to downstream builder in worker connection
-//         mode");
-
-//     eth_chan_directions ds_dir = downstream_builder->get_direction();
-
-//     log_debug(
-//         tt::LogTest,
-//         "EDM at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting to downstream EDM at x={}, y={}, "
-//         "Direction={}",
-//         this->get_noc_x(),
-//         this->get_noc_y(),
-//         this->get_direction(),
-//         local_fabric_node_id,
-//         downstream_builder->get_noc_x(),
-//         downstream_builder->get_noc_y(),
-//         ds_dir);
-
-//     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-//     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
-
-//     // Setup VC0 connection
-//     constexpr uint32_t ds_vc0_index = 0;
-//     auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->get_direction(), ds_dir);
-//     setup_downstream_vc_connection(downstream_builder, ds_vc0_index, ds_vc0_send_chan);
-// }
-
-// void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder) {
-//     connect_to_downstream_edm_impl(downstream_builder);
-// }
-
 // TODO: take the downstream sender channel, based on the VC index, and use it to construct our
 // `to_sender_channel_adapter` The `to_sender_channel_adapter` type is resolved based on the type of the downstream
 // sender channel it is connecting to.
