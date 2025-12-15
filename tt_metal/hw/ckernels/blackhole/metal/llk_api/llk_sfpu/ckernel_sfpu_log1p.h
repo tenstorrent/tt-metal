@@ -77,7 +77,8 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
 
         constexpr float THRESHOLD = 0.3f;
         v_if(abs_val < THRESHOLD) {
-            // For |x| < 0.3, use 9-term polynomial series to avoid catastrophic cancellation
+            // For |x| < 0.3, use 9-term polynomial series (with 10 coefficients  including constant term)
+            // to avoid catastrophic cancellation
             // Coefficients were computed using Sollya with the following command:
             // > fpminimax(log(x+1), [|1,2,3,4,5,6,7,8,9|], [|single...|], [-0.3; -2^(-20)] + [2^(-20); 0.3], relative);
             result = PolynomialEvaluator::eval(
