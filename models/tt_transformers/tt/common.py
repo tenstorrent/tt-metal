@@ -149,12 +149,15 @@ def preprocess_inputs_prefill(
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
     for m_args in model_args:
-        if max_prefill_len >= m_args.max_context_len:
-            max_prefill_len -= max_generated_tokens
-            # all model_args should have the same max_context_len as
-            # it's assumed that all models are the same. break out of the loop once we find the first one
-            # with the max_prefill_len >= max_context_len
-            break
+        assert (
+            max_prefill_len <= m_args.max_context_len
+        ), f"max_prefill_len {max_prefill_len} cannot exceed max_context_len {m_args.max_context_len}"
+
+    # we need to make room for the generated tokens in the total token budget
+    max_prefill_len -= max_generated_tokens
+    assert (
+        max_prefill_len > 0
+    ), f"max_prefill_len ({max_prefill_len + max_generated_tokens}) must be greater than max_generated_tokens ({max_generated_tokens})"
 
     encoded_prompts = [
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
@@ -565,7 +568,6 @@ def get_all_padded_prefill_lengths(max_len):
 
 
 def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens):
-    max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
     to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
     for trace_supported_seq_len in trace_supported_seq_lens:
         if trace_supported_seq_len not in to_warmup_seq_lens:

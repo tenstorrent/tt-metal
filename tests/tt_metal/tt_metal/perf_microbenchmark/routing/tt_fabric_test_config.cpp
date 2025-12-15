@@ -273,6 +273,10 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.enable_flow_control = parse_scalar<bool>(test_yaml["enable_flow_control"]);
     }
 
+    if (test_yaml["skip_packet_validation"]) {
+        test_config.skip_packet_validation = parse_scalar<bool>(test_yaml["skip_packet_validation"]);
+    }
+
     return test_config;
 }
 
