@@ -33,7 +33,8 @@ double PostComparisonAnalyzer::calculate_geomean_speedup(const std::vector<doubl
     }
     log_geomean_speedup /= speedups.size();
     const double geomean_speedup[2] = { std::exp(log_geomean_speedup), 1.0 };
-    return geomean_speedup[std::isinf(geomean_speedup[0])];    
+    const auto is_inf_idx = std::isinf(geomean_speedup[0])
+    return geomean_speedup[is_inf_idx];
 }
 
 void PostComparisonAnalyzer::calculate_overall_geomean_speedup() {
