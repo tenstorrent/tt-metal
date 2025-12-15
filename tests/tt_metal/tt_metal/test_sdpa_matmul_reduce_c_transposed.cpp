@@ -44,17 +44,23 @@ static void create_matmul_inputs(
     uint32_t k_chunk_size,
     uint32_t head_dim,
     std::vector<bfloat16>& tensor_A_rm,
-    std::vector<bfloat16>& tensor_B_rm) {
+    std::vector<bfloat16>& tensor_B_rm,
+    std::vector<bfloat16>& prev_max_rm) {
     SHAPE a_shape = {1, 1, k_chunk_size * 32, head_dim * 32};
     SHAPE b_shape = {1, 1, head_dim * 32, q_chunk_size * 32};
+    SHAPE prev_max_shape = {1, 1, 32, q_chunk_size * 32};
 
     tt::deprecated::Tensor<bfloat16> a_tensor =
         tt::deprecated::initialize_tensor<bfloat16>(a_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 0 /* seed */);
     tt::deprecated::Tensor<bfloat16> b_tensor =
         tt::deprecated::initialize_tensor<bfloat16>(b_shape, tt::deprecated::Initialize::RANDOM, -1, 1, 1 /* seed */);
 
+    tt::deprecated::Tensor<bfloat16> prev_max_tensor = tt::deprecated::initialize_tensor<bfloat16>(
+        prev_max_shape, tt::deprecated::Initialize::RANDOM, -20, 20, 2 /* seed */);
+
     tensor_A_rm = a_tensor.get_values();
     tensor_B_rm = b_tensor.get_values();
+    prev_max_rm = prev_max_tensor.get_values();
 }
 
 // Golden reference: compute matmul(A, B) and reduce_max over dim=0 (rows) of the matmul output.
@@ -62,9 +68,11 @@ static void create_matmul_inputs(
 static void golden_matmul_and_reduce_max(
     const std::vector<bfloat16>& tensor_A_rm,
     const std::vector<bfloat16>& tensor_B_rm,
+    const std::vector<bfloat16>& prev_max_rm,
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
     uint32_t head_dim,
+    bool do_eltwise,
     std::vector<bfloat16>& matmul_out_rm,
     std::vector<bfloat16>& max_out_rm) {
     const uint32_t M = k_chunk_size * 32;
@@ -82,18 +90,32 @@ static void golden_matmul_and_reduce_max(
         }
     }
 
+    int did_eltwise = 0;
+
     max_out_rm.assign(N, static_cast<bfloat16>(0.0f));
     for (uint32_t j = 0; j < N; ++j) {
         float col_max = -std::numeric_limits<float>::infinity();
         for (uint32_t i = 0; i < M; ++i) {
             col_max = std::max(col_max, static_cast<float>(matmul_out_rm[i * N + j]));
         }
+        if (do_eltwise) {
+            col_max = std::max(col_max, static_cast<float>(prev_max_rm[j]));
+            if (col_max == static_cast<float>(prev_max_rm[j])) {
+                did_eltwise++;
+            }
+        }
         max_out_rm[j] = static_cast<bfloat16>(col_max);
     }
+    log_info(LogTest, "did_eltwise: {}", did_eltwise);
 }
 
 static bool test_sdpa_reduce_c_transposed(
-    tt_metal::IDevice* device, uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t head_dim, bool fp32_dest_acc_en) {
+    tt_metal::IDevice* device,
+    uint32_t q_chunk_size,
+    uint32_t k_chunk_size,
+    uint32_t head_dim,
+    bool fp32_dest_acc_en,
+    bool do_eltwise) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -102,21 +124,31 @@ static bool test_sdpa_reduce_c_transposed(
     log_info(
         LogTest,
         "Running sdpa_reduce_c_transposed test with q_chunk_size: {}, k_chunk_size: {}, "
-        "fp32_dest_acc_en: {}",
+        "fp32_dest_acc_en: {}, do_eltwise: {}",
         q_chunk_size,
         k_chunk_size,
-        fp32_dest_acc_en);
+        fp32_dest_acc_en,
+        do_eltwise);
 
     // New test inputs per updated spec: build A [k_chunk_size*32 x head_dim*32]
     // and B [head_dim*32 x q_chunk_size*32], and compute golden matmul and reduce_max over dim=0.
     std::vector<bfloat16> tensor_A_rm;
     std::vector<bfloat16> tensor_B_rm;
-    create_matmul_inputs(q_chunk_size, k_chunk_size, head_dim, tensor_A_rm, tensor_B_rm);
+    std::vector<bfloat16> prev_max_rm;
+    create_matmul_inputs(q_chunk_size, k_chunk_size, head_dim, tensor_A_rm, tensor_B_rm, prev_max_rm);
 
     std::vector<bfloat16> golden_matmul_rm;
     std::vector<bfloat16> golden_max_rm;
     golden_matmul_and_reduce_max(
-        tensor_A_rm, tensor_B_rm, q_chunk_size, k_chunk_size, head_dim, golden_matmul_rm, golden_max_rm);
+        tensor_A_rm,
+        tensor_B_rm,
+        prev_max_rm,
+        q_chunk_size,
+        k_chunk_size,
+        head_dim,
+        do_eltwise,
+        golden_matmul_rm,
+        golden_max_rm);
 
     // Set up device buffers for matmul and reduce_max
     const uint32_t M = k_chunk_size * 32;
@@ -174,7 +206,7 @@ static bool test_sdpa_reduce_c_transposed(
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {k_chunk_size, q_chunk_size})};
 
-    auto max_out_buffer_config = tt::tt_metal::ShardedBufferConfig{
+    auto max_buffer_config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = max_out_num_tiles * cb_tile_size,
         .page_size = cb_tile_size,
@@ -203,7 +235,8 @@ static bool test_sdpa_reduce_c_transposed(
     auto k_in_buffer = CreateBuffer(k_in_buffer_config);
     auto q_in_buffer = CreateBuffer(q_in_buffer_config);
     auto mm_output_buffer = CreateBuffer(mm_output_buffer_config);
-    auto max_out_buffer = CreateBuffer(max_out_buffer_config);
+    auto max_out_buffer = CreateBuffer(max_buffer_config);
+    auto prev_max_buffer = CreateBuffer(max_buffer_config);
     auto one_tile_buffer = CreateBuffer(one_tile_buffer_config_2);
 
     // Host writes for inputs
@@ -221,6 +254,12 @@ static bool test_sdpa_reduce_c_transposed(
         auto q_in_tilized = tilize_nfaces(q_in_rm, K, N);
         auto q_in_uint = pack_bfloat16_vec_into_uint32_vec(q_in_tilized);
         tt_metal::detail::WriteToBuffer(q_in_buffer, q_in_uint);
+    }
+
+    {
+        auto prev_max_tilized = tilize_nfaces(prev_max_rm, 32, N);
+        auto prev_max_uint = pack_bfloat16_vec_into_uint32_vec(prev_max_tilized);
+        tt_metal::detail::WriteToBuffer(prev_max_buffer, prev_max_uint);
     }
 
     // one_tile_buffer: tile of ones
@@ -257,7 +296,14 @@ static bool test_sdpa_reduce_c_transposed(
             .set_globally_allocated_address(*max_out_buffer);
     tt_metal::CreateCircularBuffer(program, core, cb_max_out_config);
 
-    auto cb_identity_scale_id = tt::CBIndex::c_4;
+    auto cb_prev_max_id = tt::CBIndex::c_4;
+    auto cb_prev_max_config =
+        tt::tt_metal::CircularBufferConfig(max_out_num_tiles * cb_tile_size, {{cb_prev_max_id, cb_df}})
+            .set_page_size(cb_prev_max_id, cb_tile_size)
+            .set_globally_allocated_address(*prev_max_buffer);
+    tt_metal::CreateCircularBuffer(program, core, cb_prev_max_config);
+
+    auto cb_identity_scale_id = tt::CBIndex::c_5;
     auto cb_identity_scale_config =
         tt::tt_metal::CircularBufferConfig(1 * cb_tile_size, {{cb_identity_scale_id, cb_df}})
             .set_page_size(cb_identity_scale_id, cb_tile_size)
@@ -292,6 +338,7 @@ static bool test_sdpa_reduce_c_transposed(
     std::vector<uint32_t> compute_kernel_args = {
         cb_k_in_id,
         cb_q_in_id,
+        cb_prev_max_id,
         cb_mm_out_id,
         cb_max_out_id,
         cb_identity_scale_id,
@@ -301,7 +348,8 @@ static bool test_sdpa_reduce_c_transposed(
         in0_num_subblocks,
         in1_num_subblocks,
         out_subblock_h,
-        out_subblock_w};
+        out_subblock_w,
+        static_cast<uint32_t>(do_eltwise ? 1 : 0)};
 
     tt_metal::CreateKernel(
         program,
@@ -413,40 +461,44 @@ int main(int argc, char** argv) {
      * Parameters to sweep over for correctness.
      */
     // sizes are in terms of tiles (32x32)
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
-    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
-    std::vector<uint32_t> head_dim_sizes = {1, 2, 4, 8};
+    // std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
+    // std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
+    // std::vector<uint32_t> head_dim_sizes = {1, 2, 4, 8};
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
-    std::vector<bool> fp32_dest_acc_ens = {false};
+    // std::vector<bool> fp32_dest_acc_ens = {false};
     // Excluding do_eltwise since SFPU reduce_max overlap will not include eltwise max
-    std::vector<bool> do_eltwise = {false};
+    // std::vector<bool> do_eltwise = {false};
 
     /**
      * These parameters are the same as the SDPA sprint-2 perfomance test parameters.
      * Uncomment to measure perf of the test we care most about.
      */
-    // std::vector<uint32_t> q_chunk_sizes = {8};
-    // std::vector<uint32_t> k_chunk_sizes = {16};
-    // std::vector<uint32_t> head_dim_sizes = {4};
-    // std::vector<bool> fp32_dest_acc_ens = {false};
-    // std::vector<bool> do_eltwise = {false};
+    std::vector<uint32_t> q_chunk_sizes = {8};
+    std::vector<uint32_t> k_chunk_sizes = {16};
+    std::vector<uint32_t> head_dim_sizes = {4};
+    std::vector<bool> fp32_dest_acc_ens = {false};
+    std::vector<bool> do_eltwise = {true};
 
     for (uint32_t q_chunk_size : q_chunk_sizes) {
         for (uint32_t k_chunk_size : k_chunk_sizes) {
             for (uint32_t head_dim : head_dim_sizes) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
-                    bool this_passed =
-                        test_sdpa_reduce_c_transposed(device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en);
-                    if (!this_passed) {
-                        log_error(
-                            LogTest,
-                            "Test Failed for q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: {}",
-                            q_chunk_size,
-                            k_chunk_size,
-                            head_dim,
-                            fp32_dest_acc_en);
+                    for (bool do_eltwise : do_eltwise) {
+                        bool this_passed = test_sdpa_reduce_c_transposed(
+                            device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en, do_eltwise);
+                        if (!this_passed) {
+                            log_error(
+                                LogTest,
+                                "Test Failed for q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: "
+                                "{}, do_eltwise: {}",
+                                q_chunk_size,
+                                k_chunk_size,
+                                head_dim,
+                                fp32_dest_acc_en,
+                                do_eltwise);
+                            pass &= this_passed;
+                        }
                     }
-                    pass &= this_passed;
                 }
             }
         }
