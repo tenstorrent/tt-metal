@@ -29,7 +29,6 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 
     // unpA -> srcA
     // unpB -> srcB
-    // Note: For matmul with tiny tiles, operands can have different face dimensions
     const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
     const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);

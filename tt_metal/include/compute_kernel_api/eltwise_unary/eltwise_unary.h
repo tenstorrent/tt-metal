@@ -15,7 +15,6 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
-    // TODO NC: used to pass disable_src_zero_flag to hw configure
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
@@ -41,7 +40,6 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
  */
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
-    // TODO NC: used to pass disable_src_zero_flag to hw configure
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,

@@ -88,7 +88,9 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0) {
-    // Note: in0_cb_id and in1_cb_id are swapped here because of the way matmul works:
+    // Note: in0_cb_id and in1_cb_id are swapped here because internally,
+    // matmul maps in0 to srcB and in1 to srcA, so the arguments must be swapped
+    // to ensure the correct operand mapping for the hardware implementation.
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 

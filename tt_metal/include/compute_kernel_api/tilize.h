@@ -12,6 +12,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
+#include "llk_unpack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -95,7 +96,7 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
