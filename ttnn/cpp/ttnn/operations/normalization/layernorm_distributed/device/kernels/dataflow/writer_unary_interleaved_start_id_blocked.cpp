@@ -23,23 +23,18 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
-    // DPRINT <<"blk: " <<blk << ENDL();
-    DPRINT << "num_tiles: " << num_tiles << ENDL();
     uint32_t tile_id = tile_offset;
-    for (uint32_t i = 0; i < num_tiles; i += 1) {
-        for (uint32_t j = 0; j < 1; j++) {
+    for (uint32_t i = 0; i < num_tiles; i += blk) {
+        cb_wait_front(cb_out, blk);
+        for (uint32_t j = 0; j < blk; j++) {
             uint32_t l1_read_addr = get_read_ptr(cb_out);
-            // DPRINT <<"Pre wait_Front tile: "<< ENDL();
-            //         tt::data_movement::common::print_bf16_pages(l1_read_addr,32,32);
-            DPRINT << "tile_id: " << tile_id << ENDL();
-            cb_wait_front(cb_out, 1);
+            // if print is uncommented, everything passes
+            //  tt::data_movement::common::print_bf16_pages(l1_read_addr,32,32);
             noc_async_write_tile(tile_id, s, l1_read_addr);
-            // DPRINT <<"Post wait_Front tile: "<< ENDL();
-            //         tt::data_movement::common::print_bf16_pages(l1_read_addr,32,32);
             tile_id++;
-            // l1_read_addr += tile_bytes;
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, 1);
+            l1_read_addr += tile_bytes;
         }
+        noc_async_write_barrier();
+        cb_pop_front(cb_out, 1);
     }
 }
