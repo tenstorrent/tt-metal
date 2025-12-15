@@ -16,6 +16,7 @@ set(SOURCES
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
+    ttnn_fixed/debug_untilize_test.cpp
     ttnn_fixed/matmuls_test.cpp
     ttnn_fixed/reduce_ops_test.cpp
     ttnn_fixed/dropout_op_test.cpp
