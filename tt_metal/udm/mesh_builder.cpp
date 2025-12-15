@@ -242,6 +242,100 @@ public:
         return compile_time_args;
     }
 
+    std::map<std::string, std::string> get_compile_time_defines() const {
+        std::map<std::string, std::string> defines;
+
+        // MeshGcoreAccessor defines layout using constexpr arrays:
+        // 1. MESH_NUM_DIMS
+        // 2. MESH_DIMS - constexpr array {dim0, dim1, ...}
+        // 3. MESH_STRIDES - constexpr array {stride0, stride1, ...}
+        // 4. GRID_NUM_DIMS
+        // 5. GRID_DIMS - constexpr array {dim0, dim1, ...}
+        // 6. GRID_STRIDES - constexpr array {stride0, stride1, ...}
+        // 7. NUM_GRIDS
+        // 8. FABRIC_MESH_IDS - constexpr array {id0, id1, ...}
+        // 9. FABRIC_CHIP_IDS - constexpr array {id0, id1, ...}
+
+        auto dims = get_aligned_mesh_grid_dimensions();
+
+        // Mesh configuration
+        defines["MESH_NUM_DIMS"] = std::to_string(dims.mesh_num_dims);
+
+        // Build MESH_DIMS array string: {dim0, dim1, ...}
+        std::string mesh_dims_str = "{";
+        for (uint32_t i = 0; i < dims.mesh_num_dims; ++i) {
+            if (i > 0) {
+                mesh_dims_str += ", ";
+            }
+            mesh_dims_str += std::to_string(dims.mesh_dims[i]);
+        }
+        mesh_dims_str += "}";
+        defines["MESH_DIMS"] = mesh_dims_str;
+
+        // Build MESH_STRIDES array string: {stride0, stride1, ...}
+        std::string mesh_strides_str = "{";
+        for (uint32_t i = 0; i < dims.mesh_num_dims; ++i) {
+            if (i > 0) {
+                mesh_strides_str += ", ";
+            }
+            mesh_strides_str += std::to_string(dims.mesh_strides[i]);
+        }
+        mesh_strides_str += "}";
+        defines["MESH_STRIDES"] = mesh_strides_str;
+
+        // Grid configuration
+        defines["GRID_NUM_DIMS"] = std::to_string(dims.grid_num_dims);
+
+        // Build GRID_DIMS array string: {dim0, dim1, ...}
+        std::string grid_dims_str = "{";
+        for (uint32_t i = 0; i < dims.grid_num_dims; ++i) {
+            if (i > 0) {
+                grid_dims_str += ", ";
+            }
+            grid_dims_str += std::to_string(dims.grid_dims[i]);
+        }
+        grid_dims_str += "}";
+        defines["GRID_DIMS"] = grid_dims_str;
+
+        // Build GRID_STRIDES array string: {stride0, stride1, ...}
+        std::string grid_strides_str = "{";
+        for (uint32_t i = 0; i < dims.grid_num_dims; ++i) {
+            if (i > 0) {
+                grid_strides_str += ", ";
+            }
+            grid_strides_str += std::to_string(dims.grid_strides[i]);
+        }
+        grid_strides_str += "}";
+        defines["GRID_STRIDES"] = grid_strides_str;
+
+        // Fabric node id mapping
+        defines["NUM_GRIDS"] = std::to_string(grids_.size());
+
+        // Build FABRIC_MESH_IDS array string: {id0, id1, ...}
+        std::string fabric_mesh_ids_str = "{";
+        for (size_t i = 0; i < grids_.size(); ++i) {
+            if (i > 0) {
+                fabric_mesh_ids_str += ", ";
+            }
+            fabric_mesh_ids_str += std::to_string(*grid_to_fabric_node_id_[i].mesh_id);
+        }
+        fabric_mesh_ids_str += "}";
+        defines["FABRIC_MESH_IDS"] = fabric_mesh_ids_str;
+
+        // Build FABRIC_CHIP_IDS array string: {id0, id1, ...}
+        std::string fabric_chip_ids_str = "{";
+        for (size_t i = 0; i < grids_.size(); ++i) {
+            if (i > 0) {
+                fabric_chip_ids_str += ", ";
+            }
+            fabric_chip_ids_str += std::to_string(grid_to_fabric_node_id_[i].chip_id);
+        }
+        fabric_chip_ids_str += "}";
+        defines["FABRIC_CHIP_IDS"] = fabric_chip_ids_str;
+
+        return defines;
+    }
+
 private:
     void create_mesh() {
         // Create mesh object with the mesh_shape passed in as its dims
@@ -543,6 +637,10 @@ std::vector<uint32_t> MeshBuilder::get_compile_time_args() const { return impl_-
 
 std::vector<uint32_t> MeshBuilder::get_fabric_nodes_compile_args() const {
     return impl_->get_fabric_nodes_compile_args();
+}
+
+std::map<std::string, std::string> MeshBuilder::get_compile_time_defines() const {
+    return impl_->get_compile_time_defines();
 }
 
 }  // namespace tt::tt_metal::experimental::udm
