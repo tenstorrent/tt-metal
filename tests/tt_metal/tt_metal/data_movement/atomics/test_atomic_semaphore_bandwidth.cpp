@@ -187,7 +187,7 @@ bool run_atomic_semaphore_test(
 
 /// @brief Bandwidth sweep test that varies transaction sizes and counts
 void increment_value_sweep_test(
-    const shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 1},
     CoreCoord receiver_core = {0, 0}) {
