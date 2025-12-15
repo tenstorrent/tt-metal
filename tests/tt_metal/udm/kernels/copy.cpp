@@ -65,6 +65,9 @@ void kernel_main() {
     for (uint32_t d = 0; d < rank; ++d) {
         total_pages *= dim_pages[d];
     }
+    if (total_pages == 0) {
+        return;
+    }
 
     // Initialize indices and compute initial page_id
     std::array<uint32_t, MAX_RANK> indices = {0};

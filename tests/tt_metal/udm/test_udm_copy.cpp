@@ -198,17 +198,14 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     // Create MeshProgram
     auto program = tt::tt_metal::experimental::udm::CreateMeshProgram(mesh_builder);
 
-    // Get all gcores from mesh builder
-    const auto& all_gcores_vec = mesh_builder.get_all_gcores_in_mesh();
-
     // Map buffer to gcores using UDM API
     // Partition work on dimension 0 (rows) - each worker processes 1 row
     // Data is width-sharded (dim 1), so each row spans multiple devices
     int partition_dim = 0;
     auto gcores_info = tt::tt_metal::experimental::udm::map_tensor_to_gcores(
         input_mesh_tensor_builder,
-        all_gcores_vec,  // Pass all gcores - the function should select the right ones
-        partition_dim    // partition_dim = 0 (rows)
+        mesh_builder,  // Pass mesh_builder which contains mesh and grid dimensions
+        partition_dim  // partition_dim = 0 (rows)
     );
 
     // Get compile-time args from both input and output MeshTensorBuilders

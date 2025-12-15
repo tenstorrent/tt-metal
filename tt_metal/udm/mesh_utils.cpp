@@ -4,6 +4,7 @@
 
 #include "tt_metal/udm/mesh_utils.hpp"
 #include "tt_metal/udm/mesh_tensor_builder.hpp"
+#include "tt_metal/udm/mesh_builder.hpp"
 #include <tt_stl/assert.hpp>
 #include <cmath>
 
@@ -194,24 +195,32 @@ bool core_has_work(
 }  // anonymous namespace
 
 GcoresInfo map_tensor_to_gcores(
-    const MeshTensorBuilder& tensor_builder, const std::vector<Gcore>& gcores, int partition_dim) {
+    const MeshTensorBuilder& tensor_builder, const MeshBuilder& mesh_builder, int partition_dim) {
     // Single-dimension partitioning - just call the ND version
-    return map_tensor_to_gcores_nd(tensor_builder, gcores, {partition_dim});
+    return map_tensor_to_gcores_nd(tensor_builder, mesh_builder, {partition_dim});
 }
 
 GcoresInfo map_tensor_to_gcores_nd(
-    const MeshTensorBuilder& tensor_builder, const std::vector<Gcore>& gcores, const std::vector<int>& partition_dims) {
-    TT_FATAL(!gcores.empty(), "gcores cannot be empty");
+    const MeshTensorBuilder& tensor_builder, const MeshBuilder& mesh_builder, const std::vector<int>& partition_dims) {
     TT_FATAL(!partition_dims.empty(), "partition_dims cannot be empty");
+
+    // Get mesh and grid dimensions from mesh_builder
+    const auto& mesh_shape = mesh_builder.get_mesh().shape();
+    const auto& grid_shape = mesh_builder.get_flattened_grid();
+    uint32_t mesh_volume = mesh_shape.volume();
+    uint32_t grid_volume = grid_shape.volume();
+    uint32_t total_gcores = mesh_volume * grid_volume;
+
+    TT_FATAL(total_gcores > 0, "No gcores in mesh");
 
     // Get the mesh tensor shape in pages (for proper work distribution based on memory pages)
     const auto& mesh_tensor_shape_in_pages = tensor_builder.get_mesh_tensor_shape_in_pages();
-    uint32_t rank = mesh_tensor_shape_in_pages.rank();
+    uint32_t tensor_rank = mesh_tensor_shape_in_pages.rank();
 
     // Compute row-major strides for the mesh tensor shape
-    std::vector<uint32_t> mesh_tensor_strides(rank);
+    std::vector<uint32_t> mesh_tensor_strides(tensor_rank);
     uint32_t stride = 1;
-    for (int i = rank - 1; i >= 0; --i) {
+    for (int i = tensor_rank - 1; i >= 0; --i) {
         mesh_tensor_strides[i] = stride;
         stride *= mesh_tensor_shape_in_pages[i];
     }
@@ -222,80 +231,123 @@ GcoresInfo map_tensor_to_gcores_nd(
     for (size_t i = 0; i < partition_dims.size(); ++i) {
         int dim = partition_dims[i];
         if (dim < 0) {
-            dim = rank + dim;
+            dim = tensor_rank + dim;
         }
         TT_FATAL(
-            dim >= 0 && static_cast<size_t>(dim) < rank,
+            dim >= 0 && static_cast<size_t>(dim) < tensor_rank,
             "partition_dim {} out of bounds for tensor rank {}",
             dim,
-            rank);
+            tensor_rank);
         normalized_dims.push_back(dim);
         dim_sizes.push_back(mesh_tensor_shape_in_pages[dim]);
     }
 
-    // Automatically factor the cores into an N-dimensional grid
-    uint32_t num_cores = gcores.size();
-    std::vector<uint32_t> cores_per_dim = factor_cores_into_dims(num_cores, partition_dims.size());
+    // Factor the total gcores into partition dimensions
+    // We need to distribute work across mesh×grid dimensions
+    std::vector<uint32_t> cores_per_dim = factor_cores_into_dims(total_gcores, partition_dims.size());
 
     GcoresInfo info;
-    info.num_cores = 0;  // Will be updated as we assign cores
     info.partition_dims = normalized_dims;
 
-    // Generate multi-dimensional grid assignment
-    std::vector<uint32_t> core_coords(partition_dims.size(), 0);
+    // Reserve space for all gcores (including those with no work)
+    info.gcores.reserve(total_gcores);
+    info.dim_offsets.reserve(total_gcores);
+    info.dim_pages.reserve(total_gcores);
+    info.dim_strides.reserve(total_gcores);
+
+    // Iterate in the order: grid dims first (outer loop), then mesh dims (inner loop)
+    // This spreads work across mesh devices (grids) evenly before filling all cores on a single device
     uint32_t assigned_cores = 0;
+    uint32_t gcore_idx = 0;
+    std::vector<uint32_t> core_coords(partition_dims.size(), 0);
 
-    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        // Calculate multi-dimensional core coordinate from linear index (row-major)
-        compute_core_coords(core_idx, cores_per_dim, core_coords);
-
-        // Skip cores with no work (more cores than tensor chunks)
-        if (!core_has_work(core_coords, dim_sizes, cores_per_dim)) {
-            continue;
+    // Helper lambda to iterate through multi-dimensional coordinates
+    auto iterate_shape = [](const tt::tt_metal::Shape& shape, auto callback) {
+        uint32_t volume = shape.volume();
+        for (uint32_t idx = 0; idx < volume; ++idx) {
+            // Convert linear index to multi-dimensional coordinate (row-major)
+            std::vector<uint32_t> coord(shape.rank());
+            uint32_t temp = idx;
+            for (int d = shape.rank() - 1; d >= 0; --d) {
+                coord[d] = temp % shape[d];
+                temp /= shape[d];
+            }
+            callback(coord);
         }
+    };
 
-        // Assign gcore (in order from the provided vector)
-        info.gcores.push_back(gcores[core_idx]);
+    // Iterate: grid coordinates (outer), then mesh coordinates (inner)
+    // This spreads work across mesh devices: work0->grid0, work1->grid1, work2->grid2, work3->grid3
+    iterate_shape(grid_shape, [&](const std::vector<uint32_t>& grid_coord_vec) {
+        // Convert grid coordinate vector to MeshCoordinate
+        tt::tt_metal::distributed::MeshCoordinate grid_local_coord(
+            tt::stl::Span<const uint32_t>(grid_coord_vec.data(), grid_coord_vec.size()));
 
-        // Add new entry for this assigned core
-        std::vector<uint32_t> offsets, pages, strides;
-        offsets.reserve(rank);
-        pages.reserve(rank);
-        strides.reserve(rank);
+        iterate_shape(mesh_shape, [&](const std::vector<uint32_t>& mesh_coord_vec) {
+            // Convert mesh coordinate vector to MeshCoordinate for grid lookup
+            tt::tt_metal::distributed::MeshCoordinate mesh_coord(
+                tt::stl::Span<const uint32_t>(mesh_coord_vec.data(), mesh_coord_vec.size()));
 
-        for (uint32_t d = 0; d < rank; ++d) {
-            // Check if this dimension is partitioned
-            int partition_idx = find_partition_index(static_cast<int>(d), normalized_dims);
+            // Get the gcore at this (mesh, grid) coordinate
+            const auto& gcore = mesh_builder.get_gcore_with_local_coord(mesh_coord, grid_local_coord);
 
-            uint32_t num_pages, offset, stride;
+            // Calculate core work coordinates from gcore_idx
+            compute_core_coords(gcore_idx, cores_per_dim, core_coords);
 
-            if (partition_idx >= 0) {
-                // Partitioned dimension: compute assignment for this core
-                auto [core_pages, base_pages] =
-                    get_core_pages(dim_sizes[partition_idx], cores_per_dim[partition_idx], core_coords[partition_idx]);
-                num_pages = core_pages;
-                offset = core_coords[partition_idx] * base_pages;
+            // Check if this core has work
+            bool has_work = core_has_work(core_coords, dim_sizes, cores_per_dim);
+
+            // Add gcore to the list (even if it has no work)
+            info.gcores.push_back(gcore);
+
+            // Prepare dimension info vectors
+            std::vector<uint32_t> offsets, pages, strides;
+            offsets.reserve(tensor_rank);
+            pages.reserve(tensor_rank);
+            strides.reserve(tensor_rank);
+
+            if (has_work) {
+                // Gcore has work: compute actual workload
+                for (uint32_t d = 0; d < tensor_rank; ++d) {
+                    // Check if this dimension is partitioned
+                    int partition_idx = find_partition_index(static_cast<int>(d), normalized_dims);
+
+                    uint32_t num_pages, offset;
+
+                    if (partition_idx >= 0) {
+                        // Partitioned dimension: compute assignment for this core
+                        auto [core_pages, base_pages] = get_core_pages(
+                            dim_sizes[partition_idx], cores_per_dim[partition_idx], core_coords[partition_idx]);
+                        num_pages = core_pages;
+                        offset = core_coords[partition_idx] * base_pages;
+                    } else {
+                        // Non-partitioned dimension: process entire dimension
+                        num_pages = mesh_tensor_shape_in_pages[d];
+                        offset = 0;
+                    }
+
+                    offsets.push_back(offset);
+                    pages.push_back(num_pages);
+                    strides.push_back(mesh_tensor_strides[d]);
+                }
+                assigned_cores++;
             } else {
-                // Non-partitioned dimension: process entire dimension
-                num_pages = mesh_tensor_shape_in_pages[d];
-                offset = 0;
+                // Gcore has no work: assign empty workload (0 pages for all dimensions)
+                for (uint32_t d = 0; d < tensor_rank; ++d) {
+                    offsets.push_back(0);
+                    pages.push_back(0);
+                    strides.push_back(mesh_tensor_strides[d]);
+                }
             }
 
-            // Use row-major stride for all dimensions
-            stride = mesh_tensor_strides[d];
+            // Add this core's dimension info to the result
+            info.dim_offsets.push_back(std::move(offsets));
+            info.dim_pages.push_back(std::move(pages));
+            info.dim_strides.push_back(std::move(strides));
 
-            offsets.push_back(offset);
-            pages.push_back(num_pages);
-            strides.push_back(stride);
-        }
-
-        // Add this core's dimension info to the result
-        info.dim_offsets.push_back(std::move(offsets));
-        info.dim_pages.push_back(std::move(pages));
-        info.dim_strides.push_back(std::move(strides));
-
-        assigned_cores++;
-    }
+            gcore_idx++;
+        });  // end mesh iteration
+    });      // end grid iteration
 
     info.num_cores = assigned_cores;
     return info;

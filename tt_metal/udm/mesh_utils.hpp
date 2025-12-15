@@ -83,38 +83,41 @@ struct GcoresInfo {
 /**
  * @brief Map a tensor to global cores based on work partitioning strategy
  *
- * Single-dimension partitioning version (backward compatible).
+ * Single-dimension partitioning version.
  *
  * @param tensor_builder The MeshTensorBuilder containing tensor information
- * @param gcores The gcores to assign work to
+ * @param mesh_builder The MeshBuilder containing mesh and grid dimension information
  * @param partition_dim The dimension to partition work on (-1 for last dim)
  * @return GcoresInfo containing gcore assignment and work distribution
  */
 GcoresInfo map_tensor_to_gcores(
-    const class MeshTensorBuilder& tensor_builder, const std::vector<Gcore>& gcores, int partition_dim = -1);
+    const class MeshTensorBuilder& tensor_builder, const class MeshBuilder& mesh_builder, int partition_dim = -1);
 
 /**
  * @brief Map a tensor to global cores with multi-dimensional partitioning
  *
  * Partitions tensor across multiple dimensions simultaneously. Work is distributed
- * among the provided gcores in row-major order. The cores are automatically arranged
- * into an N-dimensional grid based on the number of partition dimensions.
+ * by iterating grid dimensions first, then mesh dimensions, to evenly spread work
+ * across different mesh devices (grids). All gcores in the mesh×grid space will be
+ * assigned entries, with edge/corner gcores receiving empty GcoresInfo if they have no work.
  *
- * For example, partitioning a [H, W] tensor on dims [0, 1] with 4 cores:
- * Cores arranged as 2x2 grid:
- * - Core 0: H[0::2], W[0::2]
- * - Core 1: H[0::2], W[1::2]
- * - Core 2: H[1::2], W[0::2]
- * - Core 3: H[1::2], W[1::2]
+ * For example, with 4 workloads and 4 grids (mesh devices):
+ * Iteration order: grid[0], grid[1], then mesh[0], mesh[1], mesh[2], mesh[3]
+ * - Grid 0, Mesh 0: work 0
+ * - Grid 0, Mesh 1: work 1
+ * - Grid 0, Mesh 2: work 2
+ * - Grid 0, Mesh 3: work 3
+ * - Grid 1, Mesh 0: work 4 (or empty if no more work)
+ * This ensures work is spread across mesh devices before filling cores on a single device.
  *
  * @param tensor_builder The MeshTensorBuilder containing tensor information
- * @param gcores The gcores to assign work to (assigned in order)
+ * @param mesh_builder The MeshBuilder containing mesh and grid dimension information
  * @param partition_dims The dimensions to partition work on (e.g., {0, 2})
- * @return GcoresInfo containing gcore assignment and work distribution
+ * @return GcoresInfo containing gcore assignment and work distribution for all gcores
  */
 GcoresInfo map_tensor_to_gcores_nd(
     const class MeshTensorBuilder& tensor_builder,
-    const std::vector<Gcore>& gcores,
+    const class MeshBuilder& mesh_builder,
     const std::vector<int>& partition_dims);
 
 }  // namespace tt::tt_metal::experimental::udm
