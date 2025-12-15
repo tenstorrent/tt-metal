@@ -58,7 +58,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    LayerNormDefaultProgramConfig program_config) {
+    LayerNormDistributedDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -178,17 +178,11 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     out0_cb: (x - mean(x)) * 1/sqrt(var + epsilon) * gamma + beta # RMSNorm doesn't include beta
 
     */
-    uint32_t cb_length = Wt;
 
-    const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if (cb_length * in_single_tile_size > available_L1 * 0.95) {
-        cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
-    }
-    const uint32_t in0_tiles = cb_length;
+    const uint32_t in0_tiles = Wt;
     const uint32_t in1_tiles = stats_tiles_cols;
-    const uint32_t in2_tiles = cb_length;
-    const uint32_t in3_tiles = cb_length;
+    const uint32_t in2_tiles = Wt;
+    const uint32_t in3_tiles = Wt;
     const uint32_t in4_tiles = 1;  // epsilon
     const uint32_t in5_tiles = 1;  // reduce scalar
 
@@ -197,10 +191,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     const uint32_t intermed2_tiles = 1;
     const uint32_t intermed3_tiles = 1;
     const uint32_t intermed4_tiles = 1;
-    const uint32_t intermed5_tiles = cb_length;
-    const uint32_t intermed6_tiles = cb_length;
-    const uint32_t intermed7_tiles = cb_length;
-    const uint32_t out0_tiles = cb_length;
+    const uint32_t intermed5_tiles = Wt;
+    const uint32_t intermed6_tiles = Wt;
+    const uint32_t intermed7_tiles = Wt;
+    const uint32_t out0_tiles = Wt;
 
     TT_FATAL(
         W <= TILE_WIDTH * in0_tiles,
@@ -319,31 +313,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     };
 
     uint32_t gamma_stick_size = 0;
-    uint32_t gamma_is_row_major = 0;
-    uint32_t beta_is_row_major = 0;
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
-        gamma_is_row_major = 1;
-    } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        gamma_stick_size = gamma.value().element_size() * 1024;  // size of tile in bytes bf16
-    }
-    uint32_t beta_stick_size = 0;
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        bool beta_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(beta_stick_size);
-        TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
-        beta_is_row_major = 1;
-    } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
     reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)beta_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
-    reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
-    reader_compile_time_args.push_back((std::uint32_t)cb_length);
-    reader_compile_time_args.push_back((std::uint32_t)Wt);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
@@ -364,6 +339,11 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         reader_defines["FUSE_BETA"] = "1";
     }
 
+    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
+                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    TT_FATAL(
+        use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
+        "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -387,8 +367,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         beta.has_value(),
         fp32_dest_acc_en,
         float32_reduction ? 1 : 0,
-        program_config.legacy_rsqrt ? 1 : 0,
-        cb_length};
+        program_config.legacy_rsqrt ? 1 : 0};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
