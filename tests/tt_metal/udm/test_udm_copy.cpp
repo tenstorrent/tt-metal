@@ -101,6 +101,54 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
 }
 
 /**
+ * @brief Validate that output tensor matches expected values
+ */
+inline void validate(
+    const ttnn::Tensor& expected_tensor,
+    const ttnn::Tensor& actual_tensor,
+    ShardStrategy shard_strategy = ShardStrategy::WIDTH) {
+    auto* mesh_device = expected_tensor.device();
+
+    // Create appropriate composer based on sharding strategy
+    std::unique_ptr<ttnn::distributed::MeshToTensor> composer;
+    switch (shard_strategy) {
+        case ShardStrategy::WIDTH:
+            composer = create_width_sharded_mesh_composer(mesh_device, expected_tensor.padded_shape().rank());
+            break;
+        case ShardStrategy::BLOCK:
+            composer = create_block_sharded_mesh_composer(mesh_device, expected_tensor.padded_shape().rank());
+            break;
+        case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
+    }
+
+    // Aggregate tensors and convert to vectors
+    auto expected_data = ttnn::distributed::aggregate_tensor(expected_tensor, *composer).to_vector<uint16_t>();
+    auto actual_data = ttnn::distributed::aggregate_tensor(actual_tensor, *composer).to_vector<uint16_t>();
+
+    // Compare values
+    uint32_t volume = expected_data.size();
+    uint32_t mismatches = 0;
+    const uint32_t max_print_mismatches = 10;
+
+    for (uint32_t i = 0; i < volume; ++i) {
+        if (expected_data[i] != actual_data[i]) {
+            if (mismatches < max_print_mismatches) {
+                log_error(
+                    tt::LogTest, "Mismatch at index {}: expected={}, actual={}", i, expected_data[i], actual_data[i]);
+            }
+            mismatches++;
+        }
+    }
+
+    if (mismatches > 0) {
+        log_error(tt::LogTest, "Total mismatches: {} / {}", mismatches, volume);
+        TT_THROW("Validation failed: output tensor does not match expected tensor");
+    }
+
+    log_info(tt::LogTest, "Validation passed: all {} values match", volume);
+}
+
+/**
  * @brief Helper function to run UDM copy test with given tensor shapes (width-sharded)
  */
 void run_udm_copy_test(
