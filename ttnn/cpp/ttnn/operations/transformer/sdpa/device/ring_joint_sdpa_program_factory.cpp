@@ -343,6 +343,18 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
 
+    /**
+     * Create semaphores used for L1-L1 store-and-forward of KV between cores.
+     */
+    auto sender_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto receiver_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto valid_semahpore_id = CreateSemaphore(program, core_grid, VALID);
+
+    // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
+    reader_compile_time_args.push_back(sender_semahpore_id);
+    reader_compile_time_args.push_back(receiver_semahpore_id);
+    reader_compile_time_args.push_back(valid_semahpore_id);
+
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
     // bug in the mask generation code, which would mask a full, valid chunk
@@ -590,16 +602,171 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
     uint32_t lse_addr = lse_output_tensor.buffer()->address();
 
+    /**
+     * Build chain selection for store-and-forward across cores per (batch, head).
+     */
+    struct CoreHeadWork {
+        uint32_t batch = 0;
+        uint32_t head = 0;
+        uint32_t q_chunk_start = 0;
+        uint32_t q_chunk_count = 0;
+    };
+
+    struct CoreWork {
+        CoreCoord logical_core{};
+        CoreCoord physical_core{};
+        uint32_t global_q_start = 0;
+        uint32_t global_q_count = 0;
+        std::vector<CoreHeadWork> head_work;
+    };
+
+    struct HeadSegmentRef {
+        uint32_t core_idx = 0;
+        uint32_t head_work_index = 0;
+    };
+
+    struct CoreChainInfo {
+        bool participates = false;
+        bool is_injector = false;
+        bool is_sink = false;
+        uint32_t batch = 0;
+        uint32_t head = 0;
+        uint32_t q_chunk_start = 0;
+        uint32_t q_chunk_count = 0;
+        CoreCoord prev_physical = CoreCoord{0, 0};
+        CoreCoord next_physical = CoreCoord{0, 0};
+        uint32_t next_core_q_chunks = 0;
+    };
+
+    std::vector<CoreWork> core_work(num_cores);
+    std::vector<CoreChainInfo> core_chain_info(num_cores);
+    const uint32_t total_heads = B * NH;
+    std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
+
+    // Evenly distribute flat global q chunks across cores
+    const uint32_t total_q_chunks = B * NH * q_num_chunks;
+    const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+    const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
+    uint32_t next_global_chunk = 0;
+
+    auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
+        const uint32_t head_span = q_num_chunks;
+        const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
+        const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
+        const uint32_t batch = (NH == 0) ? 0 : (head_index / NH);
+        const uint32_t head = (NH == 0) ? 0 : (head_index % NH);
+        return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
+    };
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
+        if (next_global_chunk >= total_q_chunks) {
+            chunk_count = 0;
+        } else if (chunk_count > total_q_chunks - next_global_chunk) {
+            chunk_count = total_q_chunks - next_global_chunk;
+        }
+
+        auto& work = core_work.at(i);
+        work.logical_core = core;
+        work.physical_core = device->worker_core_from_logical_core(core);
+        work.global_q_start = next_global_chunk;
+        work.global_q_count = chunk_count;
+
+        uint32_t remaining = chunk_count;
+        uint32_t flat_chunk = next_global_chunk;
+        while (remaining > 0) {
+            auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+            uint32_t chunk_capacity_in_head = q_num_chunks - q_chunk_idx;
+            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+            work.head_work.push_back(CoreHeadWork{
+                .batch = batch_idx,
+                .head = head_idx,
+                .q_chunk_start = q_chunk_idx,
+                .q_chunk_count = chunk_take,
+            });
+
+            if (!head_segments.empty()) {
+                uint32_t head_id = batch_idx * NH + head_idx;
+                if (head_id < head_segments.size()) {
+                    head_segments[head_id].push_back(HeadSegmentRef{
+                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                }
+            }
+
+            remaining -= chunk_take;
+            flat_chunk += chunk_take;
+        }
+
+        next_global_chunk += chunk_count;
+    }
+
+    // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
+    for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+        auto& segments = head_segments[head_id];
+        if (segments.size() < 2) {
+            continue;
+        }
+
+        std::optional<std::size_t> chain_start_idx;
+        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+            const auto& seg = segments.at(idx);
+            const auto& work = core_work.at(seg.core_idx);
+            if (work.global_q_count == 0) {
+                continue;
+            }
+            if (work.head_work.size() == 1) {
+                chain_start_idx = idx;
+                break;
+            }
+        }
+
+        if (!chain_start_idx.has_value()) {
+            continue;
+        }
+
+        const std::size_t start = chain_start_idx.value();
+        for (std::size_t idx = start; idx < segments.size(); ++idx) {
+            const auto& seg = segments.at(idx);
+            const uint32_t core_idx = seg.core_idx;
+            const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+            auto& chain = core_chain_info.at(core_idx);
+
+            chain.participates = true;
+            chain.batch = hw.batch;
+            chain.head = hw.head;
+            chain.q_chunk_start = hw.q_chunk_start;
+            chain.q_chunk_count = hw.q_chunk_count;
+
+            if (idx == start) {
+                chain.is_injector = true;
+            }
+            if (idx == segments.size() - 1) {
+                chain.is_sink = true;
+            }
+
+            if (idx > start) {
+                const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
+                chain.prev_physical = core_work.at(prev_core_idx).physical_core;
+            }
+            if (idx + 1 < segments.size()) {
+                const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
+                chain.next_physical = core_work.at(next_core_idx).physical_core;
+                const auto& next_hw = core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
+                chain.next_core_q_chunks = next_hw.q_chunk_count;
+            }
+        }
+    }
+
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t global_q_start = q_per_core * i;
-        uint32_t global_q_end = global_q_start + q_per_core;
-
-        // clamp all to max values for non-even partitioning
-        global_q_start = std::min(global_q_start, global_q_chunks);
-        global_q_end = std::min(global_q_end, global_q_chunks);
+        // Prefer the computed even distribution above for chain construction
+        const auto& work = core_work.at(i);
+        uint32_t global_q_start = work.global_q_start;
+        uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -619,7 +786,22 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             global_q_start,
             global_q_end,
         };
+        // Append chain runtime args for store-and-forward
+        const auto& chain = core_chain_info.at(i);
+        reader_args.push_back(static_cast<uint32_t>(chain.participates));
+        reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
+        reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
+        reader_args.push_back(chain.batch);
+        reader_args.push_back(chain.head);
+        reader_args.push_back(chain.q_chunk_start);
+        reader_args.push_back(chain.q_chunk_count);
+        reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
+        reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
+        reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
+        reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+        reader_args.push_back(chain.next_core_q_chunks);
 
+        // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
