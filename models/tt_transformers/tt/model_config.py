@@ -157,7 +157,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -1306,19 +1306,22 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = self.max_prefill_chunk_size
+        DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "Llama-3.1-8B": 4096
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
 
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
@@ -1370,12 +1373,12 @@ class ModelArgs:
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # No supported sequence lengths found, return empty list
         return []
@@ -1596,9 +1599,9 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
-                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim

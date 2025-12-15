@@ -12,6 +12,9 @@ ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
     } else {
+        if (operation_attributes.on_device_mappings.has_value() && !operation_attributes.on_device_mappings.value()) {
+            return ReshapeTiledWithoutDeviceMappingProgramFactory{};
+        }
         return ReshapeTiledProgramFactory{};
     }
 }
@@ -70,7 +73,6 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
-
     return tt::stl::hash::hash_objects(
         program_factory.index(),
         input_shape,
@@ -81,7 +83,9 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
-                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
+                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        operation_attributes.on_device_mappings.has_value(),
+        operation_attributes.on_device_mappings.has_value() ? operation_attributes.on_device_mappings.value() : true);
 }
 
 std::tuple<ReshapeDeviceOperation::operation_attributes_t, ReshapeDeviceOperation::tensor_args_t>
@@ -91,10 +95,16 @@ ReshapeDeviceOperation::invoke(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool> on_device_mappings) {
     return {
         operation_attributes_t{
-            logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
+            logical_output_shape,
+            padded_output_shape,
+            output_mem_config,
+            recreate_mapping_tensor,
+            sub_core_grid,
+            on_device_mappings},
         tensor_args_t{input}};
 }
 
