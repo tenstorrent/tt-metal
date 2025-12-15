@@ -166,36 +166,17 @@ def test_untilize_with_unpadding_W_16(device, in_dtype, use_multicore, use_pack_
 
 
 @pytest.mark.parametrize("h", [1, 18, 65])
-@pytest.mark.parametrize("w", [1, 17, 65])
+@pytest.mark.parametrize("w", [1, 15, 17, 29, 33, 49, 63, 65])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize(
-    "sub_core_grids",
-    (
-        # single core
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-        # multiple disjoint cores
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
-            ]
-        ),
-        None,
-    ),
-)
-def test_to_layout_subcore(device, h, w, input_layout, output_layout, sub_core_grids):
+def test_to_layout_device(device, h, w, input_layout, output_layout):
     torch.manual_seed(2005)
-    for i in range(3):
-        # We have found 3 as effective to uncover program cache issues. 2 usually works but given the short runtime of test we are running 3 to be safe
-        # Typically run 1 gets hashed and in the case of trace is when things like persistent semaphores are allocated if applicable
-        # Typically run 2 is where trace selects the final position of all the tensors (run 1 if no persistents)
-        # Therefore run 3 is the first where we truly are in full trace mode (run 2 if no persistents)
-        torch_input_tensor = torch_random((h, w), -0.1, 0.1, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16, layout=input_layout)
-        new_layout_tensor = ttnn.to_layout(input_tensor, layout=output_layout, sub_core_grids=sub_core_grids)
-        torch_brought_back = ttnn.to_torch(new_layout_tensor)
-        assert_with_pcc(torch_input_tensor, torch_brought_back)
+    torch_input_tensor = torch_random((h, w), -0.1, 0.1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16, layout=input_layout)
+    new_layout_tensor = ttnn.to_layout(input_tensor, layout=output_layout)
+    torch_brought_back = ttnn.to_torch(new_layout_tensor)
+
+    assert_with_pcc(torch_input_tensor, torch_brought_back)
 
 
 @pytest.mark.parametrize("shape", [[3, 50, 1, 3, 768], [3, 1370, 1, 32, 1280]])

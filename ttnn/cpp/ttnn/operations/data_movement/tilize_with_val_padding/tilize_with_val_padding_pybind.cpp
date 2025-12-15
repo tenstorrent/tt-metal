@@ -91,16 +91,12 @@ void bind_tilize_with_zero_padding(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
-               bool use_multicore,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, memory_config, output_dtype, use_multicore, sub_core_grids);
-            },
+               bool use_multicore) { return self(input_tensor, memory_config, output_dtype, use_multicore); },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
-            py::arg("use_multicore") = true,
-            py::arg("sub_core_grids") = std::nullopt});
+            py::arg("use_multicore") = true});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -19,24 +19,17 @@ using BaseTilizeValType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-MassagedTilizeVal build_ndiml_tilize_val(
-    BaseTilizeValType base_tilize, const std::optional<CoreRangeSet>& sub_core_grids) {
+MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
     auto original_shape = std::make_shared<Shape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
             *original_shape = input_tensor.logical_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(
-                output,
-                *original_shape,
-                std::nullopt /*Memory Config*/,
-                std::nullopt /*pad value*/,
-                TileReshapeMapMode::CACHE,
-                sub_core_grids);
+            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
@@ -64,8 +57,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
-    bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool use_multicore) {
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
@@ -106,14 +98,13 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 output_dtype.value_or(input_tensor.dtype()),
                 use_multicore,
                 enough_space_width,
-                enough_space_height,
-                sub_core_grids},
+                enough_space_height},
             {input_tensor},
             {},
             {})[0];
     };
 
-    return build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
+    return build_ndiml_tilize_val(base_tilize)(input_tensor);
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
@@ -122,8 +113,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
-    bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool use_multicore) {
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
@@ -137,21 +127,14 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     }
 
     return invoke(
-        input_tensor,
-        ttnn::Shape{output_padded_shape},
-        pad_value,
-        memory_config,
-        output_dtype,
-        use_multicore,
-        sub_core_grids);
+        input_tensor, ttnn::Shape{output_padded_shape}, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
-    bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool use_multicore) {
     using namespace tt::constants;
     auto padded_shape = input_tensor.padded_shape();
 
@@ -180,7 +163,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         pad_value = (uint32_t)0;
     }
     return ExecuteTilizeWithValPadding::invoke(
-        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore, sub_core_grids);
+        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 }  // namespace ttnn::operations::data_movement

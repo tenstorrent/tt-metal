@@ -37,25 +37,18 @@ using BaseUntilizeValType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedUntilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedUntilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-MassagedUntilizeVal build_ndiml_untilize_val(
-    BaseUntilizeValType base_untilize, const std::optional<CoreRangeSet>& sub_core_grids) {
+MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) {
     auto original_shape = std::make_shared<Shape>();
 
     return MassagedUntilizeVal(MassagedUntilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
             *original_shape = input_tensor.logical_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(
-                output,
-                *original_shape,
-                std::nullopt,              /*Memory Config*/
-                std::nullopt,              /*Pad value*/
-                TileReshapeMapMode::CACHE, /*Reshape map mode*/
-                sub_core_grids);
+            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_untilize)});
@@ -66,8 +59,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    bool use_pack_untilize,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    bool use_pack_untilize) {
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
 
     ttnn::SmallVector<uint32_t> output_end_vector;
@@ -106,14 +98,13 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
                                   use_pack_untilize,
                                   fp32_dest_acc_en,
                                   enough_space_width,
-                                  enough_space_height,
-                                  sub_core_grids},
+                                  enough_space_height},
             {input_tensor},
             {},
             {})[0];
     };
 
-    return build_ndiml_untilize_val(base_untilize, sub_core_grids)(input_tensor);
+    return build_ndiml_untilize_val(base_untilize)(input_tensor);
 }
 
 }  // namespace ttnn::operations::data_movement
