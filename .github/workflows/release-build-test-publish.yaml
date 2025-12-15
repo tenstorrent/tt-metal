@@ -117,7 +117,7 @@ jobs:
   # Only run docs release once per run on the main OS version
   release-docs:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.is-release-candidate !='true' }}
+    if: ${{ inputs.version == inputs.main-os-version && inputs.is-release-candidate != 'true' }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ inputs.tag-version }}
