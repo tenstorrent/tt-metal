@@ -62,8 +62,7 @@ autograd::TensorPtr memory_efficient_runner(
         input->add_grad(input_detached->get_grad());
     };
 
-    auto links = autograd::get_links(input);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, input));
     return out;
 }
 

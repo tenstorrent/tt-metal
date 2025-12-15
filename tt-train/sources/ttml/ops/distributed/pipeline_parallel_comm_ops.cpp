@@ -18,8 +18,7 @@ autograd::TensorPtr intermesh_send(const autograd::TensorPtr& tensor, ttml::core
         grad = socket_manager.recv(grad, distributed_ctx, rank);
         tensor->add_grad(grad);
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
     return out;
 }
 
@@ -32,8 +31,7 @@ autograd::TensorPtr intermesh_recv(const autograd::TensorPtr& tensor, ttml::core
     auto grad = [out, &socket_manager, distributed_ctx, rank]() {
         socket_manager.send(out->get_grad(), distributed_ctx, rank);
     };
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
     return out;
 }
 

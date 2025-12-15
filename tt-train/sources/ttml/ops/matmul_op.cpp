@@ -22,8 +22,7 @@ autograd::TensorPtr matmul_op(
         b->add_grad(b_grad);
     };
 
-    auto links = autograd::get_links(a, b);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a, b));
     return out;
 }
 

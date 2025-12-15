@@ -12,6 +12,9 @@ training_config:
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
+  estimate_memory_usage: true
+  # Uncomment to enable LoRA fine-tuning:
+  # lora_config: "configs/lora_configs/tinyllama.yaml"
 
 device_config:
   enable_ddp: false

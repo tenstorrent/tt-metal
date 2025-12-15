@@ -33,8 +33,8 @@ GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
 
 ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
-    auto q = (*m_q_linear)(x);
-    auto kv = (*m_kv_linear)(x);
+    auto q = (*get_module("q_linear"))(x);
+    auto kv = (*get_module("kv_linear"))(x);
 
     auto [query_with_heads, key_with_heads, value_with_heads] =
         ops::grouped_heads_creation(q, kv, m_num_heads, m_num_groups);
@@ -47,8 +47,8 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
 
     attention = ops::heads_fusion(attention);
 
-    auto out = (*m_out_linear)(attention);
-    out = (*m_dropout)(out);
+    auto out = (*get_module("out_linear"))(attention);
+    out = (*get_module("dropout"))(out);
 
     return out;
 }

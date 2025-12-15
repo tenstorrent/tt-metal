@@ -31,7 +31,7 @@ MultiLayerPerceptron::MultiLayerPerceptron(const MultiLayerPerceptronParameters&
 autograd::TensorPtr MultiLayerPerceptron::operator()(const autograd::TensorPtr& tensor) {
     auto x = tensor;
     for (size_t index = 0; index < m_layers.size(); ++index) {
-        x = (*m_layers[index])(x);
+        x = (*get_module("layer_" + std::to_string(index)))(x);
         if (index + 1 != m_layers.size()) {
             x = ops::relu(x);
         }

@@ -164,8 +164,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
         input->add_grad(unsquished);
     };
 
-    auto links = autograd::get_links(input);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
+    out->set_node(autograd::add_backward_node_checked(std::move(grad_fn), out, input));
 
     return out;
 }
