@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-
 from typing import Tuple
 
 
@@ -81,7 +80,7 @@ def golden_avg_pool2d(
     padding,  # Can be Tuple[int, int] or List[int, int, int, int]
     ceil_mode: bool = False,
     count_include_pad: bool = True,
-    **_,
+    divisor_override: int = None,
 ):
     import torch
 
@@ -110,6 +109,7 @@ def golden_avg_pool2d(
         padding=torch_padding,
         ceil_mode=ceil_mode,
         count_include_pad=count_include_pad,
+        divisor_override=divisor_override,
     )
 
     N, C, H, W = output_tensor.shape
@@ -185,8 +185,6 @@ def golden_upsample(
     align_corners: bool = None,
     **_,
 ):
-    import torch
-
     input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
