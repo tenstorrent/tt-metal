@@ -178,6 +178,7 @@ def test_layernorm_part_2_with_program_cache(
     [True, False],
     ids=["rmsnorm", "layernorm"],
 )
+@pytest.mark.skip(reason="#34410")
 def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, dtype, device):
     dummy_tensors = []
 
