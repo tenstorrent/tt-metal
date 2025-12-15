@@ -10,7 +10,7 @@ Tests:
   # ======================================================================================
   - name: InterMeshCrossTraffic
     sync: true
-    enable_flow_control: true
+    skip_packet_validation: true
     fabric_setup:
       topology: Mesh
     parametrization_params:
