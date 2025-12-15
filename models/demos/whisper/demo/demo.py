@@ -137,6 +137,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
 ):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
@@ -156,7 +157,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         model_repo, generation_params.language, generation_params.task
     )
     parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper
+        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper, max_batch_size=batch_size_per_device
     )
 
     # Create WhisperGenerator instance with persistent trace support
@@ -173,7 +174,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         weights_mesh_mapper=weights_mesh_mapper,
         kv_cache=kv_cache,
         cross_attn_cache=cross_attn_cache,
-        max_batch_size=WHISPER_BATCH_SIZE,
+        max_batch_size=batch_size_per_device,
     )
 
     def _model_pipeline(
@@ -310,6 +311,7 @@ def run_demo_whisper_for_conditional_generation_inference(
         mesh_device,
         model_repo,
         generation_params,
+        batch_size_per_device=batch_size_per_device,
     )
 
     # load data
@@ -384,6 +386,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
         model_repo,
         generation_params,
+        batch_size_per_device=batch_size_per_device,
     )
 
     # load data
@@ -489,6 +492,7 @@ def run_demo_whisper_for_translation_dataset(
         mesh_device,
         model_repo,
         generation_params,
+        batch_size_per_device=batch_size_per_device,
     )
 
     logger.info(f"Loading FLEURS dataset for {generation_params.language} (code: {source_lang_code_full})")
@@ -674,7 +678,7 @@ def test_demo_for_audio_classification_dataset(
 
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(2, WHISPER_BATCH_SIZE)],
+    [(2, 1)],
 )
 @pytest.mark.parametrize(
     "model_repo",
