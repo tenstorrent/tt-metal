@@ -15,11 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.DATE_AUTOMATION }}
-      ORG: "tenstorrent"
-      PROJECT_NUMBER: "31"
-      OPENED_ON_FIELD_NAME: "Opened On"
+      # Hardcoded IDs for tenstorrent org project #31 and "Opened On" field
+      # Reduces API calls from 3 to 2 (avoids querying for these fixed values)
+      # If project or field changes, update these IDs
+      PROJECT_ID: "PVT_kwDOA9MHEM4AgKVv"
+      FIELD_ID: "PVTF_lADOA9MHEM4AgKVvzg4bxWU"
     steps:
-      - name: Resolve Project and Field IDs
+      - name: Extract Issue Date
         id: setup
         run: |
           set -e
@@ -34,70 +36,46 @@ jobs:
           RAW_CREATED="${{ github.event.issue.created_at }}"
           OPENED_DATE="${RAW_CREATED%%T*}"
 
-          # Query the org project by number and list fields
-          RESP=$(gh api graphql -f query='
-          query($org:String!, $number:Int!){
-            organization(login:$org){
-              projectV2(number:$number){
-                id
-                fields(first:100){
-                  nodes {
-                    ... on ProjectV2FieldCommon {
-                      id
-                      name
-                      dataType
-                    }
-                  }
-                }
-              }
-            }
-          }' -F org="$ORG" -F number="$PROJECT_NUMBER") || {
-            echo "Error: Failed to query project" >&2
-            exit 1
-          }
-
-          # Check for GraphQL errors (including permission issues)
-          if echo "$RESP" | jq -e '.errors' > /dev/null 2>&1; then
-            echo "Error: GraphQL returned errors:" >&2
-            echo "$RESP" | jq '.errors' >&2
-
-            # Check specifically for scope issues
-            if echo "$RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES")' > /dev/null 2>&1; then
-              echo "" >&2
-              echo "Token is missing required scopes. Please update DATE_AUTOMATION secret with:" >&2
-              echo "  - read:project (to read project data)" >&2
-              echo "  - project or write:project (to update fields)" >&2
-            fi
-            exit 1
-          fi
-
-          PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id // empty')
-
-          if [ -z "$PROJECT_ID" ]; then
-            echo "Error: Project '$PROJECT_NUMBER' not found in org '$ORG'" >&2
-            echo "This may be due to:" >&2
-            echo "  - Project doesn't exist" >&2
-            echo "  - Token lacks 'read:project' scope (or token is expired)" >&2
-            echo "  - Token doesn't have access to the organization" >&2
-            exit 1
-          fi
-
-          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id // empty')
-
-          if [ -z "$FIELD_ID" ]; then
-            echo "Error: Field '$OPENED_ON_FIELD_NAME' not found in project" >&2
-            echo "Available fields:" >&2
-            echo "$RESP" | jq -r '.data.organization.projectV2.fields.nodes[] | select(. != null) | "\(.name) [\(.dataType)]"' >&2
-            exit 1
-          fi
-
           echo "opened_date=$OPENED_DATE" >> "$GITHUB_OUTPUT"
-          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-          echo "field_id=$FIELD_ID" >> "$GITHUB_OUTPUT"
 
       - name: Add Issue to Project and Set Date
         run: |
           set -e
+
+          # Helper function to check if response contains rate limit error
+          # Returns 0 if rate limit error found, 1 otherwise
+          check_rate_limit_error() {
+            local RESPONSE="$1"
+            local CONTEXT="$2"
+
+            if echo "$RESPONSE" | grep -q "API rate limit"; then
+              echo "Error while $CONTEXT: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
+
+              # Extract rate limit details from headers if available (use f2- to handle multiple colons)
+              RESET_TIME=$(echo "$RESPONSE" | grep -i "x-ratelimit-reset:" | head -1 | cut -d: -f2- | tr -d ' \r')
+              REMAINING=$(echo "$RESPONSE" | grep -i "x-ratelimit-remaining:" | head -1 | cut -d: -f2- | tr -d ' \r')
+              RESOURCE=$(echo "$RESPONSE" | grep -i "x-ratelimit-resource:" | head -1 | cut -d: -f2- | tr -d ' \r')
+
+              # Print each available rate limit detail individually
+              if [ -n "$RESOURCE" ]; then
+                echo "Rate limit resource: $RESOURCE" >&2
+              fi
+              if [ -n "$REMAINING" ]; then
+                echo "Remaining: $REMAINING" >&2
+              fi
+              if [ -n "$RESET_TIME" ]; then
+                # GitHub Actions uses Ubuntu runners, so GNU date format is safe
+                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || echo "unknown")
+                echo "Resets at: $RESET_DATE" >&2
+              fi
+
+              echo "" >&2
+              echo "Full response:" >&2
+              echo "$RESPONSE" >&2
+              return 0
+            fi
+            return 1
+          }
 
           # Add issue to project (idempotent - will return existing item if already added)
           ADD_RESP=$(gh api graphql -f query='
@@ -106,25 +84,34 @@ jobs:
               item{ id }
             }
           }' \
-          -F projectId='${{ steps.setup.outputs.project_id }}' \
-          -F contentId='${{ github.event.issue.node_id }}') || {
+          -F projectId="$PROJECT_ID" \
+          -F contentId='${{ github.event.issue.node_id }}' --include 2>&1) || {
+            if check_rate_limit_error "$ADD_RESP" "adding issue to project"; then
+              exit 1
+            fi
             echo "Error: Failed to add issue to project" >&2
+            echo "Full response:" >&2
+            echo "$ADD_RESP" >&2
             exit 1
           }
 
-          if echo "$ADD_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+          # Separate JSON body from headers for jq parsing
+          # Extract everything after the first line starting with { or [
+          ADD_BODY=$(echo "$ADD_RESP" | sed -n '/^[{[]/,$p')
+
+          if echo "$ADD_BODY" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to add issue to project:" >&2
-            echo "$ADD_RESP" | jq '.errors' >&2
+            echo "$ADD_BODY" | jq '.errors' >&2
 
             # Check for scope/permission issues
-            if echo "$ADD_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
+            if echo "$ADD_BODY" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
               echo "" >&2
               echo "Token may lack 'project' or 'write:project' scope" >&2
             fi
             exit 1
           fi
 
-          ITEM_ID=$(echo "$ADD_RESP" | jq -r '.data.addProjectV2ItemById.item.id // empty')
+          ITEM_ID=$(echo "$ADD_BODY" | jq -r '.data.addProjectV2ItemById.item.id // empty')
           if [ -z "$ITEM_ID" ]; then
             echo "Error: Could not get project item ID" >&2
             exit 1
@@ -142,27 +129,36 @@ jobs:
               projectV2Item{ id }
             }
           }' \
-          -F projectId='${{ steps.setup.outputs.project_id }}' \
+          -F projectId="$PROJECT_ID" \
           -F itemId="$ITEM_ID" \
-          -F fieldId='${{ steps.setup.outputs.field_id }}' \
-          -F date='${{ steps.setup.outputs.opened_date }}') || {
+          -F fieldId="$FIELD_ID" \
+          -F date='${{ steps.setup.outputs.opened_date }}' --include 2>&1) || {
+            if check_rate_limit_error "$UPDATE_RESP" "setting field value"; then
+              exit 1
+            fi
             echo "Error: Failed to set field value" >&2
+            echo "Full response:" >&2
+            echo "$UPDATE_RESP" >&2
             exit 1
           }
 
-          if echo "$UPDATE_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+          # Separate JSON body from headers for jq parsing
+          # Extract everything after the first line starting with { or [
+          UPDATE_BODY=$(echo "$UPDATE_RESP" | sed -n '/^[{[]/,$p')
+
+          if echo "$UPDATE_BODY" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to set field value:" >&2
-            echo "$UPDATE_RESP" | jq '.errors' >&2
+            echo "$UPDATE_BODY" | jq '.errors' >&2
 
             # Check for scope/permission issues
-            if echo "$UPDATE_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
+            if echo "$UPDATE_BODY" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
               echo "" >&2
               echo "Token may lack 'project' or 'write:project' scope" >&2
             fi
             exit 1
           fi
 
-          if ! echo "$UPDATE_RESP" | jq -e '.data.updateProjectV2ItemFieldValue.projectV2Item.id' > /dev/null 2>&1; then
+          if ! echo "$UPDATE_BODY" | jq -e '.data.updateProjectV2ItemFieldValue.projectV2Item.id' > /dev/null 2>&1; then
             echo "Error: Field update returned unexpected response" >&2
             exit 1
           fi

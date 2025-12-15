@@ -503,7 +503,7 @@ int main() {
 
             trigger_sync_register_init();
 
-            if constexpr (WATCHER_ASSERT_ENABLED) {
+            if constexpr (ASSERT_ENABLED) {
                 if (noc_mode == DM_DYNAMIC_NOC) {
                     WAYPOINT("NKFW");
                     // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed

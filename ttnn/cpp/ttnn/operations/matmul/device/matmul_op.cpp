@@ -799,8 +799,8 @@ MatmulProgramConfig create_matmul_program_config(
                 compute_kernel_config,
                 output_dtype);
         }
-        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
-        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t k = a_padded_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t n = b_padded_shape[-1] / ttnn::TILE_SIZE;
         auto shard_shape = input_tensor_a_memory_config.shard_spec().value().shape;
         m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
         n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
@@ -1318,11 +1318,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 }  // namespace bmm_op_utils
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -1943,10 +1939,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
@@ -2970,8 +2966,4 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
         chosen_program_config);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

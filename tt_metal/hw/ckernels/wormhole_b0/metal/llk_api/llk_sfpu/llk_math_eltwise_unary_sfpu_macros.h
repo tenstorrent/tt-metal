@@ -95,17 +95,17 @@
 #define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                                  \
     OP,                                                                                                               \
     APPROXIMATE,                                                                                                      \
-    FAST_APPROX,                                                                                                      \
-    SCALE_EN,                                                                                                         \
+    FAST_APPROX, 
+    IS_FP32_DEST_ACC_EN,                                                                                              \
+    SCALE_EN,                                                                                                        \
     SKIP_POSITIVE_CHECK,                                                                                              \
     ITERATIONS,                                                                                                       \
-    IS_FP32_DEST_ACC_EN,                                                                                              \
     DST_IDX,                                                                                                          \
     VECTOR_MODE,                                                                                                      \
     SCALE)                                                                                                            \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                                \
         ckernel::sfpu::                                                                                               \
-            calculate_##OP<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK, IS_FP32_DEST_ACC_EN>, \
+            calculate_##OP<APPROXIMATE, FAST_APPROX, IS_FP32_DEST_ACC_EN, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
         DST_IDX,                                                                                                      \
         VECTOR_MODE,                                                                                                  \
         SCALE)

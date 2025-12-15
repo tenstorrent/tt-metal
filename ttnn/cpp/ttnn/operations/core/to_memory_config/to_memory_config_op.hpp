@@ -9,19 +9,14 @@
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
-
+#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace core {
+namespace ttnn::operations::core {
 
 struct ToMemoryConfig {
     // TODO: Move to cpp once we merge with tt_eager
@@ -59,24 +54,13 @@ struct ToMemoryConfig {
                         throw std::runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
-                    return tt::tt_metal::operation::run(
-                               data_movement::ReshardDeviceOperation{
-                                   .output_mem_config = memory_config,
-                               },
-                               {tensor},
-                               {},
-                               optional_output_tensors)
-                        .at(0);
+                    return ttnn::reshard(tensor, memory_config, output_tensor);
                 } else {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
                     TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
-                    Tensor temp = tt::tt_metal::operation::run(
-                                      data_movement::ShardedToInterleavedDeviceOperation{
-                                          .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
-                                          .output_dtype = dtype.value_or(tensor.dtype())},
-                                      {tensor})
-                                      .at(0);
+                    Tensor temp = ttnn::prim::sharded_to_interleaved(
+                        tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
                     const bool keep_l1_aligned = false;
                     return ttnn::interleaved_to_sharded(
                         temp,
@@ -99,22 +83,15 @@ struct ToMemoryConfig {
         } else {
             // to_interleaved path
             if (tensor.is_sharded()) {
-                return tt::tt_metal::operation::run(
-                           data_movement::ShardedToInterleavedDeviceOperation{
-                               .output_mem_config = memory_config, .output_dtype = dtype.value_or(tensor.dtype())},
-                           {tensor},
-                           {},
-                           optional_output_tensors)
-                    .at(0);
+                return ttnn::prim::sharded_to_interleaved(
+                    tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
             } else {
                 // L1 to DRAM or DRAM to L1
-                return tt::tt_metal::operation::run(
-                           ttnn::operations::data_movement::CopyDeviceOperation{
-                               memory_config, dtype.value_or(tensor.dtype())},
-                           {tensor},
-                           {},
-                           optional_output_tensors)
-                    .at(0);
+                return ttnn::prim::copy(
+                    tensor,
+                    memory_config,
+                    dtype.value_or(tensor.dtype()),
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             }
         }
 
@@ -122,6 +99,4 @@ struct ToMemoryConfig {
     }
 };
 
-}  // namespace core
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::core

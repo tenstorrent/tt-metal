@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
-#include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::unary {
@@ -386,11 +385,7 @@ Tensor Tanhshrink::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     bool approx) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
-    if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
-        return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    } else {
-        return ttnn::tanhshrink_accurate(input_tensor, memory_config, optional_output_tensor);
-    }
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Hardshrink::invoke(
@@ -492,6 +487,18 @@ Tensor Softshrink::invoke(
         input_tensor, {UnaryWithParam{op_type, static_cast<float>(lambda)}}, memory_config, optional_output_tensor);
 }
 
+Tensor Logit::invoke(
+    const Tensor& input_tensor,
+    const std::optional<float> eps,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::LOGIT, {eps.value_or(-1.0f)}}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Deg2Rad::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -563,6 +570,14 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
         {EltwiseUnaryWithParam{unary_op_type, parameter}},
         memory_config,
         optional_output_tensor);
+}
+
+Tensor Swish::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::SILU;
+    return detail::unary_impl(input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
