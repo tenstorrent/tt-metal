@@ -32,7 +32,7 @@ struct AtomicSemaphoreConfig {
 /// @param test_config - Configuration of the test
 /// @return true if test passes, false otherwise
 bool run_atomic_semaphore_test(
-    const shared_ptr<distributed::MeshDevice> mesh_device, const AtomicSemaphoreConfig& test_config) {
+    const shared_ptr<distributed::MeshDevice>& mesh_device, const AtomicSemaphoreConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
 
