@@ -65,8 +65,14 @@ TEST_F(TelemetryFixture, TelemetryStaticInfoInitialized) {
             << " (supported_stats=0x" << std::hex << static_cast<int>(static_info.supported_stats) << std::dec << ")";
 
         // Verify dynamic_info counters are initialized (not garbage)
-        const auto& tx_bw = sample.snapshot.dynamic_info.tx_bandwidth;
-        const auto& rx_bw = sample.snapshot.dynamic_info.rx_bandwidth;
+        // dynamic_info is optional, check if present
+        if (!sample.snapshot.dynamic_info.has_value()) {
+            FAIL() << "dynamic_info not available for channel " << static_cast<int>(sample.channel_id)
+                   << " (supported_stats=0x" << std::hex << static_cast<int>(static_info.supported_stats) << std::dec
+                   << ")";
+        }
+        const auto& tx_bw = sample.snapshot.dynamic_info->tx_bandwidth;
+        const auto& rx_bw = sample.snapshot.dynamic_info->rx_bandwidth;
 
         // IMPORTANT: We check counters are NOT garbage, not that they're exactly zero.
         // Why? The router starts processing immediately after initialization. By the time
