@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <variant>
+
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::normalization {

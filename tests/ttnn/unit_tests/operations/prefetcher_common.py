@@ -413,13 +413,6 @@ def run_prefetcher_mm(
 
             passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
             logger.info(output)
-
-            if not passing:
-                logger.error(
-                    f"prefetcher_common::run_prefetcher_mm: failue on {output}\n\t"
-                    f"layer {l}, tensor {t}, dtype {dtype}"
-                )
-
             all_passing = passing and all_passing
 
     device.clear_loaded_sub_device_manager()
