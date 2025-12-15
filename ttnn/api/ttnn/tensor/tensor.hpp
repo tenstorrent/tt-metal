@@ -30,12 +30,28 @@
 #include <tt_stl/optional_reference.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
-#include "types.hpp"
 
 namespace ttnn {
 namespace distributed {
 class TensorToMesh;
-}
+
+}  // namespace distributed
+
+enum class PyDType {
+    FLOAT32,
+    FLOAT64,
+    FLOAT16,
+    BFLOAT16,
+    INT8,
+    INT16,
+    INT32,
+    INT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
+    BOOL
+};
 }  // namespace ttnn
 
 namespace tt {
@@ -279,8 +295,7 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]]
-Tensor create_device_tensor(
+[[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
     DataType dtype,
     Layout layout,
@@ -328,31 +343,15 @@ void write_tensor(
 
 Tensor set_tensor_id(const Tensor& tensor);
 
-enum class host_buffer_data_type {
-    FLOAT32,
-    FLOAT64,
-    FLOAT16,
-    BFLOAT16,
-    INT8,
-    INT16,
-    INT32,
-    INT64,
-    UINT8,
-    UINT16,
-    UINT32,
-    UINT64,
-    BOOL
-};
-
 Tensor convert_python_tensor_to_tt_tensor(
-    const ttnn::Shape& tensor_shape,
-    const TensorLayout& tensor_layout,
-    const host_buffer_data_type& host_data_type,
-    const std::function<HostBuffer(DataType)>& get_host_data,
-    tt::tt_metal::distributed::MeshDevice* device,
+    const TensorSpec& tensor_spec,
+    ttnn::PyDType src_data_type,
+    const std::function<HostBuffer(DataType)>& get_host_tensor,
+    std::optional<tt::tt_metal::distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const ttnn::distributed::TensorToMesh* mesh_mapper);
+    const ttnn::distributed::TensorToMesh* mesh_mapper,
+    std::optional<float> pad_value = std::nullopt);
+
 }  // namespace tt_metal
 
 }  // namespace tt

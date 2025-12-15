@@ -23,6 +23,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
+#include "tt-metalium/buffer_types.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
@@ -325,31 +328,31 @@ auto parse_external_operation(
     return std::make_tuple(operation, input_tensors);
 }
 
-host_buffer_data_type get_py_tensor_type_info(const py::handle& py_tensor) {
+PyDType get_py_tensor_type_info(const py::handle& py_tensor) {
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
         const auto py_dtype = py_tensor.attr("dtype");
         if (py_dtype.equal(torch.attr("float32"))) {
-            return host_buffer_data_type::FLOAT32;
+            return PyDType::FLOAT32;
         } else if (py_dtype.equal(torch.attr("float64"))) {
-            return host_buffer_data_type::FLOAT64;
+            return PyDType::FLOAT64;
         } else if (py_dtype.equal(torch.attr("float16"))) {
-            return host_buffer_data_type::FLOAT16;
+            return PyDType::FLOAT16;
         } else if (py_dtype.equal(torch.attr("bfloat16"))) {
-            return host_buffer_data_type::BFLOAT16;
+            return PyDType::BFLOAT16;
         } else if (py_dtype.equal(torch.attr("int8"))) {
-            return host_buffer_data_type::INT8;
+            return PyDType::INT8;
         } else if (py_dtype.equal(torch.attr("int16"))) {
-            return host_buffer_data_type::INT16;
+            return PyDType::INT16;
         } else if (py_dtype.equal(torch.attr("int32"))) {
-            return host_buffer_data_type::INT32;
+            return PyDType::INT32;
         } else if (py_dtype.equal(torch.attr("int64"))) {
-            return host_buffer_data_type::INT64;
+            return PyDType::INT64;
         } else if (py_dtype.equal(torch.attr("uint32"))) {
-            return host_buffer_data_type::UINT32;
+            return PyDType::UINT32;
         } else if (py_dtype.equal(torch.attr("uint8"))) {
-            return host_buffer_data_type::UINT8;
+            return PyDType::UINT8;
         } else if (py_dtype.equal(torch.attr("bool"))) {
-            return host_buffer_data_type::BOOL;
+            return PyDType::BOOL;
         } else {
             TT_THROW(
                 "Unsupported torch tensor dtype: {}. Cannot map provided torch type to the host buffer data type.",
@@ -358,29 +361,29 @@ host_buffer_data_type get_py_tensor_type_info(const py::handle& py_tensor) {
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
         const auto py_dtype = py_tensor.attr("dtype");
         if (py_dtype.equal(np.attr("float32"))) {
-            return host_buffer_data_type::FLOAT32;
+            return PyDType::FLOAT32;
         } else if (py_dtype.equal(np.attr("float64"))) {
-            return host_buffer_data_type::FLOAT64;
+            return PyDType::FLOAT64;
         } else if (py_dtype.equal(np.attr("float16"))) {
-            return host_buffer_data_type::FLOAT16;
+            return PyDType::FLOAT16;
         } else if (py_dtype.equal(np.attr("int8"))) {
-            return host_buffer_data_type::INT8;
+            return PyDType::INT8;
         } else if (py_dtype.equal(np.attr("int16"))) {
-            return host_buffer_data_type::INT16;
+            return PyDType::INT16;
         } else if (py_dtype.equal(np.attr("int32"))) {
-            return host_buffer_data_type::INT32;
+            return PyDType::INT32;
         } else if (py_dtype.equal(np.attr("int64"))) {
-            return host_buffer_data_type::INT64;
+            return PyDType::INT64;
         } else if (py_dtype.equal(np.attr("uint8"))) {
-            return host_buffer_data_type::UINT8;
+            return PyDType::UINT8;
         } else if (py_dtype.equal(np.attr("uint16"))) {
-            return host_buffer_data_type::UINT16;
+            return PyDType::UINT16;
         } else if (py_dtype.equal(np.attr("uint32"))) {
-            return host_buffer_data_type::UINT32;
+            return PyDType::UINT32;
         } else if (py_dtype.equal(np.attr("uint64"))) {
-            return host_buffer_data_type::UINT64;
+            return PyDType::UINT64;
         } else if (py_dtype.equal(np.attr("bool_"))) {
-            return host_buffer_data_type::BOOL;
+            return PyDType::BOOL;
         } else {
             TT_THROW(
                 "Unsupported numpy array dtype: {}. Cannot map provided torch type to the host buffer data type.",
@@ -430,11 +433,6 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
         }
     };
 
-    TT_FATAL(
-        target_dtype != DataType::BFLOAT4_B && target_dtype != DataType::BFLOAT8_B,
-        "BFLOAT4_B and BFLOAT8_B data types are not supported for tensor conversion!");
-    TT_FATAL(target_dtype != DataType::INVALID, "DataType::INVALID data type specified!");
-
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
         py::object cont_tensor = py_tensor.attr("contiguous")();
         const auto py_dtype = cont_tensor.attr("dtype");
@@ -446,10 +444,11 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
 
         auto numel = py::cast<std::size_t>(cont_tensor.attr("numel")());
         auto ptr = reinterpret_cast<const void*>(py::cast<uintptr_t>(cont_tensor.attr("data_ptr")()));
+
         return to_host_buffer(ptr, numel, cont_tensor);
 
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
-        if (target_dtype == DataType::BFLOAT16) {
+        if (target_dtype == DataType::BFLOAT16) {  // TODO: Don't create temporary tensor for bfloat16
             return convert_py_tensor_to_host_buffer(torch.attr("from_numpy")(py_tensor), target_dtype);
         }
 
@@ -514,11 +513,13 @@ DataType get_target_type(std::optional<DataType> optional_data_type, const py::h
         return optional_data_type.value();
     } else if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
         auto result = map_torch_data_type_to_ttnn(py_tensor.attr("dtype"), torch);
-        TT_FATAL(result.has_value(), "Could not map torch type to TTNN: {}", py::cast<std::string>(py_tensor("dtype")));
+        TT_FATAL(
+            result.has_value(), "Could not map torch type to TTNN: {}", py::cast<std::string>(py_tensor.attr("dtype")));
         return result.value();
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
         auto result = map_numpy_data_type_to_ttnn(py_tensor.attr("dtype"), np);
-        TT_FATAL(result.has_value(), "Could not map numpy type to TTNN: {}", py::cast<std::string>(py_tensor("dtype")));
+        TT_FATAL(
+            result.has_value(), "Could not map numpy type to TTNN: {}", py::cast<std::string>(py_tensor.attr("dtype")));
         return result.value();
     } else {
         TT_THROW(
@@ -526,38 +527,6 @@ DataType get_target_type(std::optional<DataType> optional_data_type, const py::h
             "torch or numpy tensor: {}",
             py::cast<std::string>(py::str(py_tensor.get_type())));
     }
-}
-
-Tensor convert_python_tensor_to_tt_tensor(
-    const py::handle& py_tensor,
-    std::optional<DataType> optional_data_type,
-    std::optional<Layout> optional_layout,
-    const std::optional<Tile>& optional_tile,
-    const MemoryConfig& memory_config,
-    ttnn::distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    const bool data_type_requires_tile = optional_data_type.has_value() && (optional_data_type == DataType::BFLOAT4_B ||
-                                                                            optional_data_type == DataType::BFLOAT8_B);
-
-    const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
-
-    Tensor output = convert_python_tensor_to_tt_tensor(
-        shape,
-        TensorLayout(
-            get_target_type(optional_data_type, py_tensor),
-            PageConfig(
-                optional_layout.value_or(data_type_requires_tile ? Layout::TILE : Layout::ROW_MAJOR), optional_tile),
-            memory_config),
-        get_py_tensor_type_info(py_tensor),
-        [&](const DataType& dtype) -> HostBuffer { return convert_py_tensor_to_host_buffer(py_tensor, dtype); },
-        device,
-        cq_id,
-        pad_value,
-        mesh_mapper);
-
-    return output;
 }
 
 }  // namespace
@@ -813,7 +782,7 @@ void pytensor_module(py::module& m_tensor) {
 
     pyTensor
         .def(
-            py::init<>([](const py::object& python_tensor,
+            py::init<>([](const py::object& py_tensor,
                           std::optional<DataType> data_type,
                           std::optional<MeshDevice*> device,
                           std::optional<Layout> layout,
@@ -822,16 +791,30 @@ void pytensor_module(py::module& m_tensor) {
                           std::optional<ttnn::QueueId> cq_id,
                           std::optional<float> pad_value,
                           const distributed::TensorToMesh* mesh_mapper) {
-                return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    python_tensor,
-                    data_type,
-                    layout,
-                    tile,
-                    mem_config.value_or(MemoryConfig{}),
-                    device.value_or(nullptr),
+                // introduce default pad value if not provided as default argument?
+                // if unsupported data type and user provided data type, convert on host and then move to device if
+                // provided.
+
+                auto src_dtype = CMAKE_UNIQUE_NAMESPACE::get_py_tensor_type_info(py_tensor);
+                auto dst_dtype = CMAKE_UNIQUE_NAMESPACE::get_target_type(data_type, py_tensor);
+
+                const bool tile_layout_by_default =
+                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
+                auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
+
+                TensorSpec tensor_spec(
+                    ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape"))),
+                    TensorLayout(dst_dtype, PageConfig(layout_, tile), mem_config.value_or(MemoryConfig())));
+                return tt::tt_metal::convert_python_tensor_to_tt_tensor(
+                    tensor_spec,
+                    src_dtype,
+                    [&](DataType dtype) -> HostBuffer {
+                        return CMAKE_UNIQUE_NAMESPACE::convert_py_tensor_to_host_buffer(py_tensor, dtype);
+                    },
+                    device,
                     cq_id,
-                    pad_value.value_or(0.0f),
-                    mesh_mapper);
+                    mesh_mapper,
+                    pad_value);
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,

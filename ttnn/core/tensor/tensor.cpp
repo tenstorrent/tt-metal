@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <type_traits>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -13,6 +15,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "tensor/layout/layout.hpp"
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -715,466 +718,156 @@ const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attr
 using namespace tt::tt_metal;
 namespace {
 
-// Host buffer does not have an API to get the original number of elements,
-// but in context of the conversion from python it is possible to use
-// the type ID and the set of expected types.
-DataType map_hostbuffer_type_to_datatype(const HostBuffer& buffer) {
-    const auto& type_info = buffer.type_info();
-
-    if (type_info == typeid(bfloat16)) {
-        return DataType::BFLOAT16;
-    } else if (type_info == typeid(float)) {
-        return DataType::FLOAT32;
-    } else if (type_info == typeid(uint32_t)) {
-        return DataType::UINT32;
-    } else if (type_info == typeid(uint8_t)) {
-        return DataType::UINT8;
-    } else if (type_info == typeid(uint16_t)) {
-        return DataType::UINT16;
-    } else if (type_info == typeid(int32_t)) {
-        return DataType::INT32;
-    } else {
-        TT_THROW("Unsupported type in HostBuffer: {}", buffer.type_info().name());
-    }
-}
-
-std::size_t get_element_count(const HostBuffer& buffer) {
-    auto data_type = map_hostbuffer_type_to_datatype(buffer);
-    auto byte_span = buffer.view_bytes();
-    switch (data_type) {
-        case DataType::BFLOAT16: return byte_span.size() / sizeof(bfloat16);
-        case DataType::FLOAT32: return byte_span.size() / sizeof(float);
-        case DataType::UINT32: return byte_span.size() / sizeof(uint32_t);
-        case DataType::UINT8: return byte_span.size() / sizeof(uint8_t);
-        case DataType::UINT16: return byte_span.size() / sizeof(uint16_t);
-        case DataType::INT32: return byte_span.size() / sizeof(int32_t);
-        default: TT_FATAL(false, "Unhandled DataType in get_element_count");
-    }
-}
-
-struct TensorPreparedConversion {
-    /// Use this layout to construct the initial tensor -- extra conversion might be done
-    /// after the tensor has been moved to device.
-    Layout construct_with_layout = Layout::TILE;
-    DataType host_convert_data_type = DataType::INVALID;
-};
-
-template <typename T>
-Tensor create_typed_tt_tensor_from_host_data(
-    const HostBuffer& host_data,
-    const ttnn::Shape& tensor_shape,
-    const TensorLayout& tensor_layout,
-    ttnn::distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    T pad_value,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    TT_FATAL(
-        !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
-            tensor_layout.get_memory_config().nd_shard_spec().has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
-    TT_FATAL(
-        host_data.type_info() == typeid(T),
-        "Mismatch between the host buffer data type and the target tensor data: host buffer is {} and the target is {}",
-        host_data.type_info().name(),
-        typeid(T).name());
-
-    auto pydata_span = host_data.view_as<T>();
-    if (mesh_mapper != nullptr) {
-        // Shard pydata across mesh and apply `tensor_layout` at each shard.
-        // Shapes of multi device shards will be derived automatically.
-        return ttnn::distributed::create_distributed_tensor(
-            pydata_span,
-            tensor_shape,
-            tensor_layout,
-            *mesh_mapper,
-            device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
-            cq_id,
-            pad_value);
-    }
-
-    // Create a single tt tensor from the pydata.
-    const TensorSpec tensor_spec(tensor_shape, tensor_layout);
-
-    const bool is_custom_bfloat =
-        tensor_layout.get_data_type() == DataType::BFLOAT4_B || tensor_layout.get_data_type() == DataType::BFLOAT8_B;
-
-    Tensor output;
-    if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
-                                       tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                       tensor_spec.data_type() == convert_to_data_type<T>();
-        pydata_borrowable) {
-        output = Tensor(
-            host_data,
-            tensor_shape,
-            tensor_layout.get_data_type(),
-            tensor_layout.get_layout(),
-            tensor_layout.get_tile());
-    } else if (is_custom_bfloat) {
-        TT_FATAL(
-            (std::is_same_v<T, float>),
-            "Conversion of the host buffer to bfloat4/8 requires the host data to be float");
-        // Using already implemented logic for the bfloat4/8.
-        // Otherwise construct the tensor from the host buffer directly, or through encoding. Calling
-        // `make_span` for other cases is inefficient here, as it will create a new host buffer from the span.
-        output = Tensor::from_span(pydata_span, tensor_spec, device, cq_id, pad_value);
-    } else if (tensor_impl::logical_matches_physical(tensor_spec)) {
-        output = Tensor(host_data, tensor_spec);
-    } else {
-        output = Tensor(HostBuffer(tensor_impl::encode_tensor_data(pydata_span, tensor_spec, pad_value)), tensor_spec);
-    }
-
-    if (device != nullptr) {
-        output = output.to_device(device, tensor_spec.memory_config(), cq_id);
-    }
-    return output;
-}
-
 Tensor create_tt_tensor_from_host_data(
-    const HostBuffer& host_data,
-    const ttnn::Shape& tensor_shape,
-    const TensorLayout& tensor_layout,
-    ttnn::distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
+    HostBuffer& host_buffer,
+    DataType host_dtype,
+    const TensorSpec& tensor_spec,
     float pad_value,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    auto create_concrete = [&]<typename T>() {
-        return create_typed_tt_tensor_from_host_data<T>(
-            host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
-    };
-    switch (tensor_layout.get_data_type()) {
-        case DataType::UINT8: return create_concrete.operator()<uint8_t>();
-        case DataType::UINT16: return create_concrete.operator()<uint16_t>();
-        case DataType::INT32: return create_concrete.operator()<int32_t>();
-        case DataType::UINT32: return create_concrete.operator()<uint32_t>();
-        case DataType::FLOAT32: return create_concrete.operator()<float>();
-        case DataType::BFLOAT16: return create_concrete.operator()<bfloat16>();
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
-            return create_concrete.operator()<float>();
-        }
-        case DataType::INVALID: {
-            TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
-        }
-    }
+    bool is_device_available) {
+    auto can_exec_ops_on_device = [](DataType type) {
+        // TODO: Reprocude the bug and create github issue
+        // bfloat16 to bfloat4b/bfloat8b conversions can zero half the tensor in some conditions.
+        // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
+        // TODO: can't create tile layout tensor on the device with custom tile shape
 
-    TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
+        switch (type) {
+            case DataType::FLOAT32:
+                // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
+                // https://github.com/tenstorrent/tt-metal/issues/30147 (typecast rounding error)
+                return false;
+            case DataType::UINT32:
+            case DataType::INT32:
+                // https://github.com/tenstorrent/tt-metal/issues/23407 (to_layout(RM) is not working for uint32/int32)
+                return false;
+            case DataType::UINT16:
+                // Tilize doesn't support uint16.
+                return false;
+            case DataType::UINT8:
+                // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
+                return false;
+            default: return true;
+        }
+    };
+
+    auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
+        const bool exec_on_device =
+            can_exec_ops_on_device(tensor_spec.data_type()) && can_exec_ops_on_device(host_dtype);
+        // TODO: Check if data borrowable
+        if (exec_on_device && is_device_available) {
+            return Tensor::from_borrowed_data(
+                host_buffer.view_as<T>(), tensor_spec.logical_shape(), host_buffer.pin(), tensor_spec.tile());
+        }
+
+        // TODO: T=float but dtype can be bfloat8_b or bfloat4_b
+        return Tensor::from_span(
+            tt::stl::make_const_span(host_buffer.view_as<T>()),
+            tensor_spec,
+            nullptr,
+            std::nullopt,
+            static_cast<T>(pad_value));
+    };
+
+    switch (host_dtype) {
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            // TODO: used to be float, need to connect directly with the logic from create_strategy
+            return create_tensor_from_host_buffer.operator()<bfloat16>();
+        case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
+        case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
+        case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
+        case DataType::UINT16: return create_tensor_from_host_buffer.operator()<uint16_t>();
+        case DataType::FLOAT32: return create_tensor_from_host_buffer.operator()<float>();
+        case DataType::BFLOAT16: return create_tensor_from_host_buffer.operator()<bfloat16>();
+        default: TT_THROW("Unsupported data type");
+    }
 }
 
-struct HostBufferConversionInput {
-    host_buffer_data_type host_type;
-    DataType target_type;
-    Layout layout;
-
-    bool operator==(const HostBufferConversionInput& other) const {
-        return host_type == other.host_type && target_type == other.target_type && layout == other.layout;
-    }
-};
-
-struct HostBufferConversionInputHash {
-    std::size_t operator()(const HostBufferConversionInput& input) const {
-        std::size_t h1 = std::hash<int>{}(static_cast<int>(input.host_type));
-        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.target_type));
-        std::size_t h3 = std::hash<int>{}(static_cast<int>(input.layout));
-        return h1 ^ (h2 << 1) ^ (h3 << 2);
-    }
-};
-
-std::optional<TensorPreparedConversion> prepare_tensor_conversion(
-    const host_buffer_data_type& host_data_type, const TensorLayout& tensor_layout, bool has_device) {
-    // Early exit conditions -- on-device strategy is not supported
-
-    if (!has_device ||
-        // Device is required
-        tensor_layout.get_memory_config().is_sharded() ||
-        // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
-        (((tensor_layout.get_tile().get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
-         ((tensor_layout.get_tile().get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))
-        // on-device tiling operation expects 32x32 row
-    ) {
-        return std::nullopt;
-    }
-
-    // High-level overview of the conversion strategy logic.
-    //
-    // Not all mappings improve performance if they are done on device: the type conversion itself is not the most
-    // expensive part of the conversion, it is ROW->TILE conversion. If done on host, it might be ~10 times slower than
-    // device. But due to existing issues with some on-device operators, only the mappings below can be safely done on
-    // device, without the loss of precision.
-    //
-    // Edge cases that require host-side conversion due to known bugs:
-    //    - int32 tensors with retiling can lose precision https://github.com/tenstorrent/tt-metal/issues/23407,
-    //      although the size is not stable. `(32, 32, 64, 64)` Can trigger the bug as well.
-    //    - uint8 typecast missing device support https://github.com/tenstorrent/tt-metal/issues/21682
-    //    - float32 precision loss when changing layout https://github.com/tenstorrent/tt-metal/issues/23405
-    //    - bfloat16 to bfloat4b/bfloat8b conversions can zero half the tensor in some conditions.
-    //      The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
-    //
-    // Based on the benchmark data, not all conversion pairings have performance improvements
-    // when done on host. Additionally, some types cannot be stored in ROW-MAJOR form, like bfloat8, meaning that
-    // on-host conversion to TILE is mandatory for the TTNN tensor creation.
-    //
-    // To extend the conversion map once the aforementioned bugs are resolved:
-    //
-    // - `construct_with_layout` constrols which layout should be used for the host-side tensor construction. For
-    //   performance reasons the ROW-MAJOR is the most optimal one.
-    // - `host_side_conversion` to show whether on-device type casting is necessary or not.
-    //   If not, the tensor will be created using torch (or on-host converted torch data) and optionally changed to the
-    //   right layout.
-
-    // Mapping
-    // `{input_torch_type, expected_ttnn_type, expected_layout}` -> `{on-host_tensor_layout, on-host_tensor_data_type,
-    // torch_data_conversion}`
-
-    static std::unordered_map<HostBufferConversionInput, TensorPreparedConversion, HostBufferConversionInputHash>
-        conversion_map = {
-    // clang-format off
-
-            // At the moment there are no cases that can be safely implemented with on-device
-            // conversion, and bfloat16 cases are to be implemented in a follow-up PR to avoid
-            // breaking too many tests in a scope of a single PR. The conversion mappings below
-            // can be enabled and updated as related bugs with type/layout conversion are fixed
-            // in the other parts of the library
-
-            // The mapping structure is
-            // {<Input-Type>, <Target-Type>, <Target-Layout>} -> {<Layout-To-Construct-On-Host>, <Type-To-Cast-On-Host>}
-
-#if false
-            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT16, Layout::ROW_MAJOR},  {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::BFLOAT16,     DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT16,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT32,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::FLOAT64,      DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {{host_buffer_data_type::INT16,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT16,        DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT32,        DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::INT64,        DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::INT64,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::UINT8 }},
-            {{host_buffer_data_type::INT64,        DataType::UINT8,     Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {{host_buffer_data_type::UINT8,        DataType::BFLOAT16,  Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::FLOAT32,   Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::UINT8,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::UINT16,    Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
-            {{host_buffer_data_type::UINT8,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::UINT8 }},
-            {{host_buffer_data_type::UINT8,        DataType::UINT8,     Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
-#endif
-
-            // clang-format on
-        };
-
-    HostBufferConversionInput input{
-        .host_type = host_data_type,
-        .target_type = tensor_layout.get_data_type(),
-        .layout = tensor_layout.get_layout(),
+DataType create_strategy(ttnn::PyDType src_dtype, const TensorLayout& tensor_layout) {
+    auto is_pytype_borrowable = [](ttnn::PyDType type) {
+        switch (type) {
+            case ttnn::PyDType::UINT64:
+            case ttnn::PyDType::FLOAT64:
+            case ttnn::PyDType::FLOAT16:
+            case ttnn::PyDType::INT64:
+            case ttnn::PyDType::INT16:
+            case ttnn::PyDType::INT8: return false;
+            default: return true;
+        }
     };
 
-    auto it = conversion_map.find(input);
-    if (it == conversion_map.end()) {
-        return std::nullopt;
-    } else {
-        return it->second;
+    auto to_ttnn_dtype = [](ttnn::PyDType type) {
+        switch (type) {
+            case ttnn::PyDType::FLOAT32: return DataType::FLOAT32;
+            case ttnn::PyDType::BFLOAT16: return DataType::BFLOAT16;
+            case ttnn::PyDType::INT32: return DataType::INT32;
+            case ttnn::PyDType::UINT32: return DataType::UINT32;
+            case ttnn::PyDType::UINT8: return DataType::UINT8;
+            case ttnn::PyDType::UINT16: return DataType::UINT16;
+            default: TT_THROW("Unsupported PyDType");
+        }
+    };
+
+    auto dst_dtype = tensor_layout.get_data_type();
+    if (!is_pytype_borrowable(src_dtype)) {
+        if ((dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)) {
+            return DataType::BFLOAT16;
+        }
+        return dst_dtype;
     }
+
+    return to_ttnn_dtype(src_dtype);  // borrow pytensor by default.
 }
 }  // namespace
 
+// TODO: Add namepsace for tensor conversion
 Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
-    const ttnn::Shape& tensor_shape,
-    const TensorLayout& tensor_layout,
-    const host_buffer_data_type& host_data_type,
+    const TensorSpec& tensor_spec,
+    ttnn::PyDType src_dtype,
     const std::function<HostBuffer(DataType)>& get_host_data,
-    ttnn::distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
+    const ttnn::distributed::TensorToMesh* mesh_mapper,
+    std::optional<float> pad_value) {
     ZoneScoped;
-
-    auto strategy = prepare_tensor_conversion(host_data_type, tensor_layout, device != nullptr);
-    Tensor output;
-
     GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
-        tensor_layout.get_data_type(),
-        tensor_layout.get_layout(),
-        tensor_layout.get_tile(),
-        tensor_layout.get_memory_config(),
-        device,
-        cq_id,
-        pad_value,
-        mesh_mapper);
+        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor", tensor_spec, device, cq_id, mesh_mapper, pad_value);
 
-    DataType host_dtype;
-    if (strategy) {
-        host_dtype = strategy->host_convert_data_type;
-    } else {
-        if (tensor_layout.get_data_type() == DataType::BFLOAT4_B ||
-            tensor_layout.get_data_type() == DataType::BFLOAT8_B) {
-            host_dtype = DataType::FLOAT32;
-        } else {
-            host_dtype = tensor_layout.get_data_type();
-        }
+    // TODO: exist scope for GraphTracker::instance().track_function_end(output);
+
+    auto host_dtype = create_strategy(src_dtype, tensor_spec.tensor_layout());
+    auto host_buffer = get_host_data(host_dtype);
+    Tensor output = create_tt_tensor_from_host_data(
+        host_buffer, host_dtype, tensor_spec, pad_value.value_or(0.0f), device.has_value());
+
+    if (!device) {
+        return output;
     }
 
-    HostBuffer host_data = get_host_data(host_dtype);
-
-    TT_FATAL(
-        get_element_count(host_data) == tensor_shape.volume(),
-        "Number of elements from python tensor {} must match volume of shape {}!",
-        get_element_count(host_data),
-        tensor_shape.volume());
-
-    if (strategy && !host_data.view_bytes().empty()) {
-        // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
-        // the tensor must be constructed on host.
-        output = create_tt_tensor_from_host_data(
-            host_data,
-            tensor_shape,
-            TensorLayout(
-                strategy->host_convert_data_type,
-                PageConfig(strategy->construct_with_layout, tensor_layout.get_tile()),
-                tensor_layout.get_memory_config()),
-            device,
-            cq_id,
-            pad_value,
-            mesh_mapper);
-
-        output = tt::tt_metal::set_tensor_id(output);
-
-        auto set_layout = [&](Layout target) {
-            if (output.layout() != target) {
-                output = ttnn::to_layout(output, target, std::nullopt, tensor_layout.get_memory_config());
-            }
-        };
-
-        if (output.dtype() != tensor_layout.get_data_type()) {
-            // Need to perform final data conversion on device, typecast requires TILE layout.
-            set_layout(Layout::TILE);
-            output = ttnn::typecast(output, tensor_layout.get_data_type());
-        }
-
-        set_layout(tensor_layout.get_layout());
-    } else {
-        // Convert on host
-        if (tensor_layout.get_data_type() == DataType::BFLOAT8_B ||
-            tensor_layout.get_data_type() == DataType::BFLOAT4_B) {
-            TT_FATAL(
-                tensor_layout.get_layout() == Layout::TILE,
-                "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                tensor_layout.get_layout());
-        }
-
-        output = create_tt_tensor_from_host_data(
-            host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
-        output = tt::tt_metal::set_tensor_id(output);
+    // Shard pydata across mesh and apply `tensor_layout` at each shard.
+    // Shapes of multi device shards will be derived automatically.
+    if (mesh_mapper != nullptr) {
+        // TODO: pad is missing here?
+        return ttnn::distributed::distribute_tensor(
+            output,
+            *mesh_mapper,
+            device != nullptr
+                ? std::make_optional(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>(*(device.value())))
+                : std::nullopt,
+            cq_id);
     }
 
-    GraphTracker::instance().track_function_end(output);
-
-    if (device) {
-        output = output.to_device(device, tensor_layout.get_memory_config(), cq_id);
+    auto set_layout = [&](Layout target) {
+        if (output.layout() != target) {
+            output = ttnn::to_layout(output, target, std::nullopt, tensor_spec.memory_config());
+        }
+    };
+    output = output.to_device(device.value(), tensor_spec.memory_config(), cq_id);
+    if (output.dtype() != tensor_spec.data_type()) {
+        // Need to perform final data conversion on device, typecast requires TILE layout.
+        set_layout(Layout::TILE);
+        output = ttnn::typecast(output, tensor_spec.data_type());
     }
 
+    set_layout(tensor_spec.layout());
     return output;
 }
