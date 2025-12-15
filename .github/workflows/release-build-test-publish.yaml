@@ -74,6 +74,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+      extra-tag: "in-release"
 
   galaxy-demos:
     needs: build-artifact
@@ -86,7 +87,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-
+      extra-tag: "in-release"
 
   create-docker-release-image:
     needs:
