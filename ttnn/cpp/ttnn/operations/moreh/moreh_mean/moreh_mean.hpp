@@ -9,7 +9,7 @@ namespace ttnn::operations::moreh::moreh_mean {
 struct MorehMean {
     static Tensor invoke(
         const Tensor& input,
-        const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+        const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dims,
         bool keepdim,
         const std::optional<uint32_t>& divisor,
         const std::optional<Tensor>& output,
