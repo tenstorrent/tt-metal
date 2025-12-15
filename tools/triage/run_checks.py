@@ -31,6 +31,7 @@ from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, 
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
+import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
@@ -160,14 +161,14 @@ def get_devices(
             metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
 
             if len(metal_device_ids) == 0:
-                print(
-                    f"  [warning]No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.[/]"
+                utils.WARN(
+                    f"  No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache."
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
             else:
                 device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
         else:
-            print(f"  [warning]Using all available devices.[/]")
+            utils.WARN(f"  Using all available devices.")
             device_ids = [int(id) for id in context.devices.keys()]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
