@@ -322,47 +322,21 @@ constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT =
 #endif
 constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
 
-using MY_ERISC_ID_INDEX =
-   std::integral_constant<size_t, 14>;
-constexpr size_t MY_ERISC_ID =
-   get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + MY_ERISC_ID_INDEX::value);
-
-using NUM_ACTIVE_ERISCS_INDEX =
-   std::integral_constant<size_t, 15>;
-constexpr size_t NUM_ACTIVE_ERISCS =
-   get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + NUM_ACTIVE_ERISCS_INDEX::value);
-
+constexpr size_t MY_ERISC_ID = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
+constexpr size_t NUM_ACTIVE_ERISCS = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 15);
 static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
 
 // Defines if packet header updates (as the packet header traverses its route) are done on the receiver side or the
 // sender side. If true, then the receiver channel updates the packet header before forwarding it. If false, the sender
 // channel updates the packet header before sending it over Ethernet.
-//
-using UPDATE_PKT_HDR_ON_RX_CH_INDEX =
-   std::integral_constant<size_t, 16>;
-constexpr bool UPDATE_PKT_HDR_ON_RX_CH =
-   get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + UPDATE_PKT_HDR_ON_RX_CH_INDEX::value) != 0;
+constexpr bool UPDATE_PKT_HDR_ON_RX_CH = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 16) != 0;
 
-using FORCE_ALL_PATHS_TO_USE_SAME_NOC_INDEX =
-   std::integral_constant<size_t, 17>;
-constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC =
-   get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + FORCE_ALL_PATHS_TO_USE_SAME_NOC_INDEX::value) != 0;
+constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 17) != 0;
 
-using IS_INTERMESH_ROUTER_ON_EDGE_INDEX =
-   std::integral_constant<size_t, 18>;
-constexpr bool is_intermesh_router_on_edge =
-   get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + IS_INTERMESH_ROUTER_ON_EDGE_INDEX::value) != 0;
+constexpr bool is_intermesh_router_on_edge = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 18) != 0;
+constexpr bool is_intramesh_router_on_edge = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 19) != 0;
 
-using IS_INTRAMESH_ROUTER_ON_EDGE_INDEX =
-   std::integral_constant<size_t, 19>;
-constexpr bool is_intramesh_router_on_edge =
-   get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + IS_INTRAMESH_ROUTER_ON_EDGE_INDEX::value) != 0;
-
-using SPECIAL_MARKER_0_INDEX =
-   std::integral_constant<size_t, 20>;
-constexpr size_t SPECIAL_MARKER_0_IDX =
-   MAIN_CT_ARGS_IDX_5 + SPECIAL_MARKER_0_INDEX::value;
-
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 20;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
