@@ -153,7 +153,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
-def get_decode_sdpa_configs(config, device):
+def get_decode_sdpa_configs(config, bsz, device):
     head_size = config.d_model // config.decoder_attention_heads
     padded_num_heads = nearest_32(config.decoder_attention_heads)
 
@@ -167,7 +167,7 @@ def get_decode_sdpa_configs(config, device):
                     ttnn.CoreRange(
                         # Volume must match batch size
                         ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(0, bsz - 1),
                     ),
                 }
             ),
@@ -201,10 +201,21 @@ def get_decode_sdpa_configs(config, device):
 def functional_sdpa(
     query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False, is_decode=False
 ):
-    if is_cross_attention and query_states.shape[1] == 20:
-        # NOTE: This will only work for openai/whisper-large-v3 & distil-whisper/distil-large-v3 models
-        # since the number of heads is 20
-        core_grid = ttnn.CoreGrid(y=4, x=5)
+    if is_cross_attention:
+        head_num = query_states.shape[1]
+        if head_num == 20:  # openai/whisper-large-v3 & distil-whisper/distil-large-v3 models
+            core_grid = ttnn.CoreGrid(y=4, x=5)
+        elif head_num == 16:  # openai/whisper-medium
+            core_grid = ttnn.CoreGrid(y=4, x=4)
+        elif head_num == 12:  # openai/whisper-small
+            core_grid = ttnn.CoreGrid(y=3, x=4)
+        elif head_num == 8:  # openai/whisper-base
+            core_grid = ttnn.CoreGrid(y=2, x=4)
+        elif head_num == 6:  # openai/whisper-tiny
+            core_grid = ttnn.CoreGrid(y=2, x=3)
+        else:
+            raise ValueError(f"Unsupported head number: {head_num}")
+
         height_sharded_config_query_states = ttnn.create_sharded_memory_config(
             query_states.padded_shape,
             core_grid=core_grid,
@@ -330,7 +341,6 @@ def whisper_attention(
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        # query_states = ttnn.unsqueeze_to_4D(query_states)
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
@@ -373,42 +383,26 @@ def whisper_attention(
         ttnn.deallocate(hidden_states)
         fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
 
-        # fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
-
-        (
-            query_states,  # 1, H, S, d
-            key_states,  # 1, H, d, S
-            value_states,  # 1, H, S, d
-        ) = ttnn.experimental.nlp_create_qkv_heads(
-            fused_qkv,
-            num_heads=config.decoder_attention_heads,
-            num_kv_heads=config.decoder_attention_heads,
-            transpose_k_heads=transpose_k_heads,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         if sdpa_with_kv_cache:
-            k_cache = kv_cache[0]  # 1, H, MaxS, d
-            v_cache = kv_cache[1]  # 1, H, MaxS, d
-
-            # Reshape qkv to 1, S, H, D
-            query_states = ttnn.transpose(query_states, 1, 2)
-            key_states = ttnn.transpose(key_states, 1, 2)
-            value_states = ttnn.transpose(value_states, 1, 2)
-
-            # Unpad batch
-            unpadded_batch_size = current_decode_pos.shape[0]
-            query_states = query_states[:, :unpadded_batch_size, :, :]
-            key_states = key_states[:, :unpadded_batch_size, :, :]
-            value_states = value_states[:, :unpadded_batch_size, :, :]
+            # Transpose fused_qkv to S, H, B, d
+            fused_qkv = ttnn.transpose(fused_qkv, 0, 2)
+            # Create QKV heads
+            (
+                query_states,  # S, H, B, d
+                key_states,  # S, H, B, S
+                value_states,  # S, H, B, d
+            ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+                fused_qkv,
+                num_heads=config.decoder_attention_heads,
+                num_kv_heads=config.decoder_attention_heads,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            k_cache = kv_cache[0]  # B, H, MaxS, d
+            v_cache = kv_cache[1]  # B, H, MaxS, d
 
             sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config = get_decode_sdpa_configs(
-                config, hidden_states.device()
+                config, bsz, hidden_states.device()
             )
-
-            # Convert to sharded (required by paged_update_cache and sdpa ops)
-            query_states = ttnn.interleaved_to_sharded(query_states, sdpa_batch_sharded_memcfg)
-            key_states = ttnn.interleaved_to_sharded(key_states, sdpa_batch_sharded_memcfg)
-            value_states = ttnn.interleaved_to_sharded(value_states, sdpa_batch_sharded_memcfg)
 
             # Update KV cache
             ttnn.experimental.paged_update_cache(
@@ -427,11 +421,23 @@ def whisper_attention(
                 program_config=sdpa_decode_progcfg,
                 compute_kernel_config=sdpa_decode_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # 1, 1, H, D
-
-            attn_output = ttnn.transpose(attn_output, 1, 2)
+            )  # 1, bsz, H, D
+            attn_output = ttnn.reshape(attn_output, (bsz, attn_output.shape[-2], 1, attn_output.shape[-1]))
         else:
             # Encoder-attention or no-KV-cache-decoder-attention
+            (
+                query_states,  # 1, H, S, d
+                key_states,  # 1, H, d, S
+                value_states,  # 1, H, S, d
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                fused_qkv,
+                num_heads=config.decoder_attention_heads,
+                num_kv_heads=config.decoder_attention_heads,
+                transpose_k_heads=transpose_k_heads,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(fused_qkv)
+
             attn_output = functional_sdpa(
                 query_states,
                 key_states,
@@ -441,10 +447,12 @@ def whisper_attention(
                 is_cross_attention=is_cross_attention,
                 is_decode=is_decode,
             )
+            ttnn.deallocate(query_states)
+            ttnn.deallocate(key_states)
+            ttnn.deallocate(value_states)
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     attn_output = ttnn.squeeze(attn_output, 0)
-    attn_output = attn_output[:, :tgt_len, :]
 
     attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
@@ -705,66 +713,73 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
     input_features = ttnn.from_torch(
         input_features, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=input_mesh_mapper, device=device
     )
-    input_features = ttnn.transpose(input_features, 1, 2)
+    input_features = ttnn.transpose(input_features, -1, -2)
+    batch_size = input_features.shape[0]
 
-    conv1d_config, conv1d_compute_config = get_conv_configs(device)
+    conv1_config, conv1_compute_config = get_conv_configs(device)
 
     # First time convs are runs, weights are on host (convs will return weights on device)
     conv2_out_channel_splits, conv2_out_channels = prepare_conv_weights(
         config, parameters, weights_mesh_mapper=weights_mesh_mapper
     )
 
-    input_embeds, [weights_device, _] = ttnn.conv1d(
-        input_tensor=input_features,
-        weight_tensor=parameters.conv1.weight,
-        device=device,
-        in_channels=config.num_mel_bins,
-        out_channels=config.d_model,
-        batch_size=1,
-        input_length=input_length,
-        kernel_size=3,
-        stride=1,
-        padding=1,
-        dilation=1,
-        groups=1,
-        dtype=ttnn.bfloat16,
-        conv_config=conv1d_config,
-        compute_config=conv1d_compute_config,
-        return_weights_and_bias=True,
-    )
-    parameters.conv1.weight = weights_device
-    input_embeds = ttnn.gelu(input_embeds)
-    input_embeds = ttnn.sharded_to_interleaved(input_embeds)
-
-    out_tensor_splits = []
-    for i in range(conv2_out_channel_splits):
-        out_split, [weights_device, _] = ttnn.conv1d(
-            input_tensor=input_embeds,
-            weight_tensor=parameters.conv2.weight[i],
+    # TODO: This is a hack to support batch size > 1, till the Conv OOM issue is resolved
+    input_embeds_all_batches_splits = []
+    for j in range(batch_size):
+        input_features_slice = input_features[j : j + 1, :, :, :]
+        input_embeds, [weights_device, _] = ttnn.conv1d(
+            input_tensor=input_features_slice,
+            weight_tensor=parameters.conv1.weight,
             device=device,
-            in_channels=config.d_model,
-            out_channels=conv2_out_channels,
+            in_channels=config.num_mel_bins,
+            out_channels=config.d_model,
             batch_size=1,
             input_length=input_length,
             kernel_size=3,
-            stride=2,
+            stride=1,
             padding=1,
             dilation=1,
             groups=1,
             dtype=ttnn.bfloat16,
-            conv_config=conv1d_config,
-            compute_config=conv1d_compute_config,
+            conv_config=conv1_config,
+            compute_config=conv1_compute_config,
             return_weights_and_bias=True,
         )
-        parameters.conv2.weight[i] = weights_device
-        out_split = ttnn.sharded_to_interleaved(out_split)
-        out_tensor_splits.append(out_split)
+        parameters.conv1.weight = weights_device
+        input_embeds = ttnn.gelu(input_embeds)
+        input_embeds = ttnn.sharded_to_interleaved(input_embeds)
 
-    input_embeds = ttnn.concat(out_tensor_splits, dim=3)
-    input_embeds = ttnn.gelu(input_embeds)
-    input_embeds = ttnn.squeeze(input_embeds, 0)
+        out_tensor_splits = []
+        for i in range(conv2_out_channel_splits):
+            out_split, [weights_device, _] = ttnn.conv1d(
+                input_tensor=input_embeds,
+                weight_tensor=parameters.conv2.weight[i],
+                device=device,
+                in_channels=config.d_model,
+                out_channels=conv2_out_channels,
+                batch_size=1,
+                input_length=input_length,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                dilation=1,
+                groups=1,
+                dtype=ttnn.bfloat16,
+                conv_config=conv1_config,
+                compute_config=conv1_compute_config,
+                return_weights_and_bias=True,
+            )
+            parameters.conv2.weight[i] = weights_device
+            out_split = ttnn.sharded_to_interleaved(out_split)
+            out_tensor_splits.append(out_split)
 
-    return input_embeds
+        input_embeds = ttnn.concat(out_tensor_splits, dim=3)
+        input_embeds = ttnn.gelu(input_embeds)
+        input_embeds = ttnn.squeeze(input_embeds, 0)
+        input_embeds_all_batches_splits.append(input_embeds)
+
+    input_embeds_all_batches = ttnn.concat(input_embeds_all_batches_splits, dim=0)
+    return input_embeds_all_batches
 
 
 def preprocess_decoder_inputs(

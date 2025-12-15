@@ -40,6 +40,8 @@ from models.demos.whisper.tt.whisper_generator import GenerationParams, WhisperG
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
+WHISPER_BATCH_SIZE = 2
+
 
 def load_input_paths(folder_path):
     files = [os.path.join(folder_path, f) for f in listdir(folder_path) if isfile(join(folder_path, f))]
@@ -108,7 +110,7 @@ def load_conditional_generation_ref_model(model_repo, language, task):
 
 
 def init_conditional_generation_tt_model(
-    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=1, max_seq_len=512
+    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=WHISPER_BATCH_SIZE, max_seq_len=512
 ):
     model = hf_ref_model.model
     linear_weight = hf_ref_model.proj_out.weight
@@ -202,7 +204,7 @@ def run_demo_whisper_for_audio_classification_inference(
     input_path,
     mesh_device,
     num_inputs,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     label=False,
     dataset=None,
 ):
@@ -299,7 +301,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     num_inputs,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
     torch.manual_seed(0)
@@ -373,7 +375,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
     torch.manual_seed(0)
@@ -450,7 +452,7 @@ def run_demo_whisper_for_translation_dataset(
     model_repo,
     num_inputs,
     generation_params: Optional[GenerationParams] = None,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
     torch.manual_seed(0)
@@ -672,7 +674,7 @@ def test_demo_for_audio_classification_dataset(
 
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(2, 1)],
+    [(2, WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "model_repo",
