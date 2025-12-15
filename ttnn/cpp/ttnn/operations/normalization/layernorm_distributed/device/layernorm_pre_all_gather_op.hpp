@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-#include "layernorm/device/layernorm_types.hpp"
 #include "layernorm_distributed_types.hpp"
 
 namespace ttnn::operations::normalization {
@@ -21,22 +20,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid = std::nullopt,
-    LayerNormDefaultProgramConfig program_config = LayerNormDefaultProgramConfig{});
-
-tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
-    const Tensor& a,
-    Tensor& output,
-    LayerNormDistributedType norm_type,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid = std::nullopt,
-    LayerNormDefaultProgramConfig program_config = LayerNormDefaultProgramConfig{});
+    LayerNormDistributedDefaultProgramConfig program_config = LayerNormDistributedDefaultProgramConfig{});
 
 struct LayerNormPreAllGather {
     LayerNormDistributedType norm_type;
     const DataType dtype;
     const DeviceComputeKernelConfig compute_kernel_config;
-    LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
+    LayerNormDistributedDefaultProgramConfig program_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
