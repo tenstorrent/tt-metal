@@ -18,7 +18,7 @@ from .weights import AttentionWeights
 def prefill_forward(
     hidden_states,
     rope_mats,
-    user_id,
+    # user_id,
     weights: AttentionWeights,
     kv_cache,
     config: AttentionConfig,
@@ -86,12 +86,12 @@ def prefill_forward(
         tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
         tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
 
-        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=0)
     else:
         # Non-paged attention
-        ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
-        ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
+        ttnn.fill_cache(k_cache, tt_k, batch_idx=0)
+        ttnn.fill_cache(v_cache, tt_v, batch_idx=0)
 
     # Scaled dot-product attention
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
