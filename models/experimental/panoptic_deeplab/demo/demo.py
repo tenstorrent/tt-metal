@@ -27,6 +27,7 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     create_deeplab_v3plus_visualization,
     save_predictions,
     preprocess_input_params,
+    skip_if_not_blackhole_20_or_130_cores,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
@@ -292,10 +293,8 @@ def run_panoptic_deeplab_demo(
 )
 @pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
 def test_panoptic_deeplab_demo(device, output_dir, model_category, model_location_generator):
-    compute_grid = device.compute_with_storage_grid_size()
-    logger.info(
-        f"Running demo test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
-    )
+    skip_if_not_blackhole_20_or_130_cores(device)
+
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )
