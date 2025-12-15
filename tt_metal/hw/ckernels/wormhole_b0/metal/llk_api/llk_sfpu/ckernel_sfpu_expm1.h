@@ -33,10 +33,15 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         y = val * (sfpi::vConst1 + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(0.166f)));
     }
     v_elseif(val > sfpi::vFloat(-88.0f)) {
+        // Clamp to prevent overflow if x > 89
+        sfpi::vFloat threshold_high = sfpi::vFloat(89.f);
+        sfpi::vec_min_max(val, threshold_high);
+
         // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
         // z = (bias + x * factor * N_m; where:
         // factor = 0x00b8aa3b (computed through log(e))
         // bias = 0x3f800000
+
         sfpi::vInt z = sfpu::_float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
@@ -155,8 +160,6 @@ void expm1_init() {
         sfpi::vConstFloatPrgm1 = 0.500000059604644775390625f;
         sfpi::vConstFloatPrgm2 = 1.99588379473425447940826416015625e-4f;
     }
-    // For accurate float32 mode (!APPROXIMATION_MODE && is_fp32_dest_acc_en),
-    // no programmable constants are needed as the implementation uses inline constants
 }
 
 }  // namespace sfpu

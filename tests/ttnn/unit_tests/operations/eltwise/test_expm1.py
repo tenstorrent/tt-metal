@@ -33,12 +33,12 @@ def test_expm1_arange_masking(dtype, device):
     torch_dtype = getattr(torch, dtype)
     tt_dtype = getattr(ttnn, dtype)
 
-    # Generate all possible bit patterns for bf16
-    # If dtype is float32 then convert to float32
-    # (no exhaustive testing for float32)
+    # Generate all possible 16-bit patterns and
+    # For dtype == bfloat16, this covers all possible inputs
+    # For dtype == float32, this only covers some inputs
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch_dtype)
-    input_tensor = input_tensor.to(torch_dtype)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch_dtype)  # bfloat16 -> torch_dtype
 
     # If input is subnormal then we assume hardware will flush it to 0.0
     input_tensor = flush_subnormal_values(input_tensor)

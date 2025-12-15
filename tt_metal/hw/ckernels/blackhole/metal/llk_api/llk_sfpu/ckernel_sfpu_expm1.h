@@ -33,6 +33,10 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         y = val * (sfpi::vConst1 + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(0.166f)));
     }
     v_elseif(val > sfpi::vFloat(-88.0f)) {
+        // Clamp to prevent overflow if x > 89
+        sfpi::vFloat threshold_high = sfpi::vFloat(89.f);
+        sfpi::vec_min_max(val, threshold_high);
+
         // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
         // z = (bias + x * factor * N_m; where:
         // factor = 0x00b8aa3b (computed through log(e))
