@@ -76,6 +76,7 @@ def generate_github_summary(op_models: dict):
                 f.write(f"- {model}\n")
             f.write("\n")
 
+
 def set_github_output(name: str, value: str):
     """Set a GitHub Actions output variable."""
     output_file = os.environ.get("GITHUB_OUTPUT", "")
