@@ -138,6 +138,13 @@ class LogProbsCalculator:
         # Calculate local max
         local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True, **self.common_args)
 
+        gathered_max_tensors = self._perform_all_gather(
+            local_max_tensor,
+            dim=1,
+            num_links=1,
+            buffer_key=self.persistent_buffers["MAX_REDUCTION"],
+        )
+
         # All-gather local max to get global max
         gathered_max_tensors = ttnn.all_gather(
             local_max_tensor,
@@ -189,6 +196,27 @@ class LogProbsCalculator:
         self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32), **self.common_args)
         self.global_exp_sum = ttnn.to_layout(self.global_exp_sum, ttnn.TILE_LAYOUT, **self.common_args)
 
+    def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
+        if self.mesh_device.get_num_devices() == 32:
+            # llama all_gather with persistent buffer support
+            return self.tt_ccl.line_all_gather(
+                tensor,
+                dim=dim,
+                num_links=num_links,
+                memory_config=tensor.memory_config(),
+                cluster_axis=0,
+                buffer_key=buffer_key,
+            )
+        else:
+            return ttnn.all_gather(
+                tensor,
+                dim=dim,
+                num_links=num_links,
+                memory_config=tensor.memory_config(),
+                cluster_axis=None,
+                topology=ttnn.Topology.Linear,
+            )
+
     def _prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
         """
         Prepare global idx tensor with correct values on all devices.
@@ -238,14 +266,12 @@ class LogProbsCalculator:
         # Multiply selected_logits_tensor with chip_ids_tensor to get expected logits for each user
         selected_logits_tensor = ttnn.multiply(selected_logits_tensor, chip_ids_tensor, **self.common_args)
 
-        # Use ttnn.all_gather to get logits across all devices
-        selected_logits_tensor = ttnn.all_gather(
+        # All gather logits across all devices
+        selected_logits_tensor = self._perform_all_gather(
             selected_logits_tensor,
             dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=0,
-            topology=ttnn.Topology.Linear,
-            **self.common_args,
+            num_links=1,
+            buffer_key=self.persistent_buffers["LOGPROBS_LOGITS"],
         )
 
         # Apply sum over device dimension to get logits for each user on all chips
