@@ -16,7 +16,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = false>
 ALWI void log1p_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log1p_init<APPROX, fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_log1p_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));
 }
 
 // clang-format off
@@ -35,7 +35,7 @@ ALWI void log1p_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log1p_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_log1p<APPROX, fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_log1p<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
 }  // namespace ckernel
