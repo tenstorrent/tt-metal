@@ -91,70 +91,45 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * q_num_chunks);
             const uint32_t nq = (global_q_chunk % (NH * q_num_chunks)) / q_num_chunks;
             const uint32_t q_chunk = global_q_chunk % q_num_chunks;
-            if constexpr (use_joint_mask) {
-                /*
-                If `use_joint_mask`, then one or both of input tensors are padded.
-                We already know that input tensors are padded up to Sk_chunk_t.
-                Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
-                we should generate the vertical mask.
-                */
-                if (ring_id == N_mask_ring_id) {
-                    if (mask_chunk_0 != (uint32_t)(-1)) {
-                        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_N);
-                    }
-                }
-                if (ring_id == L_mask_ring_id) {
-                    if (mask_chunk_1 != (uint32_t)(-1)) {
-                        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_L);
-                    }
-                }
+
+            generate_mask<false, false, use_joint_mask, false, 0, cb_mask_in>(
+                Sq_chunk_t,
+                Sk_chunk_t,
+                0,
+                0,
+                0,
+                ring_id == N_mask_ring_id && mask_chunk_0 != (uint32_t)(-1),
+                ring_id == L_mask_ring_id && mask_chunk_1 != (uint32_t)(-1),
+                0,
+                logical_N,
+                logical_L,
+                0);
+
+            if (ring_iter > 0) {
+                read_prev_output_and_lse(
+                    cat_out_generator,
+                    lse_writer,
+                    nb,
+                    nq,
+                    NH,
+                    q_chunk,
+                    Sq_chunk_t,
+                    DHt,
+                    local_Nt,
+                    logical_Lt,
+                    cb_prev_out,
+                    cb_lse_in,
+                    tile_bytes,
+                    lse_tile_bytes,
+                    barrier_threshold);
             }
 
             const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
             const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-
-            // If not on the first iteration, read LSE input and previous output chunk.
-            // No race condition because writer kernel writes previous output before reading it again
-
-            uint32_t base_lse_tile_id =
-                nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
-            // Don't write beyond the end of the LSE in sequence length
-            uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
-            uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
-            lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
-            lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
-
-            if (ring_iter > 0) {
-                // Read previous output for this Q chunk
-                read_block(cat_out_generator, dst_slice, cb_prev_out, tile_bytes, barrier_threshold, false);
-
-                // Read previous LSE for this Q chunk
-                cb_reserve_back(cb_lse_in, Sq_chunk_t);
-                uint32_t lse_addr = get_write_ptr(cb_lse_in);
-                uint32_t lse_tile_id = base_lse_tile_id;
-
-                for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
-                    noc_async_read_tile(lse_tile_id, lse_writer, lse_addr);
-                    lse_tile_id++;
-                    lse_addr += lse_tile_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_lse_in, Sq_chunk_t);
-            }
-
             write_block(cat_out_generator, dst_slice, cb_out, tile_bytes, barrier_threshold);
 
-            cb_wait_front(cb_lse_out, Sq_chunk_t);
-            uint32_t lse_addr = get_read_ptr(cb_lse_out);
-            uint32_t lse_tile_id = base_lse_tile_id;
-
-            for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
-                noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
-                lse_tile_id++;
-                lse_addr += lse_tile_bytes;
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_lse_out, Sq_chunk_t);
+            write_lse_output(
+                lse_writer, nb, nq, NH, q_chunk, Sq_chunk_t, local_Nt, logical_Lt, cb_lse_out, lse_tile_bytes);
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }

@@ -767,6 +767,36 @@ void write_block(
     cb_pop_front(cb_id, num_tiles);
 }
 
+void write_block(
+    const TensorAccessor& out_writer,
+    const uint32_t cb_out,
+    const uint32_t out_chunk_tiles,
+    const uint32_t rows,
+    const uint32_t cols,
+    const uint32_t cb_id,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold) {
+    uint32_t barrier_count = 0;
+
+    cb_wait_front(cb_out, out_chunk_tiles);
+
+    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    for (uint32_t row = 0; row < rows; ++row) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            noc_async_write_tile(cb_id, out_writer, l1_read_addr);
+            ++cb_id;
+            l1_read_addr += tile_bytes;
+
+            if (++barrier_count == barrier_threshold) {
+                noc_async_writes_flushed();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_out, out_chunk_tiles);
+}
+
 template <uint32_t tile_bytes>
 void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
     /*
@@ -813,4 +843,140 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
 
         write_ptr += tile_bytes;
     }
+}
+
+template <
+    bool use_padded_mask,
+    bool is_causal,
+    bool use_joint_mask,
+    bool is_chunked,
+    uint32_t sliding_window_size,
+    uint32_t cb_mask_in>
+void generate_mask(
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t q_chunk,
+    uint32_t q_low_idx,
+    uint32_t chunk_start_t_in_q_chunks,
+    bool generate_mask_0,
+    bool generate_mask_1,
+    uint32_t unpadded_Sk,
+    uint32_t unpadded_N,
+    uint32_t unpadded_L) {
+    if constexpr (is_causal || sliding_window_size > 0) {
+        uint32_t offset_q_chunk = q_chunk;
+        if constexpr (is_chunked) {
+            // Bump it up to the chunk start
+            offset_q_chunk += chunk_start_t_in_q_chunks;
+        }
+        uint32_t q_low_idx = offset_q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
+        uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+
+        for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+            const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+            const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+            // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
+            // Q-range = [q_low, q_high)
+            // K-range = [k_low, k_high)
+            // does_overlap = not (q_low >= k_high or k_low >= q_high)
+            // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
+            // Read mask chunk
+            if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
+                // If no sliding window, only generate mask along diagonal
+                // Otherwise, generate mask for all chunks
+                generate_mask<cb_mask_in>(
+                    Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
+            }
+        }
+    } else if constexpr (use_padded_mask) {
+        // Generate non-causal padded mask only once per q chunk since it is only non-zero on the last K
+        // chunk if it exists at all.
+        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk);
+    } else if constexpr (use_joint_mask) {
+        /*
+          If `use_joint_mask`, then one or both of input tensors are padded.
+          We already know that input tensors are padded up to Sk_chunk_t.
+          Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
+          we should generate the vertical mask.
+        */
+        if (generate_mask_0) {
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_N);
+        }
+        if (generate_mask_1) {
+            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_L);
+        }
+    }
+}
+
+template <typename WriterType>
+void read_prev_output_and_lse(
+    const CatAddrGenerator<WriterType, WriterType>& cat_out_generator,
+    const TensorAccessor& lse_writer,
+    uint32_t nb,
+    uint32_t nq,
+    uint32_t NH,
+    uint32_t q_chunk,
+    uint32_t Sq_chunk_t,
+    uint32_t DHt,
+    uint32_t local_Nt,
+    uint32_t logical_Lt,
+    uint32_t cb_prev_out,
+    uint32_t cb_lse_in,
+    uint32_t tile_bytes,
+    uint32_t lse_tile_bytes,
+    uint32_t barrier_threshold) {
+    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+    const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+
+    read_block(cat_out_generator, dst_slice, cb_prev_out, tile_bytes, barrier_threshold, false);
+
+    cb_reserve_back(cb_lse_in, Sq_chunk_t);
+    uint32_t lse_addr_ptr = get_write_ptr(cb_lse_in);
+
+    uint32_t base_lse_tile_id = nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
+    // Don't write beyond the end of the LSE in sequence length
+    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
+    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
+    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
+    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
+
+    uint32_t lse_tile_id = base_lse_tile_id;
+    for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
+        noc_async_read_tile(lse_tile_id, lse_writer, lse_addr_ptr);
+        lse_tile_id++;
+        lse_addr_ptr += lse_tile_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_lse_in, Sq_chunk_t);
+}
+
+template <typename WriterType>
+void write_lse_output(
+    const TensorAccessor& lse_writer,
+    uint32_t nb,
+    uint32_t nq,
+    uint32_t NH,
+    uint32_t q_chunk,
+    uint32_t Sq_chunk_t,
+    uint32_t local_Nt,
+    uint32_t logical_Lt,
+    uint32_t cb_lse_out,
+    uint32_t lse_tile_bytes) {
+    cb_wait_front(cb_lse_out, Sq_chunk_t);
+    uint32_t lse_addr_ptr = get_read_ptr(cb_lse_out);
+
+    uint32_t base_lse_tile_id = nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
+    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
+    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
+    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
+    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
+
+    uint32_t lse_tile_id = base_lse_tile_id;
+    for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
+        noc_async_write_tile(lse_tile_id, lse_writer, lse_addr_ptr);
+        lse_tile_id++;
+        lse_addr_ptr += lse_tile_bytes;
+    }
+    noc_async_writes_flushed();
+    cb_pop_front(cb_lse_out, Sq_chunk_t);
 }
