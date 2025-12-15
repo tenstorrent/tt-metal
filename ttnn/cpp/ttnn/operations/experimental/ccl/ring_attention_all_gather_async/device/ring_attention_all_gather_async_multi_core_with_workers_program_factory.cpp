@@ -27,7 +27,7 @@
 #include <ranges>
 #include <optional>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
 ttnn::device_operation::CachedProgram<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t>
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
@@ -602,4 +602,4 @@ void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_run
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async

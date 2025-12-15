@@ -9,9 +9,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-// TODO: Remove this!
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -25,7 +24,9 @@ struct RingJointScaledDotProductAttention {
     const std::optional<SDPAProgramConfig> program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    ttnn::RingAttentionAllGatherAsync all_gather_struct;
+    using RingAttentionAllGatherAsyncDeviceOperation = ttnn::operations::experimental::ccl::
+        ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation;
+    RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t all_gather_struct;
     const CoreCoord ccl_core_grid_offset;
 
     void validate(const std::vector<Tensor>& input_tensors) const;

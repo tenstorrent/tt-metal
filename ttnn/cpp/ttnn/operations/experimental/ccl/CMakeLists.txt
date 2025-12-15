@@ -114,8 +114,6 @@ target_sources(
         deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
-        ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.cpp
-        ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_program.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
 )

@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
 struct operation_attributes_t {
     std::vector<IDevice*> devices;
@@ -44,4 +44,4 @@ using tensor_return_value_t = std::vector<Tensor>;
 
 using spec_return_value_t = std::vector<TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async

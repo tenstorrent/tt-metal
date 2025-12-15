@@ -9,7 +9,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables {
     tt::tt_metal::KernelHandle worker_sender_reader_forward_kernel_id{};
@@ -28,11 +28,11 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    using operation_attributes_t = ring_attention_all_gather_async_new::operation_attributes_t;
+    using operation_attributes_t = ring_attention_all_gather_async::operation_attributes_t;
 
-    using tensor_args_t = ring_attention_all_gather_async_new::tensor_args_t;
+    using tensor_args_t = ring_attention_all_gather_async::tensor_args_t;
 
-    using tensor_return_value_t = ring_attention_all_gather_async_new::tensor_return_value_t;
+    using tensor_return_value_t = ring_attention_all_gather_async::tensor_return_value_t;
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const operation_attributes_t& operation_attributes,
@@ -71,4 +71,4 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
         CoreCoord core_grid_offset = CoreCoord(0, 0));
 };
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async

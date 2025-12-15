@@ -14,6 +14,8 @@
 
 using namespace tt::tt_metal;
 
+using ttnn::operations::experimental::ccl::ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation;
+
 namespace ttnn::operations::transformer {
 
 void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
@@ -46,7 +48,10 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         persistent_output_buffer_v,
     };
 
-    this->all_gather_struct.validate_with_output_tensors(ring_gather_input_tensors, ring_gather_output_tensors);
+    // this->all_gather_struct.validate_with_output_tensors(ring_gather_input_tensors, ring_gather_output_tensors);
+    RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
+        this->all_gather_struct,
+        {.input_tensor = ring_gather_input_tensors, .persistent_output_buffer = ring_gather_output_tensors});
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(this->program_config.has_value(), "Program config must be provided");
@@ -266,8 +271,11 @@ tt::tt_metal::operation::Hash RingJointScaledDotProductAttention::compute_progra
         this->compute_kernel_config,
         this->program_config,
         this->ccl_core_grid_offset,
-        this->all_gather_struct.compute_program_hash(
-            {input_tensors.at(1), input_tensors.at(2)}) /*all_gather input tensors*/
+        RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
+            this->all_gather_struct,
+            {.input_tensor = {input_tensors.at(1), input_tensors.at(2)}}) /*all_gather input tensors*/
+        // this->all_gather_struct.compute_program_hash(
+        //     {input_tensors.at(1), input_tensors.at(2)}) /*all_gather input tensors*/
     );
 }
 
@@ -382,7 +390,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         persistent_output_buffer_k,
         persistent_output_buffer_v,
     };
-    auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
+    auto all_gather_program = ttnn::ring_attention_all_gather_async_multi_core_with_workers_helper(
         ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
         target_device,
@@ -419,8 +427,9 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         const auto& joint_output_tensor = output_tensors.at(1);
         const auto& lse_output_tensor = output_tensors.at(2);
 
-        const RingAttentionAllGatherAsync* all_gather_operation =
-            &(static_cast<const RingJointScaledDotProductAttention*>(operation)->all_gather_struct);
+        const ttnn::operations::experimental::ccl::ring_attention_all_gather_async::
+            RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t* all_gather_operation =
+                &(static_cast<const RingJointScaledDotProductAttention*>(operation)->all_gather_struct);
         all_gather_callback.value()(
             all_gather_operation,
             program,

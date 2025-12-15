@@ -9,7 +9,6 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_op.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.hpp"
 #include "ttnn/device.hpp"
 #include <utility>
 
@@ -152,7 +151,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     int32_t rank = input_tensor_k.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
@@ -163,16 +162,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         rank - 1,
         dim);
 
-    auto all_gather_struct = ttnn::RingAttentionAllGatherAsync{
-        {},
-        gather_dim,
-        num_links,
-        num_devices,
-        input_tensor_k.memory_config(),
-        topology,
-        multi_device_global_semaphore,
-        subdevice_id,
-        cluster_axis};
+    auto all_gather_struct = ttnn::operations::experimental::ccl::ring_attention_all_gather_async::
+        RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t{
+            {},
+            gather_dim,
+            num_links,
+            num_devices,
+            input_tensor_k.memory_config(),
+            topology,
+            multi_device_global_semaphore,
+            subdevice_id,
+            cluster_axis};
 
     const std::vector<ttnn::Tensor> input_tensors = {
         input_tensor_q,

@@ -10,18 +10,18 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new {
+namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
 using ttnn::ccl::EriscDatamoverBuilder;
 
 struct RingAttentionAllGatherAsyncDeviceOperation {
-    using operation_attributes_t = ring_attention_all_gather_async_new::operation_attributes_t;
+    using operation_attributes_t = ring_attention_all_gather_async::operation_attributes_t;
 
-    using tensor_args_t = ring_attention_all_gather_async_new::tensor_args_t;
+    using tensor_args_t = ring_attention_all_gather_async::tensor_args_t;
 
-    using spec_return_value_t = ring_attention_all_gather_async_new::spec_return_value_t;
+    using spec_return_value_t = ring_attention_all_gather_async::spec_return_value_t;
 
-    using tensor_return_value_t = ring_attention_all_gather_async_new::tensor_return_value_t;
+    using tensor_return_value_t = ring_attention_all_gather_async::tensor_return_value_t;
 
     using program_factory_t = std::variant<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory>;
 
@@ -52,11 +52,30 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+
+// TODO: Remove the following once ring_join_sdpa is migrated to new infra
+namespace ttnn {
+tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
+    tt::tt_metal::Program& program,
+    const std::vector<Tensor>& input_tensor,
+    IDevice* target_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    std::vector<Tensor>& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
+}
 
 namespace ttnn::prim {
 constexpr auto ring_attention_all_gather_async = ttnn::register_operation<
     "ttnn::prim::ring_attention_all_gather_async",
-    ttnn::operations::experimental::ccl::ring_attention_all_gather_async_new::
-        RingAttentionAllGatherAsyncDeviceOperation>();
+    ttnn::operations::experimental::ccl::ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation>();
 }  // namespace ttnn::prim
