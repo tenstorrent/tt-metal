@@ -34,12 +34,13 @@ struct MeshGcoreAccessorArgs;
  *   auto args = MeshGcoreAccessorArgs<0>();
  *   MeshGcoreAccessor accessor(args);
  *   uint32_t gcore[3] = {1, 5, 10};
- *   uint64_t noc_addr = accessor.get_noc_addr(gcore);
+ *   auto result = accessor.get_fabric_node_and_noc_addr(gcore);
  * @endcode
  *
- * **Note:** When mesh and grid have different ranks, the host side automatically
- * adjusts them to the same rank by prepending 1s to the shorter shape before passing
- * as compile-time args. Example: mesh (2,2,2) + grid (16,16) → grid becomes (1,16,16)
+ * **Note:** Configuration is read from preprocessor defines as constexpr arrays (MESH_DIMS, GRID_DIMS, etc.)
+ * provided at compile time. When mesh and grid have different ranks, the host side automatically
+ * adjusts them to the same rank by prepending 1s to the shorter shape before generating defines.
+ * Example: mesh (2,2,2) + grid (16,16) → grid becomes (1,16,16)
  */
 struct MeshGcoreAccessor {
     static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
@@ -102,23 +103,22 @@ public:
     /**
      * @brief Construct a MeshGcoreAccessor from MeshGcoreAccessorArgs
      *
-     * Extracts mesh and grid configuration from compile-time arguments.
+     * Extracts mesh and grid configuration from preprocessor defines.
+     * The defines are provided during kernel compilation.
      *
-     * @tparam CTA_OFFSET Offset of compile-time arguments
-     * @param args MeshGcoreAccessorArgs containing mesh/grid CTA arg offsets
+     * @tparam CTA_OFFSET Offset of compile-time arguments (for API compatibility)
+     * @param args MeshGcoreAccessorArgs (offset parameter kept for API compatibility)
      */
     template <std::size_t CTA_OFFSET>
     MeshGcoreAccessor(const MeshGcoreAccessorArgs<CTA_OFFSET>& args) :
         mesh_config_(), grid_config_(), fabric_node_mapping_() {
-        // Populate mesh config from args (runtime initialization)
+        // Populate mesh config from args (which reads from defines)
         args.populate_mesh_config(mesh_config_);
-        compute_strides(mesh_config_);
 
-        // Populate grid config from args (runtime initialization)
+        // Populate grid config from args (which reads from defines)
         args.populate_grid_config(grid_config_);
-        compute_strides(grid_config_);
 
-        // Populate fabric node mapping from args (runtime initialization)
+        // Populate fabric node mapping from args (which reads from defines)
         args.populate_fabric_node_mapping(fabric_node_mapping_);
     }
 
@@ -209,101 +209,106 @@ public:
 // ==================== MeshGcoreAccessorArgs ====================
 
 /**
- * @brief Arguments parser for constructing MeshGcoreAccessor from compile-time args
+ * @brief Arguments parser for constructing MeshGcoreAccessor from preprocessor defines
  *
- * This class reads compile-time arguments passed from the host side and provides
- * methods to extract mesh and grid configuration.
+ * This class reads configuration from preprocessor defines provided at compile time.
+ * The CTA_OFFSET template parameter is kept for API compatibility but is not used.
  *
- * The compile-time args layout from host side is:
- * 1. mesh_num_dims (1 uint32_t)
- * 2. mesh_dims[mesh_num_dims]
- * 3. mesh_strides[mesh_num_dims]
- * 4. grid_num_dims (1 uint32_t)
- * 5. grid_dims[grid_num_dims]
- * 6. grid_strides[grid_num_dims]
- * 7. num_grids (1 uint32_t)
- * 8. fabric_mesh_ids[num_grids]
- * 9. fabric_chip_ids[num_grids]
+ * The defines expected from host side are constexpr arrays:
+ * 1. MESH_NUM_DIMS - number of mesh dimensions
+ * 2. MESH_DIMS - constexpr array of mesh dimensions {dim0, dim1, ...}
+ * 3. MESH_STRIDES - constexpr array of mesh strides {stride0, stride1, ...}
+ * 4. GRID_NUM_DIMS - number of grid dimensions
+ * 5. GRID_DIMS - constexpr array of grid dimensions {dim0, dim1, ...}
+ * 6. GRID_STRIDES - constexpr array of grid strides {stride0, stride1, ...}
+ * 7. NUM_GRIDS - number of grids
+ * 8. FABRIC_MESH_IDS - constexpr array of fabric mesh IDs {id0, id1, ...}
+ * 9. FABRIC_CHIP_IDS - constexpr array of fabric chip IDs {id0, id1, ...}
  *
- * @tparam CTA_OFFSET Offset where MeshGcoreAccessorArgs start
+ * @tparam CTA_OFFSET Kept for API compatibility (not used)
  */
 template <std::size_t CTA_OFFSET>
 struct MeshGcoreAccessorArgs {
     static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
 
-    // Offset calculations
-    static constexpr uint32_t MeshNumDimsOffset = CTA_OFFSET;
-
-    // Helper to get mesh_num_dims at compile time
-    static constexpr uint32_t get_mesh_num_dims() { return get_compile_time_arg_val(MeshNumDimsOffset); }
-
-    static constexpr uint32_t mesh_num_dims = get_mesh_num_dims();
-    static constexpr uint32_t MeshDimsOffset = MeshNumDimsOffset + 1;
-    static constexpr uint32_t MeshStridesOffset = MeshDimsOffset + mesh_num_dims;
-    static constexpr uint32_t GridNumDimsOffset = MeshStridesOffset + mesh_num_dims;
-
-    // Helper to get grid_num_dims at compile time
-    static constexpr uint32_t get_grid_num_dims() { return get_compile_time_arg_val(GridNumDimsOffset); }
-
-    static constexpr uint32_t grid_num_dims = get_grid_num_dims();
-    static constexpr uint32_t GridDimsOffset = GridNumDimsOffset + 1;
-    static constexpr uint32_t GridStridesOffset = GridDimsOffset + grid_num_dims;
-    static constexpr uint32_t NumGridsOffset = GridStridesOffset + grid_num_dims;
-
-    // Helper to get num_grids at compile time
-    static constexpr uint32_t get_num_grids() { return get_compile_time_arg_val(NumGridsOffset); }
-
-    static constexpr uint32_t num_grids = get_num_grids();
-    static constexpr uint32_t FabricMeshIdsOffset = NumGridsOffset + 1;
-    static constexpr uint32_t FabricChipIdsOffset = FabricMeshIdsOffset + num_grids;
-
     /**
-     * @brief Populate MeshConfig from compile-time args (runtime function)
+     * @brief Populate MeshConfig from preprocessor defines
      */
     template <typename MeshConfigT>
     static void populate_mesh_config(MeshConfigT& config) {
-        config.num_dims = mesh_num_dims;
-        // Use runtime loop to read compile-time args array with runtime index
-        for (uint32_t i = 0; i < mesh_num_dims; ++i) {
-            config.dim[i] = kernel_compile_time_args[MeshDimsOffset + i];
-            config.strides[i] = kernel_compile_time_args[MeshStridesOffset + i];
+#ifndef MESH_NUM_DIMS
+        static_assert(false, "MESH_NUM_DIMS must be defined");
+#endif
+#ifndef MESH_DIMS
+        static_assert(false, "MESH_DIMS must be defined");
+#endif
+#ifndef MESH_STRIDES
+        static_assert(false, "MESH_STRIDES must be defined");
+#endif
+
+        config.num_dims = MESH_NUM_DIMS;
+
+        constexpr uint32_t mesh_dims[] = MESH_DIMS;
+        for (uint32_t i = 0; i < MESH_NUM_DIMS; ++i) {
+            config.dim[i] = mesh_dims[i];
+        }
+
+        constexpr uint32_t mesh_strides[] = MESH_STRIDES;
+        for (uint32_t i = 0; i < MESH_NUM_DIMS; ++i) {
+            config.strides[i] = mesh_strides[i];
         }
     }
 
     /**
-     * @brief Populate GridConfig from compile-time args (runtime function)
+     * @brief Populate GridConfig from preprocessor defines
      */
     template <typename GridConfigT>
     static void populate_grid_config(GridConfigT& config) {
-        config.num_dims = grid_num_dims;
-        // Use runtime loop to read compile-time args array with runtime index
-        for (uint32_t i = 0; i < grid_num_dims; ++i) {
-            config.dim[i] = kernel_compile_time_args[GridDimsOffset + i];
-            config.strides[i] = kernel_compile_time_args[GridStridesOffset + i];
+#ifndef GRID_NUM_DIMS
+        static_assert(false, "GRID_NUM_DIMS must be defined");
+#endif
+#ifndef GRID_DIMS
+        static_assert(false, "GRID_DIMS must be defined");
+#endif
+#ifndef GRID_STRIDES
+        static_assert(false, "GRID_STRIDES must be defined");
+#endif
+
+        config.num_dims = GRID_NUM_DIMS;
+
+        constexpr uint32_t grid_dims[] = GRID_DIMS;
+        for (uint32_t i = 0; i < GRID_NUM_DIMS; ++i) {
+            config.dim[i] = grid_dims[i];
+        }
+
+        constexpr uint32_t grid_strides[] = GRID_STRIDES;
+        for (uint32_t i = 0; i < GRID_NUM_DIMS; ++i) {
+            config.strides[i] = grid_strides[i];
         }
     }
 
     /**
-     * @brief Populate GridToFabricNodeMapping from compile-time args (runtime function)
+     * @brief Populate GridToFabricNodeMapping from preprocessor defines
      */
     template <typename MappingT>
     static void populate_fabric_node_mapping(MappingT& mapping) {
-        mapping.num_grids = num_grids;
-        // Use runtime loop to read compile-time args array with runtime index
-        for (uint32_t i = 0; i < num_grids; ++i) {
-            uint32_t mesh_id = kernel_compile_time_args[FabricMeshIdsOffset + i];
-            uint32_t chip_id = kernel_compile_time_args[FabricChipIdsOffset + i];
-            mapping.fabric_node_ids[i] = std::make_pair(mesh_id, chip_id);
+#ifndef NUM_GRIDS
+        static_assert(false, "NUM_GRIDS must be defined");
+#endif
+#ifndef FABRIC_MESH_IDS
+        static_assert(false, "FABRIC_MESH_IDS must be defined");
+#endif
+#ifndef FABRIC_CHIP_IDS
+        static_assert(false, "FABRIC_CHIP_IDS must be defined");
+#endif
+
+        mapping.num_grids = NUM_GRIDS;
+
+        constexpr uint32_t fabric_mesh_ids[] = FABRIC_MESH_IDS;
+        constexpr uint32_t fabric_chip_ids[] = FABRIC_CHIP_IDS;
+
+        for (uint32_t i = 0; i < NUM_GRIDS; ++i) {
+            mapping.fabric_node_ids[i] = std::make_pair(fabric_mesh_ids[i], fabric_chip_ids[i]);
         }
     }
-
-    /**
-     * @brief Total number of compile-time args for MeshGcoreAccessor
-     */
-    static constexpr uint32_t num_compile_time_args() { return FabricChipIdsOffset + num_grids - CTA_OFFSET; }
-
-    /**
-     * @brief Next available offset after MeshGcoreAccessor args
-     */
-    static constexpr uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
 };

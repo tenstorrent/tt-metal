@@ -98,6 +98,17 @@ public:
      */
     std::vector<uint32_t> get_fabric_nodes_compile_args() const;
 
+    /**
+     * @brief Get compile-time defines for MeshGcoreAccessor
+     *
+     * @return Map of define names to values containing mesh and grid topology
+     *         Defines include (as constexpr arrays):
+     *         - MESH_NUM_DIMS, MESH_DIMS, MESH_STRIDES
+     *         - GRID_NUM_DIMS, GRID_DIMS, GRID_STRIDES
+     *         - NUM_GRIDS, FABRIC_MESH_IDS, FABRIC_CHIP_IDS
+     */
+    std::map<std::string, std::string> get_compile_time_defines() const;
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
