@@ -16,7 +16,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.test_new_all_reduce import (
     run_all_reduce_impl,
     RING_CRS,
     NORM_CRS,
@@ -26,7 +26,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
     run_llama_all_gather_matmul_impl,
     BINARY_MULT_CRS,
 )

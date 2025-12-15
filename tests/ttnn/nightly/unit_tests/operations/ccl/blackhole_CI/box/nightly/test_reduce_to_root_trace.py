@@ -9,7 +9,7 @@ from loguru import logger
 from tracy import signpost
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.common.utility_functions import skip_for_wormhole_b0
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.nightly.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 def compute_reference_reduce_to_root(

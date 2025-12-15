@@ -7,7 +7,7 @@ import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
     QKV_CRS,
     RING_CRS,
@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     NORM_CRS,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.test_llama_reduce_scatter_async_TG import run_reduce_scatter_test
+from tests.ttnn.nightly.unit_tests.operations.ccl.test_llama_reduce_scatter_async_TG import run_reduce_scatter_test
 
 from conftest import is_6u
 

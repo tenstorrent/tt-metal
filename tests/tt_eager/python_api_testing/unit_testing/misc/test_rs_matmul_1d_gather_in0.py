@@ -29,7 +29,7 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 )
 
 
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
     QKV_CRS,
     RING_CRS,

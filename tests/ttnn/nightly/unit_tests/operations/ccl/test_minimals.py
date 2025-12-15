@@ -18,14 +18,14 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.fusion_subtests.rms_test import (
     run_rms_trace,
     run_rms_trace_qwen,
     run_rms_fuse_impl,
     run_rms_fuse_impl_qwen,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
     run_concat_fuse_impl,
 )
 

@@ -11,7 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
+from tests.ttnn.nightly.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
     QKV_CRS,
     RING_CRS,
