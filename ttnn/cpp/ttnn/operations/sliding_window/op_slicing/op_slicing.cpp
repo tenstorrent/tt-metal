@@ -247,6 +247,12 @@ void run_sliced_op(
         // If num_slices is 1, the output would be in L1.
         // If num_slices is greater than 1, the output would be in DRAM.
         output_tensor = op_slice_attr->run_L1_op(input_tensor, {0, 0}, {output_height, output_width});
+        output_tensor = ttnn::to_memory_config(
+            output_tensor,
+            tt::tt_metal::MemoryConfig{
+                TensorMemoryLayout::INTERLEAVED,
+                BufferType::DRAM,
+            });
         return;
     }
 
