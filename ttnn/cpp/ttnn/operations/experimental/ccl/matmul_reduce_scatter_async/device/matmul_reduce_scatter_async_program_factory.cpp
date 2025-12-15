@@ -18,7 +18,32 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+
+namespace ttnn {
+// Forward declaration for reduce_scatter_minimal_async_helper (defined in reduce_scatter_minimal_async_program.cpp)
+tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset);
+}  // namespace ttnn
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program {
 
@@ -45,15 +70,15 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     const ttnn::MeshCoordinate& mesh_coord,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    ttnn::ccl::Topology topology = args.reduce_scatter_minimal_async_struct.topology;
+    ttnn::ccl::Topology topology = args.reduce_scatter_params.topology;
 
-    const auto& dim = args.reduce_scatter_minimal_async_struct.dim;
-    const auto& num_links = args.reduce_scatter_minimal_async_struct.num_links;
-    const auto& ring_size = args.reduce_scatter_minimal_async_struct.ring_size;
-    const auto& semaphore = args.reduce_scatter_minimal_async_struct.semaphore;
-    const auto& barrier_semaphore = args.reduce_scatter_minimal_async_struct.barrier_semaphore;
-    const auto& using_persistent_buffers = args.reduce_scatter_minimal_async_struct.using_persistent_buffers;
-    const auto& sub_device_id = args.reduce_scatter_minimal_async_struct.sub_device_id;
+    const auto& dim = args.reduce_scatter_params.dim;
+    const auto& num_links = args.reduce_scatter_params.num_links;
+    const auto& ring_size = args.reduce_scatter_params.ring_size;
+    const auto& semaphore = args.reduce_scatter_params.semaphore;
+    const auto& barrier_semaphore = args.reduce_scatter_params.barrier_semaphore;
+    const auto& using_persistent_buffers = args.reduce_scatter_params.using_persistent_buffers;
+    const auto& sub_device_id = args.reduce_scatter_params.sub_device_id;
 
     const auto& program_config = args.matmul_struct.program_config.value();
     auto compute_kernel_config = args.matmul_struct.compute_kernel_config.value();
@@ -65,21 +90,17 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     tt::tt_metal::Program program{};
 
     std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        tensor_args.input,
-        mesh_coord,
-        1,
-        args.reduce_scatter_minimal_async_struct.topology,
-        args.reduce_scatter_minimal_async_struct.cluster_axis);
+        tensor_args.input, mesh_coord, 1, args.reduce_scatter_params.topology, args.reduce_scatter_params.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input,
         mesh_coord,
         -1,
-        args.reduce_scatter_minimal_async_struct.topology,
-        args.reduce_scatter_minimal_async_struct.cluster_axis);
+        args.reduce_scatter_params.topology,
+        args.reduce_scatter_params.cluster_axis);
 
     uint32_t ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-        tensor_args.input, mesh_coord, args.reduce_scatter_minimal_async_struct.cluster_axis);
+        tensor_args.input, mesh_coord, args.reduce_scatter_params.cluster_axis);
 
     // Create the reduce scatter fused op signaler
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> reduce_scatter_fused_op_signaler =
@@ -167,7 +188,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
 
         if (shared_vars.reduce_scatter_override_runtime_arguments_callback.has_value()) {
             shared_vars.reduce_scatter_override_runtime_arguments_callback.value()(
-                &args.reduce_scatter_minimal_async_struct,
+                nullptr,
                 program,
                 {output_tensors.mm}, /* matmul output tensor */
                 {},

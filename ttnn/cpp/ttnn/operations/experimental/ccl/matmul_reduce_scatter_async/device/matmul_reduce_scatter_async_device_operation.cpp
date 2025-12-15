@@ -10,7 +10,10 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* Reduce Scatter Matmul fusion includes */
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
@@ -36,7 +39,7 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
 
     // Matmul Reduce Scatter validate
     TT_FATAL(
-        args.reduce_scatter_minimal_async_struct.dim == 3,
+        args.reduce_scatter_params.dim == 3,
         "MatmulReduceScatterAsync requires dim=3 for the ReduceScatter operations.");
 
     if (args.matmul_struct.program_config.has_value()) {
@@ -61,11 +64,16 @@ spec_return_value_t MatmulReduceScatterAsyncDeviceOperation::compute_output_spec
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs = args.matmul_struct.compute_output_specs(input_tensors, {})[0];
 
-    // Reduce Scatter shape
-    ttnn::TensorSpec reduce_scatter_output_specs =
-        args.reduce_scatter_minimal_async_struct.compute_output_specs(input_tensors)[0];
+    // Reduce Scatter shape - use the device operation's compute_output_specs
+    using ReduceScatterOp = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+        ReduceScatterMinimalAsyncDeviceOperation;
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::tensor_args_t reduce_scatter_tensor_args{
+        input_tensors[0], std::nullopt, std::nullopt};
 
-    return {.mm = matmul_output_specs, .reduce_scatter = reduce_scatter_output_specs};
+    auto reduce_scatter_output_specs =
+        ReduceScatterOp::compute_output_specs(args.reduce_scatter_params, reduce_scatter_tensor_args);
+
+    return {.mm = matmul_output_specs, .reduce_scatter = reduce_scatter_output_specs[0]};
 }
 
 tensor_return_value_t MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
@@ -86,24 +94,23 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
     auto input_memory_config = tensor_args.input.memory_config();
 
     return tt::tt_metal::operation::hash_operation<MatmulReduceScatterAsyncDeviceOperation>(
-        args.reduce_scatter_minimal_async_struct.dim,
-        args.reduce_scatter_minimal_async_struct.num_links,
-        args.reduce_scatter_minimal_async_struct.ring_size,
-        args.reduce_scatter_minimal_async_struct.output_mem_config,
-        args.reduce_scatter_minimal_async_struct.optional_intermediate_mem_config.value(),
-        args.reduce_scatter_minimal_async_struct.topology,
-        args.reduce_scatter_minimal_async_struct.sub_device_id.has_value(),
-        args.reduce_scatter_minimal_async_struct.sub_device_id.has_value()
+        args.reduce_scatter_params.dim,
+        args.reduce_scatter_params.num_links,
+        args.reduce_scatter_params.ring_size,
+        args.reduce_scatter_params.output_mem_config,
+        args.reduce_scatter_params.optional_intermediate_mem_config.value(),
+        args.reduce_scatter_params.topology,
+        args.reduce_scatter_params.sub_device_id.has_value(),
+        args.reduce_scatter_params.sub_device_id.has_value()
             ? tensor_args.input.device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX,
-                  args.reduce_scatter_minimal_async_struct.sub_device_id.value())
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, args.reduce_scatter_params.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        args.reduce_scatter_minimal_async_struct.cluster_axis,
-        args.reduce_scatter_minimal_async_struct.barrier_semaphore.has_value(),
-        args.reduce_scatter_minimal_async_struct.using_persistent_buffers,
-        args.reduce_scatter_minimal_async_struct.chunks_per_sync,
-        args.reduce_scatter_minimal_async_struct.num_workers_per_link,
-        args.reduce_scatter_minimal_async_struct.num_buffers_per_channel,
+        args.reduce_scatter_params.cluster_axis,
+        args.reduce_scatter_params.barrier_semaphore.has_value(),
+        args.reduce_scatter_params.using_persistent_buffers,
+        args.reduce_scatter_params.chunks_per_sync,
+        args.reduce_scatter_params.num_workers_per_link,
+        args.reduce_scatter_params.num_buffers_per_channel,
         args.reduce_scatter_core_grid_offset,
         input_shape,
         input_memory_layout,
@@ -170,25 +177,25 @@ MatmulReduceScatterAsyncDeviceOperation::invoke(
 
     /* ReduceScatter setup */
     constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
-    ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct = ttnn::ReduceScatterMinimalAsync(
-        dim,
-        num_links,
-        devices.size(),
-        memory_config_rs.value_or(input_tensor.memory_config()),
-        intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
-        topology,
-        multi_device_global_semaphore,
-        barrier_semaphore,
-        using_persistent_buffers,
-        sub_device_id,
-        std::nullopt,
-        std::nullopt,
-        DEFAULT_WORKERS_PER_LINK,
-        std::nullopt);
+    ReduceScatterMinimalAsyncParams reduce_scatter_params{
+        .dim = dim,
+        .num_links = num_links,
+        .ring_size = static_cast<uint32_t>(devices.size()),
+        .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
+        .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
+        .topology = topology,
+        .semaphore = multi_device_global_semaphore,
+        .barrier_semaphore = barrier_semaphore,
+        .using_persistent_buffers = using_persistent_buffers,
+        .sub_device_id = sub_device_id,
+        .cluster_axis = std::nullopt,
+        .chunks_per_sync = std::nullopt,
+        .num_workers_per_link = DEFAULT_WORKERS_PER_LINK,
+        .num_buffers_per_channel = std::nullopt,
+    };
 
     return {
-        operation_attributes_t(
-            reduce_scatter_minimal_async_struct, matmul_struct, reduce_scatter_core_grid_offset, devices),
+        operation_attributes_t(reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, devices),
         tensor_args_t{
             .input = input_tensor,
             .weight = weight_tensor,
