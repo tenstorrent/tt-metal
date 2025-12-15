@@ -7,7 +7,7 @@ from loguru import logger
 
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 import torch
 import ttnn
 
@@ -16,6 +16,7 @@ shapes = [
 ]
 
 
+@pytest.mark.skipif(is_blackhole(), reason="disabled due to illegal kernel placement, see issue #5863")
 @pytest.mark.parametrize("shape", shapes)
 def test_move_op(shape, device):
     run_move_op(shape, device)
