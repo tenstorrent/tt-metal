@@ -856,7 +856,6 @@ void generate_mask(
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t q_chunk,
-    uint32_t q_low_idx,
     uint32_t chunk_start_t_in_q_chunks,
     bool generate_mask_0,
     bool generate_mask_1,

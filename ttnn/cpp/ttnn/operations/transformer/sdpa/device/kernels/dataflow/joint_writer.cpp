@@ -71,7 +71,6 @@ void kernel_main() {
                     Sk_chunk_t,
                     0,
                     0,
-                    0,
                     mask_chunk_0 != (uint32_t)(-1),
                     mask_chunk_1 != (uint32_t)(-1),
                     0,

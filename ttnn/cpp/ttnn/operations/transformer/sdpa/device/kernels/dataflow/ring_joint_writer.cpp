@@ -97,7 +97,6 @@ void kernel_main() {
                 Sk_chunk_t,
                 0,
                 0,
-                0,
                 ring_id == N_mask_ring_id && mask_chunk_0 != (uint32_t)(-1),
                 ring_id == L_mask_ring_id && mask_chunk_1 != (uint32_t)(-1),
                 0,

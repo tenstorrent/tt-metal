@@ -98,17 +98,8 @@ void kernel_main() {
                     q_chunk = local_q_start + q_iter;
 #endif
 
-                    generate_mask<use_padded_mask, is_causal, false, is_chunked, 0, cb_mask_in>(
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        q_chunk,
-                        q_low_idx,
-                        chunk_start_t_in_q_chunks,
-                        false,
-                        false,
-                        unpadded_Sk,
-                        0,
-                        0);
+                    generate_mask<use_padded_mask, is_causal, false, is_chunked, sliding_window_size, cb_mask_in>(
+                        Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, false, false, unpadded_Sk, 0, 0);
 
                     /*
                       Determine how many rows of OUT will be written. Both start and end rows are
