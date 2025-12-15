@@ -22,14 +22,11 @@ ttnn::Tensor permute_impl(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-
     // Get the device
     uint32_t rank = a.logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value_);
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
 
     if (rank > 4) {
@@ -61,7 +58,7 @@ ttnn::Tensor permute_impl(
         if (input.memory_config().is_sharded() && output_mem_config.is_sharded()) {
             mem_config = input.memory_config();
         }
-        return ttnn::transpose(input, 1, -2, mem_config, pad_value_);
+        return ttnn::transpose(input, 1, -2, mem_config, pad_value);
     };
 
     auto transpose_cn = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
@@ -108,9 +105,7 @@ ttnn::Tensor permute_launch(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-    return permute_impl(a, dims, output_mem_config, pad_value_);  // TODO(#34353)
+    return permute_impl(a, dims, output_mem_config, pad_value);
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
@@ -171,9 +166,6 @@ ttnn::Tensor ExecutePermute::invoke(
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -214,7 +206,7 @@ ttnn::Tensor ExecutePermute::invoke(
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = detail::permute_launch(itensor, iorder, output_memory_config, pad_value_);
+    auto output_tensor = detail::permute_launch(itensor, iorder, output_memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
@@ -226,7 +218,7 @@ ttnn::Tensor ExecutePermute::invoke(
 
 ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
-    return invoke(input_tensor, dims, std::nullopt, pad_value.value_or(0.0f));  // TODO(#34353)
+    return invoke(input_tensor, dims, std::nullopt, pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

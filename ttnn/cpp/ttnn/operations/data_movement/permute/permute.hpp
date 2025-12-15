@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <optional>
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
@@ -15,12 +14,12 @@ struct ExecutePermute {
         const ttnn::Tensor& input_tensor,
         const SmallVector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+        const std::optional<float>& pad_value = 0.0f);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const SmallVector<int64_t>& dims,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+        const std::optional<float>& pad_value = 0.0f);
 };
 
 }  // namespace operations::data_movement

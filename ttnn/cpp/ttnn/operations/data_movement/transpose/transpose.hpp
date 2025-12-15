@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
@@ -16,13 +14,10 @@ struct ExecuteTranspose {
         int64_t dim1,
         int64_t dim2,
         const std::optional<MemoryConfig>& memory_config_arg,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+        const std::optional<float>& pad_value = 0.0f);
 
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int64_t dim1,
-        int64_t dim2,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+        const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, const std::optional<float>& pad_value = 0.0f);
 };
 
 }  // namespace operations::data_movement::transpose

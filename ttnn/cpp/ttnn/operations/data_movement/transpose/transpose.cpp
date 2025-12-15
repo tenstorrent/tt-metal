@@ -26,11 +26,8 @@ inline Tensor transpose_(
     TransposeOpDim transpose_dim,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-
     auto prim_permute = [&](const ttnn::Tensor& input, ttnn::SmallVector<uint32_t> dims) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value_);
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
 
     bool interleaved_rm = !a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
@@ -42,13 +39,13 @@ inline Tensor transpose_(
             break;
         case TransposeOpDim::NH:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value_);
+                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
         case TransposeOpDim::NW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value_);
+                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
         case TransposeOpDim::CW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value_);
+                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
         case TransposeOpDim::CN:
             if (interleaved_rm) {
                 return prim_permute(a, ttnn::SmallVector<uint32_t>({1, 0, 2, 3}));
@@ -61,7 +58,7 @@ inline Tensor transpose_(
             break;
         default: break;
     }
-    return ttnn::prim::transpose(a, transpose_dim, output_mem_config, pad_value_);
+    return ttnn::prim::transpose(a, transpose_dim, output_mem_config, pad_value);
 }
 
 ttnn::Tensor transpose_nd(
@@ -70,9 +67,6 @@ ttnn::Tensor transpose_nd(
     uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-
     const auto rank = input_tensor.logical_shape().rank();
     ttnn::SmallVector<int64_t> permutation;
     permutation.reserve(rank);
@@ -80,7 +74,7 @@ ttnn::Tensor transpose_nd(
         permutation.push_back(i);
     }
     std::swap(permutation[dim1], permutation[dim2]);
-    return ttnn::permute(input_tensor, permutation, memory_config_arg, pad_value_);
+    return ttnn::permute(input_tensor, permutation, memory_config_arg, pad_value);
 }
 
 }  // namespace detail
@@ -170,9 +164,6 @@ ttnn::Tensor transpose_impl(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
@@ -185,7 +176,7 @@ ttnn::Tensor transpose_impl(
         normalized_dim1 += rank_diff;
         normalized_dim2 += rank_diff;
     } else if (initial_rank > 4) {
-        return detail::transpose_nd(input_tensor, normalized_dim1, normalized_dim2, memory_config_arg, pad_value_);
+        return detail::transpose_nd(input_tensor, normalized_dim1, normalized_dim2, memory_config_arg, pad_value);
     }
 
     bool wh = (normalized_dim1 == 2 && normalized_dim2 == 3) || (normalized_dim2 == 2 && normalized_dim1 == 3);
@@ -230,7 +221,7 @@ ttnn::Tensor transpose_impl(
         } else {
             TT_ASSERT(false, "Unsupported transpose dims");
         }
-        output = detail::transpose_(input_typecasted, transpose_dim, memory_config, pad_value_);
+        output = detail::transpose_(input_typecasted, transpose_dim, memory_config, pad_value);
     }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
@@ -249,17 +240,13 @@ ttnn::Tensor ExecuteTranspose::invoke(
                              const std::optional<float>& pad_value) {
         return transpose_impl(input_tensor, dim1, dim2, memory_config, pad_value);
     };
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
 
-    return build_memory_config_transpose(base_transpose)(input_tensor, dim1, dim2, memory_config, pad_value_);
+    return build_memory_config_transpose(base_transpose)(input_tensor, dim1, dim2, memory_config, pad_value);
 }
 
 ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, const std::optional<float>& pad_value) {
-    // TODO(#34353)
-    auto pad_value_ = pad_value.value_or(0.0f);
-    return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value_);
+    return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement::transpose
