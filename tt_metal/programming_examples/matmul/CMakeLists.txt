@@ -4,5 +4,6 @@ project(metal_example_matmul)
 add_subdirectory(matmul_common)
 
 add_subdirectory(matmul_single_core)
+add_subdirectory(matmul_single_core_tensor)
 add_subdirectory(matmul_multi_core)
 add_subdirectory(matmul_multicore_reuse)
