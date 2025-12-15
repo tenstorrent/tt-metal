@@ -167,8 +167,13 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
         uint32_t(output_cb_index)};
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -176,6 +181,8 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -185,7 +192,10 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
         compute_kernel,
         core,
         tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_args,
+            .defines = compute_kernel_defines});
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});

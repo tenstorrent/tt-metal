@@ -133,14 +133,21 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     /** compute
      */
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     }
 
     if (!core_range.empty()) {
@@ -150,6 +157,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
                 .defines = compute_kernel_defines});
     }
@@ -160,6 +168,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
                 .defines = compute_kernel_defines});
     }
