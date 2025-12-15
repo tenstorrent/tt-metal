@@ -17,11 +17,6 @@ on:
         type: boolean
         default: true
         description: "Run T3K ubench - Fabric BW performance test"
-      run-perf-fabric-latency:
-        required: false
-        type: boolean
-        default: true
-        description: "Run T3K ubench - Fabric Latency performance test"
       run-perf-fabric-mux-bw:
         required: false
         type: boolean
@@ -41,10 +36,6 @@ jobs:
 
           # Check which test groups should be included
           if [[ "${{ inputs.run-perf-fabric-bw }}" == "true" ]]; then
-            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric BW && Latency","cmd":"TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml"}')
-          fi
-
-            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Latency","cmd":"pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_1d_fabric_latency.py"}')
           fi
 
           if [[ "${{ inputs.run-perf-fabric-mux-bw }}" == "true" ]]; then
