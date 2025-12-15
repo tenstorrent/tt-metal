@@ -293,11 +293,18 @@ jobs:
           TT_METAL_L2_NIGHTLY_RUN_ID: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
           PERF_DEVICE_MODELS_RUN_ID: ${{ steps.trigger-workflows.outputs.perf-device-models-run-id }}
         run: |
+          # Create temporary directory for workflow results to avoid race conditions
+          # when multiple background processes write outputs simultaneously
+          TEMP_OUTPUT_DIR=$(mktemp -d)
+          trap "rm -rf $TEMP_OUTPUT_DIR" EXIT
+
           # Helper function for workflow monitoring
+          # Writes results to temp files instead of $GITHUB_OUTPUT to avoid race conditions
           monitor_workflow() {
             local run_id="$1"
             local workflow_name="$2"
             local output_var="$3"
+            local temp_file="$TEMP_OUTPUT_DIR/${output_var}.txt"
 
             if [ -z "$run_id" ] || [ "$run_id" = "" ]; then
               echo "⚪ Skipping $workflow_name - not triggered"
@@ -318,12 +325,12 @@ jobs:
                 if [ "$run_status" = "completed" ]; then
                   if [ "$conclusion" = "success" ]; then
                     echo "🎯 $workflow_name passed: $run_url"
-                    echo "$output_var=success:$run_url" >> $GITHUB_OUTPUT
+                    echo "$output_var=success:$run_url" > "$temp_file"
                     return 0
                   else
                     echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url/attempts/$(($retries + 1))"
                     if [ $retries -ge $((MAX_RETRIES - 1)) ]; then
-                      echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+                      echo "$output_var=failure:$run_url" > "$temp_file"
                       return 1
                     fi
                     break
@@ -335,7 +342,7 @@ jobs:
               # Handle timeout
               if [ $elapsed -ge $timeout_seconds ]; then
                 echo "⏰ $workflow_name timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
-                echo "$output_var=timeout:$run_url" >> $GITHUB_OUTPUT
+                echo "$output_var=timeout:$run_url" > "$temp_file"
                 return 1
               fi
               # Retry logic
@@ -347,12 +354,12 @@ jobs:
                   elapsed=0 # Reset timer for retry
                 else
                   echo "🛑 Failed to trigger retry for $workflow_name"
-                  echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+                  echo "$output_var=failure:$run_url" > "$temp_file"
                   return 1
                 fi
               fi
             done
-            echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+            echo "$output_var=failure:$run_url" > "$temp_file"
             return 1
           }
 
@@ -390,6 +397,16 @@ jobs:
               exit_code=1
             fi
           done
+
+          # Consolidate results from temp files into $GITHUB_OUTPUT
+          # This happens after all parallel processes complete, avoiding race conditions
+          echo "📝 Consolidating workflow results..."
+          for temp_file in "$TEMP_OUTPUT_DIR"/*.txt; do
+            if [ -f "$temp_file" ]; then
+              cat "$temp_file" >> $GITHUB_OUTPUT
+            fi
+          done
+
           if [ "$exit_code" -eq 0 ]; then
             echo "✅ All workflows completed successfully"
           else
@@ -473,14 +490,8 @@ jobs:
             # Display detailed test results with links
             echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
 
-            # Display test results using data-driven approach
-            declare -A test_configs
-            test_configs["All Post-Commit Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.all-post-commit-result }}"
-            test_configs["Blackhole Post-Commit Tests"]="${{ inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.blackhole-result }}"
-            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
-            test_configs["Device Perf Regressions"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.perf-device-models-result }}"
-
             # Function to display test result
+            # Args: test_name, enabled (true/false), result (format: status:url or empty)
             display_test_result() {
               local test_name="$1"
               local enabled="$2"
@@ -488,6 +499,8 @@ jobs:
 
               if [ "$enabled" = "true" ]; then
                 if [ -n "$result" ]; then
+                  # Result format is "status:url" where url contains "https://"
+                  # Use cut to extract status (field 1) and url (fields 2 onwards)
                   local status=$(echo "$result" | cut -d: -f1)
                   local url=$(echo "$result" | cut -d: -f2-)
                   case "$status" in
@@ -504,11 +517,11 @@ jobs:
               fi
             }
 
-            # Display results for all test types
-            for test_name in "${!test_configs[@]}"; do
-              IFS=':' read -r enabled result <<< "${test_configs[$test_name]}"
-              display_test_result "$test_name" "$enabled" "$result"
-            done
+            # Display results for each test type directly (avoids IFS parsing issues)
+            display_test_result "All Post-Commit Tests" "${{ inputs.run_all_post_commit }}" "${{ needs.setup-and-test.outputs.all-post-commit-result }}"
+            display_test_result "Blackhole Post-Commit Tests" "${{ inputs.run_blackhole_post_commit }}" "${{ needs.setup-and-test.outputs.blackhole-result }}"
+            display_test_result "TT-Metal L2 Nightly APC Tests" "${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}" "${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
+            display_test_result "Device Perf Regressions" "${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}" "${{ needs.setup-and-test.outputs.perf-device-models-result }}"
 
             echo "" >> $GITHUB_STEP_SUMMARY
 
