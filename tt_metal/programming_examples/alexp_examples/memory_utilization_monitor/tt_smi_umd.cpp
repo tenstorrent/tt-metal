@@ -44,6 +44,10 @@
 // TT-Metal includes (for device enumeration fallback)
 #include <tt-metalium/host_api.hpp>
 
+// Shared memory tracking (fallback when allocation server not available)
+#include <sys/mman.h>
+#include <sys/stat.h>
+
 #define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
 
 namespace fs = std::filesystem;
@@ -140,7 +144,143 @@ struct DeviceInfo {
 
     TelemetryData telemetry;
     std::vector<ProcessInfo> processes;
+
+    // SHM tracking
+    int shm_fd = -1;
+    void* shm_region = nullptr;
+    ino_t shm_inode = 0;  // To detect if SHM was recreated
 };
+
+// Shared memory structure (matches memory_stats_shm.hpp)
+struct SHMDeviceMemoryRegion {
+    uint32_t version;
+    uint32_t num_active_processes;
+    uint64_t last_update_timestamp;
+    std::atomic<uint32_t> reference_count;  // Atomic!
+
+    std::atomic<uint64_t> total_dram_allocated;      // Atomic!
+    std::atomic<uint64_t> total_l1_allocated;        // Atomic!
+    std::atomic<uint64_t> total_l1_small_allocated;  // Atomic!
+    std::atomic<uint64_t> total_trace_allocated;     // Atomic!
+    std::atomic<uint64_t> total_cb_allocated;        // Atomic!
+    std::atomic<uint64_t> total_kernel_allocated;    // Atomic!
+
+    struct ProcessStats {
+        int32_t pid;
+        uint64_t dram_allocated;
+        uint64_t l1_allocated;
+        uint64_t l1_small_allocated;
+        uint64_t trace_allocated;
+        uint64_t cb_allocated;
+        uint64_t kernel_allocated;
+        uint64_t last_update_timestamp;
+        char process_name[64];
+    } processes[64];
+
+    uint8_t padding[64];
+} __attribute__((aligned(64)));
+
+constexpr uint32_t SHM_VERSION = 1;
+
+// SHM helper functions
+namespace SHMHelper {
+
+bool connect_to_shm(DeviceInfo& dev) {
+    std::string shm_name = "/tt_device_" + std::to_string(dev.device_id) + "_memory";
+
+    // Check if we need to reconnect (SHM might have been recreated)
+    if (dev.shm_region) {
+        int test_fd = shm_open(shm_name.c_str(), O_RDONLY, 0);
+        if (test_fd < 0) {
+            // SHM gone - disconnect old mapping
+            munmap(dev.shm_region, sizeof(SHMDeviceMemoryRegion));
+            close(dev.shm_fd);
+            dev.shm_region = nullptr;
+            dev.shm_fd = -1;
+        } else {
+            // Check if same file
+            struct stat old_stat, new_stat;
+            if (fstat(dev.shm_fd, &old_stat) == 0 && fstat(test_fd, &new_stat) == 0) {
+                if (old_stat.st_ino != new_stat.st_ino) {
+                    // Recreated - disconnect and reconnect
+                    munmap(dev.shm_region, sizeof(SHMDeviceMemoryRegion));
+                    close(dev.shm_fd);
+                    dev.shm_region = nullptr;
+                    dev.shm_fd = -1;
+                    dev.shm_inode = new_stat.st_ino;
+                }
+            }
+            close(test_fd);
+
+            if (dev.shm_region) {
+                return true;  // Still valid
+            }
+        }
+    }
+
+    // Try to connect
+    dev.shm_fd = shm_open(shm_name.c_str(), O_RDONLY, 0);
+    if (dev.shm_fd < 0) {
+        return false;
+    }
+
+    dev.shm_region = mmap(nullptr, sizeof(SHMDeviceMemoryRegion), PROT_READ, MAP_SHARED, dev.shm_fd, 0);
+    if (dev.shm_region == MAP_FAILED) {
+        close(dev.shm_fd);
+        dev.shm_fd = -1;
+        dev.shm_region = nullptr;
+        return false;
+    }
+
+    // Verify version
+    auto* region = static_cast<SHMDeviceMemoryRegion*>(dev.shm_region);
+    if (region->version != SHM_VERSION) {
+        munmap(dev.shm_region, sizeof(SHMDeviceMemoryRegion));
+        close(dev.shm_fd);
+        dev.shm_fd = -1;
+        dev.shm_region = nullptr;
+        return false;
+    }
+
+    // Store inode for future comparisons
+    struct stat st;
+    if (fstat(dev.shm_fd, &st) == 0) {
+        dev.shm_inode = st.st_ino;
+    }
+
+    return true;
+}
+
+void disconnect_from_shm(DeviceInfo& dev) {
+    if (dev.shm_region) {
+        munmap(dev.shm_region, sizeof(SHMDeviceMemoryRegion));
+        dev.shm_region = nullptr;
+    }
+    if (dev.shm_fd >= 0) {
+        close(dev.shm_fd);
+        dev.shm_fd = -1;
+    }
+}
+
+bool read_memory_from_shm(DeviceInfo& dev) {
+    if (!connect_to_shm(dev)) {
+        return false;
+    }
+
+    auto* region = static_cast<SHMDeviceMemoryRegion*>(dev.shm_region);
+
+    // Explicitly load atomic values with memory_order_relaxed (safe for monitoring)
+    dev.used_dram = region->total_dram_allocated.load(std::memory_order_relaxed);
+    dev.used_l1 = region->total_l1_allocated.load(std::memory_order_relaxed);
+    dev.used_l1_small = region->total_l1_small_allocated.load(std::memory_order_relaxed);
+    dev.used_trace = region->total_trace_allocated.load(std::memory_order_relaxed);
+    dev.used_cb = region->total_cb_allocated.load(std::memory_order_relaxed);
+    dev.used_kernel = region->total_kernel_allocated.load(std::memory_order_relaxed);
+
+    return true;
+}
+
+}  // namespace SHMHelper
 
 // ANSI colors
 namespace Color {
@@ -1256,8 +1396,9 @@ public:
                 num_devices = devices.size();
             }
 
-            // If allocation server is available, query it for memory usage stats
+            // Query memory stats from allocation server OR shared memory
             if (server_available_) {
+                // Use allocation server (full per-process details)
                 for (auto& dev : devices) {
                     try {
                         auto stats = query_device_stats(dev.device_id);
@@ -1283,6 +1424,11 @@ public:
                     } catch (...) {
                         // If query fails for this device, keep the default values (0)
                     }
+                }
+            } else {
+                // Fallback: Use shared memory (aggregated stats only)
+                for (auto& dev : devices) {
+                    SHMHelper::read_memory_from_shm(dev);
                 }
             }
 

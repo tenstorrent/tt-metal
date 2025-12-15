@@ -38,6 +38,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tracy_memory_monitor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/memory_stats_shm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
@@ -163,6 +164,7 @@ target_link_libraries(
     PUBLIC
         common
         Tracy::TracyClient
+        rt
     PRIVATE
         FlatBuffers::FlatBuffers
         range-v3::range-v3

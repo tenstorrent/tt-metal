@@ -6,6 +6,7 @@
 
 #include <core_descriptor.hpp>
 #include <host_api.hpp>
+#include "tt_metal/impl/profiler/memory_stats_shm.hpp"
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -252,8 +253,6 @@ void Device::configure_command_queue_programs() {
 
     // Run the cq program (Mark as Dispatch type for kernel tracking)
     command_queue_program.impl().set_kernel_type(tt::tt_metal::detail::ProgramKernelType::DISPATCH);
-    std::cout << "🔧 [DEBUG] Set Dispatch program kernel_type to "
-              << static_cast<int>(command_queue_program.impl().get_kernel_type()) << std::endl;
     command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
@@ -448,6 +447,57 @@ bool Device::initialize(
         return true;
     }
 
+    // Create shared memory stats provider (if tracking enabled)
+    const char* shm_enabled = std::getenv("TT_METAL_SHM_STATS_ENABLED");
+    if (shm_enabled && std::string(shm_enabled) == "1") {
+        // Compute composite asic_id for globally unique chip identification
+        // asic_id = (board_id << 8) | asic_location
+        uint64_t asic_id = 0;
+
+        try {
+            // Get TTDevice from driver
+            const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+            auto* tt_device = driver->get_tt_device(this->id_);
+
+            if (tt_device) {
+                // Get board_id from TTDevice
+                uint64_t board_id = tt_device->get_board_id();
+
+                // Determine asic_location based on whether this is MMIO or remote
+                // For N300: MMIO chip = asic_location 0, remote chip = asic_location 1
+                uint32_t asic_location = this->is_mmio_capable() ? 0 : 1;
+
+                // Compute composite asic_id
+                asic_id = (board_id << 8) | asic_location;
+
+                log_debug(
+                    tt::LogMetal,
+                    "Device {}: board_id=0x{:x}, asic_location={} ({}) -> asic_id=0x{:x} for SHM tracking",
+                    this->id_,
+                    board_id,
+                    asic_location,
+                    asic_location == 0 ? "MMIO" : "Remote",
+                    asic_id);
+            } else {
+                // Fallback: use device_id
+                asic_id = this->id_;
+                log_warning(
+                    tt::LogMetal, "Could not get TTDevice for device {}, using device_id as asic_id", this->id_);
+            }
+        } catch (const std::exception& e) {
+            // If any error, use device_id as fallback
+            log_warning(
+                tt::LogMetal,
+                "Error getting asic_id for device {}: {}. Using device_id as fallback.",
+                this->id_,
+                e.what());
+            asic_id = this->id_;
+        }
+
+        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_);
+        log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
+    }
+
     this->initialized_ = true;
 
     return true;
@@ -462,18 +512,17 @@ bool Device::close() {
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
-    std::cout << "🔍 [Device " << this->id_ << "] About to reset sub_device_manager_tracker_" << std::endl;
-    std::cout << "   This should trigger allocator cleanup..." << std::endl;
-
     sub_device_manager_tracker_.reset(nullptr);
 
     this->ethernet_cores_.clear();
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->initialized_ = false;
 
-    std::cout << "✓  [Device " << this->id_ << "] Device close complete" << std::endl;
+    // Clean up shared memory stats provider
+    this->shm_stats_provider_.reset();
+
+    this->initialized_ = false;
 
     return true;
 }

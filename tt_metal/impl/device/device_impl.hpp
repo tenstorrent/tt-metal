@@ -22,6 +22,7 @@
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
+class SharedMemoryStatsProvider;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -151,6 +152,9 @@ public:
     program_cache::detail::ProgramCache& get_program_cache() override { return program_cache_; }
     std::size_t num_program_cache_entries() override;
 
+    // Get shared memory stats provider (may be null if tracking not enabled)
+    SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
+
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
@@ -245,6 +249,9 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+
+    // Shared memory statistics provider (for real-time memory monitoring)
+    std::unique_ptr<class SharedMemoryStatsProvider> shm_stats_provider_;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(

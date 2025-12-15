@@ -6,6 +6,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/allocator/allocation_client.hpp"
+#include "tt_metal/impl/profiler/memory_stats_shm.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 // DISABLED: TracyMemoryMonitor feature disabled
 // #include "tt_metal/impl/profiler/tracy_memory_monitor.hpp"
 #include <tt-metalium/mesh_device.hpp>
@@ -22,7 +24,6 @@
 
 namespace tt::tt_metal {
 class Buffer;
-class IDevice;
 namespace distributed {
 class MeshDevice;
 }
@@ -99,6 +100,20 @@ L1Stats& get_l1_stats() {
     static L1Stats stats;
     return stats;
 }
+
+// Helper: Convert BufferType to ShmBufferType for shared memory tracking
+tt::tt_metal::ShmBufferType to_shm_buffer_type(tt::tt_metal::BufferType type) {
+    using namespace tt::tt_metal;
+    switch (type) {
+        case BufferType::DRAM: return ShmBufferType::DRAM;
+        case BufferType::L1: return ShmBufferType::L1;
+        case BufferType::L1_SMALL: return ShmBufferType::L1_SMALL;
+        case BufferType::TRACE: return ShmBufferType::TRACE;
+        case BufferType::SYSTEM_MEMORY: return ShmBufferType::DRAM;  // Map system memory to DRAM for stats
+        default: return ShmBufferType::UNKNOWN;
+    }
+}
+
 }  // anonymous namespace
 
 namespace tt::tt_metal {
@@ -153,6 +168,21 @@ void GraphTracker::track_allocate(const Buffer* buffer) {
                 buffer->device()->id(), buffer->size(), static_cast<uint8_t>(buffer->buffer_type()), buffer->address());
         }
 
+        // Report to shared memory tracking (if enabled)
+        // The provider is created by Device::initialize(), so it's owned by the device
+        auto* device = dynamic_cast<const Device*>(buffer->device());
+        if (device && device->get_shm_stats_provider()) {
+            // NOTE: For now, use device()->id() as chip_id (represents the gateway/board)
+            // Future enhancement: determine actual physical chip from DRAM bank assignment
+            // For N300: each Device manages 2 chips, but we currently track them together
+            device->get_shm_stats_provider()->record_allocation(
+                getpid(),
+                buffer->size(),
+                to_shm_buffer_type(buffer->buffer_type()),
+                buffer->device()->id()  // chip_id: gateway device ID (board-level tracking)
+            );
+        }
+
         // Report to Tracy-based memory monitor (always enabled, checks Tracy at runtime)
         // DISABLED: TracyMemoryMonitor feature disabled
         // TracyMemoryMonitor::instance().track_allocation(
@@ -193,6 +223,18 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
         // Report to legacy allocation server (if enabled)
         if (AllocationClient::is_enabled()) {
             AllocationClient::report_deallocation(buffer->device()->id(), buffer->address());
+        }
+
+        // Report to shared memory tracking (if enabled)
+        // The provider is created by Device::initialize(), so it's owned by the device
+        auto* device = dynamic_cast<Device*>(buffer->device());
+        if (device && device->get_shm_stats_provider()) {
+            device->get_shm_stats_provider()->record_deallocation(
+                getpid(),
+                buffer->size(),
+                to_shm_buffer_type(buffer->buffer_type()),
+                buffer->device()->id()  // chip_id: which chip this buffer was allocated on
+            );
         }
 
         // Report to Tracy-based memory monitor (always enabled, checks Tracy at runtime)

@@ -37,14 +37,26 @@ add_executable(allocation_monitor_client allocation_monitor_client.cpp)
 target_link_libraries(allocation_monitor_client PRIVATE pthread)
 
 # ============================================================================
-# tt-smi: DEPRECATED - Use tt_smi_umd instead
+# tt_smi: Simple TT-SMI with SHM memory tracking
 # ============================================================================
-# Commented out - tt_smi.cpp is deprecated in favor of tt_smi_umd
-# which has better UMD telemetry support and interactive views
-#
-# add_executable(tt_smi tt_smi.cpp)
-# target_link_libraries(tt_smi PUBLIC TT::Metalium PRIVATE pthread stdc++fs)
-# target_compile_options(tt_smi PRIVATE -Wno-error=unused-parameter -Wno-unused-parameter)
+# Lightweight monitoring tool that uses shared memory for memory tracking
+add_executable(tt_smi tt_smi.cpp)
+
+target_link_libraries(
+    tt_smi
+    PUBLIC
+        TT::Metalium # TT-Metal provides UMD access
+    PRIVATE
+        pthread
+        rt # For shm_open/shm_unlink
+)
+
+target_compile_options(
+    tt_smi
+    PRIVATE
+        -Wno-error=unused-parameter
+        -Wno-unused-parameter
+)
 
 # ============================================================================
 # tt_smi_umd: Enhanced tt-smi with UMD telemetry and ncurses TUI
@@ -101,6 +113,51 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_simple.cpp")
 endif()
 
 # ============================================================================
+# tt_smi_simple_shm: Simple UMD + SHM monitoring (no allocation server)
+# ============================================================================
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_simple_shm.cpp")
+    add_executable(tt_smi_simple_shm tt_smi_simple_shm.cpp)
+
+    target_link_libraries(
+        tt_smi_simple_shm
+        PUBLIC
+            TT::Metalium # TT-Metal provides UMD access
+        PRIVATE
+            pthread
+            rt # For shm_open
+    )
+
+    # Disable specific warnings
+    target_compile_options(
+        tt_smi_simple_shm
+        PRIVATE
+            -Wno-error=unused-parameter
+            -Wno-unused-parameter
+    )
+endif()
+
+# ============================================================================
+# show_chip_ids: Debug utility to display all chip IDs from UMD
+# ============================================================================
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/show_chip_ids.cpp")
+    add_executable(show_chip_ids show_chip_ids.cpp)
+
+    target_link_libraries(
+        show_chip_ids
+        PUBLIC
+            TT::Metalium # TT-Metal provides UMD access
+    )
+
+    # Disable specific warnings
+    target_compile_options(
+        show_chip_ids
+        PRIVATE
+            -Wno-error=unused-parameter
+            -Wno-unused-parameter
+    )
+endif()
+
+# ============================================================================
 # Optional: Allocation Client Demo
 # ============================================================================
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/allocation_client_demo.cpp")
@@ -127,6 +184,11 @@ if(TARGET tt_smi_simple)
     list(APPEND INSTALL_TARGETS tt_smi_simple)
 endif()
 
+# Add tt_smi_simple_shm to install if it was built
+if(TARGET tt_smi_simple_shm)
+    list(APPEND INSTALL_TARGETS tt_smi_simple_shm)
+endif()
+
 install(TARGETS ${INSTALL_TARGETS} RUNTIME DESTINATION bin)
 
 # ============================================================================
@@ -143,5 +205,8 @@ if(TARGET tt_smi_umd)
 endif()
 if(TARGET tt_smi_simple)
     message(STATUS "    • tt_smi_simple             (simple telemetry-only tool, no memory tracking)")
+endif()
+if(TARGET tt_smi_simple_shm)
+    message(STATUS "    • tt_smi_simple_shm         UMD + SHM, no allocation server needed!")
 endif()
 message(STATUS "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
