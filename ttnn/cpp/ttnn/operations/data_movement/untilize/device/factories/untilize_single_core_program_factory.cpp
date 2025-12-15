@@ -107,7 +107,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     }
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
     } else {
@@ -124,14 +124,15 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
     // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(output_cb_index),
-        static_cast<uint32_t>(output_stick_size),
-        static_cast<uint32_t>(tile_height),
-        static_cast<uint32_t>(num_blocks_across_height),
-        static_cast<uint32_t>(num_columns_of_blocks),
-        static_cast<uint32_t>(num_blocks_per_column_row),
-        static_cast<uint32_t>(num_tiles_per_block),
-        static_cast<uint32_t>(output_single_block_width_size)};
+        (uint32_t)output_cb_index,
+        (uint32_t)output_stick_size,
+        (uint32_t)tile_height,
+        (uint32_t)num_blocks_across_height,
+        (uint32_t)num_columns_of_blocks,
+        (uint32_t)num_blocks_per_column_row,
+        (uint32_t)num_tiles_per_block,
+        (uint32_t)output_single_block_width_size,
+    };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
     } else {
@@ -148,8 +149,12 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
     // Compute file path
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -158,6 +163,8 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -165,10 +172,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     // Compute compile-time args
     uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;
     std::vector<uint32_t> compute_compile_time_args = {
-        static_cast<uint32_t>(num_blocks),
-        static_cast<uint32_t>(num_tiles_per_block),
-        static_cast<uint32_t>(src0_cb_index),
-        static_cast<uint32_t>(output_cb_index)};
+        (uint32_t)num_blocks, (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
 
     // Compute kernel
     tt::tt_metal::CreateKernel(
@@ -177,6 +181,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
         core,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_kernel_defines});
 

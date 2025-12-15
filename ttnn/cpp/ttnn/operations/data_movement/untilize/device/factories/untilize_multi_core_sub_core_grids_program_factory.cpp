@@ -26,13 +26,10 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
-    auto& output = tensor_return_value;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
-    const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    TT_FATAL(
-        operation_attributes.sub_core_grids.has_value(),
-        "Sub core grids must be provided for multi core sub core grids");
+    const auto& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids.value();
+    const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -61,8 +58,7 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     if (ntiles_per_row > max_tiles) {
         starting_tile = max_tiles;
     }
-    ntiles_per_block =
-        ttnn::operations::data_movement::untilize_types::get_largest_divisor(ntiles_per_row, starting_tile);
+    ntiles_per_block = untilize_helper::get_largest_divisor(ntiles_per_row, starting_tile);
     TT_ASSERT(
         ntiles_per_row % ntiles_per_block == 0 and ntiles_per_block >= 1 and ntiles_per_block <= ntiles_per_row and
         ntiles % ntiles_per_block == 0);
@@ -113,13 +109,17 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     /** compute
      */
     std::vector<uint32_t> compute_args = {
-        static_cast<uint32_t>(nblocks_per_core),  // per_core_block_cnt
-        static_cast<uint32_t>(ntiles_per_block),  // per_block_ntiles
-        static_cast<uint32_t>(src0_cb_index),
-        static_cast<uint32_t>(output_cb_index)};
+        (uint32_t)nblocks_per_core,  // per_core_block_cnt
+        (uint32_t)ntiles_per_block,  // per_block_ntiles
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -128,6 +128,8 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -137,7 +139,10 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
         compute_kernel,
         all_cores,
         ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_args,
+            .defines = compute_kernel_defines});
 
     uint32_t tile_start_id = 0;
     uint32_t offset_within_stick = 0;

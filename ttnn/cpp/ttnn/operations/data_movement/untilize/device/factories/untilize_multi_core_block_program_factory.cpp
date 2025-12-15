@@ -27,13 +27,13 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
     tt::tt_metal::Program program{};
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
-
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-    auto use_pack_untilize = operation_attributes.use_pack_untilize;
-    auto fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+
     const auto& input_shape = a.padded_shape();
 
     IDevice* device = a.device();

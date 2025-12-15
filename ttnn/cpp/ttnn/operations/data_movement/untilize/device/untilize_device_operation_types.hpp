@@ -8,12 +8,20 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include <vector>
 #include <optional>
-#include "ttnn/tensor/memory_config/memory_config.hpp"
 
-namespace ttnn::operations::data_movement::untilize_types {
+namespace ttnn::operations::data_movement {
+namespace untilize_helper {
+uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint32_t divisor_factor = 1);
+}  // namespace untilize_helper
+
+namespace untilize_types {
+struct tensor_args_t {
+    Tensor input{};
+};
+
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config{};
     bool use_multicore{};
@@ -25,16 +33,10 @@ struct operation_attributes_t {
     uint32_t pf_type{};
 };
 
-struct tensor_args_t {
-    Tensor input{};
-};
-
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
 using shape_return_value_t = ttnn::Shape;
-
-uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint32_t divisor_factor = 1);
 
 namespace program {
 struct untilize_shared_variables_t {
@@ -45,4 +47,5 @@ struct untilize_shared_variables_t {
     std::vector<CoreCoord> cores_with_runtime_args{};
 };
 }  // namespace program
-}  // namespace ttnn::operations::data_movement::untilize_types
+}  // namespace untilize_types
+}  // namespace ttnn::operations::data_movement

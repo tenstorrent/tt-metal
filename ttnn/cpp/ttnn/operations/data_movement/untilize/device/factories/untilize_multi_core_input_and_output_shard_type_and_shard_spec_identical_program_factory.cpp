@@ -73,7 +73,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         dst_buffer);
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
 
     // Reader kernel
     KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -83,7 +83,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)output_cb_index};
 
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -94,15 +94,19 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
 
     // Compute compile-time args
     std::vector<uint32_t> compute_compile_time_args = {
-        static_cast<uint32_t>(num_blocks_per_core),
-        static_cast<uint32_t>(num_tiles_per_block),
-        static_cast<uint32_t>(src0_cb_index),
-        static_cast<uint32_t>(output_cb_index)};
+        (uint32_t)num_blocks_per_core,
+        (uint32_t)num_tiles_per_block,
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     // Compute kernel
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel;
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
@@ -110,6 +114,8 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
         compute_kernel =
@@ -121,6 +127,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         shard_spec.grid,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_kernel_defines});
 

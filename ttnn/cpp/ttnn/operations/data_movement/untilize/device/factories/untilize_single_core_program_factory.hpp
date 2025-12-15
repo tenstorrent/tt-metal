@@ -7,7 +7,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation_types.hpp"
-
 namespace ttnn::operations::data_movement::program {
 
 struct UntilizeSingleCoreProgramFactory {

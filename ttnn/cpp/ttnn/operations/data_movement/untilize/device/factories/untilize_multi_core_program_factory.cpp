@@ -6,7 +6,6 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
@@ -33,8 +32,9 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
-
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input.dtype());
+    const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
@@ -173,7 +173,7 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
     KernelHandle unary_reader_kernel_id;
     if (input_is_sharded) {
         // Sharded input
-        std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -181,7 +181,7 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
-        std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
         unary_reader_kernel_id = CreateKernel(
             program,
@@ -209,14 +209,14 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(output_cb_index),
-        static_cast<uint32_t>(output_stick_size),
-        static_cast<uint32_t>(tile_height),
-        static_cast<uint32_t>(num_tiles_per_input_block),
-        static_cast<uint32_t>(output_num_blocks_across_width),
-        static_cast<uint32_t>(output_element_size),
-        static_cast<uint32_t>(num_cols_per_input_block),
-        static_cast<uint32_t>(num_cols_per_output_block),
+        (uint32_t)output_cb_index,
+        (uint32_t)output_stick_size,
+        (uint32_t)tile_height,
+        (uint32_t)num_tiles_per_input_block,
+        (uint32_t)output_num_blocks_across_width,
+        (uint32_t)output_element_size,
+        (uint32_t)num_cols_per_input_block,
+        (uint32_t)num_cols_per_output_block,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -232,13 +232,20 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
         compute_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Compute kernel file
     std::string compute_kernel;
-    if (!operation_attributes.use_pack_untilize || a.dtype() == DataType::UINT16 ||
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
         compute_kernel = std::string(
@@ -250,20 +257,19 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
     // Note: This condition is always true for sharded input
     KernelHandle untilize_kernel_id = 0;
     std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
     if (!full_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args = {
-            static_cast<uint32_t>(num_tiles_per_input_block),
-            static_cast<uint32_t>(src0_cb_index),
-            static_cast<uint32_t>(output_cb_index)};
+            (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
         untilize_kernel_id = CreateKernel(
             program,
             compute_kernel,
             full_compute_core_range,
             ComputeConfig{
-                .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_compile_time_args,
                 .defines = compute_kernel_defines});
     }
@@ -273,15 +279,14 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
     KernelHandle untilize_cliff_kernel_id = 0;
     if (!cliff_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
-            static_cast<uint32_t>(num_tiles_per_input_block),
-            static_cast<uint32_t>(src0_cb_index),
-            static_cast<uint32_t>(output_cb_index)};
+            (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
         untilize_cliff_kernel_id = CreateKernel(
             program,
             compute_kernel,
             cliff_compute_core_range,
             ComputeConfig{
-                .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_compile_time_args_cliff,
                 .defines = compute_kernel_defines});
     }
