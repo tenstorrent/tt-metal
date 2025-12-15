@@ -6,6 +6,16 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_channel_mapping.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connections.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connection_mapping.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_archetypes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_builder_connection_mapping.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_mapping_logic.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_builder_local_connections.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_integration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_device_detection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
@@ -60,6 +70,32 @@ target_include_directories(
 
 set_target_properties(
     test_physical_discovery
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# Telemetry Initialization Test
+add_executable(test_telemetry_init ${CMAKE_CURRENT_SOURCE_DIR}/test_telemetry_init.cpp)
+
+target_link_libraries(
+    test_telemetry_init
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    test_telemetry_init
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+set_target_properties(
+    test_telemetry_init
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
