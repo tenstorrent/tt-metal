@@ -180,17 +180,50 @@ async function generateSummaryBox(grouped, context) {
 }
 
 /**
+ * Counts total failing jobs from regressions and stayed failing sections
+ * @param {Array} regressedDetails - Array of regression detail objects
+ * @param {Array} stayedFailingDetails - Array of stayed failing detail objects
+ * @returns {number} Total number of failing jobs
+ */
+function countTotalFailingJobs(regressedDetails, stayedFailingDetails) {
+  let total = 0;
+
+  // Count from regressions
+  for (const item of regressedDetails) {
+    if (Array.isArray(item.failing_jobs)) {
+      total += item.failing_jobs.length;
+    }
+  }
+
+  // Count from stayed failing
+  for (const item of stayedFailingDetails) {
+    if (Array.isArray(item.failing_jobs)) {
+      total += item.failing_jobs.length;
+    }
+  }
+
+  return total;
+}
+
+/**
  * Builds the complete markdown report.
  *
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
  * @param {object} context - GitHub Actions context
+ * @param {number} totalFailingJobs - Total number of failing jobs (optional)
  * @returns {Promise<string>} Complete markdown report
  */
-async function buildReport(grouped, context) {
+async function buildReport(grouped, context, totalFailingJobs = 0) {
   const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
   const timestamp = new Date().toISOString(); // get the timestamp for the report
+
+  const failingJobsHeader = totalFailingJobs > 0
+    ? `\n## Total Failing Jobs\n\n**Total failing jobs across all workflows: ${totalFailingJobs}**\n\n`
+    : '';
+
   return [
     `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
+    failingJobsHeader,
     await generateSummaryBox(grouped, context),
     '\n## Column Descriptions\n',
     '<p>A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).</p>\n',
@@ -766,7 +799,18 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
             if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
             resolveOwnersForSnippet(sn, item.name);
           }
+          // Extract failing job names from error snippets
+          const failingJobNames = (() => {
+            const jobs = new Set();
+            for (const sn of (item.error_snippets || [])) {
+              const jobName = (sn && sn.job) ? String(sn.job) : '';
+              if (jobName) jobs.add(jobName);
+            }
+            return Array.from(jobs);
+          })();
+          item.failing_jobs = failingJobNames;
         } catch (_) { /* ignore */ }
+        if (!item.failing_jobs) item.failing_jobs = [];
         item.repeated_errors = [];
       }
       const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
@@ -784,6 +828,7 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
           commits_between: item.commits_between || [],
           error_snippets: item.error_snippets || [],
           repeated_errors: item.repeated_errors || [],
+          failing_jobs: item.failing_jobs || [],
         });
       }
     } catch (e) {
@@ -946,4 +991,5 @@ module.exports = {
   enrichStayedFailing,
   buildRegressionsSection,
   buildStayedFailingSection,
+  countTotalFailingJobs,
 };

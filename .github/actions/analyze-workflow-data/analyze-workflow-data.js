@@ -79,6 +79,7 @@ const {
   enrichStayedFailing,
   buildRegressionsSection,
   buildStayedFailingSection,
+  countTotalFailingJobs,
 } = reporting;
 
 
@@ -164,9 +165,6 @@ async function run() {
       days
     );
 
-    // Generate primary report
-    const mainReport = await buildReport(filteredGrouped, github.context);
-
     // END OF BASIC ANALYZE STEP
 
     // Cache for error snippets to avoid fetching the same run's errors multiple times
@@ -187,6 +185,13 @@ async function run() {
 
     // Enrich stayed failing with first failing run within the window
     await enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
+
+    // Count total failing jobs from regressions and stayed failing sections
+    const totalFailingJobs = countTotalFailingJobs(regressedDetails, stayedFailingDetails);
+    core.info(`Total failing jobs across all workflows: ${totalFailingJobs}`);
+
+    // Generate primary report with failing jobs count
+    const mainReport = await buildReport(filteredGrouped, github.context, totalFailingJobs);
 
     // upload the changes json to the artifact space
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
