@@ -9,7 +9,9 @@ import statistics
 import pytest
 import ttnn
 from loguru import logger
-
+import itertools
+import time
+import random
 from .clip_encoder import CLIPEncoder
 
 # from .fid_score import calculate_fid_score
@@ -166,11 +168,14 @@ def test_tt_dit_accuracy(
     dit_pipeline,
     model_metadata,
     evaluation_range,
+    is_24hrs_test,
+    monkeypatch,
 ) -> None:
     """Accuracy test for TT-Metal DiT pipelines with CLIP and FID score evaluation.
     It relies on the default configurations set in each pipeline.
     """
 
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
     benchmark_profiler = BenchmarkProfiler()
     if ttnn.device.is_blackhole() and device_name == "galaxy":
         device_name = "bh_" + device_name
@@ -195,8 +200,10 @@ def test_tt_dit_accuracy(
 
     # Generate images for each prompt
     is_video = False
-    for i, prompt in enumerate(prompts):
-        logger.info(f"Generating image {i+1}/{len(prompts)}: {prompt[:50]}...")
+    iter = itertools.cycle(prompts) if is_24hrs_test else prompts
+    start_time = time.time()
+    for i, prompt in enumerate(iter):
+        logger.info(f"Generating image {i+1}: {prompt[:50]}...")
 
         # Generate image using TT-Metal pipeline
         with benchmark_profiler("inference", iteration=i):
@@ -218,6 +225,12 @@ def test_tt_dit_accuracy(
             os.makedirs("generated_images", exist_ok=True)
             generated_images[0].save(f"generated_images/tt_dit_image_{i+1}.png")
             is_video = False
+
+        if is_24hrs_test:
+            if (time.time() - start_time) > 24 * 60 * 60:
+                break
+            # Sleep for a random time between 0.1 and 10 seconds
+            time.sleep(random.uniform(0.1, 10))
 
     # Performance metrics
     average_inference_time = benchmark_profiler.get_duration_average("inference", 1)  # Skip warmup iterations

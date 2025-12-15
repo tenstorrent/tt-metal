@@ -25,8 +25,8 @@ def pytest_addoption(parser):
     parser.addoption(
         "--num-prompts",
         action="store",
-        default=5,
-        help="Number of prompts to process (default: 5)",
+        default=5000,
+        help="Number of prompts to process (default: 5000)",
     )
 
     # model_id_choices = ["flux1.dev", "flux1.schnell", "sd35.large", "motif.image.6b.preview"]
@@ -45,6 +45,13 @@ def pytest_addoption(parser):
         default=None,
         type=int,
         help="Number of inference steps (default: 28)",
+    )
+
+    parser.addoption(
+        "--24hrs-test",
+        action="store_true",
+        default=False,
+        help="Whether to run a 24-hour test",
     )
 
 
@@ -66,6 +73,11 @@ def evaluation_range(request):
 @pytest.fixture
 def model_id(request):
     return request.config.getoption("--model-id")
+
+
+@pytest.fixture
+def is_24hrs_test(request):
+    return request.config.getoption("--24hrs-test")
 
 
 @pytest.fixture
