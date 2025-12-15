@@ -719,7 +719,7 @@ if(WITH_PYTHON_BINDINGS)
         # -ft     Perform a build that opts into the Python 3.13+ free-threaded behavior.
 
         set(NANOBIND_LIBNAME "nanobind-static")
-        nanobind_build_library(${NANOBIND_LIBNAME})
+        nanobind_build_library(${NANOBIND_LIBNAME} AS_SYSINCLUDE)
         add_library(TT::Nanobind ALIAS ${NANOBIND_LIBNAME})
 
         # find_package(Python3) required for here.
