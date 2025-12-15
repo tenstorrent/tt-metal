@@ -14,10 +14,12 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -36,6 +38,7 @@ protected:
     UnitMeshUtils2x4FabricTest() :
         ::tt::tt_metal::MeshDeviceFixtureBase(::tt::tt_metal::MeshDeviceFixtureBase::Config{
             .mesh_shape = ::tt::tt_metal::distributed::MeshShape{2, 4},
+            .trace_region_size = 64 * 1024,  // 64KB for trace capture
             .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
 };
 
@@ -266,43 +269,89 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         }
     }
 
-    // Run a trivial op on each unit tensor
-    {
-        ZoneScopedN("RunAbsOps");
-        for (const auto& unit_tensor : unit_tensors) {
-            ttnn::abs(unit_tensor);
-        }
-    }
-
+    // Create aggregated tensor that will be reused across warmup and trace
     Tensor aggregated_tensor;
     {
         ZoneScopedN("Aggregate");
         aggregated_tensor = aggregate(unit_tensors);
     }
 
-    // Quiesce the parent mesh before all gather
+    // Run all_gather during warmup to:
+    // 1. Populate program cache
+    // 2. Create semaphores (which involves writes)
+    // 3. Get the correctly-shaped output tensor for reuse
+    Tensor all_gathered_output;
     {
-        ZoneScopedN("QuiesceDevices");
-        mesh_device_->quiesce_devices();
+        ZoneScopedN("CacheWarmup");
+
+        // Run a trivial op on each unit tensor
+        {
+            ZoneScopedN("RunAbsOps");
+            for (const auto& unit_tensor : unit_tensors) {
+                ttnn::abs(unit_tensor);
+            }
+        }
+
+        // Quiesce the parent mesh before all gather
+        {
+            ZoneScopedN("QuiesceDevices");
+            mesh_device_->quiesce_devices();
+        }
+
+        {
+            ZoneScopedN("AllGather");
+            // Use cluster_axis=1 (columns) for 2x4 mesh -> ring_size=4
+            all_gathered_output = ttnn::all_gather(aggregated_tensor, /*dim=*/0, /*cluster_axis=*/1);
+        }
+
+        // Quiesce parent mesh after all gather to ensure command queues are finished
+        {
+            ZoneScopedN("QuiesceDevicesAfterAllGather");
+            mesh_device_->quiesce_devices();
+        }
+
+        {
+            ZoneScopedN("Disaggregate");
+            auto disaggregated_tensors = disaggregate(all_gathered_output);
+        }
     }
 
-    Tensor all_gathered_tensor;
+    // Trace capture - reuse same tensors for cache hit
+    distributed::MeshTraceId trace_id;
     {
-        ZoneScopedN("AllGather");
-        all_gathered_tensor = ttnn::all_gather(aggregated_tensor, /*dim=*/0);
+        ZoneScopedN("TraceCapture");
+
+        // Begin trace on parent mesh (trace_region_size was set in fixture config)
+        uint8_t cq_id = mesh_device_->mesh_command_queue().id();
+        trace_id = distributed::BeginTraceCapture(mesh_device_.get(), cq_id);
+
+        {
+            ZoneScopedN("AllGather");
+            // Use same cluster_axis and pass pre-allocated output
+            ttnn::all_gather(
+                aggregated_tensor,
+                /*dim=*/0,
+                /*cluster_axis=*/1,
+                /*subdevice_id=*/std::nullopt,
+                /*memory_config=*/std::nullopt,
+                /*output_tensor=*/all_gathered_output);
+        }
+
+        // End trace on parent mesh
+        mesh_device_->end_mesh_trace(cq_id, trace_id);
     }
 
-    // Quiesce parent mesh after all gather to ensure command queues are finished
-    {
-        ZoneScopedN("QuiesceDevicesAfterAllGather");
-        mesh_device_->quiesce_devices();
+    // Measure TraceExecution
+    for (int j = 0; j < 10; j++) {
+        ZoneScopedN("TraceExecution");
+
+        uint8_t cq_id = mesh_device_->mesh_command_queue().id();
+        mesh_device_->replay_mesh_trace(cq_id, trace_id, /*blocking=*/false);
     }
 
-    {
-        ZoneScopedN("Disaggregate");
-        auto disaggregated_tensors = disaggregate(all_gathered_tensor);
-    }
-
+    // Release trace and quiesce
+    mesh_device_->release_mesh_trace(trace_id);
+    mesh_device_->quiesce_devices();
     FrameMark;  // Mark the end of a frame
 }
 
