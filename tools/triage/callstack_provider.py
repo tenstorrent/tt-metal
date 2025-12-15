@@ -121,7 +121,7 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     cwd = Path.cwd()
 
     for i, frame in enumerate(callstack):
-        line = f"  #{i:<{frame_number_width}} "
+        line = f"#{i:<{frame_number_width}} "
         if frame.pc is not None:
             line += f"[blue]0x{frame.pc:08X}[/] in "
         if frame.function_name is not None:

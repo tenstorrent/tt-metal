@@ -79,6 +79,7 @@ import importlib
 import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
+from rich.table import Table
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -338,7 +339,11 @@ console: Console
 def init_console(args: ScriptArguments) -> None:
     global console
 
-    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False)
+    # When redirecting to file, use a larger width to avoid wrapping
+    # When in a terminal, let Rich auto-detect the terminal width
+    width = None if sys.stdout.isatty() else 500
+
+    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
 
 
 def create_progress() -> Progress:
@@ -517,7 +522,7 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         if not isinstance(result, list):
             result = [result]
 
-        def generate_header(header: list[str], obj, flds):
+        def generate_header(table: Table, obj, flds):
             for field in flds:
                 metadata = field.metadata
                 # Skip field if it requires higher verbosity level
@@ -528,9 +533,10 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 elif "recurse" in metadata and metadata["recurse"]:
                     value = getattr(obj, field.name)
                     assert is_dataclass(value)
-                    generate_header(header, value, fields(value))
+                    generate_header(table, value, fields(value))
                 elif "serialized_name" in metadata:
-                    header.append(metadata["serialized_name"] if metadata["serialized_name"] else field.name)
+                    justify = metadata.get("justify", "left")
+                    table.add_column(metadata.get("serialized_name", field.name), justify=justify)
 
         def generate_row(row: list[str], obj, flds):
             for field in flds:
@@ -555,32 +561,15 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 elif "serializer" in metadata:
                     row.append(metadata["serializer"](getattr(obj, field.name)))
 
+        table = Table()
+
         # Create table header
-        header = []
-        generate_header(header, result[0], fields(result[0]))
-        table = [header]
+        generate_header(table, result[0], fields(result[0]))
         for item in result:
-            row = []
+            row: list[str] = []
             generate_row(row, item, fields(item))
-            multilined_row = [r.splitlines() for r in row]
-            multirow = max([len(r) for r in multilined_row])
-            if multirow == 1:
-                table.append(row)
-            else:
-                # If multirow, add empty rows for each line in the row
-                for i in range(multirow):
-                    multirow_row = []
-                    for lines in multilined_row:
-                        if i < len(lines):
-                            multirow_row.append(lines[i])
-                        else:
-                            multirow_row.append("")
-                    table.append(multirow_row)
-
-        from tabulate import tabulate
-        from utils import DEFAULT_TABLE_FORMAT
-
-        console.print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+            table.add_row(*row)
+        console.print(table)
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:

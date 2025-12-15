@@ -44,7 +44,7 @@ def create_console_theme(disable_colors: bool) -> Theme:
         "warning": yellow,  # Warning messages
         "verbose": grey,  # Verbose output messages
         "progress.tasks": "gray50",  # Progress task numbers
-        "progress.description": "cyan",  # Progress description
+        "progress.description": "grey85",  # Progress description
         "blue": blue,
         "red": red,
         "green": green,
@@ -55,21 +55,6 @@ def create_console_theme(disable_colors: bool) -> Theme:
         for key in styles.keys():
             styles[key] = ""
     return Theme(styles)
-
-
-# Tabulate format for displaying tables
-from tabulate import TableFormat, Line, DataRow
-
-DEFAULT_TABLE_FORMAT = TableFormat(
-    lineabove=Line("╭", "─", "┬", "╮"),
-    linebelowheader=Line("├", "─", "┼", "┤"),
-    linebetweenrows=None,
-    linebelow=Line("╰", "─", "┴", "╯"),
-    headerrow=DataRow("│", "│", "│"),
-    datarow=DataRow("│", "│", "│"),
-    padding=1,
-    with_header_hide=None,
-)
 
 
 # Verbosity and logging methods
