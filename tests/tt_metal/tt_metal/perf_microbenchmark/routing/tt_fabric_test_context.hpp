@@ -508,11 +508,11 @@ public:
 
     PerformanceTestMode get_performance_test_mode() { return performance_test_mode_; }
 
-    bool get_telemetry_enabled() { return telemetry_enabled_; }
+    bool get_telemetry_enabled() const { return telemetry_enabled_; }
 
     void set_skip_packet_validation(bool skip_packet_validation) { skip_packet_validation_ = skip_packet_validation; }
 
-    bool get_skip_packet_validation() { return skip_packet_validation_; }
+    bool get_skip_packet_validation() const { return skip_packet_validation_; }
 
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }

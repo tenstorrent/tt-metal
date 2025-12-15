@@ -18,7 +18,7 @@ public:
     ~DeviceManager();
     DeviceManager();
 
-    bool is_initialized() { return is_initialized_; }
+    bool is_initialized() const { return is_initialized_; }
 
     void initialize(
         const std::vector<ChipId>& device_ids,
@@ -82,7 +82,7 @@ private:
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;
     IDevice* get_device(ChipId id) const;
-    void teardown_fd(const std::unordered_set<ChipId>& devices_to_close);
+    void teardown_fd(const std::unordered_set<ChipId>& devices_to_close) const;
 
     // Retrieves the fabric router sync timeout value from configuration or returns a default
     static uint32_t get_fabric_router_sync_timeout_ms();

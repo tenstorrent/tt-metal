@@ -2514,7 +2514,7 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
     MeshId neighbor_mesh_id,
     const RequestedIntermeshConnections& requested_intermesh_connections,
     const RequestedIntermeshPorts& requested_intermesh_ports,
-    const std::vector<uint64_t>& src_exit_node_chips) {
+    const std::vector<uint64_t>& src_exit_node_chips) const {
     std::unordered_set<FabricNodeId> requested_exit_nodes;
     if (!requested_intermesh_ports.empty()) {
         for (const auto& port : requested_intermesh_ports.at(*my_mesh_id).at(*neighbor_mesh_id)) {

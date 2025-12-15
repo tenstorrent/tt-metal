@@ -97,7 +97,7 @@ public:
     bool validate(IDevice* device);
     void overflow_check(IDevice* device);
 
-    int size() { return amt_written; }
+    int size() const { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
 
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }

@@ -1093,7 +1093,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
 }
 
 void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) const {
     ZoneScoped;
 
     TT_ASSERT(MetalContext::instance().device_manager()->is_dispatch_firmware_active());
@@ -1126,7 +1126,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 }
 
 void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
-    IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+    IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) const {
     ZoneScoped;
 
     const Hal& hal = MetalContext::instance().hal();
@@ -1597,7 +1597,7 @@ struct DispatchMetaData {
     std::string cmd_subtype;
 };
 
-void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {
+void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) const {
     DispatchMetaData current_dispatch_meta_data;
     std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;
 

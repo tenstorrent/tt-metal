@@ -598,7 +598,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     }
 }
 
-void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {
+void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) const {
     emit_physical_system_descriptor_to_text_proto(*this, file_path);
 }
 

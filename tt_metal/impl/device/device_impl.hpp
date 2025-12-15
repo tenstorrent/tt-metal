@@ -198,8 +198,8 @@ private:
 
     void configure_command_queue_programs();
 
-    void mark_allocations_unsafe();
-    void mark_allocations_safe();
+    void mark_allocations_unsafe() const;
+    void mark_allocations_safe() const;
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord& logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;

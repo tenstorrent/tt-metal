@@ -220,7 +220,7 @@ public:
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
     YAML::Node generate_yaml_node() const;
-    void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
+    void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt) const;
 
 private:
     void run_local_discovery(bool run_live_discovery);

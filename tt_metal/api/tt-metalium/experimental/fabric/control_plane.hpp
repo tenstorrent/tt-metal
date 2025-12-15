@@ -361,7 +361,7 @@ private:
         MeshId neighbor_mesh_id,
         const RequestedIntermeshConnections& requested_intermesh_connections,
         const RequestedIntermeshPorts& requested_intermesh_ports,
-        const std::vector<uint64_t>& src_exit_node_chips);
+        const std::vector<uint64_t>& src_exit_node_chips) const;
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // Have each host send their port descriptors to the controller host, for intermesh connectivity generation.
