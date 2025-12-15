@@ -8,7 +8,6 @@ The topology solver implements a **constraint satisfaction problem (CSP)** solve
 - Generic template-based design (works with any node types)
 - Stateless API (thread-safe, reentrant)
 - Three connection validation modes (STRICT, RELAXED, NONE)
-- Fast path optimization for path graphs (O(n) instead of exponential)
 - Comprehensive constraint system (required/preferred, trait-based, explicit pairs)
 
 ## Public API
@@ -82,6 +81,13 @@ public:
 };
 ```
 
+**Key Methods**:
+- **`add_required_trait_constraint`**: Restricts target nodes with a specific trait value to map ONLY to global nodes with the same trait value.
+- **`add_preferred_trait_constraint`**: Prioritizes mapping target nodes to global nodes with the same trait value.
+- **`add_required_constraint`**: Pins a specific target node to a specific global node.
+- **`add_preferred_constraint`**: Suggests a mapping for a specific target node.
+- **`get_valid_mappings`**: Query allowed global nodes for a target node.
+
 **Constraint Types**:
 - **Required**: MUST be satisfied - solver fails if any cannot be met
 - **Preferred**: SHOULD be satisfied - solver optimizes for them but may skip if needed
@@ -148,6 +154,12 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED);
 ```
+
+**Parameters**:
+- **`target_graph`**: The subgraph pattern to find (logical mesh).
+- **`global_graph`**: The larger host graph to search in (physical machine/cluster).
+- **`constraints`**: The set of required and preferred constraints.
+- **`connection_validation_mode`**: (Optional) Validation strictness for channel counts.
 
 ## Usage Examples
 
@@ -231,103 +243,203 @@ tt_metal/fabric/
 
 **Important**: Internal implementation (`tt::tt_fabric::detail`) is in `tt_metal/fabric/` directory, not part of public API.
 
-### Internal Modules
-
-All implementation details are in `tt::tt_fabric::detail` namespace:
-
-1. **GraphIndexData**: Converts `AdjacencyGraph` to indexed representation for O(1) lookups
-2. **ConstraintIndexData**: Converts `MappingConstraints` to index-based representation
-3. **SearchHeuristic**: Unified node selection and candidate generation with integer cost-based priority
-4. **ConsistencyChecker**: Local and forward consistency validation during DFS
-5. **PathGraphDetector**: Fast path optimization for path graphs (O(n) instead of exponential)
-6. **DFSSearchEngine**: Core backtracking search with memoization
-7. **MappingValidator**: Final mapping validation and result building
-
-### Algorithm Flow
-
-```
-solve_topology_mapping(target_graph, global_graph, constraints)
-│
-├─► Preprocessing: Build GraphIndexData and ConstraintIndexData
-│
-├─► Fast Path Detection: Check if target is path graph, try O(n) algorithm
-│
-├─► General DFS Search:
-│   ├─ SearchHeuristic::select_and_generate_candidates() - select node, generate ordered candidates
-│   ├─ ConsistencyChecker::check_local_consistency() - validate with mapped neighbors
-│   ├─ ConsistencyChecker::check_forward_consistency() - ensure future nodes have options
-│   └─ Backtracking with memoization
-│
-└─► Validation: MappingValidator validates mapping and builds result
-```
-
 ### Key Implementation Details
 
-#### SearchHeuristic Cost System
+All internal components reside in `tt::tt_fabric::detail` namespace.
 
-**Important**: Hard constraints are **absolute requirements** - candidates that violate hard constraints are **filtered out entirely** before cost computation. They are not given a high cost; they are excluded from consideration.
+#### 1. GraphIndexData
 
-**Hard Constraints** (must be satisfied, filtered before cost computation):
-- Required constraints (pinning, trait-based restrictions)
-- Graph isomorphism (edges exist to all mapped neighbors)
-- Degree sufficient (global_deg >= target_deg)
-- Channel counts sufficient (in STRICT mode)
+Converts the generic `AdjacencyGraph` (node-ID based) into an efficient index-based representation (0 to N-1 integers) for O(1) lookups during the search.
 
-**Node Selection Cost** (lower = more constrained = selected first):
+- **Index Generation**:
+  1. **Node Lists**: All unique node IDs from the input graph are collected into a vector (`target_nodes` and `global_nodes`).
+  2. **Mapping**: A hash map (`target_to_idx` / `global_to_idx`) is built mapping each Node ID to its position (index) in the vector (0 to N-1).
+  3. **Adjacency Lists**: The original adjacency map is converted to a vector of vectors (`target_adj_idx`). For each node `i`, `target_adj_idx[i]` contains the *indices* of its neighbors. These neighbor lists are **sorted** to allow for fast `std::binary_search` lookups.
+
+- **`GraphIndexData(target_graph, global_graph)`**: Constructor. Maps node IDs to indices, builds deduplicated adjacency lists, and pre-calculates connection counts (multi-edges).
+- **`target_to_idx` / `global_to_idx`**: Maps to convert public Node IDs to internal `size_t` indices.
+- **`target_conn_count`**: Stores required channel counts for each edge (for STRICT validation).
+
+#### 2. ConstraintIndexData
+
+Converts high-level `MappingConstraints` into index-based lookups.
+
+- **Index Generation**:
+  - Uses the `target_to_idx` and `global_to_idx` maps from `GraphIndexData`.
+  - Iterates through the high-level `MappingConstraints` (which use Node IDs).
+  - For each constraint, converts the Target Node ID to `target_idx` and the Global Node ID to `global_idx`.
+  - Stores the results in `restricted_global_indices` (vector of vectors). `restricted_global_indices[target_idx]` holds the sorted list of allowed `global_idx` values.
+
+- **`ConstraintIndexData(constraints, graph_data)`**: Constructor. Intersects all required and preferred constraints to build per-node allowed/preferred lists.
+- **`is_valid_mapping(target_idx, global_idx)`**: Fast check if a specific mapping is allowed by required constraints.
+- **`get_candidates(target_idx)`**: Returns the specific list of global node indices allowed for a target node (if restricted).
+
+#### 3. SearchHeuristic
+
+Implements the intelligence of the solver: which node to map next (Variable Ordering) and which global node to try (Value Ordering).
+
+- **`select_and_generate_candidates(...)`**: The main entry point. Selects the "most constrained" target node and returns it along with a sorted list of global candidates.
+- **`check_hard_constraints(...)`**: Filters candidates based on:
+  - Required constraints (pinnings).
+  - Graph isomorphism (edges to already-mapped neighbors must exist).
+  - Degree constraints (global degree >= target degree).
+  - Channel capacity (in STRICT mode).
+- **`compute_node_cost(...)`**: Scores unmapped target nodes. Lower cost = picked earlier.
+  - **Logic**: Prioritizes nodes with fewer valid candidates (Minimum Remaining Values - MRV) and more mapped neighbors.
+- **`compute_candidate_cost(...)`**: Scores valid global candidates. Lower cost = tried earlier.
+  - **Logic**: Prioritizes preferred nodes, better channel count matches (in RELAXED mode), and tighter degree fits.
+
+### Difference Between Node Cost and Candidate Cost
+
+The solver uses two distinct cost calculations for two different decisions in the search process:
+
+1.  **Node Cost (Variable Ordering)**: Decides **"Which target node should I map next?"**
+    *   **Goal**: Pick the "hardest" or "most constrained" node to map (Fail-Fast).
+    *   **Heuristic**: Minimum Remaining Values (MRV).
+    *   **Key Input**: Number of valid global candidates available (`candidate_count`).
+    *   **Formula**: `(candidate_count * HARD_WEIGHT) ...`
+    *   **Result**: The solver picks the unmapped target node with the *lowest* cost (fewest options).
+
+2.  **Candidate Cost (Value Ordering)**: Decides **"Which global node should I try assigning to this target node first?"**
+    *   **Goal**: Pick the "best fit" or "most likely to succeed" global node.
+    *   **Heuristic**: Least Constraining Value / Preferred Value.
+    *   **Key Input**: Soft constraints like preferences and channel count matches.
+    *   **Formula**: `-is_preferred * SOFT_WEIGHT ...`
+    *   **Result**: The solver sorts candidates by cost (lowest first) and tries them in that order.
+
+- **Cost System Details**:
+
+- **Hard Constraints vs Hard Weight**:
+  - **Hard Constraints** are boolean checks that *filter out* invalid global nodes entirely. They define `candidate_count`.
+  - **`HARD_WEIGHT`** is a multiplier for `candidate_count`. It ensures the solver prioritizes the **Minimum Remaining Values (MRV)** heuristic above all else.
+  - **Logic**: A node with fewer valid candidates (lower `candidate_count`) yields a lower cost, making it the highest priority to solve next. The large weight ensures that a node with 2 options is *always* picked before a node with 3 options, regardless of soft constraints.
+  - **Candidate Count vs Mapped Neighbors**:
+    - **Candidate Count (`candidate_count`)**: How many global nodes can *potentially* host this target node right now. Fewer is better (more critical).
+    - **Mapped Neighbors (`mapped_neighbors`)**: How many of this target node's neighbors have *already* been assigned. More is better (higher constraint density).
+    - **Relation**: A target node with many mapped neighbors usually has a low candidate count because those neighbors restrict the valid options (must connect to them). Both metrics guide the solver to the most "difficult" parts of the graph first.
+  - **Why MRV? (Fail-Fast Principle)**:
+    - **Scenario A (Without MRV)**: You map a node with 100 options first. You pick option #1. Later, you try to map a "bottleneck" node that had only 1 valid option, but it conflicts with your first choice. You must backtrack and try option #2 for the first node. You might repeat this 100 times before finding a combo that works for the bottleneck.
+    - **Scenario B (With MRV)**: You map the "bottleneck" node (1 option) *first*. It succeeds or fails immediately. If it succeeds, the node with 100 options is then filtered to only those compatible with the bottleneck. This drastically reduces the search tree size by pushing the branching factor (multiplication) to the bottom of the tree rather than the top.
+- **Node Cost Formula**: `(candidate_count * HARD_WEIGHT) - (preferred_count * SOFT_WEIGHT) - (mapped_neighbors * RUNTIME_WEIGHT)`
+- **Candidate Cost Formula**: `-is_preferred * SOFT_WEIGHT - channel_match_score + degree_gap * RUNTIME_WEIGHT`
+  - **`channel_match_score` Logic (RELAXED mode)**:
+    - **Sufficient Channels (>= required)**: Grants a **bonus** (reduces cost). Exact match gets max bonus (`SOFT_WEIGHT`). Excess channels reduce the bonus slightly (preferring tighter fits).
+    - **Insufficient Channels (< required)**: Applies a **penalty** (increases cost).
+    - **Result**: The solver strongly prefers candidates with *enough* connections over those without. Among those with enough, it prefers exact matches to save larger pipes for other needs.
+- **Weights**: `HARD_WEIGHT` (1M) >> `SOFT_WEIGHT` (1K) >> `RUNTIME_WEIGHT` (1).
+
+#### 4. ConsistencyChecker
+
+Validates partial mappings to prune the search tree early.
+
+- **`check_local_consistency(target, global, ...)`**:
+  - **Goal**: Ensure the current assignment `target -> global` is compatible with *past* decisions (already mapped neighbors).
+  - **Algorithm**:
+    1. Iterate over all neighbors of `target`.
+    2. If a neighbor `N_T` is already mapped to `N_G`:
+       - Check if an edge exists between `global` and `N_G` in the global graph.
+       - If `STRICT` mode: Check if the edge capacity between `global` and `N_G` is >= required capacity.
+    3. If any check fails, return `false`.
+
+- **`check_forward_consistency(target, global, ...)`**:
+  - **Goal**: Ensure the current assignment doesn't break *future* decisions (unmapped neighbors).
+  - **Algorithm**:
+    1. Iterate over all *unmapped* neighbors of `target`.
+    2. For each unmapped neighbor `N_T`:
+       - Scan all *unused* neighbors of `global` (`Candidate_G`).
+       - Check if `Candidate_G` is a valid match for `N_T` (satisfies hard constraints and local consistency).
+       - If **zero** valid candidates are found for `N_T`, then `target -> global` is a dead end. Return `false` immediately.
+  - **Impact**: Detects failures one step earlier, pruning large branches of the search tree.
+
+#### 5. DFSSearchEngine
+
+The core backtracking search algorithm.
+
+- **`search(...)`**: Initializes the search. Performs pre-assignment of pinned nodes (optimization) and starts the recursive process.
+- **`dfs_recursive(...)`**: The recursive step.
+  1. Checks memoization cache (failed states).
+  2. Calls `SearchHeuristic` to pick the next node and candidates.
+  3. Iterates candidates, running `ConsistencyChecker`.
+  4. Recurses.
+  5. Backtracks if needed.
+- **`hash_state(...)`**: Computes FNV-1a hash of the current partial mapping for memoization.
+
+**State Management**:
+
+The solver maintains a comprehensive state object (`SearchState`) that evolves during the recursion.
+
 ```cpp
-cost = (candidate_count * HARD_WEIGHT)
-     - (preferred_count * SOFT_WEIGHT)
-     - (mapped_neighbors * RUNTIME_WEIGHT)
+struct SearchState {
+    std::vector<int> mapping;                    // Current partial mapping
+    std::vector<bool> used;                      // Usage tracking O(1)
+    std::unordered_set<uint64_t> failed_states;  // Memoization Cache (FNV-1a hashes)
+    size_t dfs_calls = 0;
+    size_t backtrack_count = 0;
+    std::string error_message;
+};
 ```
 
-**What these values mean**:
-- **`candidate_count`**: Number of unused global nodes that satisfy all hard constraints for this target node. Only candidates passing hard constraint filtering are counted.
+**Search Process Visualization**:
 
-  Lower `candidate_count` = more constrained = selected first (MRV heuristic - Minimum Remaining Values).
+```mermaid
+flowchart TD
+    Start([Start Search]) --> Init[Initialize SearchState]
+    Init --> PreAssign[Apply Required Constraints<br/>(Pinnings)]
+    PreAssign --> CheckCount{Enough Global Nodes?}
+    CheckCount -- No --> Fail([Return Failure])
+    CheckCount -- Yes --> DFS[Start DFS Recursive]
 
-- **`preferred_count`**: Number of candidates (from `candidate_count`) that are also in the preferred constraints set. This is a subset of `candidate_count`.
+    subgraph DFS Logic
+        DFS --> MemoCheck{In Failed States?}
+        MemoCheck -- Yes --> ReturnFalse([Return False])
+        MemoCheck -- No --> Select[Select Target Node<br/>(Heuristic: Most Constrained)]
 
-  Higher `preferred_count` = more preferred options = lower cost = selected earlier.
+        Select --> GenCand[Generate Candidates<br/>(Heuristic: Cost Ordered)]
+        GenCand --> CandLoop{Next Candidate?}
 
-- **`mapped_neighbors`**: Number of neighbors of this target node that are already mapped. More mapped neighbors = more constraints from existing assignments = lower cost = selected earlier.
+        CandLoop -- No More Candidates --> MarkFail[Hash & Cache State<br/>(Memoization)]
+        MarkFail --> ReturnFalse
 
-**Candidate Ordering** (lower = better = tried first):
-```cpp
-// Only computed for candidates that passed hard constraint filtering
-cost = -is_preferred * SOFT_WEIGHT
-     - channel_match_score * (varies)
-     + degree_gap * RUNTIME_WEIGHT
+        CandLoop -- Yes --> CheckLocal{Local Consistency?<br/>(Edges exist?)}
+        CheckLocal -- No --> CandLoop
+
+        CheckLocal -- Yes --> CheckFwd{Forward Consistency?<br/>(Future viable?)}
+        CheckFwd -- No --> CandLoop
+
+        CheckFwd -- Yes --> Apply[Apply Assignment<br/>mapping[t] = g<br/>used[g] = true]
+        Apply --> Recurse[Recurse DFS]
+
+        Recurse -- Success --> ReturnTrue([Return True])
+        Recurse -- Failure --> Backtrack[Backtrack<br/>mapping[t] = -1<br/>used[g] = false]
+        Backtrack --> CandLoop
+    end
 ```
 
-**What these values mean**:
-- **`is_preferred`**: 1 if this candidate is in the preferred constraints set, 0 otherwise
-- **`channel_match_score`**: In RELAXED mode, rewards candidates with channel counts closer to required (exact match = best, then closest above, then closest below)
-- **`degree_gap`**: Difference between global and target degree (smaller gap = better fit)
+**Memoization Details**:
+- **Hash Function (FNV-1a)**:
+  - The hash function generates a unique 64-bit signature for the current partial mapping state.
+  - **Input**: The `mapping` vector (array of size `N_target`).
+  - **Logic**:
+    1. Initialize `hash` with FNV offset basis.
+    2. Iterate through `mapping`. If `mapping[i]` is assigned (not -1):
+       - XOR `hash` with a combined value of `target_index` and `global_index`.
+       - Multiply `hash` by FNV prime.
+    3. Result is a signature that uniquely identifies *which* target nodes are mapped to *which* global nodes.
+- **Cache**: `failed_states` (unordered set) stores hashes of states that have been fully explored and proven to have **no solution**.
+- **Pruning**:
+  - At the start of each `dfs_recursive` call, we compute the hash of the current state.
+  - If the hash is found in `failed_states`, we know this specific partial assignment leads to a dead end (already explored via a different path).
+  - We return `false` immediately, skipping redundant work.
 
-**Cost Weights**:
-- `HARD_WEIGHT = 1000000` - Used for node selection priority (candidate count is primary factor for MRV)
-- `SOFT_WEIGHT = 1000` - Soft constraints secondary (preferred constraints, channel matching)
-- `RUNTIME_WEIGHT = 1` - Runtime optimization minor (degree gap, mapped neighbors)
+#### 6. MappingValidator
 
-**Note**: `HARD_WEIGHT` is used to prioritize nodes with fewer valid candidates (MRV heuristic), not to penalize hard constraint violations. Hard constraint violations result in candidate exclusion, not high cost.
+Final verification layer.
 
-#### Consistency Checking
-
-- **Local Consistency**: Verifies mapped neighbors are connected in global graph
-- **Forward Consistency**: Ensures future neighbors have viable candidates
-- **Channel Counts**: Validated according to `ConnectionValidationMode`
-
-#### Memoization
-
-- Uses FNV-1a hash function to cache failed states
-- Avoids revisiting previously failed partial assignments
-- Reduces redundant work in search tree
-
-#### Fast Path for Path Graphs
-
-- Detects path graphs: 2 endpoints (degree 1), all others degree ≤ 2
-- Uses O(n) path-extension algorithm instead of exponential search
-- Significantly faster for linear chains
+- **`build_result(...)`**: Assembles the final `MappingResult`. Even if the search failed, it preserves the "best effort" partial mapping for debugging.
+- **`validate_mapping(...)`**: Double-checks the final mapping for correctness (all edges exist).
+- **`validate_connection_counts(...)`**: Verifies bandwidth requirements.
+  - **STRICT**: Fails if physical channels < logical channels.
+  - **RELAXED**: Emits warnings but allows the mapping.
 
 ### Logging
 
@@ -342,7 +454,8 @@ log_error(tt::LogFabric, "Error: {}", error_msg);  // Errors
 ```
 
 **Logging Points**:
-- Mapping start: Degree histograms for target and global graphs
+- Mapping start: Degree histograms for target and global graphs (e.g., `target_degree_histogram={2:4}, global_degree_histogram={2:4}`)
+- Pre-assignment conflicts: Early detection of conflicting required constraints
 - Validation failures: Detailed error messages explaining problems
 - Success: Statistics (DFS calls, backtracks, constraint satisfaction)
 
@@ -363,16 +476,15 @@ result.print(target_graph);
 
 1. **Graph Size**: Worst case exponential, but pruning makes it much better in practice
 2. **Constraints**: More constraints generally improve performance (smaller search space)
-3. **Fast Path**: Path graphs solved in O(n) time
-4. **Memoization**: Failed states cached to avoid redundant work
-5. **Statistics**: Use `result.stats` to understand solver performance
+3. **Memoization**: Failed states cached to avoid redundant work
+4. **Statistics**: Use `result.stats` to understand solver performance
 
 ## Thread Safety
 
-The solver is **stateless** - all state is passed as parameters:
+The public API (`solve_topology_mapping()`) is **stateless** - each call creates its own internal state:
 - ✅ Thread-safe: Multiple threads can call `solve_topology_mapping()` concurrently
 - ✅ Reentrant: Can be called recursively
-- ✅ No global state: Each call is independent
+- ✅ No global state: Each call creates a new `DFSSearchEngine` instance internally
 
 ## Template Requirements
 
