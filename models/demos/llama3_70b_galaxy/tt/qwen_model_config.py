@@ -1131,6 +1131,8 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
+            breakpoint()
+
             self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 3840 // RING_SIZE),  # Use padded N
                 core_grid=pf_mm_out_core_range_set,
