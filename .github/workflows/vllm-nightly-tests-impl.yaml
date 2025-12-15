@@ -204,7 +204,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-T3K][v1][prefix-caching] Llama-3.1-8B-Instruct (prefix-cache)",
+              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct (prefix caching)",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
