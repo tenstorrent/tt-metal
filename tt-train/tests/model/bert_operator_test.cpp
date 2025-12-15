@@ -127,11 +127,17 @@ void print_comparison(
 class BERTOperatorTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        autograd::ctx().open_device();
         batch_size = 1;
         seq_len = 32;
         hidden_dim = 128;
         num_heads = 2;
         head_dim = hidden_dim / num_heads;
+    }
+
+    void TearDown() override {
+        autograd::ctx().reset_graph();
+        autograd::ctx().close_device();
     }
 
     uint32_t batch_size;
