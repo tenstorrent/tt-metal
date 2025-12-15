@@ -19,6 +19,9 @@ jobs:
         config:
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            nanobind: true
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Debug"
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"

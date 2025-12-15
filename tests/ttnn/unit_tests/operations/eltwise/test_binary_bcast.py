@@ -2304,7 +2304,7 @@ def test_add_i32(device):
     torch.manual_seed(2024)
     a = torch.cat([torch.zeros(128, dtype=torch.int32), torch.ones(128, dtype=torch.int32)])
     a = torch.reshape(a, (1, 1, 1, 256))
-    b = torch.zeros((1, 1, 256, 256))
+    b = torch.zeros((1, 1, 256, 256), dtype=torch.int32)
 
     torch_add = a + b
 
