@@ -303,6 +303,7 @@ void RunMatmulBenchmark(
         .transpose_a = false,
         .transpose_b = false,
         .output_tile = output_tile};
+    attributes = ttnn::operations::matmul::create_matmul_attributes(input_tensor_0, input_tensor_1, attributes, {});
 
     ttnn::Tensor output_tensor;
     // Warmup iterations
