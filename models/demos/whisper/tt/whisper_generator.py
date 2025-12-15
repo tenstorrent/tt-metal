@@ -623,6 +623,8 @@ class WhisperGenerator:
 
                 # On last prefill iteration, sample the first transcription token
                 if prefill_pos == prefix_len - 1:
+                    # Squeeze extra dimension from 4D [batch, 1, seq, hidden] to 3D [batch, seq, hidden]
+                    decoder_output = ttnn.squeeze(decoder_output, 1)
                     decoder_output = decoder_output @ self.ttnn_linear_weight
                     logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
                     next_token_logits = logits_to_torch[:, 0, :]
@@ -750,6 +752,8 @@ class WhisperGenerator:
             else:
                 output_idx = 0
 
+            # Squeeze extra dimension from 4D [batch, 1, seq, hidden] to 3D [batch, seq, hidden]
+            decoder_output = ttnn.squeeze(decoder_output, 1)
             decoder_output = decoder_output @ self.ttnn_linear_weight
             logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
             next_token_logits = logits_to_torch[:, output_idx, :]

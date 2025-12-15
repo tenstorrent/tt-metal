@@ -28,6 +28,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
+    WHISPER_BATCH_SIZE,
     WHISPER_L1_SMALL_SIZE,
     WHISPER_TRACE_REGION_SIZE,
     convert_to_ttnn,
@@ -39,8 +40,6 @@ from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
 from models.demos.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
-
-WHISPER_BATCH_SIZE = 2
 
 
 def load_input_paths(folder_path):
@@ -174,6 +173,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         weights_mesh_mapper=weights_mesh_mapper,
         kv_cache=kv_cache,
         cross_attn_cache=cross_attn_cache,
+        max_batch_size=WHISPER_BATCH_SIZE,
     )
 
     def _model_pipeline(
@@ -613,7 +613,7 @@ def run_demo_whisper_for_translation_dataset(
 
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(1, 1)],
+    [(1, WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "input_path",
@@ -644,7 +644,7 @@ def test_demo_for_audio_classification_inference(
 
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(1, 1)],
+    [(1, WHISPER_BATCH_SIZE)],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
@@ -808,7 +808,7 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device",
-    [(1)],
+    [(WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -904,7 +904,7 @@ def test_demo_for_conditional_generation_dataset(
 )
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(1, 1)],
+    [(1, WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
