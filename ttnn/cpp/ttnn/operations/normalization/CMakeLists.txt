@@ -62,9 +62,7 @@ target_sources(
         layernorm_distributed/device/layernorm_post_all_gather_op.cpp
         layernorm_distributed/device/layernorm_pre_all_gather_op.cpp
         layernorm_distributed/device/multi_core/layernorm_post_all_gather_op_multi_core.cpp
-        layernorm_distributed/device/multi_core/layernorm_post_all_gather_welford_op_multi_core.cpp
         layernorm_distributed/device/multi_core/layernorm_pre_all_gather_op_multi_core.cpp
-        layernorm_distributed/device/multi_core/layernorm_pre_all_gather_welford_op_multi_core.cpp
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
