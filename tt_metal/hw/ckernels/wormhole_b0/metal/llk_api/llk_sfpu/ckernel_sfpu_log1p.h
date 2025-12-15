@@ -44,10 +44,10 @@ sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
  * This function implements ln(1+x) with accurate computation for small x.
  * Algorithm based on log1p_fp32 from operations.py:
  * 1. Handle special cases (x < -1, x == -1, infinity, NaN)
- * 2. For |x| < 0.3: Use 13-term Taylor series to avoid catastrophic cancellation
+ * 2. For |x| < 0.3: Use 9-term polynomial series to avoid catastrophic cancellation
  * 3. For |x| >= 0.3: Use standard ln(1+x) computation
  *
- * The threshold of 0.3 and 13 terms work well enough to provide good accuracy
+ * The threshold of 0.3 and 9 terms work well enough to provide good accuracy
  * across the entire domain.
  *
  * @param val The input value (sfpi::vFloat vector), can be any floating point number > -1
@@ -77,7 +77,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
 
         constexpr float THRESHOLD = 0.3f;
         v_if(abs_val < THRESHOLD) {
-            // For |x| < 0.3, use 10-term polynomial series to avoid catastrophic cancellation
+            // For |x| < 0.3, use 9-term polynomial series to avoid catastrophic cancellation
             // Coefficients were computed using Sollya with the following command:
             // > fpminimax(log(x+1), [|1,2,3,4,5,6,7,8,9|], [|single...|], [-0.3; -2^(-20)] + [2^(-20); 0.3], relative);
             result = PolynomialEvaluator::eval(
@@ -114,7 +114,6 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
             // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
             constexpr float SQRT2 = 1.4142135381698608f;  // sqrt(2)
             v_if(m >= SQRT2) {
-                // m = m * 0.5f;  // Divide by 2
                 m = m * 0.5f;
                 exp = exp + 1;  // Increment exponent
             }
@@ -155,7 +154,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
 
             // Combine: ln(1+x) = exp×ln(2) + ln(m)
             // Convert exponent to float using sign-magnitude format
-            sfpi::vInt exp_for_convert = exp;
+            sfpi::vInt signmag_exp = exp;
 
             // We want to convert exponent to floating point using int32 -> float conversion.
             // However, int32_to_float takes a sign-magnitude
@@ -164,11 +163,11 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
             v_if(exp < 0) {
                 sfpi::vInt exp_abs = ~exp + 1;  // Two's complement negation
                 // Convert to sign-magnitude negative: setsgn(value, 1) sets MSB to 1
-                exp_for_convert = sfpi::setsgn(exp_abs, 1);
+                signmag_exp = sfpi::setsgn(exp_abs, 1);
             }
             v_endif;
 
-            sfpi::vFloat expf = sfpi::int32_to_float(exp_for_convert, 0);
+            sfpi::vFloat expf = sfpi::int32_to_float(signmag_exp, 0);
 
             // Step 5: Combine: ln(x) = exp×ln(2) + ln(m)
             constexpr float LN2 = 0.69314718246459961f;  // log(2)
@@ -186,6 +185,12 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
     return result;
 }
 
+/**
+ * @tparam APPROXIMATION_MODE If true, use approximation mode (for consistency with log kernel)
+ * @tparam FAST_APPROX If true, skip NaN check for negative inputs
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ * @tparam ITERATIONS Number of iterations for given face
+ */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
 #pragma GCC unroll 8
@@ -202,12 +207,18 @@ inline void calculate_log1p() {
     }
 }
 
+/**
+ * @tparam APPROXIMATION_MODE If true, use approximation mode (for consistency with log kernel)
+ * @tparam FAST_APPROX If true, skip NaN check for negative inputs
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log1p_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
     } else {
         _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        // Note: Unlike blackhole, _init_reciprocal_ uses 3 programmble constants
     }
 }
 
