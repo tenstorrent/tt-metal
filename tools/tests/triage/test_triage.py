@@ -215,3 +215,19 @@ class TestTriage:
             assert (
                 timedelta(seconds=0) < check.result.uptime < timedelta(days=8 * 365)
             ), f"Invalid ARC uptime: {check.result.uptime}"
+
+    def test_check_core_magic(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        run_script(
+            script_path=os.path.join(triage_home, "check_core_magic.py"),
+            args=None,
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        assert (
+            len(FAILURE_CHECKS) == 0
+        ), f"Core magic check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
