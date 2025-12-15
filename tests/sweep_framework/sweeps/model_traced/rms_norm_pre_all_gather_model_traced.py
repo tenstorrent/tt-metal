@@ -61,8 +61,10 @@ def run(
         [torch_weight, torch.zeros(((torch_weight.numel() + 31) // 32) * 32 - torch_weight.numel())]
     ).reshape(1, 1, -1, 32)
 
+    # Create input tensor - bfloat8_b and bfloat4_b require TILE layout
+    input_layout = ttnn.TILE_LAYOUT if input_a_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else input_a_layout
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
+        torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
     )
     # Determine weight layout based on dtype - bfloat8_b and bfloat4_b require TILE layout
     weight_layout = ttnn.TILE_LAYOUT if input_b_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT

@@ -134,10 +134,15 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
-    # Create weight tensor - use the shape as traced
-    # The traced configs have weight in shape [1,1,64,32] with ROW_MAJOR layout
+    # Reshape weight for TILE layout: must match input's last dimension
+    torch_weight_reshaped = (
+        torch_weight.flatten()[: input_tensor_shape[-1]].reshape([1, 1, 1, input_tensor_shape[-1]])
+        if input_b_layout == ttnn.TILE_LAYOUT and len(weight_tensor_shape) == 4
+        else torch_weight
+    )
+
     weight_tensor = ttnn.from_torch(
-        torch_weight,
+        torch_weight_reshaped,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,

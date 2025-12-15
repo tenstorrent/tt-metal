@@ -2104,6 +2104,165 @@ OperationParameterExtractors.register_extractor(
 )
 
 
+# Add rms_norm extractor method
+def _extract_rms_norm_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for rms_norm operation
+
+    For RMS norm, the weight should match the input's last dimension.
+    The traced "other" shape might be padded, so we recalculate it.
+    """
+    try:
+        params = {}
+
+        # Extract first 2 tensor configs (input and weight)
+        tensor_configs = []
+        for arg in config:
+            if isinstance(arg, dict):
+                for key in sorted(arg.keys()):
+                    if key.startswith("arg"):
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg[key])
+                        if tensor_config:
+                            tensor_configs.append(tensor_config)
+                            if len(tensor_configs) >= 2:
+                                break
+                if len(tensor_configs) >= 2:
+                    break
+
+        if len(tensor_configs) >= 2:
+            input_shape = tensor_configs[0].shape
+            # Calculate correct weight shape from input's last dimension
+            weight_size = input_shape[-1]
+            # Pad to 32-byte alignment for TTNN
+            padded_weight_size = ((weight_size + 31) // 32) * 32
+            # Weight shape in [1, 1, -1, 32] format
+            weight_shape = [1, 1, padded_weight_size // 32, 32]
+
+            params["input_shape"] = {"self": input_shape, "other": weight_shape}
+            params["input_a_dtype"] = tensor_configs[0].dtype
+            params["input_b_dtype"] = tensor_configs[1].dtype
+            params["input_a_layout"] = tensor_configs[0].layout
+            params["input_b_layout"] = tensor_configs[1].layout
+            params["input_a_memory_config"] = tensor_configs[0].memory_config
+            params["input_b_memory_config"] = tensor_configs[1].memory_config
+
+            # Extract output memory config if present
+            output_memory_config = None
+            for arg in config:
+                if isinstance(arg, dict):
+                    for key, val in arg.items():
+                        if "output" in key.lower() or (
+                            key.startswith("arg") and isinstance(val, dict) and "MemoryConfig" in str(val)
+                        ):
+                            if isinstance(val, dict) and "MemoryConfig" in val:
+                                output_memory_config = val["MemoryConfig"]
+                                break
+
+            if output_memory_config is None:
+                output_memory_config = tensor_configs[0].memory_config
+
+            params["output_memory_config"] = output_memory_config
+
+            return params
+        return None
+    except Exception as e:
+        return None
+
+
+def _transform_rms_norm_parameters(
+    configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+) -> List[Dict]:
+    """Transform rms_norm traced configs to run function format
+
+    Handles layout-specific weight shape adjustment:
+    - TILE layout: weight shape becomes [1, 1, 1, input_last_dim]
+    - ROW_MAJOR layout: keep traced shape [1, 1, H, 32]
+    """
+    transformed_configs = []
+
+    for config in configs:
+        try:
+            if not isinstance(config, dict):
+                continue
+
+            input_shape_dict = config.get("input_shape", {})
+            if not input_shape_dict or "self" not in input_shape_dict or "other" not in input_shape_dict:
+                continue
+
+            shape_a = input_shape_dict["self"]
+            shape_b = input_shape_dict["other"]
+
+            # Parse dtypes and layouts
+            input_a_dtype_str = config.get("input_a_dtype", "DataType::BFLOAT16")
+            input_b_dtype_str = config.get("input_b_dtype", "DataType::BFLOAT16")
+            input_a_layout_str = config.get("input_a_layout", "Layout::TILE")
+            input_b_layout_str = config.get("input_b_layout", "Layout::ROW_MAJOR")
+
+            # Adjust weight shape based on layout BEFORE parsing
+            # Check if layout is TILE (handle both parsed and string formats)
+            is_tile_layout = "TILE" in str(input_b_layout_str)
+
+            if is_tile_layout and isinstance(shape_b, list) and len(shape_b) == 4:
+                # For TILE layout, adjust weight shape to [1, 1, 1, input_last_dim]
+                input_last_dim = shape_a[-1]
+                adjusted_shape_b = [1, 1, 1, input_last_dim]
+                # Update the input_shape dict with adjusted weight shape
+                input_shape_dict = {"self": shape_a, "other": adjusted_shape_b}
+                shape_b = adjusted_shape_b
+
+            # Parse memory configs
+            input_a_mem_config = config.get("input_a_memory_config", {})
+            input_b_mem_config = config.get("input_b_memory_config", {})
+            output_mem_config = config.get("output_memory_config", input_a_mem_config)
+
+            transformed_config = {
+                "input_shape": input_shape_dict,  # Use adjusted shape
+                "input_a_dtype": input_a_dtype_str,
+                "input_b_dtype": input_b_dtype_str,
+                "input_a_layout": input_a_layout_str,
+                "input_b_layout": input_b_layout_str,
+                "input_a_memory_config": input_a_mem_config,
+                "input_b_memory_config": input_b_mem_config,
+                "output_memory_config": output_mem_config,
+            }
+
+            # Apply parsers if provided
+            if parse_dtype:
+                transformed_config["input_a_dtype"] = parse_dtype(input_a_dtype_str)
+                transformed_config["input_b_dtype"] = parse_dtype(input_b_dtype_str)
+            if parse_layout:
+                transformed_config["input_a_layout"] = parse_layout(input_a_layout_str)
+                transformed_config["input_b_layout"] = parse_layout(input_b_layout_str)
+            if parse_memory_config:
+                transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, shape_a)
+                transformed_config["input_b_memory_config"] = parse_memory_config(input_b_mem_config, shape_b)
+                transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, shape_a)
+
+            transformed_configs.append(transformed_config)
+
+        except Exception as e:
+            print(f"Error transforming rms_norm config: {e}")
+            continue
+
+    return transformed_configs
+
+
+# Add methods to class
+OperationParameterExtractors._extract_rms_norm_parameters = staticmethod(_extract_rms_norm_parameters)
+OperationParameterExtractors._transform_rms_norm_parameters = staticmethod(_transform_rms_norm_parameters)
+
+# Register rms_norm extractor - even though it has no master data, we need it to transform traced configs
+OperationParameterExtractors.register_extractor(
+    "rms_norm",
+    extract_func=None,  # No extraction needed for traced-only data
+    transform_func=OperationParameterExtractors._transform_rms_norm_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::rms_norm",
+    extract_func=None,  # No extraction needed for traced-only data
+    transform_func=OperationParameterExtractors._transform_rms_norm_parameters,
+)
+
+
 # Add subtract extractor method
 def _extract_subtract_parameters(config: List) -> Optional[Dict]:
     """Extract parameters for subtract operation
