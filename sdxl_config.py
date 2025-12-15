@@ -27,7 +27,7 @@ class SDXLConfig:
 
     # Model settings
     model_name: str = "stabilityai/stable-diffusion-xl-base-1.0"
-    hf_home: str = os.getenv("HF_HOME", "/mnt/MLPerf/tt_dnn-models/hf_home")
+    hf_home: str = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
 
     # Pipeline settings
     num_inference_steps: int = 50

@@ -476,8 +476,10 @@ class TtSDXLPipeline(LightweightModule):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        start_latents=None,
     ):
         # Generate user input tensors for the TT model.
+        # For img2img workflows, pass start_latents instead of start_latent_seed.
 
         # Validate timesteps/sigmas at the beginning if custom values are provided
         if timesteps is not None or sigmas is not None:
@@ -497,30 +499,58 @@ class TtSDXLPipeline(LightweightModule):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        # Generate random latents
-        latents_list = []
-        for index in range(self.batch_size):
-            # Create generator from seed if provided for reproducibility
-            # Using torch.Generator() ensures consistent results with original implementation
-            generator = None
-            if start_latent_seed is not None:
-                generator = torch.Generator()
-                generator.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            latents = self.torch_pipeline.prepare_latents(
-                1,
-                num_channels_latents,
-                height,
-                width,
-                all_prompt_embeds_torch.dtype,
-                self.cpu_device,
-                generator,
-                None,
-            )
-            B, C, H, W = latents.shape  # 1, 4, 128, 128
-            latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
-            latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            latents_list.append(latents)
-        tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        # Validate that we don't have both start_latents and start_latent_seed
+        if start_latents is not None and start_latent_seed is not None:
+            raise ValueError("Cannot specify both start_latents and start_latent_seed. Choose one.")
+
+        # Use provided latents for img2img, or generate random latents for txt2img
+        if start_latents is not None:
+            # Img2img mode: use provided latents
+            logger.info("Using provided start_latents for img2img mode")
+
+            # Validate latent shape
+            if start_latents.dim() != 4:
+                raise ValueError(f"start_latents must be 4D tensor [B, C, H, W], got shape {start_latents.shape}")
+
+            B, C, H, W = start_latents.shape
+            if C != num_channels_latents:
+                raise ValueError(f"start_latents channels ({C}) must match unet in_channels ({num_channels_latents})")
+
+            # Convert to expected format: [B, C, H, W] -> [B, 1, H*W, C]
+            latents = start_latents.permute(0, 2, 3, 1)  # [B, H, W, C]
+            tt_latents = latents.reshape(B, 1, H * W, C)  # [B, 1, H*W, C]
+
+            # For img2img, we expect batch_size to match
+            if B != self.batch_size:
+                logger.warning(
+                    f"start_latents batch size ({B}) doesn't match pipeline batch_size ({self.batch_size}). Using latent batch size."
+                )
+        else:
+            # Txt2img mode: generate random latents
+            logger.info("Generating random latents for txt2img mode")
+            latents_list = []
+            for index in range(self.batch_size):
+                # Create generator from seed if provided for reproducibility
+                # Using torch.Generator() ensures consistent results with original implementation
+                generator = None
+                if start_latent_seed is not None:
+                    generator = torch.Generator()
+                    generator.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                latents = self.torch_pipeline.prepare_latents(
+                    1,
+                    num_channels_latents,
+                    height,
+                    width,
+                    all_prompt_embeds_torch.dtype,
+                    self.cpu_device,
+                    generator,
+                    None,
+                )
+                B, C, H, W = latents.shape  # 1, 4, 128, 128
+                latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
+                latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+                latents_list.append(latents)
+            tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
