@@ -74,11 +74,10 @@ class Model:
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
-        # max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
-        max_seq_len = 1024
+        max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
         self.rope_setup = RotarySetup(
             device=mesh_device,
-            batch_size=128,
+            batch_size=max_local_batch_size,
             head_dim=hf_config.head_dim,
             max_seq_len=max_seq_len,
             rope_theta=getattr(hf_config, "rope_theta", 10000.0),
@@ -142,7 +141,7 @@ class Model:
         dtype,
         mesh_device,
         state_dict,
-        weight_cache_path,
+        tensor_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
@@ -164,10 +163,11 @@ class Model:
             state_dict=state_dict,
             ccl_manager=ccl_manager,
             dtype=dtype,
-            tensor_cache_path=weight_cache_path,
+            tensor_cache_path=tensor_cache_path,
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
+            max_local_batch_size=args.max_local_batch_size,
         )
 
         # Add tt_transformers compatible attributes
@@ -211,8 +211,6 @@ class Model:
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
             )
-        if is_decode:
-            breakpoint()
         logits = hidden_states
 
         if get_last_token != -1:

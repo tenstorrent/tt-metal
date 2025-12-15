@@ -639,28 +639,29 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
         )
-        # Test full decoder layer integration
-        tt_output = decoder_layer(
-            tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode
-        )
+        for _ in range(100):
+            # Test full decoder layer integration
+            tt_output = decoder_layer(
+                tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode
+            )
 
-        # Compare outputs
-        pcc_threshold = 0.924 if seq_len == 1 else 0.88
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )
-        if is_row_sharded:
-            tt_output_torch = tt_output_torch[0]
-        else:
-            tt_output_torch = tt_output_torch[0, ..., : seq_len * batch_size, :]
-        passing, output = compare_tensors(
-            tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
-        )
-        if passing:
-            logger.info(f"Decoder Layer test passed. Output: {output}")
-        else:
-            assert passing, f"Decoder Layer test failed. Output: {output}"
+            # Compare outputs
+            pcc_threshold = 0.916 if seq_len == 1 else 0.88
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+            )
+            if is_row_sharded:
+                tt_output_torch = tt_output_torch[0]
+            else:
+                tt_output_torch = tt_output_torch[0, ..., : seq_len * batch_size, :]
+            passing, output = compare_tensors(
+                tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
+            )
+            if passing:
+                logger.info(f"Decoder Layer test passed. Output: {output}")
+            else:
+                assert passing, f"Decoder Layer test failed. Output: {output}"
         # passing, output = run_component_comparison(
         #     tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         # )

@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_allreduce, apply_rope
+from .operations import apply_rope
 from .weights import AttentionWeights
 
 
@@ -77,8 +77,8 @@ def decode_forward(
 
     # Update KV cache
     k_cache, v_cache = kv_cache
-    # tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
-    # tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
+    tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
+    tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
 
     ttnn.experimental.paged_update_cache(
         k_cache,
@@ -152,7 +152,7 @@ def decode_forward(
 
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    # tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
     # tt_out = ttnn.reshape(
     #     tt_out,
     #     (batch_size, seq_len, hidden_size),
@@ -162,6 +162,6 @@ def decode_forward(
 
     # Tensor parallel allreduce
     # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    # tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
 
     return tt_out
