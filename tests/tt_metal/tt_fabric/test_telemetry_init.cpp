@@ -11,7 +11,15 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-TEST_F(TGFabricFixture, TelemetryStaticInfoInitialized) {
+// Test fixture for telemetry initialization tests
+class TelemetryFixture : public BaseFabricFixture {
+public:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt_fabric::FabricConfig::FABRIC_1D); }
+
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+TEST_F(TelemetryFixture, TelemetryStaticInfoInitialized) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& devices = this->get_devices();
 
