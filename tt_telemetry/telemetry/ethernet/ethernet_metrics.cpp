@@ -497,6 +497,11 @@ static std::optional<double> calculate_bandwidth(
     // from two samples due to modulo arithmetic). At 1200 MHz, UINT64_MAX cycles = ~178 days,
     // so multiple wraparounds between telemetry samples (~1 Hz) are practically impossible.
     // This check catches: counter resets, hardware glitches, or missed samples for hours.
+    //
+    // TODO: Firmware should zero telemetry memory structures during ERISC initialization
+    // to prevent reading garbage values at startup. Currently, L1 memory is not zeroed on
+    // device power-on/reset, leading to large spurious deltas until firmware initializes.
+    // Without firmware fix, we rely on this heuristic to detect and recover from garbage data.
     constexpr uint64_t MAX_REASONABLE_DELTA_CYCLES = 1000000000000ULL;  // ~14 minutes at 1200 MHz
     if (delta_cycles > MAX_REASONABLE_DELTA_CYCLES) {
         log_warning(
@@ -541,6 +546,15 @@ static std::optional<double> update_bandwidth_metric_impl(
 
     auto bandwidth = calculate_bandwidth(
         delta_words, delta_cycles, channel, metric_type, arc_telemetry_reader, start_of_update_cycle, arch);
+
+    if (!bandwidth.has_value()) {
+        // Reset baseline - treat as device restart/garbage data
+        // Next sample will start fresh from these values
+        prev_words = curr_words;
+        prev_cycles = curr_cycles;
+        first_update = true;
+        return std::nullopt;
+    }
 
     prev_words = curr_words;
     prev_cycles = curr_cycles;
