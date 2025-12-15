@@ -262,8 +262,8 @@ def functional_sdpa(
 
     elif (not is_decode) and (query_states.shape[-2] == value_states.shape[-2]):
         ## Encoder-self-attention
-        q_chunk_size = 32
-        k_chunk_size = 32
+        q_chunk_size = 256
+        k_chunk_size = 256
         compute_grid_size = query_states.device().compute_with_storage_grid_size()
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
