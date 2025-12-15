@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from math import prod
 from time import sleep
 
 import torch
@@ -28,21 +29,22 @@ def get_experts_on_device(num_experts, expert_mapping, device):
     return [e for e in range(num_experts) if expert_mapping[0, 0, e, device] == 1]
 
 
-def _get_replication_dims(replication_axis, mesh_shape):
+def get_cluster_dims(replication_axis, mesh_shape):
+    devices = prod(mesh_shape)
     if replication_axis == 1:
-        replication_dim = mesh_shape[0]
-        replication_group = mesh_shape[1]
+        replication_factor = mesh_shape[0]
+        cluster_size = mesh_shape[1]
     elif replication_axis == 0:
-        replication_dim = mesh_shape[1]
-        replication_group = mesh_shape[0]
+        replication_factor = mesh_shape[1]
+        cluster_size = mesh_shape[0]
     else:
         assert replication_axis == -1
-        replication_dim = 1
-        replication_group = mesh_shape[0] * mesh_shape[1]
-    return replication_dim, replication_group
+        replication_factor = 1
+        cluster_size = mesh_shape[0] * mesh_shape[1]
+    return replication_factor, cluster_size, devices
 
 
-def _get_batch_rep_idxr(replication_axis, batch):
+def get_batch_cluster_idxr(replication_axis, batch):
     def _idxr(m0, m1, b):
         if replication_axis == 0:
             return m1 * batch + b
@@ -81,7 +83,6 @@ def get_input_sparse_contribs(
         expert_idxr = lambda d, local_idx: d * experts_per_device + local_idx
 
     input_contribs_tensor = torch.zeros([expert_dim, batch, seq, hidden_size])
-    batch_idxr = _get_batch_rep_idxr(axis, batch)
 
     token_expert_count = 0
     for d in range(devices):
@@ -99,7 +100,7 @@ def get_input_sparse_contribs(
                     # multiply by expert index to mock application of expert
 
                     if apply_fake_expert:
-                        contrib = sparse_tokens[d, b, s, :] * (-1 if expert_idx == 0 else expert_idx)
+                        contrib = sparse_tokens[d, b, s, :] * (expert_idx + 1)
                     else:
                         contrib = sparse_tokens[d, b, s, :]
                     input_contribs_tensor[local_expert_idx, b, s, :] += contrib
@@ -121,13 +122,12 @@ def get_output_combined_contribs(
     hidden = sparse_contribs.shape[-1]
     seq = sparse_contribs.shape[-2]
 
-    devices = mesh_shape[0] * mesh_shape[1]
+    replication_dim, replication_group, devices = get_cluster_dims(replication_axis, mesh_shape)
 
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    replication_dim, replication_group = _get_replication_dims(replication_axis, mesh_shape)
-    batch_rep_idxr = _get_batch_rep_idxr(replication_axis, batch)
+    batch_rep_idxr = get_batch_cluster_idxr(replication_axis, batch)
 
     if local_reduce:
         local_contrib_idx_func = lambda d, _: d
