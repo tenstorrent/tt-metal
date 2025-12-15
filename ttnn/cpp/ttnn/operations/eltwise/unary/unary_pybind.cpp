@@ -2160,7 +2160,13 @@ void py_module(py::module& module) {
         ttnn::silu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|silu|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
+        ttnn::swish,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|swish|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
         ttnn::sin,
@@ -2418,12 +2424,6 @@ void py_module(py::module& module) {
         ttnn::sinh,
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(
-        module,
-        ttnn::swish,
-        R"doc(Performs swish function on :attr:`input_tensor`.)doc",
-        "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
