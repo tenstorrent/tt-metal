@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.hpp"
@@ -82,6 +83,7 @@ void py_module(nb::module_& mod) {
 
     reduction::detail::bind_fast_reduce_nc(mod);
     reduction::detail::bind_reduction_intimg_operation(mod);
+    reduction::detail::bind_deepseek_grouped_gate(mod);
 
     ssm::detail::bind_prefix_scan(mod);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(mod);
