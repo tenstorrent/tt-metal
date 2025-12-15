@@ -955,8 +955,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
     // Determine NUM_VCS: 2 if VC1 runtime args are being passed, otherwise 1
-    // VC1 runtime args are passed when VC1 is needed (2D routing AND not an inter-mesh router)
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0 && !isInterMesh;
+    // VC1 runtime args are passed when VC1 is configured (both inter-mesh and intra-mesh have VC1)
+    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
 
     // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
@@ -1172,9 +1172,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     // Pack VC0 runtime args
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);
 
-    // Pack VC1 runtime args if VC1 is needed (2D routing AND not an inter-mesh router)
-    // VC1 connections are only made for intra-mesh routers in multi-mesh topologies
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0 && !isInterMesh;
+    // Pack VC1 runtime args if VC1 is configured
+    // Both inter-mesh and intra-mesh routers have VC1 in multi-mesh topologies
+    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
     }
@@ -1494,12 +1494,8 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
     }
 
-    // Validate upstream VC1 usage (only intra-mesh routers have VC1 receiver)
+    // Validate upstream VC1 usage
     if (upstream_vc_idx == 1) {
-        TT_FATAL(
-            !isInterMesh,
-            "Upstream VC1 connections require intra-mesh router (inter-mesh has no VC1 receiver). Got isInterMesh: {}",
-            isInterMesh);
         TT_FATAL(
             config.num_used_receiver_channels_per_vc[1] > 0,
             "VC1 receiver channels not configured on upstream router.");
