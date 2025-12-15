@@ -76,7 +76,8 @@ public:
      */
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
 
-    uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const;
+    uint32_t get_downstream_sender_channel(
+        bool is_2D_routing, eth_chan_directions downstream_direction, uint32_t vc) const;
 
     eth_chan_directions get_eth_direction() const;
     size_t get_noc_x() const;

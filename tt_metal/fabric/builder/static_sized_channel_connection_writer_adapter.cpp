@@ -106,9 +106,8 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         if (vc_idx == 0) {
             num_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
         } else {
-            // VC1: Use actual connection count (3 for XY, 4 for Z)
-            // This is safe because VC1 channels are only created when intermesh is configured
-            num_downstream_edms = downstream_edms_connected_by_vc[vc_idx].size();
+            // VC1: Use fixed count based on 2D routing (3 for XY, 4 for Z intermesh)
+            num_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
         }
 
         // Pack connection mask (bit mask indicating which slots are valid)

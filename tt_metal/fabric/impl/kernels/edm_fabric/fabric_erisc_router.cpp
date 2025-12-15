@@ -1905,6 +1905,20 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector,
                 local_fabric_telemetry);
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+            // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
+            // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
+            rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC1T, decltype(local_relay_interface)>(
+                local_receiver_channels,
+                downstream_edm_noc_interfaces_vc1,
+                local_relay_interface,
+                receiver_channel_pointers_ch0,
+                receiver_channel_0_trid_tracker,
+                port_direction_table,
+                receiver_channel_response_credit_senders,
+                routing_table,
+                local_fabric_telemetry);
+#else
             rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC0T, decltype(local_relay_interface)>(
                 local_receiver_channels,
                 downstream_edm_noc_interfaces_vc0,
@@ -1915,6 +1929,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 receiver_channel_response_credit_senders,
                 routing_table,
                 local_fabric_telemetry);
+#endif
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
@@ -1946,7 +1961,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-#if defined(FABRIC_2D_VC1_ACTIVE)
+#if defined(FABRIC_2D_VC1_SERVICED)
                 tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 4>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -1987,7 +2002,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_response_credit_senders,
                     routing_table,
                     local_fabric_telemetry);
-#endif  // FABRIC_2D_VC1_ACTIVE
+#endif  // FABRIC_2D_VC1_SERVICED
             }
         }
 
@@ -2050,9 +2065,11 @@ void
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
+        DPRINT << "wait for conn " << sender_channel_idx << ENDL();
         while (!connect_is_requested(*interface.connection_live_semaphore)) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
+        DPRINT << "conn established " << sender_channel_idx << ENDL();
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
     };
     if constexpr (multi_txq_enabled) {
@@ -2655,11 +2672,7 @@ void kernel_main() {
                                                                                // read dest.
 
 #if defined(FABRIC_2D)
-                        // Inter-mesh routers cross over to intra-mesh VC1, so use VC1 stream IDs
-                        // Intra-mesh routers connect to VC0 normally
-                        is_intermesh_router_on_edge
-                            ? get_vc1_downstream_sender_channel_free_slots_stream_id(compact_index)
-                            : get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
+                        get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
 #else
                         // Issue #33360 TODO: Create a new array for explicitly holding downstream receiver stream IDs
                         // so we can remove this hack.

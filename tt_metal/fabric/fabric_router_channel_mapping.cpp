@@ -14,13 +14,11 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     Topology topology,
     bool downstream_is_tensix_builder,
     RouterVariant variant,
-    const IntermeshVCConfig* intermesh_config,
-    bool is_inter_mesh_router) :
+    const IntermeshVCConfig* intermesh_config) :
     topology_(topology),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     variant_(variant),
-    intermesh_vc_config_(intermesh_config),
-    is_inter_mesh_router_(is_inter_mesh_router) {
+    intermesh_vc_config_(intermesh_config) {
     initialize_mappings();
 }
 
@@ -96,10 +94,9 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
         receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
             InternalReceiverChannelMapping{BuilderType::ERISC, z_router_vc1_receiver_channel};
     } else {
-        // Standard mesh router VC1: only create if intermesh VC is required
-        // Inter-mesh routers don't have VC1 (they only use VC0)
-        // Intra-mesh routers have VC1 to forward inter-mesh traffic
-        if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1 && !is_inter_mesh_router_) {
+        // Standard mesh router VC1: create if intermesh VC is required
+        // Both inter-mesh and intra-mesh routers have VC1
+        if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
             // Determine sender count based on intermesh router type
             // XY intermesh: 3 sender channels (mesh directions only)
             // Z intermesh: 4 sender channels (3 mesh directions + Z)
@@ -119,12 +116,12 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
                     InternalSenderChannelMapping{BuilderType::ERISC, mesh_vc1_base_sender_channel + i};
             }
 
-            // Create ONE receiver channel for VC1 (not N)
+            // Create ONE receiver channel for VC1
             // A receiver channel forwards to multiple downstream sender channels
             receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
                 InternalReceiverChannelMapping{BuilderType::ERISC, mesh_vc1_receiver_channel};
         }
-        // If intermesh VC not required or is inter-mesh router, don't create VC1 mappings
+        // If intermesh VC not required, don't create VC1 mappings
     }
 }
 
@@ -155,26 +152,11 @@ uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
         return 2;
     }
 
-    // Check if intermesh VC is required
+    // Check if intermesh VC is required (all routers get VC1 when enabled)
     if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
-        // Pass-through mode: all routers have VC0 and VC1
-        if (intermesh_vc_config_->requires_vc1_mesh_pass_through) {
-            log_trace(tt::LogFabric, "get_num_virtual_channels: pass_through mode → 2 VCs");
-            return 2;
-        }
-
-        // Other modes (EDGE_ONLY, FULL_MESH): Inter-mesh only has VC0, intra-mesh has VC0+VC1
-        // Use the stored value (set during construction) to match what was actually created
-        if (is_inter_mesh_router_) {
-            log_trace(tt::LogFabric, "get_num_virtual_channels: is_inter_mesh_router_=true → 1 VC");
-            return 1;  // Inter-mesh routers only have VC0
-        } else {
-            log_trace(tt::LogFabric, "get_num_virtual_channels: is_inter_mesh_router_=false → 2 VCs");
-            return 2;  // Intra-mesh routers have VC0 + VC1
-        }
+        return 2;  // Both inter-mesh and intra-mesh routers have VC0 + VC1
     }
 
-    log_trace(tt::LogFabric, "get_num_virtual_channels: no intermesh VC → 1 VC");
     return 1;  // VC0 only (single-mesh or 1D)
 }
 
