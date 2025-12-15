@@ -20,7 +20,7 @@
 
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 
 namespace ttnn {
 
@@ -124,38 +124,36 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
     // Matmul
-    tt::tt_metal::operation::ProgramWithCallbacks matmul_program_with_callbacks =
-        operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-            reduce_scatter_program_with_callbacks.program,
-            input_tensor,
-            weight_tensor,
-            bias,
-            matmul_output_tensor,
-            bcast_batch,
-            compute_kernel_config,
-            program_config,
-            untilize_out,
-            matmul_fused_op_signaler);
-    const auto matmul_override_runtime_arguments_callback =
-        matmul_program_with_callbacks.override_runtime_arguments_callback;
+    auto matmul_program = operations::matmul::program::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+        reduce_scatter_program_with_callbacks.program,
+        input_tensor,
+        weight_tensor,
+        bias,
+        matmul_output_tensor,
+        bcast_batch,
+        compute_kernel_config,
+        program_config,
+        untilize_out,
+        matmul_fused_op_signaler);
 
     // Fuse the override runtime arguments callbacks
     auto override_runtime_arguments_callback =
-        [reduce_scatter_override_runtime_arguments_callback, matmul_override_runtime_arguments_callback](
+        [shared_variables = std::move(matmul_program.shared_variables),
+         reduce_scatter_override_runtime_arguments_callback](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            if (matmul_override_runtime_arguments_callback.has_value()) {
-                matmul_override_runtime_arguments_callback.value()(
-                    operation,
-                    program,
-                    {input_tensors[0], input_tensors[1]}, /* input tensor, weight tensor */
-                    optional_input_tensors,
-                    {output_tensors[0]} /* matmul output tensor */
-                );
-            }
+            auto operation_attributes = static_cast<const MatmulReduceScatterAsync*>(operation)->matmul_struct;
+
+            std::vector<Tensor> matmul_output_tensors = {output_tensors[0]};
+            operations::matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+                program,
+                shared_variables,
+                operation_attributes,
+                {{input_tensors[0], input_tensors[1]}, {optional_input_tensors[0]}, {output_tensors[0]}},
+                matmul_output_tensors);
 
             if (reduce_scatter_override_runtime_arguments_callback.has_value()) {
                 reduce_scatter_override_runtime_arguments_callback.value()(
@@ -168,9 +166,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             }
         };
 
-    matmul_program_with_callbacks.override_runtime_arguments_callback = override_runtime_arguments_callback;
-
-    return matmul_program_with_callbacks;
+    return {
+        .program = std::move(matmul_program.program),
+        .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn
