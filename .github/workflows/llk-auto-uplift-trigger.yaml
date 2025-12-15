@@ -138,25 +138,63 @@ jobs:
           echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Generate rich commits table with PR links
-          COMMITS_TABLE="| Commit | Message | Author | PR |"$'\n'
-          COMMITS_TABLE+="|--------|---------|---------|-----|"$'\n'
+          # Generate rich commits table with PR links and Issues
+          # Column order: Issue | PR | Commit | Message | Author
+          COMMITS_TABLE="| Issue | PR | Commit | Message | Author |"$'\n'
+          COMMITS_TABLE+="|-------|-----|--------|---------|--------|"$'\n'
 
           if [ "$COMMIT_COUNT" -gt 0 ]; then
             while IFS='|' read -r short_hash message author full_hash || [ -n "$short_hash" ]; do
               [ -z "$short_hash" ] && continue
 
-              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
-              clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
+              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
+              # Remove trailing PR reference and convert #numbers to tt-llk links
+              clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//' | sed 's/#\([0-9]\+\)/[#\1](https:\/\/github.com\/tenstorrent\/tt-llk\/pull\/\1)/g')
 
+              # Format PR column
               if [ -n "$pr_number" ]; then
-                COMMITS_TABLE+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
+                PR_CELL="[#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number)"
               else
-                COMMITS_TABLE+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
+                PR_CELL="-"
               fi
+
+              # Parse Ticket section from full commit body
+              COMMIT_BODY=$(git log -1 --format="%b" "$full_hash")
+              TICKET_SECTION=$(echo "$COMMIT_BODY" | sed -n '/### Ticket/,/### /p' | head -n -1 | tail -n +2)
+
+              # Extract issue references for this commit
+              ISSUE_LINKS=""
+              if [ -n "$TICKET_SECTION" ]; then
+                # Check if ticket section is just "None" (case-insensitive, with optional whitespace)
+                TICKET_TRIMMED=$(echo "$TICKET_SECTION" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+                if [ "$TICKET_TRIMMED" != "none" ] && [ -n "$TICKET_TRIMMED" ]; then
+                  # Extract tt-metal issues - matches both plain URLs and markdown links
+                  METAL_ISSUES=$(echo "$TICKET_SECTION" | grep -oE 'https?://github\.com/tenstorrent/tt-metal/issues/[0-9]+' | grep -oE '[0-9]+$' | sort -u)
+                  for issue_num in $METAL_ISSUES; do
+                    [ -n "$ISSUE_LINKS" ] && ISSUE_LINKS+=", "
+                    ISSUE_LINKS+="[metal#$issue_num](https://github.com/tenstorrent/tt-metal/issues/$issue_num)"
+                  done
+
+                  # Extract tt-llk issues - matches both plain URLs and markdown links
+                  LLK_URL_ISSUES=$(echo "$TICKET_SECTION" | grep -oE 'https?://github\.com/tenstorrent/tt-llk/issues/[0-9]+' | grep -oE '[0-9]+$' | sort -u)
+                  for issue_num in $LLK_URL_ISSUES; do
+                    [ -n "$ISSUE_LINKS" ] && ISSUE_LINKS+=", "
+                    ISSUE_LINKS+="[llk#$issue_num](https://github.com/tenstorrent/tt-llk/issues/$issue_num)"
+                  done
+
+                  # Bare #number format → always tt-llk (commits are from that repo)
+                  BARE_ISSUES=$(echo "$TICKET_SECTION" | sed 's|https\?://[^ ]*||g' | grep -oE '(^|[[:space:]])#[0-9]+' | grep -oE '[0-9]+' | sort -u)
+                  for issue_num in $BARE_ISSUES; do
+                    [ -n "$ISSUE_LINKS" ] && ISSUE_LINKS+=", "
+                    ISSUE_LINKS+="[llk#$issue_num](https://github.com/tenstorrent/tt-llk/issues/$issue_num)"
+                  done
+                fi
+              fi
+
+              COMMITS_TABLE+="| $ISSUE_LINKS | $PR_CELL | [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author |"$'\n'
             done < <(git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
           else
-            COMMITS_TABLE+="| (No commits found) | - | - | - |"$'\n'
+            COMMITS_TABLE+="| | | | (No commits found) | |"$'\n'
           fi
 
           # Determine labels for counts
