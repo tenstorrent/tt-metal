@@ -1,0 +1,41 @@
+name: 'Prepare Tracy Reports'
+description: 'Cleans up intermediate Tracy files and renames CSV reports with model name'
+
+inputs:
+  profiler-dir:
+    description: 'Path to the profiler directory'
+    required: true
+  model-name:
+    description: 'Model name to include in the report filename'
+    required: true
+  card:
+    description: 'Card type (e.g., N150, N300)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare Tracy reports
+      shell: bash
+      run: |
+        PROFILER_DIR="${{ inputs.profiler-dir }}"
+        REPORTS_DIR="${PROFILER_DIR}/reports"
+        MODEL_NAME="${{ inputs.model-name }}"
+        CARD="${{ inputs.card }}"
+
+        # Clean up large intermediate files
+        find "$PROFILER_DIR" -name "profile_log_device.csv" -type f -delete 2>/dev/null || true
+        find "$PROFILER_DIR" -name "tracy_profile_log_host.tracy" -type f -delete 2>/dev/null || true
+
+        # Rename CSV files with model name
+        if [[ -d "$REPORTS_DIR" ]]; then
+          for csv in $(find "$REPORTS_DIR" -name "ops_perf_results_*.csv" -type f); do
+            dir=$(dirname "$csv")
+            if [[ -n "$CARD" ]]; then
+              mv "$csv" "${dir}/ops_perf_results_${MODEL_NAME}_${CARD}.csv"
+            else
+              mv "$csv" "${dir}/ops_perf_results_${MODEL_NAME}.csv"
+            fi
+          done
+        fi
