@@ -67,11 +67,9 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 using detail::ProgramImpl;
@@ -1443,7 +1441,7 @@ public:
     // This class assumes that the launch message has the same layout for all core types.
     // This assumption is currently valid, but may be relaxed.
     // For now, query the size from HAL and assert it is the same for all core types.
-    LaunchMessageGenerator() : launch_msg_sizeB(0) {
+    LaunchMessageGenerator() {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
              programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
@@ -1635,7 +1633,7 @@ private:
         std::vector<std::pair<uint32_t, uint32_t>> payload;
     };
 
-    uint32_t launch_msg_sizeB;
+    uint32_t launch_msg_sizeB{0};
 
     LaunchMessageCmds<CQDispatchWritePackedMulticastSubCmd> multicast_cmds;
     LaunchMessageCmds<CQDispatchWritePackedUnicastSubCmd> unicast_cmds;
@@ -2020,7 +2018,7 @@ void update_program_dispatch_commands(
                 "Kernel binary size exceeds prefetcher cache size ({}, {})",
                 program_sizeB,
                 max_program_sizeB);
-            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            bool wraparound_flag = cache_offset != 0 ? false : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
                     .flags = uint8_t(wraparound_flag),
@@ -2190,7 +2188,7 @@ void update_traced_program_dispatch_commands(
                 "Kernel binary size exceeds prefetcher cache size ({}, {})",
                 program_sizeB,
                 max_program_sizeB);
-            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            bool wraparound_flag = cache_offset != 0 ? false : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
                     .flags = uint8_t(wraparound_flag),

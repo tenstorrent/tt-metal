@@ -27,6 +27,7 @@ file(
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
+    deepseek_minimal_broadcast/device/kernels/*
 )
 
 target_sources(
@@ -40,7 +41,10 @@ target_sources(
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
             composite_common.hpp
-            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -50,11 +54,11 @@ target_sources(
         llama_common.cpp
         composite_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
+        all_reduce_async/device/all_reduce_async_device_operation.cpp
+        all_reduce_async/device/all_reduce_async_program_factory.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_experimental_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_experimental_device_operation.hpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
-        all_reduce_async/device/all_reduce_async_op.cpp
-        all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -79,11 +83,11 @@ target_sources(
         all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp
         all_reduce_async/all_reduce_async.cpp
         all_gather_concat_heads_fused/all_gather_concat.cpp
-        all_gather_concat_heads_fused/device/all_gather_concat_op.cpp
-        all_gather_concat_heads_fused/device/all_gather_concat_program.cpp
+        all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
+        all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp
         all_gather_matmul_async/all_gather_matmul_async.cpp
-        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
-        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_device_operation.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_program_factory.cpp
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
@@ -91,7 +95,7 @@ target_sources(
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
         matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
-        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op_device_operation.cpp
@@ -108,6 +112,9 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
+        deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
         ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async_deprecated/ring_attention_all_gather_async_program.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp

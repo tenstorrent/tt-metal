@@ -16,8 +16,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 using address_t = uint32_t;
 
@@ -61,5 +60,4 @@ struct WorkerEdmInterfaceArgs {
     const uint32_t num_buffers_per_channel;
 };
 
-} // namespace ccl
-} // namespace ttnn
+}  // namespace ttnn::ccl

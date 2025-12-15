@@ -81,8 +81,9 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
-            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
-            "Inputs to Joint SDPA must be BF16 or BF8");
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
+                tensor.dtype() == DataType::BFLOAT4_B,
+            "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
@@ -237,11 +238,11 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
     lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
 
     return {
-        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
-            joint_input.logical_shape(),
-            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(lse_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
+            input.logical_shape(), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
+        TensorSpec(
+            joint_input.logical_shape(), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
+        TensorSpec(lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::MeshWorkloadWithCallbacks RingJointScaledDotProductAttention::create_mesh_workload(

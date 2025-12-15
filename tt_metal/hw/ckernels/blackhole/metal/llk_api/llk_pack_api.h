@@ -163,12 +163,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false, tilize>(
-        pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
-
-    set_packer_strides<untilize, tilize>(pack_src_format[output_id], pack_dst_format[output_id], tile_c_dim);
-
-    // Program packer to pack out 16 datums per row
-    TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -216,27 +211,11 @@ inline void llk_pack_untilize_init(
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
-
-    if constexpr (narrow_row) {
-        TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
-    } else {
-        TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    }
-    // Pack row by row
-    // if constexpr (diagonal) {
-    //     TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
-    // } else {
-    // }
 }
 
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
-
-    uint x_stride = (uint)(pack_src_format[output_id] & 0x3) == (uint)DataFormat::Float32   ? 4
-                    : (uint)(pack_src_format[output_id] & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                            : 1;
-    const uint z_stride = FACE_R_DIM * FACE_C_DIM * x_stride;
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+    _llk_pack_untilize_uninit_(pack_src_format[output_id]);
 }
 
 template <
@@ -321,15 +300,6 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>(face_r_dim, narrow_tile);
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_pack_get_tile(std::uint32_t output, std::uint32_t tile_index, std::uint32_t* p_tile) {
-    _llk_pack_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
-}
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_pack_release_tile(std::uint32_t output) {
-    _llk_pack_release_tile_<mail2math, mail2pack>();
 }
 
 inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_pack_debug_dump_(data, byte_size); }
