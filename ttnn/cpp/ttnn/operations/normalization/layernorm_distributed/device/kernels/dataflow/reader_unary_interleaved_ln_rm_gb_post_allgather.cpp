@@ -99,30 +99,32 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_inp, 1);
             }
+            if (ncht == 0 or cb_iterations != 1) {
 #if defined FUSE_GAMMA || defined FUSE_BETA
 #ifdef FUSE_GAMMA
-            for (uint32_t j = 0; j < cb_length; j++) {
-                cb_reserve_back(cb_gamma, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-                uint64_t gamma_noc_addr = get_noc_addr(gamma_tile_count, addrg);
-                gamma_tile_count++;
-                async_read_row_to_tile<gamma_is_row_major>(gamma_noc_addr, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_gamma, 1);
-            }
+                for (uint32_t j = 0; j < cb_length; j++) {
+                    cb_reserve_back(cb_gamma, 1);
+                    uint32_t l1_write_addr = get_write_ptr(cb_gamma);
+                    uint64_t gamma_noc_addr = get_noc_addr(gamma_tile_count, addrg);
+                    gamma_tile_count++;
+                    async_read_row_to_tile<gamma_is_row_major>(gamma_noc_addr, l1_write_addr);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_gamma, 1);
+                }
 #endif
 #ifdef FUSE_BETA
-            for (uint32_t j = 0; j < cb_length; j++) {
-                cb_reserve_back(cb_beta, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_beta);
-                uint64_t beta_noc_addr = get_noc_addr(beta_tile_count, addrb);
-                beta_tile_count++;
-                async_read_row_to_tile<beta_is_row_major>(beta_noc_addr, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_beta, 1);
+                for (uint32_t j = 0; j < cb_length; j++) {
+                    cb_reserve_back(cb_beta, 1);
+                    uint32_t l1_write_addr = get_write_ptr(cb_beta);
+                    uint64_t beta_noc_addr = get_noc_addr(beta_tile_count, addrb);
+                    beta_tile_count++;
+                    async_read_row_to_tile<beta_is_row_major>(beta_noc_addr, l1_write_addr);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_beta, 1);
+                }
+#endif
+#endif
             }
-#endif
-#endif
         }
         for (uint32_t i = 0; i < cb_leftovers; i++) {
             cb_reserve_back(cb_inp, 1);
