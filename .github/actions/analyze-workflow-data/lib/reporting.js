@@ -837,7 +837,7 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
   }
 }
 
-function buildWorkflowBadge(workflowPath, timeSinceSuccess) {
+function buildWorkflowBadge(workflowPath, timeSinceSuccess, failingJobsCount = 0) {
   const workflowFileName = workflowPath
     ? workflowPath
       .replace(/^\.github\/workflows\//, '')
@@ -849,6 +849,9 @@ function buildWorkflowBadge(workflowPath, timeSinceSuccess) {
   }
   if (workflowFileName) {
     badgeParts.push(`workflow file: ${workflowFileName}`);
+  }
+  if (failingJobsCount > 0) {
+    badgeParts.push(`failed jobs: ${failingJobsCount}`);
   }
   return badgeParts.length ? ` <em>(${badgeParts.join(', ')})</em>` : '';
 }
@@ -867,7 +870,8 @@ function buildRegressionsSection(regressedDetails, context) {
   const lines = regressedDetails.map(it => {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
-    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
+    const failingJobsCount = Array.isArray(it.failing_jobs) ? it.failing_jobs.length : 0;
+    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess, failingJobsCount);
 
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
@@ -929,7 +933,8 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
   const lines = stayedFailingDetails.map(it => {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
-    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
+    const failingJobsCount = Array.isArray(it.failing_jobs) ? it.failing_jobs.length : 0;
+    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess, failingJobsCount);
 
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
