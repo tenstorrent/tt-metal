@@ -43,6 +43,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using std::flush;
 using std::int32_t;
@@ -60,6 +61,32 @@ using namespace tt;
 
 #define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
+using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
+
+struct RiscKeyComparator {
+    bool operator()(const RiscKey& x, const RiscKey& y) const {
+        const ChipId x_device_id = get<0>(x);
+        const ChipId y_device_id = get<0>(y);
+        const uint32_t x_risc_id = get<2>(x);
+        const uint32_t y_risc_id = get<2>(y);
+        const umd::CoreDescriptor& x_core_desc = get<1>(x);
+        const umd::CoreDescriptor& y_core_desc = get<1>(y);
+
+        if (x_device_id != y_device_id) {
+            return x_device_id < y_device_id;
+        }
+
+        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
+        if (core_desc_cmp(x_core_desc, y_core_desc)) {
+            return true;
+        }
+        if (core_desc_cmp(y_core_desc, x_core_desc)) {
+            return false;
+        }
+
+        return x_risc_id < y_risc_id;
+    }
+};
 namespace {
 
 string logfile_path = "generated/dprint/";
@@ -101,33 +128,6 @@ public:
 };
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
-
-using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
-
-struct RiscKeyComparator {
-    bool operator()(const RiscKey& x, const RiscKey& y) const {
-        const ChipId x_device_id = get<0>(x);
-        const ChipId y_device_id = get<0>(y);
-        const uint32_t x_risc_id = get<2>(x);
-        const uint32_t y_risc_id = get<2>(y);
-        const umd::CoreDescriptor& x_core_desc = get<1>(x);
-        const umd::CoreDescriptor& y_core_desc = get<1>(y);
-
-        if (x_device_id != y_device_id) {
-            return x_device_id < y_device_id;
-        }
-
-        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
-        if (core_desc_cmp(x_core_desc, y_core_desc)) {
-            return true;
-        }
-        if (core_desc_cmp(y_core_desc, x_core_desc)) {
-            return false;
-        }
-
-        return x_risc_id < y_risc_id;
-    }
-};
 
 void ResetStream(ostringstream* stream) {
     stream->str("");
@@ -565,7 +565,7 @@ void DPrintServer::Impl::init_device(ChipId device_id) {
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
-    for (auto& logical_core : all_cores) {
+    for (const auto& logical_core : all_cores) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
@@ -664,7 +664,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 rtoptions.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint).at(core_type);
 
             // We should also validate that the cores the user specified are valid worker cores.
-            for (auto& logical_core : print_cores) {
+            for (const auto& logical_core : print_cores) {
                 // Need to convert user-specified logical cores to virtual cores, this can throw
                 // if the user gave bad coords.
                 CoreCoord virtual_core;
@@ -824,7 +824,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 
     // When detaching a device, disable prints on it.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
-    for (auto& logical_core : all_cores) {
+    for (const auto& logical_core : all_cores) {
         CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_core.coord, logical_core.type);
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);

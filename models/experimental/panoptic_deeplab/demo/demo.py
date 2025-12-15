@@ -22,7 +22,6 @@ from models.experimental.panoptic_deeplab.tt.common import (
     preprocess_nchw_input_tensor,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
     create_panoptic_visualization,
@@ -30,6 +29,7 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     save_predictions,
     preprocess_input_params,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 def run_panoptic_deeplab_demo(
@@ -52,7 +52,6 @@ def run_panoptic_deeplab_demo(
         output_dir: Directory to save outputs
         target_size: Input size as (height, width)
     """
-    disable_persistent_kernel_cache()
 
     logger.info(f"Running Panoptic DeepLab demo on {image_path}")
     logger.info(f"Target size: {target_size}")
@@ -147,6 +146,50 @@ def run_panoptic_deeplab_demo(
     # Run inference
     logger.info("Running TTNN inference...")
     ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
+
+    # Validate outputs with PCC and relative error checks
+    logger.info("Validating outputs with PCC and relative error checks...")
+    logger.info("=" * 80)
+    logger.info(f"Validation Results for {os.path.basename(image_path)} ({model_category}):")
+    logger.info("=" * 80)
+
+    # Check semantic output with PCC and relative errors
+    check_ttnn_output(
+        layer_name="semantic",
+        pytorch_output=pytorch_semantic_logits,
+        ttnn_output=ttnn_semantic_logits,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=0.958,
+        exp_abs_err=1.769,
+        exp_rel_err=0.150,
+    )
+
+    # Check instance outputs (only for PANOPTIC_DEEPLAB)
+    if model_category == PANOPTIC_DEEPLAB:
+        check_ttnn_output(
+            layer_name="center",
+            pytorch_output=pytorch_center_logits,
+            ttnn_output=ttnn_center_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=0.980,
+            exp_abs_err=0.006,
+            exp_rel_err=21.08,
+        )
+
+        check_ttnn_output(
+            layer_name="offset",
+            pytorch_output=pytorch_offset_logits,
+            ttnn_output=ttnn_offset_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=0.984,
+            exp_abs_err=9.630,
+            exp_rel_err=1.675,
+        )
+
+    logger.info("=" * 80)
 
     # Process TTNN results
     logger.info("Processing TTNN results...")

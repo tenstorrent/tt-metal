@@ -96,7 +96,10 @@ class TtPanopticDeepLab:
         backbone_dtype = resnet_layer_dtypes if resnet_layer_dtypes is not None else ttnn.bfloat8_b
 
         self.backbone = TtResNet(
-            parameters=backbone_params, device=device, dtype=backbone_dtype, model_configs=model_configs
+            parameters=backbone_params,
+            device=device,
+            dtype=backbone_dtype,
+            model_configs=model_configs,
         )
 
         logger.debug("ResNet backbone initialization complete")

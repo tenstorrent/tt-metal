@@ -22,21 +22,126 @@ on:
         default: "in-service"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Matrix
+        id: set-matrix
+        run: |
+          FULL_MATRIX=$(jq -n -c '[
+            {
+                "name": "t3k LLM falcon7b model perf tests",
+                "model-name": "falcon7b",
+                "model-type": "LLM",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_falcon7b_tests",
+                "timeout": 75,
+                "owner_id": "U05RWH3QUPM" # Salar Hosseini
+            },
+            {
+                "name": "t3k LLM falcon40b model perf tests",
+                "model-name": "falcon40b",
+                "model-type": "LLM",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_falcon40b_tests",
+                "timeout": 75,
+                "owner_id": "U053W15B6JF"  # Djordje Ivanovic
+            },
+            {
+                "name": "t3k CNN resnet50 model perf tests",
+                "model-name": "resnet50",
+                "model-type": "CNN",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_resnet50_tests",
+                "timeout": 75,
+                "owner_id": "U0837MYG788" # Marko Radosavljevic
+            },
+            {
+                "name": "t3k CNN sentence_bert model perf tests",
+                "model-name": "sentence_bert",
+                "model-type": "LLM",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_sentence_bert_tests",
+                "timeout": 75,
+                "owner_id": "U045U3DEKM4" # Mohamed Bahnas (Aniruddha Tupe)
+            },
+            {
+                "name": "t3k DiT SD3.5 model perf tests",
+                "model-name": "stable_diffusion_35_large",
+                "model-type": "DiT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_stable_diffusion_35_large_tests",
+                "timeout": 75,
+                "save-perf-data": true,
+                "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+                "name": "t3k DiT Mochi model perf tests",
+                "model-name": "mochi",
+                "model-type": "DiT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_mochi_tests",
+                "timeout": 75,
+                "save-perf-data": true,
+                "owner_id": "U09ELB03XRU" # Stephen Osborne
+            },
+            {
+                "name": "t3k DiT Wan2.2 model perf tests",
+                "model-name": "wan22",
+                "model-type": "DiT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_wan22_tests",
+                "timeout": 45,
+                "save-perf-data": true,
+                "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+                "name": "t3k DiT Flux.1-dev model perf tests",
+                "model-name": "flux1-dev",
+                "model-type": "DiT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_flux1_tests",
+                "timeout": 75,
+                "save-perf-data": true,
+                "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+                "name": "t3k DiT Motif model perf tests",
+                "model-name": "motif",
+                "model-type": "DiT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_motif_tests",
+                "timeout": 15,
+                "save-perf-data": true,
+                "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+                "name": "t3k ViT Gemma3 perf tests",
+                "model-name": "gemma-3-27b-it",
+                "model-type": "ViT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_gemma3_tests",
+                "timeout": 75,
+                "owner_id": "U093901FR8U" # Milos Stojko
+            }
+          ]')
+
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+          else
+            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(."model-name" == $model)]' --compact-output)
+            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+          fi
+
   t3000-model-perf-tests:
+    needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "t3k LLM falcon7b model perf tests", model-name: "falcon7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U05RWH3QUPM}, # Salar Hosseini
-          { name: "t3k LLM falcon40b model perf tests", model-name: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "t3k CNN resnet50 model perf tests", model-name: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U0837MYG788}, # Marko Radosavljevic
-          { name: "t3k CNN sentence_bert model perf tests", model-name: "sentence_bert", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
-          { name: "t3k DiT SD3.5 model perf tests", model-name: "stable_diffusion_35_large", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_stable_diffusion_35_large_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "t3k DiT Mochi model perf tests", model-name: "mochi", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_mochi_tests, timeout: 75, owner_id: U09ELB03XRU}, # Stephen Osborne
-          { name: "t3k DiT Wan2.2 model perf tests", model-name: "wan22", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_wan22_tests, timeout: 45, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "t3k DiT Flux.1-dev model perf tests", model-name: "flux1-dev", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 75, owner_id: U08TED0JM9D}, # Samuel Adesoye
-          { name: "t3k ViT Gemma3 perf tests", model-name: "gemma-3-27b-it", model-type: "ViT", arch: wormhole_b0, cmd: run_t3000_gemma3_tests, timeout: 75, owner_id: U093901FR8U}, # Milos Stojko
-        ]
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -64,8 +169,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -82,6 +192,27 @@ jobs:
           source /work/tests/scripts/t3000/run_t3000_model_perf_tests.sh
           ${{ matrix.test-group.cmd }}
           env python3 models/perf/merge_perf_results.py
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
+        shell: bash
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload benchmark data
+        if: ${{ matrix.test-group.save-perf-data && !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          path: /work
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
         run: |

@@ -1,0 +1,57 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <variant>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
+
+#include "slice_write_device_operation_types.hpp"
+#include "slice_write_rm_sharded_input_program_factory.hpp"
+#include "slice_write_tiled_sharded_input_program_factory.hpp"
+#include "slice_write_rm_interleaved_program_factory.hpp"
+
+namespace ttnn::operations::experimental::slice_write {
+
+struct SliceWriteDeviceOperation {
+    using operation_attributes_t = slice_write::operation_attributes_t;
+    using tensor_args_t = slice_write::tensor_args_t;
+    using spec_return_value_t = slice_write::spec_return_value_t;
+    using tensor_return_value_t = slice_write::tensor_return_value_t;
+    using program_factory_t = std::variant<
+        program::SliceWriteRMShardedInputProgramFactory,
+        program::SliceWriteTiledShardedInputProgramFactory,
+        program::SliceWriteRMInterleavedProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        Tensor& output_tensor,
+        const ttnn::Shape& slice_start,
+        const ttnn::Shape& slice_end,
+        const ttnn::Shape& step);
+};
+
+}  // namespace ttnn::operations::experimental::slice_write
+
+namespace ttnn::prim {
+constexpr auto slice_write = ttnn::register_operation<
+    "ttnn::prim::slice_write",
+    ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation>();
+}  // namespace ttnn::prim

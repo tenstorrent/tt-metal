@@ -21,7 +21,6 @@
 #include "tt-metalium/mesh_device_view.hpp"
 #include "tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -100,6 +99,9 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
+    if (this == &other) {
+        return *this;
+    }
     this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = other.tensor_attributes;
@@ -401,13 +403,11 @@ Tensor Tensor::extract_shard(const CoreCoord& core) const {
     return this->extract_shard(core_id);
 }
 
-Tensor Tensor::extract_shard(const uint32_t& core_id) const {
-    return tensor_impl::extract_shard_wrapper(*this, core_id);
-}
+Tensor Tensor::extract_shard(const uint32_t& core_id) const { return tensor_impl::extract_shard(*this, core_id); }
 
 Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor_to_layout(*this, target_layout); }
 
-std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
+std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
 
 Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
@@ -529,7 +529,7 @@ void memcpy(
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
-    auto mesh_device = src.device();
+    auto* mesh_device = src.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
     memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
 }
@@ -549,7 +549,7 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
-    auto mesh_device = dst.device();
+    auto* mesh_device = dst.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
     memcpy(mesh_device->mesh_command_queue(), dst, src, region);
 }
@@ -574,10 +574,10 @@ void memcpy(
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        auto mesh_device = src.device();
+        auto* mesh_device = src.device();
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        auto mesh_device = dst.device();
+        auto* mesh_device = dst.device();
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         TT_THROW("Unsupported memcpy");
@@ -630,7 +630,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
         dst.storage_type());
 
     if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host_wrapper(src, dst, blocking, cq_id);
+        tensor_impl::copy_to_host(src, dst, blocking, cq_id);
         return;
     }
 
@@ -650,7 +650,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
 
     auto mesh_buffer = dst.device_storage().mesh_buffer;
     TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
+    tensor_impl::copy_to_device(src, dst, cq_id);
 }
 
 // TODO #32045: Remove this function since IDs are assigned in the constructor.

@@ -14,8 +14,6 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
-std::string unary_with_param_to_string(const UnaryWithParam& unary_op);
-
 bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
@@ -71,6 +69,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GE:
         case UnaryOpType::UNARY_LE:
         case UnaryOpType::TYPECAST:
+        case UnaryOpType::BITCAST:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_AND:
         case UnaryOpType::BITWISE_OR:
@@ -88,6 +87,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LOG10:
         case UnaryOpType::LOG2:
         case UnaryOpType::LOG1P:
+        case UnaryOpType::TANH:
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::WHERE_TSS:
@@ -96,6 +96,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
+        case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW: return true;
         default: return false;
     }
@@ -106,6 +107,10 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
+
+uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
+uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
+uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 }  // namespace ttnn::operations::unary::utils

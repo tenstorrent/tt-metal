@@ -29,11 +29,13 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program = CreateProgram();
 
+    TT_FATAL(args.sub_core_grids == std::nullopt, "Sub core grids are not supported for sharded input tensors");
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
 
     auto out_shard_spec = output.shard_spec().value();
+
     TT_FATAL(
         out_shard_spec.num_cores() == ncores,
         "Output tensor should have same number of cores {} as input tensor {}",
@@ -72,15 +74,19 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
+    // For bitcast, use output format for input CB to avoid unpacker conversion
+    // This ensures raw bit copying without conversion
+    tt::DataFormat cb_data_format_for_input = (ops_chain[0].type() == UnaryOpType::BITCAST) ? out_df : act_df;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, cb_data_format_for_input}})
             .set_page_size(in_cb_id, in_cb_pagesize)
             .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
+        ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -98,8 +104,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
@@ -151,6 +157,19 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
+            case UnaryOpType::LOGIT: {
+                float value1 = *ops_chain[0].get_param_if<float>(0);
+                float value2 = 1.0f - value1;
+                packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
+                if (value1 > 0.5f) {
+                    unary_defines["WHERE"] = "where_tile";
+                    unary_defines["CLAMP"] = "clamp_tile";
+                } else if (value1 >= 0.0f) {
+                    unary_defines["CLAMP"] = "clamp_tile";
+                }
+                break;
+            }
             default: break;
         }
     }
@@ -192,8 +211,8 @@ void UnaryShardedProgramFactory::override_runtime_arguments(
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }

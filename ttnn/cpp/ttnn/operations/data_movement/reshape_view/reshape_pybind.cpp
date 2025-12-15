@@ -28,15 +28,26 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const ttnn::Shape& shape,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
-               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+               const ttnn::TileReshapeMapMode reshape_tile_mode,
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    shape,
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids,
+                    on_device_mappings);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
-            py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE},
+            py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE,
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("on_device_mappings") = true},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -44,8 +55,18 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const ttnn::Shape& padded_shape,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
-               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
-                return self(input_tensor, logical_shape, padded_shape, memory_config, pad_value, reshape_tile_mode);
+               const ttnn::TileReshapeMapMode reshape_tile_mode,
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    logical_shape,
+                    padded_shape,
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids,
+                    on_device_mappings);
             },
             py::arg("input_tensor"),
             py::arg("logical_shape"),
@@ -53,22 +74,35 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
-            py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE},
+            py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE,
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("on_device_mappings") = true},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t>& shape,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
-               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+               const ttnn::TileReshapeMapMode reshape_tile_mode,
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    shape,
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids,
+                    on_device_mappings);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
-            py::arg("recreate_mapping_tensor") = ttnn::TileReshapeMapMode::CACHE});
+            py::arg("recreate_mapping_tensor") = ttnn::TileReshapeMapMode::CACHE,
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("on_device_mappings") = true});
 }
 }  // namespace detail
 
@@ -82,29 +116,25 @@ void py_bind_reshape_view(pybind11::module& module) {
     detail::bind_reshape_view(
         module,
         ttnn::reshape,
-
         R"doc(
-        Note: for a 0 cost view, the following conditions must be met:
-            * the last dimension must not change
-            * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+            Note: for a 0 cost view, the following conditions must be met:
+                * the last dimension must not change
+                * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
 
-        Args:
-            * input_tensor: Input Tensor.
-            * new_shape: New shape of tensor.
+            Args:
+                * input_tensor: Input Tensor.
+                * new_shape: New shape of tensor.
 
-        Keyword Args:
-            * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
-            * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
-            * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
+            Keyword Args:
+                * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
+                * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
+                * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
+                * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+                * :attr:`on_device_mappings` (bool, optional): Specifies whether to use the tile reshape version with on device mappings. Default is True.
 
-        Returns:
-            ttnn.Tensor: the output tensor with the new shape.
 
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.arange(4, dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reshape(tensor, (1, 1, 2, 2))
-
+            Returns:
+                ttnn.Tensor: the output tensor with the new shape.
         )doc");
 }
 

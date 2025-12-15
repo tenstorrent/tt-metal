@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace ttnn::fabric {
 
@@ -17,9 +17,10 @@ void py_bind_fabric_api(py::module& module) {
         .value("DISABLED", tt::tt_fabric::FabricConfig::DISABLED)
         .value("FABRIC_1D", tt::tt_fabric::FabricConfig::FABRIC_1D)
         .value("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING)
+        .value("FABRIC_1D_NEIGHBOR_EXCHANGE", tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE)
         .value("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D)
-        .value("FABRIC_2D_DYNAMIC", tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC)
-        .value("CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
+        .value(
+            "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
     py::enum_<tt::tt_fabric::FabricReliabilityMode>(module, "FabricReliabilityMode", R"(
         Specifies how the fabric initialization handles system health and configuration.
         Values:

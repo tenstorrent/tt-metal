@@ -19,7 +19,7 @@ def extract_times(log_file: str) -> Tuple[List[float], List[float], List[float]]
     Returns:
         Tuple of (denoising_times, vae_times, output_read_times)
     """
-    denoising_pattern = r"Denoising loop for \d+ promts completed in (\d+\.\d+) seconds"
+    denoising_pattern = r"Denoising loop for \d+ prompts completed in (\d+\.\d+) seconds"
     vae_pattern = r"On device VAE decoding completed in (\d+\.\d+) seconds"
     output_read_pattern = r"Output tensor read completed in (\d+\.\d+) seconds"
 

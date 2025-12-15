@@ -43,6 +43,13 @@ def main():
         default=True,
     )
     parser.add_option(
+        "--op-support-count",
+        dest="op_support_count",
+        action="store",
+        help="Maximum number of ops that can be supported by the profiler",
+        type="int",
+    )
+    parser.add_option(
         "--child-functions",
         type="string",
         help="Comma separated list of child function to have their duration included for parent OPs",
@@ -61,6 +68,13 @@ def main():
         dest="profile_dispatch_cores",
         action="store_true",
         help="Collect dispatch cores profiling data",
+        default=False,
+    )
+    parser.add_option(
+        "--enable-sum-profiling",
+        dest="do_sum",
+        action="store_true",
+        help="Enable sum profiling",
         default=False,
     )
     parser.add_option(
@@ -99,6 +113,20 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--disable-device-data-dump-to-files",
+        dest="disable_device_data_dump_to_files",
+        action="store_true",
+        help="Disable dumping collected device data to files",
+        default=False,
+    )
+    parser.add_option(
+        "--disable-device-data-push-to-tracy",
+        dest="disable_device_data_push_to_tracy",
+        action="store_true",
+        help="Disable pushing collected device data to Tracy GUI",
+        default=False,
+    )
+    parser.add_option(
         "--collect-noc-traces",
         dest="collect_noc_traces",
         action="store_true",
@@ -122,6 +150,14 @@ def main():
     )
     parser.add_option(
         "--tracy-tools-folder", dest="binary_folder", action="store", help="Tracy tools folder", type="string"
+    )
+    parser.add_option(
+        "--profiler-capture-perf-counters",
+        type="string",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1, instrn, all",
+        action="callback",
+        callback=split_comma_list,
+        dest="perf_counter_groups",
     )
 
     if not sys.argv[1:]:
@@ -176,8 +212,17 @@ def main():
     if options.profile_dispatch_cores:
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
+    if options.do_sum:
+        os.environ["TT_METAL_PROFILER_SUM"] = "1"
+
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+
+    if options.disable_device_data_dump_to_files:
+        os.environ["TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES"] = "1"
+
+    if options.disable_device_data_push_to_tracy:
+        os.environ["TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY"] = "1"
 
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"
@@ -191,11 +236,40 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
+    if options.perf_counter_groups:
+        # Map counter group names to bit positions (from perf_counters.hpp)
+        counter_group_bits = {
+            "fpu": 0,  # PROFILE_PERF_COUNTERS_FPU    (1 << 0)
+            "pack": 1,  # PROFILE_PERF_COUNTERS_PACK   (1 << 1)
+            "unpack": 2,  # PROFILE_PERF_COUNTERS_UNPACK (1 << 2)
+            "l1": 3,  # PROFILE_PERF_COUNTERS_L1     (1 << 3)
+            "instrn": 4,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 4)
+        }
+
+        bitfield = 0
+        for group in options.perf_counter_groups:
+            group_lower = group.lower()
+            if group_lower == "all":
+                # Enable all counter groups
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)  # 0x1F = 31
+                break
+            elif group_lower in counter_group_bits:
+                bitfield |= 1 << counter_group_bits[group_lower]
+            else:
+                logger.warning(f"Unknown counter group '{group}'. Valid groups: fpu, pack, unpack, l1, instrn, all")
+
+        if bitfield > 0:
+            os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
+            logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
+
     if options.cpp_post_process:
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
 
     if options.device_memory_profiler:
         os.environ["TT_METAL_MEM_PROFILER"] = "1"
+
+    if options.op_support_count:
+        os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
 
     if len(args) > 0:
         doReport = False
@@ -236,7 +310,7 @@ def main():
                 except ValueError as exc:
                     trySystem = True
                 if trySystem:
-                    subprocess.run(progname, shell=True, check=True)
+                    subprocess.run(" ".join(args), shell=True, check=True)
 
             if options.partial:
                 tracy_state.doPartial = True

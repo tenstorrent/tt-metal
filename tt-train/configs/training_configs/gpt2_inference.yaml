@@ -1,0 +1,20 @@
+training_config:
+  project_name: "tt_train_nano_gpt"
+  #model_path: "data/gpt2s_exported"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 4
+  num_epochs: 1
+  max_steps: 5000
+  learning_rate: 0.0003
+  weight_decay: 0.1
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  gradient_accumulation_steps: 1
+  tokenizer_type: bpe
+  tokenizer_path: "data/gpt2-tokenizer.json"
+  model_config: "configs/model_configs/gpt2s.yaml"
+
+device_config:
+    enable_ddp: false
+    mesh_shape: [1,1]

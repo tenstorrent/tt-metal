@@ -12,21 +12,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "tt-metalium/distributed_context.hpp"
-#include "tt-metalium/mesh_socket.hpp"
+#include <tt-metalium/mesh_socket.hpp>
 
 namespace ttnn::mesh_socket {
 
 void py_module_types(py::module& module) {
-    py::class_<
-        tt::tt_metal::distributed::multihost::DistributedContext,
-        std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>(module, "DistributedContext")
-        .def_static("get_current_world", &tt::tt_metal::distributed::multihost::DistributedContext::get_current_world)
-        .def_static(
-            "set_current_world",
-            &tt::tt_metal::distributed::multihost::DistributedContext::set_current_world,
-            py::arg("ctx"))
-        .def_static("is_initialized", &tt::tt_metal::distributed::multihost::DistributedContext::is_initialized);
     py::class_<tt::tt_metal::distributed::MeshCoreCoord>(module, "MeshCoreCoord")
         .def(
             py::init<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord>(),
@@ -84,9 +74,7 @@ void py_module_types(py::module& module) {
                 Args:
                     connections (List[SocketConnection]): The connections of the socket
                     memory_config (SocketMemoryConfig): The memory config of the socket
-            )doc")
-        .def_readwrite("distributed_context", &tt::tt_metal::distributed::SocketConfig::distributed_context);
-
+            )doc");
     py::class_<tt::tt_metal::distributed::MeshSocket, std::shared_ptr<tt::tt_metal::distributed::MeshSocket>>(
         module, "MeshSocket");
 }

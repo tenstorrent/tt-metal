@@ -12,8 +12,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     const std::vector<uint32_t>& non_worker_rows,
@@ -214,5 +213,4 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     TT_THROW("Invalid Arch Name specified");
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

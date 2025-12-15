@@ -21,9 +21,8 @@ namespace ttnn::distributed {
 class BidirectionalFabricSocket : public ISocket {
 public:
     BidirectionalFabricSocket(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-        const tt::tt_metal::distributed::SocketConfig& send_socket_config,
-        const tt::tt_metal::distributed::SocketConfig& recv_socket_config);
+        const tt::tt_metal::distributed::MeshSocket& send_socket,
+        const tt::tt_metal::distributed::MeshSocket& recv_socket);
 
     ~BidirectionalFabricSocket() override = default;
 
@@ -39,9 +38,8 @@ public:
         const tt::tt_metal::distributed::SocketConfig& socket_config);
 
 private:
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
-    tt::tt_metal::distributed::SocketConfig send_socket_config_;
-    tt::tt_metal::distributed::SocketConfig recv_socket_config_;
+    tt::tt_metal::distributed::MeshSocket send_socket_;
+    tt::tt_metal::distributed::MeshSocket recv_socket_;
 };
 
 }  // namespace ttnn::distributed

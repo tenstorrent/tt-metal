@@ -22,7 +22,6 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -32,11 +31,7 @@
 
 using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace tensor_impl {
+namespace tt::tt_metal::tensor_impl {
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
@@ -438,7 +433,10 @@ void to_string(
 }  // namespace detail
 
 template <typename T>
-std::string to_string(const Tensor& tensor) {
+Tensor to_layout_impl(const Tensor& tensor, Layout target_layout);
+
+template <typename T>
+std::string to_string_impl(const Tensor& tensor) {
     const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {
@@ -454,9 +452,9 @@ std::string to_string(const Tensor& tensor) {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            return to_layout_impl<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         } else {
-            return to_layout<T>(tensor, Layout::ROW_MAJOR);
+            return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
         }
     };
 
@@ -485,7 +483,7 @@ std::string to_string(const Tensor& tensor) {
                 auto cpu_tensor = tensor.cpu();
                 if (storage.mesh_buffer == nullptr) {
                     // Use owned buffer path above.
-                    return to_string<T>(cpu_tensor);
+                    return to_string_impl<T>(cpu_tensor);
                 }
 
                 auto* mesh_device = storage.mesh_buffer->device();
@@ -515,21 +513,18 @@ std::string to_string(const Tensor& tensor) {
         tensor.storage());
 }
 
-template std::string to_string<bfloat16>(const Tensor& tensor);
-template std::string to_string<float>(const Tensor& tensor);
-template std::string to_string<int32_t>(const Tensor& tensor);
-template std::string to_string<uint32_t>(const Tensor& tensor);
-template std::string to_string<uint16_t>(const Tensor& tensor);
-template std::string to_string<uint8_t>(const Tensor& tensor);
-
 template <>
-std::string to_string<bfloat8_b>(const Tensor& tensor) {
-    return to_string<float>(tensor);
+std::string to_string_impl<bfloat8_b>(const Tensor& tensor) {
+    return to_string_impl<float>(tensor);
 }
 
 template <>
-std::string to_string<bfloat4_b>(const Tensor& tensor) {
-    return to_string<float>(tensor);
+std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
+std::string to_string(const Tensor& tensor) {
+    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 
 // ======================================================================================
@@ -552,7 +547,6 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     TT_THROW("Unreachable");
 }
 
-template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
@@ -574,23 +568,6 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
 
     HostStorage host_storage(std::move(distributed_host_buffer));
     return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
-}
-
-template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_host<float>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_host<int32_t>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_host<uint32_t>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_host<uint16_t>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_host<uint8_t>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id);
-
-template <>
-Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    return to_host<uint32_t>(tensor, blocking, cq_id);
-}
-
-template <>
-Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    return to_host<uint32_t>(tensor, blocking, cq_id);
 }
 
 // ======================================================================================
@@ -644,7 +621,6 @@ DeviceStorage write_to_mesh_buffer(
 
 }  // namespace
 
-template <typename T>
 std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const Storage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
@@ -680,7 +656,6 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
         host_storage);
 }
 
-template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
@@ -701,12 +676,11 @@ Tensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    auto [mesh_storage, topology] = to_device_mesh_buffer<T>(
+    auto [mesh_storage, topology] = to_device_mesh_buffer(
         tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, tensor.tensor_topology(), cq_id);
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
-template <typename T>
 void copy_to_host(
     const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
@@ -763,7 +737,6 @@ void copy_to_host(
         device_tensor.tensor_topology());
 }
 
-template <typename T>
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
@@ -777,7 +750,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
     auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
 
-    auto [mesh_storage, topology] = to_device_mesh_buffer<T>(
+    auto [mesh_storage, topology] = to_device_mesh_buffer(
         host_tensor.storage(),
         mesh_buffer,
         device_tensor.tensor_spec(),
@@ -786,92 +759,6 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         cq_id);
     device_tensor = Tensor(
         std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
-}
-
-template Tensor to_device<bfloat16>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_device<float>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_device<int32_t>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_device<uint32_t>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_device<uint16_t>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id);
-template Tensor to_device<uint8_t>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id);
-
-template <>
-Tensor to_device<bfloat4_b>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
-    return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
-}
-
-template <>
-Tensor to_device<bfloat8_b>(
-    const Tensor& tensor,
-    distributed::MeshDevice* target_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
-    return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
-}
-
-template void copy_to_device<bfloat16>(const Tensor&, Tensor&, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_device<float>(const Tensor&, Tensor&, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_device<int32_t>(const Tensor&, Tensor&, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_device<uint32_t>(const Tensor&, Tensor&, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_device<uint16_t>(const Tensor&, Tensor&, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_device<uint8_t>(const Tensor&, Tensor&, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_host<bfloat16>(const Tensor&, Tensor&, bool, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_host<float>(const Tensor&, Tensor&, bool, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_host<int32_t>(const Tensor&, Tensor&, bool, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_host<uint32_t>(const Tensor&, Tensor&, bool, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_host<uint16_t>(const Tensor&, Tensor&, bool, std::optional<tt::tt_metal::QueueId>);
-template void copy_to_host<uint8_t>(const Tensor&, Tensor&, bool, std::optional<tt::tt_metal::QueueId>);
-
-template <>
-void copy_to_device<bfloat4_b>(
-    const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
-    copy_to_device<uint32_t>(host_tensor, device_tensor, cq_id);
-}
-
-template <>
-void copy_to_device<bfloat8_b>(
-    const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
-    copy_to_device<uint32_t>(host_tensor, device_tensor, cq_id);
-}
-
-template <>
-void copy_to_host<bfloat4_b>(
-    const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    copy_to_host<uint32_t>(device_tensor, host_tensor, blocking, cq_id);
-}
-
-template <>
-void copy_to_host<bfloat8_b>(
-    const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    copy_to_host<uint32_t>(device_tensor, host_tensor, blocking, cq_id);
 }
 
 // ======================================================================================
@@ -1112,7 +999,7 @@ template std::vector<uint8_t> decode_tensor_data<uint8_t>(
 // ======================================================================================
 
 template <typename T>
-Tensor to_layout(const Tensor& tensor, Layout target_layout) {
+Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
     if (tensor.layout() == target_layout) {
         return tensor;
     }
@@ -1148,15 +1035,8 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         tensor.tensor_topology());
 }
 
-template Tensor to_layout<bfloat16>(const Tensor& tensor, Layout target_layout);
-template Tensor to_layout<float>(const Tensor& tensor, Layout target_layout);
-template Tensor to_layout<int32_t>(const Tensor& tensor, Layout target_layout);
-template Tensor to_layout<uint32_t>(const Tensor& tensor, Layout target_layout);
-template Tensor to_layout<uint16_t>(const Tensor& tensor, Layout target_layout);
-template Tensor to_layout<uint8_t>(const Tensor& tensor, Layout target_layout);
-
 template <typename T>
-Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
+Tensor to_layout_bfloat_impl(const Tensor& tensor, Layout target_layout) {
     static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
@@ -1170,13 +1050,17 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
 }
 
 template <>
-Tensor to_layout<bfloat8_b>(const Tensor& tensor, Layout target_layout) {
-    return to_layout_bfloat<bfloat8_b>(tensor, target_layout);
+Tensor to_layout_impl<bfloat8_b>(const Tensor& tensor, Layout target_layout) {
+    return to_layout_bfloat_impl<bfloat8_b>(tensor, target_layout);
 }
 
 template <>
-Tensor to_layout<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
-    return to_layout_bfloat<bfloat4_b>(tensor, target_layout);
+Tensor to_layout_impl<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
+    return to_layout_bfloat_impl<bfloat4_b>(tensor, target_layout);
+}
+
+Tensor to_layout(const Tensor& tensor, Layout target_layout) {
+    return dispatch(tensor.dtype(), [&]<typename T>() { return to_layout_impl<T>(tensor, target_layout); });
 }
 
 // ======================================================================================
@@ -1184,7 +1068,7 @@ Tensor to_layout<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
 // ======================================================================================
 
 template <typename T>
-Tensor pad(
+Tensor pad_impl(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -1275,39 +1159,8 @@ Tensor pad(
         tensor.tensor_topology());
 }
 
-template Tensor pad<bfloat16>(
-    const Tensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-template Tensor pad<float>(
-    const Tensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-template Tensor pad<int32_t>(
-    const Tensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-template Tensor pad<uint32_t>(
-    const Tensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-template Tensor pad<uint16_t>(
-    const Tensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-template Tensor pad<uint8_t>(
-    const Tensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-
 template <>
-Tensor pad<bfloat8_b>(
+Tensor pad_impl<bfloat8_b>(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -1316,7 +1169,7 @@ Tensor pad<bfloat8_b>(
 }
 
 template <>
-Tensor pad<bfloat4_b>(
+Tensor pad_impl<bfloat4_b>(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
@@ -1324,8 +1177,18 @@ Tensor pad<bfloat4_b>(
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
+Tensor pad(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    return dispatch(tensor.dtype(), [&]<typename T>() {
+        return pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
+    });
+}
+
 template <typename T>
-Tensor unpad(
+Tensor unpad_impl(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
@@ -1381,21 +1244,8 @@ Tensor unpad(
         tensor.tensor_topology());
 }
 
-template Tensor unpad<bfloat16>(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
-template Tensor unpad<float>(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
-template Tensor unpad<int32_t>(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
-template Tensor unpad<uint32_t>(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
-template Tensor unpad<uint16_t>(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
-template Tensor unpad<uint8_t>(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
-
 template <>
-Tensor unpad<bfloat8_b>(
+Tensor unpad_impl<bfloat8_b>(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
@@ -1403,11 +1253,19 @@ Tensor unpad<bfloat8_b>(
 }
 
 template <>
-Tensor unpad<bfloat4_b>(
+Tensor unpad_impl<bfloat4_b>(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
+}
+
+Tensor unpad(
+    const Tensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end) {
+    return dispatch(
+        tensor.dtype(), [&]<typename T>() { return unpad_impl<T>(tensor, output_tensor_start, output_tensor_end); });
 }
 
 // ======================================================================================
@@ -1415,8 +1273,8 @@ Tensor unpad<bfloat4_b>(
 // ======================================================================================
 
 template <typename T>
-Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
-    auto buffer = tensor.buffer();
+Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
+    auto* buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
     tt::tt_metal::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
@@ -1431,21 +1289,18 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
         tensor.tensor_spec().tile());
 }
 
-template Tensor extract_shard<bfloat16>(const Tensor& tensor, const uint32_t& core_id);
-template Tensor extract_shard<float>(const Tensor& tensor, const uint32_t& core_id);
-template Tensor extract_shard<int32_t>(const Tensor& tensor, const uint32_t& core_id);
-template Tensor extract_shard<uint32_t>(const Tensor& tensor, const uint32_t& core_id);
-template Tensor extract_shard<uint16_t>(const Tensor& tensor, const uint32_t& core_id);
-template Tensor extract_shard<uint8_t>(const Tensor& tensor, const uint32_t& core_id);
-
 template <>
-Tensor extract_shard<bfloat8_b>(const Tensor& tensor, const uint32_t& core_id) {
-    return extract_shard<uint32_t>(tensor, core_id);
+Tensor extract_shard_impl<bfloat8_b>(const Tensor& tensor, const uint32_t& core_id) {
+    return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 template <>
-Tensor extract_shard<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
-    return extract_shard<uint32_t>(tensor, core_id);
+Tensor extract_shard_impl<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
+    return extract_shard_impl<uint32_t>(tensor, core_id);
+}
+
+Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
+    return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
 }
 
 // ======================================================================================
@@ -1585,8 +1440,4 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
 
-}  // namespace tensor_impl
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal::tensor_impl

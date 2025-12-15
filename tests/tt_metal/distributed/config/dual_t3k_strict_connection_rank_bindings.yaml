@@ -5,4 +5,4 @@ rank_bindings:
   - rank: 1
     mesh_id: 1
 
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_strict_connection_mgd.yaml"
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_strict_connection_mgd.textproto"

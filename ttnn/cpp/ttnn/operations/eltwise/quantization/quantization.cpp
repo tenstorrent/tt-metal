@@ -254,7 +254,8 @@ Tensor QuantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
@@ -271,7 +272,8 @@ Tensor QuantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);
@@ -459,7 +461,8 @@ Tensor RequantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
                 // Pass axis only to operations that have tensor parameters.
@@ -551,7 +554,8 @@ Tensor DequantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
@@ -567,7 +571,8 @@ Tensor DequantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);

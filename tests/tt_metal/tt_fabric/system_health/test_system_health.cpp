@@ -11,14 +11,14 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace system_health_tests {
+namespace tt::tt_fabric::system_health_tests {
 
 enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
 
@@ -300,7 +300,9 @@ TEST(Cluster, ReportSystemHealth) {
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 eth_ss << " link UP " << connection_type;
                 CoreCoord connected_eth_core = CoreCoord{0, 0};
-                if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
+                auto eth_conn_it = eth_connections.find(chip_id);
+                if (eth_conn_it != eth_connections.end() &&
+                    eth_conn_it->second.find(chan) != eth_conn_it->second.end()) {
                     ChipId connected_chip_id = 0;
                     std::tie(connected_chip_id, connected_eth_core) =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
@@ -404,6 +406,10 @@ TEST(Cluster, TestMeshFullConnectivity) {
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X8) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 8;
+        num_connections_per_side = 2;
+    } else if (cluster_type == tt::tt_metal::ClusterType::P300_X2) {
+        num_expected_chips = 4;
+        num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);
@@ -535,5 +541,4 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 }
 
-}  // namespace system_health_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::system_health_tests

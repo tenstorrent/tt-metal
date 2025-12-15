@@ -128,6 +128,8 @@ def test_ttnn_insemb(device, model_location_generator):
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
             exp_pcc=0.887,
+            exp_abs_err=0.09,
+            exp_rel_err=27.5,
         )
     )
     all_passed.append(
@@ -138,9 +140,11 @@ def test_ttnn_insemb(device, model_location_generator):
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
             exp_pcc=0.742,
+            exp_abs_err=6.8,
+            exp_rel_err=5.0,
         )
     )
 
     # Fail test based on PCC results
-    assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"
-    logger.info("All PCC tests passed!")
+    assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
+    logger.info("All PCC and tolerance tests passed!")

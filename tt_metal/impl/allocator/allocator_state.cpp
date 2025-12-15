@@ -10,8 +10,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 void AllocatorState::BufferTypeState::merge(const BufferTypeState& other) {
     // Validate compatibility before merging
@@ -210,5 +209,4 @@ const AllocatorState::BufferTypeState* AllocatorState::get_buffer_type_state(Buf
     return &it->second;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

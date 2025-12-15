@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
@@ -52,7 +53,8 @@ def test_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 194_350_275
+    expected_device_perf_cycles_per_iteration = 191_651_771
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -117,7 +119,8 @@ def test_refiner_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_refiner_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 551_173_379
+    expected_device_perf_cycles_per_iteration = 602_265_531
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -146,7 +149,9 @@ def test_sdxl_refiner_unet_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_decode_perf_device():
-    expected_device_perf_cycles_per_iteration = 932_430_106
+    expected_device_perf_cycles_per_iteration = 680_239_540
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -171,7 +176,9 @@ def test_sdxl_vae_decode_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_encode_perf_device():
-    expected_device_perf_cycles_per_iteration = 492_473_727
+    expected_device_perf_cycles_per_iteration = 343_068_075
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

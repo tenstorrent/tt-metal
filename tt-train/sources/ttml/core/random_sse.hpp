@@ -73,10 +73,10 @@ inline size_t calculate_aligned_chunk_size(size_t total_size, size_t num_threads
 // Create chunks for parallel processing
 template <typename T>
 inline auto create_chunks(std::span<T> output, size_t num_threads, size_t chunk_size) noexcept {
-    return std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
+    return std::views::iota(0u, num_threads) | std::views::transform([output, chunk_size](size_t i) {
                const size_t offset = i * chunk_size;
                const size_t size = std::min(chunk_size, output.size() - offset);
-               return std::span{output.data() + offset, size};
+               return output.subspan(offset, size);
            }) |
            std::views::take_while([](auto chunk) { return !chunk.empty(); });
 }

@@ -42,12 +42,12 @@ extern uint8_t my_x[NUM_NOCS];
 // Virtual Y coordinate
 extern uint8_t my_y[NUM_NOCS];
 
-inline void WRITE_REG(uint32_t addr, uint32_t val) {
+inline void WRITE_REG(uintptr_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     ptr[0] = val;
 }
 
-inline uint32_t READ_REG(uint32_t addr) {
+inline uint32_t READ_REG(uintptr_t addr) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     return ptr[0];
 }
@@ -106,7 +106,7 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
 // tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
 // kernels bring into the global namespace using "using namespace ckernel".
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
-inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr) {
+inline __attribute__((always_inline)) uint32_t reg_read(uintptr_t addr) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(addr);
     return p_reg[0];
 }

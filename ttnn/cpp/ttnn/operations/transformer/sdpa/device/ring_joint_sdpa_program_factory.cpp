@@ -282,6 +282,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -291,6 +299,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -414,6 +424,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -502,13 +514,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // lse input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_6, stats_df}})
-                            .set_page_size(tt::CBIndex::c_6, stats_tile_size);
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_7, im_df}})
-                            .set_page_size(tt::CBIndex::c_7, im_tile_size);
+    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
+                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // column identity input
@@ -562,8 +574,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
     // lse output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * out_tile_size, {{tt::CBIndex::c_17, out_df}})
-                             .set_page_size(tt::CBIndex::c_17, out_tile_size);
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -640,19 +652,19 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Get addresses for regular tensors
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto gathered_k_buffer = input_tensors.at(3).buffer();
-            auto gathered_v_buffer = input_tensors.at(4).buffer();
-            auto joint_q_buffer = input_tensors.at(5).buffer();
-            auto joint_k_buffer = input_tensors.at(6).buffer();
-            auto joint_v_buffer = input_tensors.at(7).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = input_tensors.at(2).buffer();
+            auto* gathered_k_buffer = input_tensors.at(3).buffer();
+            auto* gathered_v_buffer = input_tensors.at(4).buffer();
+            auto* joint_q_buffer = input_tensors.at(5).buffer();
+            auto* joint_k_buffer = input_tensors.at(6).buffer();
+            auto* joint_v_buffer = input_tensors.at(7).buffer();
 
             // Get addresses for output tensors
-            auto out_buffer = output_tensors.at(0).buffer();
-            auto joint_out_buffer = output_tensors.at(1).buffer();
-            auto lse_buffer = output_tensors.at(2).buffer();
+            auto* out_buffer = output_tensors.at(0).buffer();
+            auto* joint_out_buffer = output_tensors.at(1).buffer();
+            auto* lse_buffer = output_tensors.at(2).buffer();
 
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();

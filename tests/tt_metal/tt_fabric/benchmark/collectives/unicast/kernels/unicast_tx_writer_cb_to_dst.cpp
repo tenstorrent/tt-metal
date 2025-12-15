@@ -59,9 +59,6 @@ void kernel_main() {
     // supported in this path (see guard below). This API will change soon. The future 2D
     // interface will mirror the 1D style. See linear/api.h for the reference shape.
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
-#endif
     (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
 
     sender.open<true>();

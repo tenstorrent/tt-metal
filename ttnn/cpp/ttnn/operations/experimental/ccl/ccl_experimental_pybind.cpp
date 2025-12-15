@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_pybind.hpp"
@@ -24,14 +25,18 @@
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_pybind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 void py_module(pybind11::module& module) {
     ccl::bind_fused_rms_1_1_32_8192(module);
     ccl::py_bind_all_gather_matmul_async(module);
+    ccl::py_bind_strided_all_gather_minimal_matmul_async(module);
     ccl::py_bind_llama_all_gather_matmul_async(module);
     ccl::py_bind_all_gather_async(module);
+    ccl::py_bind_strided_all_gather_async(module);
     ccl::py_bind_all_to_all_async(module);
     ccl::py_bind_all_to_all_async_generic(module);
     ccl::py_bind_all_gather_concat(module);
@@ -46,6 +51,7 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_recv_async(module);
     ccl::py_bind_neighbor_pad_async(module);
     ccl::py_bind_slice_reshard_async(module);
+    ccl::py_bind_deepseek_minimal_broadcast(module);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

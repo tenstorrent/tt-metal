@@ -24,13 +24,11 @@ namespace detail {
 // Helper to temporarily change logger level
 class LogLevelGuard {
 public:
-    explicit LogLevelGuard(spdlog::level::level_enum new_level)
-        : saved_level_(tt::LoggerRegistry::instance().get(tt::LogOp)->level()) {
+    explicit LogLevelGuard(spdlog::level::level_enum new_level) :
+        saved_level_(tt::LoggerRegistry::instance().get(tt::LogOp)->level()) {
         tt::LoggerRegistry::instance().set_level(new_level);
     }
-    ~LogLevelGuard() {
-        tt::LoggerRegistry::instance().set_level(saved_level_);
-    }
+    ~LogLevelGuard() { tt::LoggerRegistry::instance().set_level(saved_level_); }
     LogLevelGuard(const LogLevelGuard&) = delete;
     LogLevelGuard& operator=(const LogLevelGuard&) = delete;
 
@@ -122,22 +120,26 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
             output = detail::extract_output_tensor(std::apply(op, transformed_args));
-            op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
-                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+                ExecutionStatus::Error,
+                {.cb_peak_size_per_core = 0,
+                 .l1_buffers_peak_per_core = 0,
+                 .peak_memory_usage_per_core = 0,
+                 .l1_output_buffer_per_core = 0},
+                /* output_tensor_spec= */ std::nullopt,
+                e.what()};
         }
-
+        op_trace = capture_outer.end_graph_capture();
     }  // end of outer graph capture
 
     // extract memory footprint from the trace
     auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
-    size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
-    size_t l1_buffers_peak_per_core =
-        extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
-    size_t peak_memory_usage_per_core = extract_peak_memory_usage(op_trace, interleaved_storage_cores);
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(op_trace, interleaved_storage_cores);
+
     size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
                                                                   : extract_l1_output_buffer_allocation_size_per_core(
                                                                         output, interleaved_storage_cores);

@@ -17,6 +17,12 @@
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
+// Forward declaration of the FDMeshCQTestAccessor class
+// This is used to access the system memory manager from cq test fixtures
+namespace tt::tt_dispatch::dispatcher_tests {
+class FDMeshCQTestAccessor;
+}  // namespace tt::tt_dispatch::dispatcher_tests
+
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
@@ -34,6 +40,10 @@ struct DeviceMemoryAddress {
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
+    // This class can now access private members of FDMeshCommandQueue
+    // This is used to access the system memory manager from cq test fixtures
+    friend class tt_dispatch::dispatcher_tests::FDMeshCQTestAccessor;
+
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     CoreCoord virtual_program_dispatch_core() const;
@@ -207,7 +217,7 @@ protected:
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
 
 public:
     FDMeshCommandQueue(
@@ -271,6 +281,10 @@ public:
     std::pair<bool, size_t> query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB);
     void reset_prefetcher_cache_manager();
     int get_prefetcher_cache_sizeB() const;
+
+    void wait_for_completion(bool reset_launch_msg_state) override;
+    void finish_and_reset_in_use() override;
+    bool in_use() override { return in_use_.load(); }
 };
 
 }  // namespace tt::tt_metal::distributed

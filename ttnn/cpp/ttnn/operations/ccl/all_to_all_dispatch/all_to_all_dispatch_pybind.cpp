@@ -13,12 +13,12 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "all_to_all_dispatch.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_dispatch(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         All to all dispatch operation for dispatching the input tokens to devices with the selected experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we dispatch the tokens to the experts only on that axis. This operation sends tokens to their selected experts, with empty rows for tokens that did not select any experts on that device.
         B = local batch size/batch size per device
