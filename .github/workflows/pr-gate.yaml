@@ -272,7 +272,6 @@ jobs:
 
   ttsim-integration-tests:
     needs: [ build ]
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
@@ -282,7 +281,7 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
-      run-metal-cpp-unit-tests: false
+      run-metal-cpp-unit-tests: true
 
   docker-image:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
