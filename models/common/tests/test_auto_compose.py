@@ -30,6 +30,7 @@ pytestmark = [
         [
             (1, 1),  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
             (1, 2),  # 1D mesh, 2 devices
+            (1, 4),  # 1D mesh, 4 devices
             (1, 8),  # 1D mesh, 8 devices
             (2, 4),  # 2D mesh, 8 devices
             (4, 8),  # 2D mesh, 32 devices
@@ -38,6 +39,7 @@ pytestmark = [
         ids=[
             "1x1",
             "1x2",
+            "1x4",
             "1x8",
             "2x4",
             "4x8",
