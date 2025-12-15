@@ -36,10 +36,6 @@ public:
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
 
-    // For debug purposes
-    void set_metadata(const std::string_view name, const std::string_view parameters);
-    void set_runtime_id(uint64_t runtime_id);
-
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
     MeshCommandQueue* get_last_used_command_queue() const;

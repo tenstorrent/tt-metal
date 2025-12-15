@@ -57,10 +57,10 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-    static void mesh_workload_set_metadata(
+    static void mesh_workload_set_operation_name_and_parameters(
         const distributed::MeshWorkloadImpl* mesh_workload,
-        const std::string_view name,
-        const std::string_view parameters) noexcept;
+        const std::string_view operation_name,
+        const std::string_view operation_parameters) noexcept;
     static void mesh_workload_set_runtime_id(
         const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept;
 

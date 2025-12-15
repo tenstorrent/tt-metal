@@ -22,6 +22,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/inspector.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -244,7 +245,7 @@ void handle_mesh_adapter_cache_hit(
 
 // Helper for logging operation info
 template <DeviceOperationConcept mesh_device_operation_t>
-void set_mesh_workload_metadata(
+void emit_mesh_workload_annotation(
     tt::tt_metal::distributed::MeshWorkload& workload,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
@@ -269,9 +270,10 @@ void set_mesh_workload_metadata(
         },
         tensor_args);
 
-    workload.set_metadata(operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
+    tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(
+        workload, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
 #else
-    workload.set_metadata(operation_name, "");
+    tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(workload, operation_name, "");
 #endif
 }
 
@@ -312,7 +314,7 @@ void create_and_cache_mesh_workload(
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
-            set_mesh_workload_metadata<mesh_device_operation_t>(
+            emit_mesh_workload_annotation<mesh_device_operation_t>(
                 cached_workload.workload, operation_attributes, tensor_args, tensor_return_value);
 
             if (program_cache.is_enabled()) {
