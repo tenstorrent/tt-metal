@@ -87,6 +87,20 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
                 core_idx++;
             }
         }
+        // Local copy workers (addresses only)
+        for (size_t i = 0; i < shared_vars.local_reader_kernel_ids.size(); ++i) {
+            CoreCoord core = shared_vars.local_copy_core_coords[i];
+            auto& reader_runtime_args = GetRuntimeArgs(program, shared_vars.local_reader_kernel_ids[i]);
+            auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.local_writer_kernel_ids[i]);
+
+            auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
+            worker_reader_runtime_args[0] = input.buffer()->address();
+            worker_reader_runtime_args[1] = output.buffer()->address();
+
+            auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
+            worker_writer_runtime_args[0] = input.buffer()->address();
+            worker_writer_runtime_args[1] = output.buffer()->address();
+        }
     }
 }
 
@@ -335,11 +349,110 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         }
     }
 
+    // Local copy workers on cores not used by fabric: AllCores - FabricCores
+    std::vector<KernelHandle> local_reader_kernel_ids;
+    std::vector<KernelHandle> local_writer_kernel_ids;
+    std::vector<CoreCoord> local_copy_core_coords;
+    {
+        auto compute_grid = target_device->compute_with_storage_grid_size();
+        CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid.x - 1, compute_grid.y - 1}));
+        CoreRangeSet fabric_cores = worker_core_ranges;
+        CoreRangeSet local_copy_cores = all_cores.subtract(fabric_cores);
+
+        if (!local_copy_cores.empty()) {
+            // CB on all local-copy cores
+            CreateCircularBuffer(program, local_copy_cores, cb_sender_config);
+
+            // Distribute work evenly across local-copy cores
+            std::vector<CoreCoord> local_cores = corerange_to_cores(local_copy_cores, std::nullopt, /*row_wise=*/true);
+            const uint32_t num_local_cores = local_cores.size();
+            const uint32_t total_units =
+                (operation_attributes.dim > 0) ? (outer_dim_size * input_halo_dim_size) : input_halo_dim_size;
+            const uint32_t base = (num_local_cores == 0) ? 0 : (total_units / num_local_cores);
+            const uint32_t rem = (num_local_cores == 0) ? 0 : (total_units % num_local_cores);
+
+            uint32_t unit_offset = 0;
+            for (uint32_t i = 0; i < num_local_cores; ++i) {
+                const uint32_t units_for_core = base + (i < rem ? 1u : 0u);
+                if (units_for_core == 0) {
+                    continue;
+                }
+
+                const CoreCoord& logical_core = local_cores[i];
+                local_copy_core_coords.push_back(logical_core);
+
+                // Local copy reader (no fabric)
+                auto local_reader_cfg = ReaderDataMovementConfig{};
+                local_reader_cfg.compile_args = {sender_cb_index, page_size};
+                TensorAccessorArgs(*input_buffer).append_to(local_reader_cfg.compile_args);
+                auto local_reader_kernel_id = CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_reader.cpp",
+                    {logical_core},
+                    local_reader_cfg);
+                local_reader_kernel_ids.push_back(local_reader_kernel_id);
+
+                // Reader runtime args
+                const uint32_t reader_total_rows_start = unit_offset;
+                const uint32_t reader_stick_start_id = 0;
+                const uint32_t reader_rows_count = units_for_core;
+                const uint32_t reader_num_sticks_to_read = num_sticks_per_halo_dim;
+
+                std::vector<uint32_t> local_reader_rt_args = {
+                    tensor_args.input_tensor.buffer()->address(),  // input_tensor_address
+                    tensor_return_value.buffer()->address(),       // output_tensor_address (unused)
+                    reader_total_rows_start,
+                    reader_stick_start_id,
+                    input_halo_dim_size,
+                    reader_rows_count,
+                    reader_num_sticks_to_read,
+                    num_sticks_per_halo_dim,
+                };
+                SetRuntimeArgs(program, local_reader_kernel_id, {logical_core}, local_reader_rt_args);
+
+                // Local copy writer (no fabric)
+                auto local_writer_cfg = WriterDataMovementConfig{};
+                local_writer_cfg.compile_args = {sender_cb_index, page_size};
+                TensorAccessorArgs(*output_buffer).append_to(local_writer_cfg.compile_args);
+                auto local_writer_kernel_id = CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_writer.cpp",
+                    {logical_core},
+                    local_writer_cfg);
+                local_writer_kernel_ids.push_back(local_writer_kernel_id);
+
+                // Writer runtime args
+                const uint32_t writer_total_rows_start = unit_offset;
+                const uint32_t writer_stick_start_id = 0;
+                const uint32_t writer_rows_count = units_for_core;
+                const uint32_t writer_num_sticks_to_read = num_sticks_per_halo_dim;
+
+                std::vector<uint32_t> local_writer_rt_args = {
+                    tensor_args.input_tensor.buffer()->address(),  // input_tensor_address (unused by writer)
+                    tensor_return_value.buffer()->address(),       // output_tensor_address
+                    writer_total_rows_start,
+                    writer_stick_start_id,
+                    input_halo_dim_size,
+                    output_halo_dim_size,
+                    writer_rows_count,
+                    operation_attributes.padding_left,
+                    writer_num_sticks_to_read,
+                    num_sticks_per_halo_dim};
+                SetRuntimeArgs(program, local_writer_kernel_id, {logical_core}, local_writer_rt_args);
+
+                unit_offset += units_for_core;
+            }
+        }
+    }
+
     return cached_program_t(
         std::move(program),
         NeighborPadAsyncSharedVariables{
             .reader_kernel_ids = std::move(reader_kernel_ids),
             .writer_kernel_ids = std::move(writer_kernel_ids),
+            .local_reader_kernel_ids = std::move(local_reader_kernel_ids),
+            .local_writer_kernel_ids = std::move(local_writer_kernel_ids),
+            .local_copy_core_coords = std::move(local_copy_core_coords),
             .num_links = operation_attributes.num_links,
             .num_directions = num_directions});
 }

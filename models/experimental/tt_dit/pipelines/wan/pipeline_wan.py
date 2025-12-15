@@ -246,12 +246,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
         vae_parallel_config = VaeHWParallelConfig(
             height_parallel=ParallelFactor(
-                factor=tuple(mesh_device.shape)[sp_axis],
-                mesh_axis=sp_axis,
-            ),
-            width_parallel=ParallelFactor(
                 factor=tuple(mesh_device.shape)[tp_axis],
                 mesh_axis=tp_axis,
+            ),
+            width_parallel=ParallelFactor(
+                factor=tuple(mesh_device.shape)[sp_axis],
+                mesh_axis=sp_axis,
             ),
         )
 
