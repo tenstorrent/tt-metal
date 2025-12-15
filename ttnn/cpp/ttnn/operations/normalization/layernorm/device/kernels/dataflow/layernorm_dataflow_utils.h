@@ -149,9 +149,9 @@ inline void compute_single_stage_noc_addrs(
 
 /**
  * @brief Read a block of tiles from remote memory
- * to L1 for an input CB. Does a dummy reserve/push
- * to fill out reminder tiles in a block to keep the
- * total number of reserved tiles aligned with the CB size.
+ * to L1 for an input CB. Reserves space for a full
+ * block of tiles for synchronization purposes, but
+ * only reads tiles that contain data
  *
  * @tparam T Type of the AddrGen object
  * @tparam Block The block type
@@ -162,7 +162,7 @@ inline void compute_single_stage_noc_addrs(
  * @param block Block object that defines the number of tiles to read
  */
 template <typename T, typename Block>
-void read_block_to_cb(
+inline void read_block_to_cb(
     const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
     // Need to reserve/push on intervals that nicely
     // divide the CB size. The CB and block size has been
@@ -170,7 +170,7 @@ void read_block_to_cb(
     cb_reserve_back(cb_id, block.full_block_size());
     uint32_t l1_write_addr = get_write_ptr(cb_id);
     // Only read in the part of the block that has data
-    for (uint32_t r = 0; r < block.size(); r++) {
+    for (auto r : block.local()) {
         noc_async_read_tile(offset + r, addr, l1_write_addr);
         l1_write_addr += tile_bytes;
     }
