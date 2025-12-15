@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.unit_tests.operations.data_movement.test_fill_pad import (
+from tests.ttnn.nightly.unit_tests.operations.data_movement.test_fill_pad import (
     create_nd_padded_tiled_tensor,
     ttnn_dtype_to_torch_dtype,
 )
