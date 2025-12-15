@@ -10,7 +10,7 @@
 
 /* Reduce Scatter Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
-#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn {
 

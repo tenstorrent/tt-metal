@@ -7,11 +7,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

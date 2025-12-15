@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include "tt-metalium/allocator.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"

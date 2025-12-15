@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/matmul/device/tmp/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
-#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt-metalium/work_split.hpp"
@@ -257,9 +257,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
 
-        (std::uint32_t) false,  // extract_shard_sub_blocks (not used for interleaved)
-        (std::uint32_t)0,       // shard_width_in_tiles (not used for interleaved)
-        (std::uint32_t)0,       // shard_height_in_tiles (not used for interleaved)
+        (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
+        (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
+        (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
         // in0/in1 common args
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -278,7 +278,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)!is_input_a_sparse,                      // bcast_A
         (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
         // fuse op args
-        (std::uint32_t) false,  // fuse_op
+        (std::uint32_t)false,  // fuse_op
     };
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in0_sender_compile_time_args);
@@ -306,7 +306,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         // batch args
         (std::uint32_t)Kt * Nt,  // KtNt
         (std::uint32_t)batchA,   // batchA
-        (std::uint32_t) true,    // bcast_B
+        (std::uint32_t)true,     // bcast_B
         // sparsity args
         (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
@@ -328,8 +328,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         // bias args (placeholders)
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
-        (std::uint32_t) false,  // fuse_op
-        (std::uint32_t) false   // fuse_op_reduce_scatter
+        (std::uint32_t)false,  // fuse_op
+        (std::uint32_t)false   // fuse_op_reduce_scatter
     };
 
     // Append TensorAccessorArgs

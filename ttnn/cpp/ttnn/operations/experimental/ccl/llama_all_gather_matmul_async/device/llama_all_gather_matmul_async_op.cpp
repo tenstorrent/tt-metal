@@ -7,7 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {

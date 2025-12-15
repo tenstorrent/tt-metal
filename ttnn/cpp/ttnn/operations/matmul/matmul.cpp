@@ -6,16 +6,16 @@
 
 #include <variant>
 
-#include "device/tmp/config/matmul_program_config_types.hpp"
+#include "device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation.hpp"
 
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
-#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
-#include "ttnn/operations/matmul/device/tmp/sparse_matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
 
 namespace ttnn::operations::matmul {
 

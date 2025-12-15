@@ -6,12 +6,12 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_program_factory.hpp"
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
 namespace ttnn::operations::matmul {
 

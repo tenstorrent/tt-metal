@@ -5,20 +5,17 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/matmul/device/tmp/sparse_matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_1d_type.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
-namespace ttnn::operations::sparse_matmul::program {
+namespace ttnn::operations::matmul::program {
 
-struct SparseMatmulMultiCoreReuseMcast1DProgramFactory {
+struct MatmulMultiCoreReuseProgramFactory {
     struct shared_variables_t {
-        std::vector<tt::tt_metal::KernelHandle> kernels;
-        std::vector<tt::tt_metal::CBHandle> cbs;
-        bool extract_shard_sub_blocks{};
-        CoreCoord start_core;
-        std::vector<CoreCoord> cores;
-        uint32_t num_cores_with_work{};
-        matmul::Matmul1DType type{};
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
+        uint32_t num_cores_x{};
+        uint32_t num_blocks_y{};
+        uint32_t num_blocks_x{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -35,8 +32,8 @@ struct SparseMatmulMultiCoreReuseMcast1DProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-struct SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory {
-    using shared_variables_t = SparseMatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t;
+struct MatmulMeshWorkloadMultiCoreReuseFactory {
+    using shared_variables_t = MatmulMultiCoreReuseProgramFactory::shared_variables_t;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
@@ -52,4 +49,4 @@ struct SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::sparse_matmul::program
+}  // namespace ttnn::operations::matmul::program

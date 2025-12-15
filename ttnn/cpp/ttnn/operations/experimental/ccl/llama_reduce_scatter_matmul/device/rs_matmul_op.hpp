@@ -21,7 +21,7 @@
 
 /* Fusion includes */
 
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 

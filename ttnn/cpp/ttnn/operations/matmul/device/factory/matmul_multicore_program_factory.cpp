@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>

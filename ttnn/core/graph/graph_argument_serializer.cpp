@@ -4,7 +4,7 @@
 
 #include "ttnn/graph/graph_argument_serializer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/matmul/device/tmp/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/types.hpp"
 #include <boost/algorithm/string/replace.hpp>
 #include <tt_stl/small_vector.hpp>

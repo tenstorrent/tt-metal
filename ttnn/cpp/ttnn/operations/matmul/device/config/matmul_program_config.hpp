@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::matmul {
 namespace bmm_op_utils {

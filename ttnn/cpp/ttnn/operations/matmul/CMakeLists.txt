@@ -17,7 +17,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES matmul.hpp
+        FILES matmul.hpp device/matmul_device_operation.hpp device/matmul_device_operation_types.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -25,19 +25,19 @@ target_sources(
     PRIVATE
         matmul.cpp
         #
-        device/tmp/config/matmul_program_config.cpp
-        device/tmp/matmul_device_operation.cpp
-        device/tmp/utilities/matmul_utilities.cpp
+        device/config/matmul_program_config.cpp
+        device/matmul_device_operation.cpp
+        device/utilities/matmul_utilities.cpp
         #factories
-        device/tmp/factory/matmul_multicore_program_factory.cpp
-        device/tmp/factory/matmul_multicore_reuse_program_factory.cpp
-        device/tmp/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp
-        device/tmp/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
-        device/tmp/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
-        device/tmp/factory/matmul_multicore_reuse_optimized_program_factory.cpp
+        device/factory/matmul_multicore_program_factory.cpp
+        device/factory/matmul_multicore_reuse_program_factory.cpp
+        device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp
+        device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
+        device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
+        device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
         # sparse
-        device/tmp/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
-        device/tmp/sparse_matmul_device_operation.cpp
+        device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
+        device/sparse/sparse_matmul_device_operation.cpp
 )
 
 target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs})

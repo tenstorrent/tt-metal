@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::matmul::program {
 

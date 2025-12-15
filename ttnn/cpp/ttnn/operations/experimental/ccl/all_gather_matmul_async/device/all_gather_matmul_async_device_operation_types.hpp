@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
 
 #include <optional>

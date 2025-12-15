@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/matmul/device/tmp/sparse_matmul_device_operation.hpp"
-#include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 
 #include <tt-metalium/work_split.hpp>
 

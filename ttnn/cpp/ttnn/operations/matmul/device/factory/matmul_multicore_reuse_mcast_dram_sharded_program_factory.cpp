@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
-#include "ttnn/operations/matmul/device/tmp/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 
 #include <algorithm>
 #include <utility>

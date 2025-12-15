@@ -7,7 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/operations/matmul/device/tmp/factory/matmul_multicore_reuse_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace tt;

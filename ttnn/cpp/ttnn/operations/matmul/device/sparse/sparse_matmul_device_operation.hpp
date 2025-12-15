@@ -6,9 +6,9 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 
-#include "ttnn/operations/matmul/device/tmp/sparse_matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/tmp/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
-#include "ttnn/operations/matmul/device/tmp/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::sparse_matmul {
 
