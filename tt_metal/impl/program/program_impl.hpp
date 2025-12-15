@@ -304,7 +304,7 @@ private:
     std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;
     ProgramTransferInfo program_transfer_info;
 
-    bool finalized_{false};
+    bool finalized_;
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -339,7 +339,7 @@ private:
     };
     uint32_t programmable_core_count_;
     uint64_t id;  // Need to make non-const due to move constructor
-    uint64_t runtime_id{0};
+    uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
@@ -358,7 +358,7 @@ private:
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
-    bool local_circular_buffer_allocation_needed_{false};
+    bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

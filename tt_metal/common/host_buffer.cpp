@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-HostBuffer::HostBuffer() = default;
+HostBuffer::HostBuffer() : type_info_(nullptr) {}
 
 HostBuffer::HostBuffer(const HostBuffer& other) = default;
 

@@ -31,7 +31,7 @@ private:
     std::ofstream kernels_ostream;
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
-    bool initialized{false};
+    bool initialized;
     std::filesystem::path logging_path;
 
     int64_t convert_timestamp(const time_point& tp) const {

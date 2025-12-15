@@ -121,7 +121,7 @@ public:
 private:
     // Workload related members
     LightMetalBinary binary_;
-    const flatbuffer::LightMetalBinary* fb_binary_{nullptr};
+    const flatbuffer::LightMetalBinary* fb_binary_;
     bool show_reads_ = false;
     bool disable_checking_ = false;
 

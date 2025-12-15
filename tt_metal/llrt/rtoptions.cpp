@@ -237,7 +237,14 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 
 }  // namespace
 
-RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+RunTimeOptions::RunTimeOptions() :
+    system_kernel_dir("/usr/share/tenstorrent/kernels/"),
+    profiler_enabled(false),
+    profile_dispatch_cores(false),
+    profiler_sync_enabled(false),
+    profiler_mid_run_dump(false),
+    profiler_trace_profiler(false),
+    profiler_buffer_usage_enabled(false) {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {

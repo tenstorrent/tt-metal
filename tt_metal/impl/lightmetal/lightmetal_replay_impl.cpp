@@ -74,7 +74,7 @@ namespace detail {
 //////////////////////////////////////
 
 LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* device) :
-    binary_(std::move(binary)), device_(device) {
+    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
     if (binary_.is_empty()) {
         log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }

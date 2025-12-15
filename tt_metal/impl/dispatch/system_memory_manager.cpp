@@ -77,7 +77,8 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
+    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);

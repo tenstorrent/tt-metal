@@ -87,9 +87,11 @@ struct TileIterator {
         const uint32_t& in_start_h, const uint32_t& in_start_w, const uint32_t& in_end_h, const uint32_t& in_end_w) :
         start_h(in_start_h),
         start_w(in_start_w),
-
+        tile_idx_h(0),
+        tile_idx_w(0),
         tile_end_h(in_end_h - 1),
-        tile_end_w(in_end_w - 1) {};
+        tile_end_w(in_end_w - 1),
+        first(true) {};
 
     bool next() {
         if (first) {
@@ -115,11 +117,11 @@ struct TileIterator {
 protected:
     const uint32_t& start_h;
     const uint32_t& start_w;
-    uint32_t tile_idx_h{0};
-    uint32_t tile_idx_w{0};
+    uint32_t tile_idx_h;
+    uint32_t tile_idx_w;
     const uint32_t tile_end_h;
     const uint32_t tile_end_w;
-    bool first{true};
+    bool first;
 
     uint32_t h() { return start_h + tile_idx_h; }
 

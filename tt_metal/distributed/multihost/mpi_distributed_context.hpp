@@ -38,7 +38,7 @@ private:
 // ---------------------------------------------------------------------
 class MPIRequest : public Request {
 public:
-    explicit MPIRequest(MPI_Request req) : req_(req) {}
+    explicit MPIRequest(MPI_Request req) : req_(req), done_(false) {}
 
     Status wait() override;
     std::optional<Status> test() override;
