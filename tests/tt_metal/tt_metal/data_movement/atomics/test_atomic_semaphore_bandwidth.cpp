@@ -227,7 +227,7 @@ void increment_value_sweep_test(
 
 /// @brief Directed performance test with optimal parameters
 void directed_performance_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     uint32_t atomic_inc_value = 1,
     CoreCoord sender_core = {0, 0},
