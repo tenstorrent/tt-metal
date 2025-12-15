@@ -7,9 +7,29 @@
 #include "layernorm_pre_all_gather.hpp"
 #include "layernorm_post_all_gather.hpp"
 
+#include <fmt/format.h>
+
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
+
+void bind_layernorm_distributed_program_config(py::module& module) {
+    py::class_<LayerNormDistributedDefaultProgramConfig>(module, "LayerNormDistributedDefaultProgramConfig", R"doc(
+            Configuration controlling how distributed layernorm post/all-gather programs
+            treat reduction and reciprocal calculation fallbacks.
+        )doc")
+        .def(
+            py::init<bool, bool>(),
+            py::kw_only(),
+            py::arg("legacy_reduction").noconvert() = true,
+            py::arg("legacy_rsqrt").noconvert() = true)
+        .def("__repr__", [](const LayerNormDistributedDefaultProgramConfig& config) {
+            return fmt::format(
+                "LayerNormDistributedDefaultProgramConfig(legacy_reduction={}, legacy_rsqrt={})",
+                config.legacy_reduction,
+                config.legacy_rsqrt);
+        });
+}
 
 void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
@@ -172,6 +192,7 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
 }
 
 void bind_normalization_layernorm_distributed(py::module& module) {
+    bind_layernorm_distributed_program_config(module);
     bind_normalization_layernorm_pre_all_gather_operation(module);
     bind_normalization_layernorm_post_all_gather_operation(module);
 }
