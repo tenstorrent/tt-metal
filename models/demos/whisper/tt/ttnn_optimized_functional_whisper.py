@@ -15,6 +15,7 @@ from models.common.utility_functions import nearest_32
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 WHISPER_L1_SMALL_SIZE = 1024
+WHISPER_TRACE_REGION_SIZE = 100000000
 
 
 def gelu(tensor):
@@ -28,15 +29,28 @@ def dropout(hidden_states, p, training):
 
 def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapper, n_layers=None):
     """
-    Generates empty KV cache and sends to device
+    Generates empty KV cache for self-attention and cross-attention, and sends to device.
+    Returns:
+        tuple: (kv_cache, cross_attn_cache)
+            - kv_cache: List of [K, V] tensors per layer for self-attention
+            - cross_attn_cache: List of [K, V] tensors per layer for cross-attention (pre-allocated)
     """
 
     logger.info(f"Initializing KV cache with max batch size: {max_batch_size} and max sequence length: {max_seq_len}")
 
     kv_cache = []
+    cross_attn_cache = []
     if n_layers is None:
         n_layers = config.decoder_layers
+
+    # Cross-attention cache dimensions
+    # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
+    encoder_seq_len = 1500
+    num_heads = config.encoder_attention_heads
+    head_dim = config.d_model // config.encoder_attention_heads
+
     for i in range(n_layers):
+        # Self-attention cache
         kv_cache_layer = []
         for j in range(2):
             cache_k_or_v = torch.zeros(
@@ -59,24 +73,70 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
             kv_cache_layer.append(cache_k_or_v)
         kv_cache.append(kv_cache_layer)
 
-    return kv_cache
+        # Pre-allocate cross-attention cache for tracing
+        # bfloat16 to match calculate_key_values output dtype
+        cross_k = torch.zeros((max_batch_size, num_heads, head_dim, encoder_seq_len))
+        cross_k = ttnn.as_tensor(
+            cross_k,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=weights_mesh_mapper,
+            cache_file_name=None,
+        )
+
+        cross_v = torch.zeros((max_batch_size, num_heads, encoder_seq_len, head_dim))
+        cross_v = ttnn.as_tensor(
+            cross_v,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=weights_mesh_mapper,
+            cache_file_name=None,
+        )
+        cross_attn_cache.append([cross_k, cross_v])
+
+    return kv_cache, cross_attn_cache
 
 
 def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
     head_size = hidden_size // config.encoder_attention_heads
 
-    fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
+    compute_grid_size = key_value_states.device().compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+    key_value_states = ttnn.to_memory_config(key_value_states, ttnn.L1_MEMORY_CONFIG)
+    fused_kv = ttnn.linear(
+        key_value_states,
+        parameters.key_value.weight,
+        bias=parameters.key_value.bias,
+        core_grid=core_grid,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(key_value_states)
+    fused_kv = ttnn.to_memory_config(fused_kv, WHISPER_MEMORY_CONFIG)
     fused_kv = ttnn.unsqueeze_to_4D(fused_kv)  # 1, 1, S, 2xHxd
-
     key_states = fused_kv[:, :, :, :hidden_size]
-    key_states = ttnn.transpose(key_states, 2, 3)  # 1, 1, Hxd, S
-    key_states = ttnn.reshape(key_states, (bsz, config.encoder_attention_heads, head_size, tgt_len))  # 1, H, d, S
-
     value_states = fused_kv[:, :, :, hidden_size:]
-    value_states = ttnn.transpose(value_states, 1, 2)  # 1, S, 1, Hxd
-    value_states = ttnn.reshape(value_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
-    value_states = ttnn.transpose(value_states, 1, 2)  # 1, H, S, d
+
+    # num_kv_heads=0 is required here because we're calling nlp_create_qkv_heads
+    # on just the K or V tensor (not combined QKV)
+    key_states = ttnn.experimental.nlp_create_qkv_heads(
+        key_states,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_heads=config.encoder_attention_heads,
+        num_kv_heads=0,
+    )[0]
+    key_states = ttnn.permute(key_states, [0, 1, 3, 2])
+
+    value_states = ttnn.experimental.nlp_create_qkv_heads(
+        value_states,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_heads=config.encoder_attention_heads,
+        num_kv_heads=0,
+    )[0]
 
     return key_states, value_states
 
@@ -107,8 +167,9 @@ def get_decode_sdpa_configs(config, device):
         ),
     )
 
+    compute_grid_size = device.compute_with_storage_grid_size()
     sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
         exp_approx_mode=False,
         q_chunk_size=256,
         k_chunk_size=256,
@@ -125,18 +186,103 @@ def get_decode_sdpa_configs(config, device):
     return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
-def functional_sdpa(query_states, key_states, value_states, scaling, attention_mask):
-    query_states *= scaling
+def functional_sdpa(
+    query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False, is_decode=False
+):
+    if is_cross_attention and query_states.shape[1] == 20:
+        # NOTE: This will only work for openai/whisper-large-v3 & distil-whisper/distil-large-v3 models
+        # since the number of heads is 20
+        core_grid = ttnn.CoreGrid(y=4, x=5)
+        height_sharded_config_query_states = ttnn.create_sharded_memory_config(
+            query_states.padded_shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        query_states = ttnn.to_memory_config(query_states, height_sharded_config_query_states)
 
-    attn_weights = query_states @ key_states
+        height_sharded_config_key_states = ttnn.create_sharded_memory_config(
+            key_states.padded_shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        key_states = ttnn.to_memory_config(key_states, height_sharded_config_key_states)
 
-    if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
+        height_sharded_config_value_states = ttnn.create_sharded_memory_config(
+            value_states.padded_shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        value_states = ttnn.to_memory_config(value_states, height_sharded_config_value_states)
 
-    attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
+        query_states *= scaling
 
-    attn_probs = dropout(attn_weights, p=0, training=False)
-    attn_output = attn_probs @ value_states
+        attn_weights = ttnn.matmul(query_states, key_states, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+        ttnn.deallocate(query_states)
+        ttnn.deallocate(key_states)
+
+        attn_weights = ttnn.softmax_in_place(attn_weights, dim=-1)
+
+        attn_probs = dropout(attn_weights, p=0, training=False)
+
+        attn_output = ttnn.matmul(
+            attn_probs,
+            value_states,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_probs)
+        ttnn.deallocate(value_states)
+        attn_output = ttnn.to_memory_config(attn_output, WHISPER_MEMORY_CONFIG)
+
+    elif (not is_decode) and (query_states.shape[-2] == value_states.shape[-2]):
+        ## Encoder-self-attention
+        q_chunk_size = 32
+        k_chunk_size = 32
+        compute_grid_size = query_states.device().compute_with_storage_grid_size()
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=True,  # NOTE: False is more correct
+        )
+
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            query_states.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            scale=scaling,
+            attn_mask=None,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    else:
+        # original implementation for decoder-attention-no-KV-cache
+        query_states *= scaling
+
+        attn_weights = query_states @ key_states
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
+
+        attn_probs = dropout(attn_weights, p=0, training=False)
+
+        attn_output = attn_probs @ value_states
+
     return attn_output
 
 
@@ -147,6 +293,8 @@ def whisper_attention(
     is_decode,
     encoder_hidden_states=None,
     kv_cache=None,
+    cross_attn_cache=None,
+    cross_attn_cache_valid=False,
     current_decode_pos=None,
     *,
     parameters,
@@ -157,6 +305,14 @@ def whisper_attention(
 
     is_cross_attention = encoder_hidden_states is not None
     sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
+    # Enabling encoder SDPA, to disable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
+    encoder_sdpa_attention = not is_decode
+    if encoder_sdpa_attention:
+        transpose_k_heads = False
+    elif sdpa_with_kv_cache:
+        transpose_k_heads = False
+    else:
+        transpose_k_heads = True
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
@@ -164,10 +320,45 @@ def whisper_attention(
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
-        key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
-        attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
+        # Use cached cross-attention K/V if cache is valid, otherwise compute and copy to pre-allocated cache
+        if cross_attn_cache is not None and cross_attn_cache_valid:
+            key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
+        else:
+            # Compute K/V and copy to pre-allocated cache
+            key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
+            if cross_attn_cache is not None:
+                # Copy to pre-allocated tensors
+                ttnn.copy(key_states, cross_attn_cache[0])
+                ttnn.copy(value_states, cross_attn_cache[1])
+                # Use cache references for attention
+                key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
+        attn_output = functional_sdpa(
+            query_states,
+            key_states,
+            value_states,
+            scaling,
+            attention_mask,
+            is_cross_attention=is_cross_attention,
+            is_decode=is_decode,
+        )
     else:
-        fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
+        if not is_decode:
+            fused_qkv_dtype = ttnn.bfloat8_b
+        else:
+            fused_qkv_dtype = ttnn.bfloat16
+        compute_grid_size = hidden_states.device().compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+        fused_qkv = ttnn.linear(
+            hidden_states,
+            parameters.query_key_value.weight,
+            bias=parameters.query_key_value.bias,
+            core_grid=core_grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=fused_qkv_dtype,
+        )
+        ttnn.deallocate(hidden_states)
+        fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
+
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
 
         (
@@ -178,7 +369,7 @@ def whisper_attention(
             fused_qkv,
             num_heads=config.decoder_attention_heads,
             num_kv_heads=config.decoder_attention_heads,
-            transpose_k_heads=(not sdpa_with_kv_cache),
+            transpose_k_heads=transpose_k_heads,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if sdpa_with_kv_cache:
@@ -226,7 +417,16 @@ def whisper_attention(
 
             attn_output = ttnn.transpose(attn_output, 1, 2)
         else:
-            attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
+            # Encoder-attention or no-KV-cache-decoder-attention
+            attn_output = functional_sdpa(
+                query_states,
+                key_states,
+                value_states,
+                scaling,
+                attention_mask,
+                is_cross_attention=is_cross_attention,
+                is_decode=is_decode,
+            )
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     attn_output = ttnn.squeeze(attn_output, 0)
@@ -311,7 +511,16 @@ def expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] =
 
 
 def decoder_layer(
-    config, hidden_states, attention_mask, encoder_hidden_states, kv_cache=None, current_decode_pos=None, *, parameters
+    config,
+    hidden_states,
+    attention_mask,
+    encoder_hidden_states,
+    kv_cache=None,
+    current_decode_pos=None,
+    cross_attn_cache=None,
+    cross_attn_cache_valid=False,
+    *,
+    parameters,
 ):
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
@@ -349,6 +558,8 @@ def decoder_layer(
         is_decode=True,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
+        cross_attn_cache_valid=cross_attn_cache_valid,
         current_decode_pos=current_decode_pos,
         parameters=parameters.encoder_attn,
     )
@@ -397,6 +608,8 @@ def decoder(
     decoder_attention_mask,
     encoder_hidden_states,
     kv_cache=None,
+    cross_attn_cache=None,
+    cross_attn_cache_valid=False,
     current_decode_pos=None,
     *,
     parameters,
@@ -413,6 +626,8 @@ def decoder(
             decoder_attention_mask,
             encoder_hidden_states,
             kv_cache=kv_cache[i] if kv_cache is not None else None,
+            cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
+            cross_attn_cache_valid=cross_attn_cache_valid,
             current_decode_pos=current_decode_pos,
             parameters=decoder_layer_parameter,
         )
@@ -611,6 +826,7 @@ def whisper(
     decoder_hidden_states,
     decoder_attention_mask,
     kv_cache=None,
+    cross_attn_cache=None,
     current_decode_pos=None,
     *,
     parameters,
@@ -622,6 +838,7 @@ def whisper(
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        cross_attn_cache=cross_attn_cache,
         current_decode_pos=current_decode_pos,
         parameters=parameters.decoder,
     )

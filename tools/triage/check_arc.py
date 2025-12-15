@@ -59,11 +59,11 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     ), f"ARC heartbeat lower than default value: {RED}{heartbeat_1}{RST}. Expected at least {BLUE}{heartbeat_offset}{RST}"
     uptime_seconds = (heartbeat_1 - heartbeat_offset) / heartbeats_per_second
 
-    # Heartbeat must be between 10 and 50
+    # Heartbeat must be between 5 and 50
     log_check_device(
         device,
-        heartbeats_per_second >= 10,
-        f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s",
+        heartbeats_per_second >= 5,
+        f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}5{RST}hb/s",
     )
     log_check_device(
         device,

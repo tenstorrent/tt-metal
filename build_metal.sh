@@ -246,6 +246,11 @@ if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
     exit 1
 fi
 
+# Disable unity builds for CodeCoverage builds to get accurate per-file coverage
+if [[ "$build_type" == "CodeCoverage" || "$build_type" == "ASanCoverage" ]]; then
+    unity_builds="OFF"
+fi
+
 # If build-dir is not specified
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then

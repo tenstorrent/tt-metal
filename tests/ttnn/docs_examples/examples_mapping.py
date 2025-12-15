@@ -377,8 +377,6 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Normalization Program Configs
     "ttnn.SoftmaxDefaultProgramConfig": normalization.test_softmax_default_program_config,
     "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_scale_mask_softmax_in_place,
-    # Moreh Operations
-    # "ttnn.moreh_sum": moreh.test_moreh_sum, # Lack of example
     # Transformers
     # "ttnn.transformer.split_query_key_value_and_split_heads": transformer.test_split_query_key_value_and_split_heads, # Lack of example
     # "ttnn.transformer.concatenate_heads": transformer.test_concatenate_heads, # Lack of example

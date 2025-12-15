@@ -19,10 +19,8 @@
 
 // clang-format on
 
-namespace tt {
-
 // llrt = lower-level runtime
-namespace llrt {
+namespace tt::llrt {
 
 using RamSrcAddr = unsigned int;
 using RamDstAddr = unsigned int;
@@ -105,6 +103,4 @@ void set_metal_eth_fw_run_flag(ChipId device_id, const CoreCoord& virtual_core, 
 
 }  // namespace internal_
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

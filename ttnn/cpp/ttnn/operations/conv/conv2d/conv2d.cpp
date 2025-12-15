@@ -21,7 +21,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -285,8 +285,15 @@ Result conv2d_L1(
             }
         }
 
+        const std::array<std::uint32_t, 4> input_tensor_shape = {
+            batch_size,
+            input_height,
+            input_width,
+            in_channels,
+        };
+
         // call conv micro op
-        auto conv_output = conv2d(
+        auto conv_output = ttnn::prim::conv2d(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
@@ -299,7 +306,7 @@ Result conv2d_L1(
             opt_conv_op_block_config,
             conv_out_memory_config,
             output_dtype,
-            {batch_size, input_height, input_width, in_channels},
+            input_tensor_shape,
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,

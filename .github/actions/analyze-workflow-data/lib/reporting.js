@@ -552,6 +552,7 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
       const aggregateRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
       const commitUrl = info?.head_sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${info.head_sha}` : undefined;
       const commitShort = info?.head_sha ? info.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+
       changes.push({
         name,
         previous,
@@ -688,6 +689,7 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
           })();
           item.failing_jobs = failingJobNames;
         } catch (_) { /* ignore */ }
+
         item.repeated_errors = [];
         const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
         if (changeRef) {

@@ -1,24 +1,28 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
+#include "prod_nc_program_factory.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/work_split.hpp>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operation.hpp"
+#include <tt-metalium/work_split.hpp>
 
-namespace tt {
-using namespace constants;
-namespace operations {
+#include <string>
 
-namespace primary {
+namespace ttnn::operations::reduction::prod_nc::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
-    const tt::tt_metal::Tensor& input, const tt::tt_metal::Tensor& output, int64_t dim) {
+using namespace tt::constants;
+
+ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_args.output;
+    const int64_t dim = operation_attributes.dim;
+
     TT_FATAL(dim == 0 || dim == 1, "Dimension ({}) must be either 0 or 1", dim);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -30,7 +34,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     const auto& input_shape = input.padded_shape();
 
@@ -44,9 +48,9 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
     const auto num_output_tiles = output.physical_volume() / TILE_HW;
 
-    log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
+    log_debug(tt::LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(
-        LogTest,
+        tt::LogTest,
         "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
         dim,
         num_reduce_input_tile,
@@ -79,10 +83,10 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, in0_t},        // input
-            {CBIndex::c_1, in1_t},        // zero
-            {CBIndex::c_2, intermed0_t},  // accumulated sum
-            {CBIndex::c_3, out0_t},       // output
+            {tt::CBIndex::c_0, in0_t},        // input
+            {tt::CBIndex::c_1, in1_t},        // zero
+            {tt::CBIndex::c_2, intermed0_t},  // accumulated sum
+            {tt::CBIndex::c_3, out0_t},       // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -92,7 +96,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(dim)};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
-    constexpr uint32_t cb_id_out = CBIndex::c_3;
+    constexpr uint32_t cb_id_out = tt::CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
@@ -130,7 +134,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
@@ -141,7 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
@@ -154,7 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
              CHtWt,
              static_cast<uint32_t>(dim)});
 
-        SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
@@ -164,41 +168,50 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
              static_cast<uint32_t>(ttnn::operations::is_dram(output))});
 
         if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
+            tt::tt_metal::SetRuntimeArgs(
+                program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
             TT_FATAL(compute_kernel_2_id.has_value(), "compute_kernel_2_id needs to have a value");
-            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
+            tt::tt_metal::SetRuntimeArgs(
+                program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
         tile_offset += num_tiles_per_core;
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
-                                                   const void* operation,
-                                                   const tt::tt_metal::Program& program,
-                                                   const std::vector<tt::tt_metal::Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
-                                                   const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-        const auto* input_buffer = input_tensors.at(0).buffer();
-        const auto* output_buffer = input_tensors.at(1).buffer();
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = input_buffer->address();
-            }
-
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = output_buffer->address();
-            }
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel_id = reader_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
+            .num_cores_to_be_used = num_cores_to_be_used,
+            .num_cores_y = num_cores_y}};
 }
 
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+void ProdNcProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    const auto& shared_variables = cached_program.shared_variables;
+
+    const auto* input_buffer = tensor_args.input.buffer();
+    const auto* output_buffer = tensor_args.output.buffer();
+
+    for (uint32_t i = 0; i < shared_variables.num_cores_to_be_used; ++i) {
+        tt::tt_metal::CoreCoord core = {i / shared_variables.num_cores_y, i % shared_variables.num_cores_y};
+        {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+            runtime_args[0] = input_buffer->address();
+        }
+
+        {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
+            runtime_args[0] = output_buffer->address();
+        }
+    }
+}
+
+}  // namespace ttnn::operations::reduction::prod_nc::program

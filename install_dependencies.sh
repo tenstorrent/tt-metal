@@ -332,15 +332,15 @@ install_sfpi() {
         echo "[ERROR] Unknown packaging system for $sfpi_dist" >&2
         exit 1
     fi
-    if [[ -z $sfpi_md5 ]] ; then
+    if [[ -z $sfpi_hash ]] ; then
 	echo "[ERROR] SFPI $sfpi_version $sfpi_pkg package for $sfpi_arch $sfpi_dist is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
     wget -P $TEMP_DIR "$sfpi_url/$sfpi_filename"
-    if [[ $(md5sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
-	     != "$sfpi_md5" ]] ; then
-	echo "[ERROR] SFPI $sfpi_filename md5 mismatch" >&2
+    if [[ $(${sfpi_hashtype}sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
+	     != "$sfpi_hash" ]] ; then
+	echo "[ERROR] SFPI $sfpi_filename ${sfpi_hashtype} mismatch" >&2
 	if [[ -d $TEMP_DIR ]] ; then
 	    rm -rf $TEMP_DIR
 	fi

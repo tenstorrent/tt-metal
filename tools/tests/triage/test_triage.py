@@ -28,6 +28,14 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 
 
+def print_process_output(proc):
+    stdout, stderr = proc.communicate(input=None, timeout=0)
+    print("\n=== Process stdout ===")
+    print(stdout.decode("utf-8") if stdout else "(empty)")
+    print("\n=== Process stderr ===")
+    print(stderr.decode("utf-8") if stderr else "(empty)")
+
+
 @pytest.fixture(scope="class")
 def cause_hang_with_app(request):
     global metal_home
@@ -53,14 +61,11 @@ def cause_hang_with_app(request):
         if proc.returncode != 0:
             # Print process output for debugging
             print("The application did not hang as expected.")
-            stdout, stderr = proc.communicate(input=None, timeout=0)
-            print("\n=== Process stdout ===")
-            print(stdout.decode("utf-8") if stdout else "(empty)")
-            print("\n=== Process stderr ===")
-            print(stderr.decode("utf-8") if stderr else "(empty)")
+            print_process_output(proc)
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
+
     request.cls.app_configuration = app_configuration
     request.cls.exalens_context = init_ttexalens()
     try:
@@ -70,6 +75,8 @@ def cause_hang_with_app(request):
         proc.terminate()
         try:
             proc.wait(timeout=5)
+            # Pytest will only display this if test fails
+            print_process_output(proc)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
@@ -87,7 +94,7 @@ def cause_hang_with_app(request):
             "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang",
             [],
             {},
-            3,
+            10,
         ),
         (
             # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
@@ -167,6 +174,24 @@ class TestTriage:
         assert (
             len(FAILURE_CHECKS) == 0
         ), f"Dump fast dispatch check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_check_noc_status(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "check_noc_status.py"),
+            args=None,
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        # Some mismatches may occur on unused cores.
+        non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
+        assert (
+            len(non_state_failures) == 0
+        ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
 
     def test_check_arc(self):
         global triage_home
