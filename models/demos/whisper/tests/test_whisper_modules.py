@@ -20,10 +20,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"
 
+WHISPER_BATCH_SIZE = 2
+
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize(
     "sequence_size, use_encoder_states, use_attn_mask, use_kv_cache",
     (
@@ -154,6 +156,9 @@ def test_whisper_attention(
             parameters=ttnn_parameters,
         )
         output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+        # 4D to 3D
+        if len(output.shape) == 4:
+            output = output.squeeze(1)
 
         pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
         logger.info(f"[pos={i}] Output PCC: {output_pcc}")
@@ -188,7 +193,7 @@ def test_whisper_attention(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_size):
@@ -220,13 +225,18 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D and unpadding
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+    output = output[:, :sequence_size, :]
+
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
@@ -251,7 +261,7 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
 
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         config=config,
-        input_features=torch_input_features,
+        input_features=torch_input_features.unsqueeze(1),
         parameters=ttnn_parameters,
         device=mesh_device,
         weights_mesh_mapper=weights_mesh_mapper,
@@ -260,13 +270,19 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
     output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D and unpadding
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+    sequence_size = torch_output.shape[-2]
+    output = output[:, :sequence_size, :]
+
     _, pcc_message = assert_with_pcc(torch_output, output, 0.998)
     logger.info(f"Output PCC: {pcc_message}")
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -357,6 +373,9 @@ def test_decoder_layer(
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    # 4D to 3D
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -364,7 +383,7 @@ def test_decoder_layer(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -394,7 +413,7 @@ def test_decoder(
         (batch_size, encoder_sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32
     )
 
-    decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
+    decoder_input_ids = torch.ones(batch_size, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
 
     attention_mask = None
 
@@ -454,6 +473,10 @@ def test_decoder(
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
 
@@ -467,7 +490,7 @@ def test_decoder(
         [1, True],
     ),
 )
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_whisper(
     tmp_path, mesh_device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, batch_size_per_device
@@ -500,7 +523,7 @@ def test_ttnn_whisper(
 
     (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
         config=config,
-        input_features=input_features,
+        input_features=input_features.unsqueeze(1),
         input_ids=decoder_input_ids,
         attention_mask=attention_mask,
         parameters=ttnn_parameters,
@@ -533,6 +556,10 @@ def test_ttnn_whisper(
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D
+    if len(last_hidden_state.shape) == 4:
+        last_hidden_state = last_hidden_state.squeeze(1)
+
     if is_blackhole():
         expec_out_pcc = 0.990
     else:  # wormhole_b0
@@ -543,7 +570,7 @@ def test_ttnn_whisper(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize("num_decode_iterations", [5])
 @pytest.mark.parametrize(
