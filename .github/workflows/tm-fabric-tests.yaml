@@ -20,6 +20,11 @@ on:
         required: false
         default: true
         type: boolean
+      run-perf-fabric-bw:
+        description: 'Run T3K ubench - Fabric BW performance test'
+        required: false
+        default: true
+        type: boolean
       run-perf-fabric-mux-bw:
         description: 'Run T3K ubench - Fabric Mux BW performance test'
         required: false
