@@ -50,6 +50,16 @@ struct ProgramCache;
 namespace tt::tt_fabric {
 class FabricNodeId;
 }
+
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}
+
+namespace tt::tt_metal::experimental::MeshDevice {
+void SetUserData(distributed::MeshDevice* mesh_device, uintptr_t key, std::shared_ptr<void> value);
+std::shared_ptr<void> GetUserData(distributed::MeshDevice* mesh_device, uintptr_t key);
+void RemoveUserData(distributed::MeshDevice* mesh_device, uintptr_t key);
+}
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
@@ -120,6 +130,14 @@ private:
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+
+    std::unordered_map<uintptr_t, std::shared_ptr<void>> user_data_;
+
+    friend void experimental::MeshDevice::SetUserData(
+        distributed::MeshDevice* mesh_device, uintptr_t key, std::shared_ptr<void> value);
+    friend std::shared_ptr<void> experimental::MeshDevice::GetUserData(
+        distributed::MeshDevice* mesh_device, uintptr_t key);
+    friend void experimental::MeshDevice::RemoveUserData(distributed::MeshDevice* mesh_device, uintptr_t key);
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 

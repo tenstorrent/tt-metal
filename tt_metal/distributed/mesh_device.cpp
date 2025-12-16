@@ -1188,3 +1188,26 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::MeshDevice {
+
+void SetUserData(distributed::MeshDevice* mesh_device, uintptr_t key, std::shared_ptr<void> value) {
+    auto lock = mesh_device->lock_api();
+    mesh_device->user_data_[key] = std::move(value);
+}
+
+std::shared_ptr<void> GetUserData(distributed::MeshDevice* mesh_device, uintptr_t key) {
+    auto lock = mesh_device->lock_api();
+    auto it = mesh_device->user_data_.find(key);
+    if (it != mesh_device->user_data_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+void RemoveUserData(distributed::MeshDevice* mesh_device, uintptr_t key) {
+    auto lock = mesh_device->lock_api();
+    mesh_device->user_data_.erase(key);
+}
+
+}  // namespace tt::tt_metal::experimental::MeshDevice
