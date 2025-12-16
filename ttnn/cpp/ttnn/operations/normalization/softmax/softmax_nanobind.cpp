@@ -112,7 +112,7 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
                     :header-rows: 1
 
                     * - Dtypes
-                        - Layouts
+                      - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
                       - TILE
 

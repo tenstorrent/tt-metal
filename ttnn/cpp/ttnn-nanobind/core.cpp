@@ -116,6 +116,7 @@ void py_module(nb::module_& mod) {
 
             ttnn::set_printoptions(profile_enum, sci_mode_enum, precision_value);
         },
+        nb::sig("def set_printoptions(\\* , profile: str, sci_mode: Optional[str|bool], precision: Optional[int]"),
         nb::kw_only(),
         nb::arg("profile"),
         nb::arg("sci_mode") = nb::none(),
