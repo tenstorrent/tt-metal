@@ -491,6 +491,32 @@ target_link_libraries(
         Python3::Python
         ttml
 )
+
+# Bridge marker emission to Moreh's MarkerDeviceOperation to avoid duplicating
+# the marker op implementation inside TTML.
+set(MOREH_NN_HOME "$ENV{MOREH_NN_HOME}")
+if(NOT MOREH_NN_HOME)
+    message(FATAL_ERROR "MOREH_NN_HOME is not set; required for TTML marker bridge to Moreh MarkerDeviceOperation.")
+endif()
+target_include_directories(_ttml PRIVATE "${MOREH_NN_HOME}")
+
+find_library(
+    MOREHNN_LIBRARY
+    NAMES
+        _morehnn.so
+        _morehnn
+    HINTS
+        "${MOREH_NN_HOME}/morehnn"
+        "${MOREH_NN_HOME}/install/lib"
+    NO_DEFAULT_PATH
+)
+if(NOT MOREHNN_LIBRARY)
+    message(
+        FATAL_ERROR
+        "Failed to find _morehnn shared library under ${MOREH_NN_HOME}/morehnn or ${MOREH_NN_HOME}/install/lib (expected _morehnn.so)."
+    )
+endif()
+target_link_libraries(_ttml PRIVATE "${MOREHNN_LIBRARY}")
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS

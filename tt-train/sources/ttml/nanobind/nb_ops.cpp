@@ -4,9 +4,13 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
+
+#include <stdexcept>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "morehnn/operations/marker/marker_forward/device/marker_device_operation.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -169,6 +173,18 @@ void py_module(nb::module_& m) {
             nb::arg("target"),
             nb::arg("reduce") = ReduceType::MEAN);
     }
+
+    m.def(
+        "marker",
+        [](const autograd::TensorPtr& tensor, const std::string& attributes) {
+            if (!tensor) {
+                throw std::runtime_error("ttml.ops.marker: tensor is None");
+            }
+            // Emit the Moreh MarkerDeviceOperation in TTML's device context.
+            (void)ttnn::prim::moreh_nn::marker(tensor->get_value(), attributes);
+        },
+        nb::arg("tensor"),
+        nb::arg("attributes"));
 
     {
         auto py_matmul = static_cast<nb::module_>(m.attr("matmul"));
