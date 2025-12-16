@@ -40,10 +40,7 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
-            subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
             output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
-            output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens and the metadata. Defaults to `None`.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
@@ -59,8 +56,6 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                             cluster_axis=cluster_axis,
                             num_links=num_links,
                             topology=topology,
-                            memory_config=memory_config,
-                            subdevice_id=subdevice_id,
                             output_concat_dim=output_concat_dim)
         )doc";
 
@@ -75,11 +70,7 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                const ttnn::Tensor& expert_indices_tensor,
                const ttnn::Tensor& expert_scores_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
-               const std::optional<uint32_t> output_concat_dim,
                const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<std::array<ttnn::Tensor, 2>>& output_tensors,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
@@ -88,11 +79,8 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                     expert_scores_tensor,
                     expert_mapping_tensor,
                     cluster_axis,
-                    output_tensors,
                     num_links,
                     topology,
-                    memory_config,
-                    subdevice_id,
                     output_concat_dim);
             },
             py::arg("input_tensor").noconvert(),
@@ -102,9 +90,6 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             py::kw_only(),
             py::arg("output_concat_dim") = 1,
             py::arg("cluster_axis") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensors") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("topology").noconvert() = std::nullopt});
 }

@@ -18,12 +18,8 @@ struct ExecuteAllToAllDispatchSelectiveTilize {
         const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
         std::optional<uint32_t> num_links,
-        std::optional<tt::tt_fabric::Topology> topology,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-        const std::optional<uint32_t>& output_concat_dim);
+        std::optional<tt::tt_fabric::Topology> topology);
 };
 
 }  // namespace operations::experimental::ccl

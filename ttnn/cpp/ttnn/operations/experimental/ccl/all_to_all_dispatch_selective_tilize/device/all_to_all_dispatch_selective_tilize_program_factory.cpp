@@ -89,12 +89,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
+    auto scores_tensor = tensor_args.expert_scores_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
+
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
-    const auto& dte_tensor = tensor_return_value.at(2);
-    const auto& dte_scores_tensor = tensor_return_value.at(3);
-    const auto& ed_table_tensor = tensor_return_value.at(4);
+    const auto& scores_tensor = tensor_return_value.at(2);
+
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -216,6 +217,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     CoreCoord worker_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));  // exclusive end
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t num_cores = worker_core_range_set.num_cores();
+    uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
 
     // split tokens sends across cores, each core will process tokens_per_device tokens
     auto

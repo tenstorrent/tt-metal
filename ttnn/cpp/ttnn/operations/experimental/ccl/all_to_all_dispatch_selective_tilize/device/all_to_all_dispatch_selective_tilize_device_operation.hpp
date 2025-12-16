@@ -20,47 +20,28 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
-
-std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& mapping_tensor,
-    uint32_t num_links,
-    std::optional<uint32_t> axis);
-
-}  // namespace detail
-
 struct AllToAllDispatchSelectiveTilizeDeviceOperation {
-    enum AllToAllTransferType {
-        FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
-        PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
-    };
     struct operation_attributes_t {
         const CoreRangeSet worker_core_range_set;
-        const MemoryConfig output_mem_config;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const AllToAllTransferType impl;
-        const uint32_t output_concat_dim;
-        static constexpr auto attribute_names = std::forward_as_tuple(
-            "worker_core_range_set", "output_mem_config", "axis", "num_links", "topology", "impl", "output_concat_dim");
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("worker_core_range_set", "axis", "num_links", "topology");
         auto attribute_values() const {
-            return std::forward_as_tuple(
-                worker_core_range_set, output_mem_config, axis, num_links, topology, impl, output_concat_dim);
+            return std::forward_as_tuple(worker_core_range_set, axis, num_links, topology);
         };
     };
     struct tensor_args_t {
         const Tensor input_tensor;
         const Tensor expert_indices_tensor;
+        const Tensor expert_scores_tensor;
         const Tensor expert_mapping_tensor;
-        const std::optional<std::array<Tensor, 2>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<ttnn::TensorSpec, 5>;
 
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    using tensor_return_value_t = std::array<Tensor, 5>;
 
     struct AllToAllDispatchSelectiveTilizeSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -117,15 +98,12 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
+        const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
-        const ttnn::MemoryConfig& memory_config,
-        const CoreRangeSet& worker_core_range_set,
-        AllToAllTransferType impl,
-        uint32_t output_concat_dim);
+        const CoreRangeSet& worker_core_range_set);
 };
 }  // namespace ttnn::operations::experimental::ccl
 
@@ -134,4 +112,3 @@ namespace ttnn::prim {
 constexpr auto all_to_all_dispatch_selective_tilize = ttnn::
     register_operation<"ttnn::prim::all_to_all_dispatch_selective_tilize", ttnn::operations::experimental::ccl::AllToAllDispatchSelectiveTilizeDeviceOperation>();
 }  // namespace ttnn::prim
-

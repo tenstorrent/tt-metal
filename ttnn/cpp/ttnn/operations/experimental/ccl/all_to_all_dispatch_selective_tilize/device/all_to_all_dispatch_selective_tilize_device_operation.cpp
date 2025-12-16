@@ -26,8 +26,6 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_m
 
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
-
-    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_hit(
@@ -42,7 +40,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
-    uint32_t output_concat_dim = operation_attributes.output_concat_dim;
 
     // experts are expert parallel across devices
     // tokens are data parallel across devices
@@ -63,94 +60,79 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
 
     // final batch in the metadata tensor
     uint32_t tokens_per_device = input_shape[0] * input_shape[1] * input_shape[2];
+    uint32_t tile_height = indices_shape[2];
+    uint32_t height_tiles = tt::div_up(tokens_per_device, tile_height);
     uint32_t global_tokens = tokens_per_device * dispatch_devices;
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t experts_per_device = mapping_shape[-1] / mesh_view.num_devices();
 
     auto output_shape = ttnn::Shape({1, global_tokens, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * tt::round_up(selected_experts_k, 32)});
-    auto dte_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * experts_per_device});
-    auto dte_scores_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * experts_per_device});
-    auto ed_table_shape = ttnn::Shape({1, experts_per_device * dispatch_devices});
+    auto metadata_shape = ttnn::Shape({dispatch_devices, height_tiles, tile_height, selected_experts_k});
+    auto scores_shape = ttnn::Shape({dispatch_devices, height_tiles, tile_height, selected_experts_k});
 
-    log_debug(tt::LogOp, "output_shape: {}", output_shape);
-    log_debug(tt::LogOp, "metadata_shape: {}", metadata_shape);
-    log_debug(tt::LogOp, "input_tensor_shape: {}", input_shape);
-    log_debug(tt::LogOp, "indices_shape: {}", indices_shape);
-    log_debug(tt::LogOp, "mapping_shape: {}", mapping_shape);
-    log_debug(tt::LogOp, "dispatch_devices: {}", dispatch_devices);
-    log_debug(tt::LogOp, "hidden_size: {}", hidden_size);
-    log_debug(tt::LogOp, "batch: {}", batch);
-    log_debug(tt::LogOp, "selected_experts_k: {}", selected_experts_k);
+    // ttnn::MemoryConfig l1_memory_config =
+    // ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    ttnn::MemoryConfig dram_memory_config =
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-    auto mem_config = operation_attributes.output_mem_config;
     auto output_tokens_spec = TensorSpec(
         Shape(output_shape),
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), dram_memory_config));
     auto metadata_spec = TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.expert_indices_tensor.dtype(),
             tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
-            mem_config));
+            dram_memory_config));
+
     auto scores_spec = TensorSpec(
         Shape(scores_shape),
         tt::tt_metal::TensorLayout(
-            tensor_args.expert_indices_tensor.dtype(),
-            tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
-            mem_config));
+            tensor_args.expert_scores_tensor.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.expert_scores_tensor.layout()),
+            dram_memory_config));
 
-    if (tensor_args.optional_output_tensors.has_value()) {
-        auto output_tensors = tensor_args.optional_output_tensors.value();
-        auto preallocated_output_spec = output_tensors[0].tensor_spec();
-        auto preallocated_metadata_spec = output_tensors[1].tensor_spec();
-        return {preallocated_output_spec, preallocated_metadata_spec};
-    }
-    return {output_tokens_spec, metadata_spec, dte_spec, dte_scores_spec, ed_table_spec};
+    return {output_tokens_spec, metadata_spec, scores_spec};
 }
 
-AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t AllToAllDispatchSelectiveTilizeDeviceOperation::create_output_tensors(
+AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t
+AllToAllDispatchSelectiveTilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensors.has_value()) {
-        return tensor_args.optional_output_tensors.value();
-    }
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
     auto metadata_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
-    auto dte_tensor = create_device_tensor(output_spec[2], tensor_args.input_tensor.device());
-    auto dte_scores_tensor = create_device_tensor(output_spec[3], tensor_args.input_tensor.device());
-    auto ed_table_tensor = create_device_tensor(output_spec[4], tensor_args.input_tensor.device());
-    return {output_tensor, metadata_tensor, dte_tensor, dte_scores_tensor, ed_table_tensor};
+    auto scores_tensor = create_device_tensor(output_spec[2], tensor_args.input_tensor.device());
+    return {output_tensor, metadata_tensor, scores_tensor};
 }
 
-std::tuple<AllToAllDispatchSelectiveTilizeDeviceOperation::operation_attributes_t, AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_args_t>
+std::tuple<
+    AllToAllDispatchSelectiveTilizeDeviceOperation::operation_attributes_t,
+    AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_args_t>
 AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set,
-    AllToAllTransferType impl,
-    uint32_t output_concat_dim) {
+    const CoreRangeSet& worker_core_range_set) {
     return {
         operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
-            .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .impl = impl,
-            .output_concat_dim = output_concat_dim},
+        },
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,
+            .expert_scores_tensor = expert_scores_tensor,
             .expert_mapping_tensor = expert_mapping_tensor,
-            .optional_output_tensors = optional_output_tensors}};
+        },
+    };
 }
 
 }  // namespace ttnn::operations::experimental::ccl
