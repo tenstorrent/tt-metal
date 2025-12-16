@@ -267,12 +267,6 @@ void MAIN {
         {
             uint32_t cb_out_mm = cb_out_accumulate_im;
 
-            // Set up ping pong buffers
-            uint32_t alias_prev_sum = cb_prev_sum;
-            uint32_t alias_cur_sum = cb_cur_sum;
-            uint32_t alias_prev_max = cb_prev_max;
-            uint32_t alias_cur_max = cb_cur_max;
-
             // Loop through all K chunks
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 // Reconfig register DF
@@ -343,7 +337,7 @@ void MAIN {
                  */
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                pack_reconfig_data_format(alias_cur_max);
+                pack_reconfig_data_format(cb_cur_max);
 
                 /**
                  * OPTIMIZATION
@@ -354,18 +348,18 @@ void MAIN {
                  *  cur_max = max(qk, dim=-1)
                  */
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    alias_cur_max, alias_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
-                /* QK -= alias_cur_max */
+                /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
-                reconfig_data_format(cb_qk_im, alias_cur_max);
+                reconfig_data_format(cb_qk_im, cb_cur_max);
                 pack_reconfig_data_format(cb_qk_im);
 
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
-                    alias_cur_max, alias_cur_sum, Sk_chunk_t_dynamic);
+                    cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
                 // FIXME: doing this reduce in the previous sub_exp_block_bcast_cols_inplace function gives incorrect
@@ -373,7 +367,7 @@ void MAIN {
 
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    alias_cur_sum, alias_cur_sum, Sk_chunk_t_dynamic, false);
+                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
@@ -407,15 +401,15 @@ void MAIN {
                     // When there is more than 1 chunk, we perform Lazy Softmax
 
                     // Reconfig register DF
-                    reconfig_data_format(alias_prev_max, alias_cur_max);
+                    reconfig_data_format(cb_prev_max, cb_cur_max);
                     pack_reconfig_data_format(cb_exp_max_diff);
 
                     /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    cb_pop_front(alias_prev_max, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    cb_pop_front(cb_prev_max, Sq_chunk_t);
 
                     /* PREV_SUM *= EXP_MAX_DIFF */
-                    mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                     /* OUT_ACC *= EXP_MAX_DIFF */
                     reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
@@ -423,9 +417,9 @@ void MAIN {
                     mul_block_bcast_cols<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
 
                     /* CUR_SUM += PREV_SUM */
-                    reconfig_data_format(alias_cur_sum, alias_prev_sum);
-                    pack_reconfig_data_format(alias_cur_sum);
-                    add_block_inplace<true>(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                    reconfig_data_format(cb_cur_sum, cb_prev_sum);
+                    pack_reconfig_data_format(cb_cur_sum);
+                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
                     /* OUT_ACC += OUT_IM */
                     reconfig_data_format(cb_out_accumulate_im, cb_out_im);
@@ -435,21 +429,16 @@ void MAIN {
 
                 if (k_chunk < k_chunk_end - 1 || do_reduce) {
                     // Swap CB handles to prepare for next iteration
-                    std::swap(alias_prev_sum, alias_cur_sum);
-                    std::swap(alias_prev_max, alias_cur_max);
+                    std::swap(cb_prev_sum, cb_cur_sum);
+                    std::swap(cb_prev_max, cb_cur_max);
                 } else {
                     // Write results OUT_ACC, CUR_MAX, CUR_SUM to designated
                     // Write o, m, l into cb_out
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
-                    move_block<true>(alias_cur_max, cb_out_m, Sq_chunk_t);
-                    move_block<true>(alias_cur_sum, cb_out_l, Sq_chunk_t);
+                    move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
                 }
             }
-
-            cb_prev_sum = alias_prev_sum;
-            cb_cur_sum = alias_cur_sum;
-            cb_prev_max = alias_prev_max;
-            cb_cur_max = alias_cur_max;
         }
         /* END OF FLASH ATTENTION LOOP */
         // Perform reduction across intermediates from other cores if this is the reduction core
