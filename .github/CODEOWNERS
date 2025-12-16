@@ -29,8 +29,8 @@ tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @tenstorrent/met
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # TT-STL
-tt_stl/ @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
-tt_stl/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_stl/ @ayerofieiev-tt @akerteszTT @tenstorrent/codeowner-bypass
+tt_stl/**/CMakeLists.txt @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tenstorrent/codeowner-bypass
@@ -48,7 +48,7 @@ tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeow
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @tenstorrent/codeowner-bypass
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tt_metal/graph/ @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
+tt_metal/graph/ @ayerofieiev-tt @akerteszTT @dgomezTT @tenstorrent/codeowner-bypass
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @kstevensTT @tenstorrent/codeowner-bypass # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
@@ -127,7 +127,7 @@ tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT @tenstorrent/codeowner-bypass
-ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
+ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/matmul.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
@@ -138,10 +138,10 @@ ttnn/**/kernels/ @tenstorrent/codeowner-bypass # Removes the owners above from o
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
-ttnn/cpp/ttnn/deprecated/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/deprecated/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/codeowner-bypass
 
-ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @aczajkowskiTT @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/point_to_point/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
@@ -361,7 +361,7 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstor
 
 # tt-train
 # primary owners
-tt-train/** @dmakoviichuk-tt @ayerofieiev-tt @tenstorrent/codeowner-bypass
+tt-train/** @ayerofieiev-tt @tenstorrent/codeowner-bypass
 # kernel development
 tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @tenstorrent/codeowner-bypass
 # ops

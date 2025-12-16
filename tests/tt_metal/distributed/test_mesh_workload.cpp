@@ -44,11 +44,13 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -510,6 +512,10 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
 TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     if (mesh_device_->num_devices() == 1) {
         GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::N300) {
+        GTEST_SKIP() << "Skipping test for N300 board due to #34420";
     }
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};

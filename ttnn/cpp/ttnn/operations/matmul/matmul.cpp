@@ -211,7 +211,7 @@ ttnn::Tensor bound_matmul(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            parameters.output_mem_config,
+            output_tensor.memory_config(),
             optional_output_tensor);
     }
 
@@ -219,7 +219,7 @@ ttnn::Tensor bound_matmul(
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
+            output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;
