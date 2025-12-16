@@ -275,21 +275,12 @@ Tensor ExecuteDiv::invoke(
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+    // Only require legacy mode for round_mode if not INT32, or if accurate_mode is set.
+    const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32) or accurate_mode);
 
-    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or output_dtype.has_value() or accurate_mode;
-
-    if (not(use_legacy
-                ? *use_legacy
-                : has_legacy_only_args or
-                      binary::is_legacy_only(
-                          input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+    if (is_int32) {
         TT_FATAL(
-            not has_legacy_only_args,
-            "accurate_mode, optional output_dtype are not valid when passing use_legacy parameter as false in div");
-
-        TT_FATAL(
-            (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
-            "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+            (use_legacy == false || use_legacy == std::nullopt), "Integer Division is not supported in legacy mode");
 
         if (round_mode == "floor") {
             return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
@@ -316,13 +307,14 @@ Tensor ExecuteDiv::invoke(
                 use_legacy,
                 sub_core_grids);
         } else {
-            Tensor a =
-                is_int32 ? typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_a;
-            Tensor b =
-                is_int32 ? typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_b;
+            // round_mode = None
+            TT_FATAL(
+                (output_dtype == std::nullopt || output_dtype == DataType::FLOAT32),
+                "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+                "ttnn.float32");
             return BinaryOperation<BinaryOpType::DIV>::invoke(
-                a,
-                b,
+                input_a,
+                input_b,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
@@ -334,14 +326,31 @@ Tensor ExecuteDiv::invoke(
         }
     }
 
+    if (not(use_legacy
+                ? *use_legacy
+                : has_legacy_only_args or
+                      binary::is_legacy_only(
+                          input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+        TT_FATAL(
+            not has_legacy_only_args,
+            "accurate_mode, round_mode not valid when passing use_legacy parameter as false in div");
+
+        return BinaryOperation<BinaryOpType::DIV>::invoke(
+            input_a,
+            input_b,
+            std::nullopt,
+            output_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            use_legacy,
+            sub_core_grids);
+    }
+
     TT_FATAL(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
-    if (is_int32) {
-        TT_FATAL(
-            (output_dtype == std::nullopt || output_dtype == DataType::INT32),
-            "Incorrect optional output dtype (expected None or 'ttnn.int32')");
-    }
 
     Tensor result;
     // No accurate_mode for FP32 div as inf/nan are handled at kernel level
@@ -380,7 +389,8 @@ Tensor ExecuteDiv::invoke(
     } else if (round_mode == "floor") {
         result = ttnn::floor(result, output_mem_config, output_tensor, sub_core_grids);
     }
-    if (is_fp32 || (is_int32 && round_mode == std::nullopt && output_dtype == std::nullopt)) {
+
+    if (is_fp32) {
         return result;
     }
     return typecast(result, input_dtype, std::nullopt, output_tensor, sub_core_grids);
