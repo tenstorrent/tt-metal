@@ -11,7 +11,6 @@ This directory contains the core implementation for BGE-large-en-v1.5 (BAAI Gene
 
 ## Device-Specific Implementations
 - Wormhole: See `models/demos/wormhole/bge_large_en/`
-- Blackhole: See `models/demos/blackhole/bge_large_en/`
 
 ## Model Specifications
 - Model: BAAI/bge-large-en-v1.5

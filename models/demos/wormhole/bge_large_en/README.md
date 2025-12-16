@@ -1,7 +1,7 @@
 # BGE-Large-EN-v1.5
 
 ## Platforms:
-    Wormhole (n150, n300)
+    Wormhole (n150, n300), T3K, Galaxy
 
 ## Introduction
 **BAAI/bge-large-en-v1.5** (BAAI General Embedding) is a state-of-the-art sentence embedding model developed by Beijing Academy of Artificial Intelligence. It achieves top performance on the MTEB English benchmark. Built on BERT-large architecture, it leverages mean pooling to generate dense sentence embeddings of 1024 dimensions, enabling highly accurate semantic search, text clustering, and information retrieval tasks.
@@ -28,10 +28,12 @@ pytest --disable-warnings models/demos/wormhole/bge_large_en/tests/pcc/test_ttnn
 ```
 
 ###  Performant Model with Trace+2CQ
-> **Note:** BGE-Large uses BERT-large as its backbone model.
+> **Note:** BGE-Large uses BERT-large as its backbone model. The model supports both 384 and 512 sequence lengths.
 
 #### Single Device (BS=8):
-- End-to-end performance with mean-pooling post-processing
+- End-to-end performance with mean-pooling post-processing:
+  - **Sequence Length 384**: **230 sentences per second**
+  - **Sequence Length 512**: **146 sentences per second**
 ```
 pytest --disable-warnings models/demos/wormhole/bge_large_en/tests/perf/test_bge_e2e_performant.py::test_e2e_performant_bge
 ```
@@ -72,24 +74,36 @@ pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/interactive_de
 
 ## Testing
 ### Performant Dataset evaluation with Trace+2CQ
-- You can use any English semantic textual similarity dataset for evaluation
-- Adjust the `num_samples` parameter to control the number of dataset samples used during evaluation.
+- The `dataset_evaluation.py` script supports evaluation on MTEB datasets including:
+  - **Retrieval tasks** (e.g., ArguAna): Evaluates using Recall@K and nDCG@K metrics
+  - **Semantic Textual Similarity tasks** (e.g., STSBenchmark): Evaluates using Spearman's correlation
+- Datasets are automatically downloaded from Hugging Face
+- Adjust the `max_samples` parameter to control the number of dataset samples used during evaluation
 
 #### Single Device (BS=8):
+- Retrieval task evaluation:
 ```
-pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_eval
+pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_retrieval_evaluation
+```
+- Semantic Textual Similarity task evaluation:
+```
+pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_sts_evaluation
 ```
 
 #### Multi Device (DP=2, n300):
+- Retrieval task evaluation:
 ```
-pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_eval_dp
+pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_retrieval_evaluation_dp
+```
+- Semantic Textual Similarity task evaluation:
+```
+pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_sts_evaluation_dp
 ```
 
 ##  Details
-- The entry point to the BGE model is located at: `models/demos/sentence_bert/ttnn/ttnn_sentence_bert_model.py`
+- The entry point to the BGE model is located at: `models/demos/bge_large_en/ttnn/ttnn_bge_model.py`
 - Batch size: 8
-- Sequence Length: 384 (can support up to 512)
-- **Important:** For retrieval tasks, prepend queries with: `"Represent this sentence for searching relevant passages: "`
+- Sequence Length: Supports both **384** and **512** sequence lengths
 
 ## Performance
 BGE-Large-EN-v1.5 achieves state-of-the-art results on:
