@@ -28,8 +28,8 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        # 8-chip (T3K/LoudBox) configuration - uncomment when running on 8-chip systems
-        # Note: This config is NOT valid on 6U (32-chip) systems with fabric enabled
+        # 8-chip t3k/loudbox config, uncomment when running on 8-chip systems
+        # note: this config is not valid on 6u (32-chip) systems with fabric enabled
         # pytest.param(
         #     (1, 8),  # mesh_device
         #     (1, 0),  # cfg
@@ -42,12 +42,12 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
         #     "1x8tp1",
         #     id="1x8tp1",
         # ),
-        # 6U (32-chip Galaxy) configuration - matching Stable Diffusion
+        # 6u (32-chip galaxy) config matching stable diffusion
         pytest.param(
             (4, 8),  # mesh_device
-            (2, 1),  # cfg (CFG parallel on axis 1)
-            (4, 0),  # sp (sequence parallel on axis 0)
-            (4, 1),  # tp (tensor parallel on axis 1)
+            (2, 1),  # cfg parallel on axis 1
+            (4, 0),  # sequence parallel on axis 0
+            (4, 1),  # tensor parallel on axis 1
             (4, 1),  # encoder_tp
             (4, 1),  # vae_tp
             ttnn.Topology.Linear,
@@ -55,7 +55,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
             "4x8cfg1sp0tp1",
             id="4x8cfg1sp0tp1",
         ),
-        # 8-chip (T3K) configuration with CFG - uncomment when running on 8-chip systems
+        # 8-chip t3k config with cfg, uncomment when running on 8-chip systems
         # pytest.param(
         #     (2, 4),  # mesh_device
         #     (2, 0),  # cfg
