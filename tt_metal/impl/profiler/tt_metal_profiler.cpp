@@ -1052,12 +1052,13 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
     std::map<ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data;
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+
     if (!getDeviceProfilerState() || !detail::getProgramsPerfDataMidRun()) {
         return {};
     }
+
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
-    // printf("%d\n", profiler_state_manager==nullptr);
     TT_FATAL(profiler_state_manager != nullptr, "Profiler state manager is nullptr");
     for (const auto& [device_id, device_programs_perf_analyses] :
          profiler_state_manager->device_programs_perf_analyses_map) {
@@ -1067,6 +1068,7 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
             latest_programs_perf_data[device_id] = device_programs_perf_analyses.back();
         }
     }
+
 #endif
     return latest_programs_perf_data;
 }

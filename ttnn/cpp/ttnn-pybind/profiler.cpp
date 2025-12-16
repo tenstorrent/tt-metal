@@ -129,6 +129,13 @@ void ProfilerModule(py::module& m_profiler) {
     )doc");
 
     m_profiler.def(
+        "tracy_frame",
+        &tt::tt_metal::op_profiler::tracy_frame,
+        R"doc(
+        Emit a tracy frame signpost.
+    )doc");
+
+    m_profiler.def(
         "GetLatestProgramsPerfData",
         []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetLatestProgramsPerfData()); },
         R"doc(

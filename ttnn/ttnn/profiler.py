@@ -33,11 +33,3 @@ def GetAllProgramsPerfData():
 
 
 __all__ = []
-# __all__ = [
-#     "start_tracy_zone",
-#     "stop_tracy_zone",
-#     "tracy_message",
-#     "tracy_frame",
-#     "GetLatestProgramsPerfData",
-#     "GetAllProgramsPerfData",
-# ]
