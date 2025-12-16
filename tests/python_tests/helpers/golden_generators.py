@@ -883,6 +883,52 @@ class DataCopyGolden:
 
 
 @register_golden
+class PackGolden:
+    """
+    Golden generator for pack operations with optional ReLU activation.
+
+    This is similar to DataCopyGolden but includes support for ReLU configuration.
+    It's implemented as a separate class to allow future pack testing extensions
+    without affecting DataCopyGolden.
+    """
+
+    def __call__(
+        self,
+        operand1,
+        data_format,
+        num_faces: int = 4,
+        input_dimensions: list[int] = [32, 32],
+        enable_relu: bool = False,
+    ):
+        if num_faces not in [1, 2, 4]:
+            raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
+
+        torch_format = format_dict[data_format]
+
+        height, width = input_dimensions[0], input_dimensions[1]
+
+        tile_cnt = (height // 32) * (width // 32)
+        tile_size = height * width // tile_cnt
+
+        # Fixed face_r_dim at 16. TODO: enable other dimensions.
+        elements_per_tile_needed = 16 * FACE_DIM * num_faces
+
+        if not isinstance(operand1, torch.Tensor):
+            operand1 = torch.tensor(operand1, dtype=torch_format)
+        elif operand1.dtype != torch_format:
+            operand1 = operand1.to(torch_format)
+
+        result = operand1.view(tile_cnt, tile_size)[
+            :, :elements_per_tile_needed
+        ].reshape(-1)
+
+        if enable_relu:
+            result = torch.relu(result)
+
+        return result
+
+
+@register_golden
 class UnarySFPUGolden:
     def __init__(self):
         self.ops = {

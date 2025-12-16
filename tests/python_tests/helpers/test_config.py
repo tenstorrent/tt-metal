@@ -228,6 +228,10 @@ def generate_build_header(test_config):
         narrow_tile = test_config["narrow_tile"].value
         header_content.append(f"constexpr bool NARROW_TILE = {narrow_tile};")
 
+    if "relu_config" in test_config:
+        relu_config = test_config["relu_config"]
+        header_content.append(f"constexpr int RELU_CONFIG = {relu_config};")
+
     # Math fidelity & Approximation mode
     header_content.append(
         f"constexpr std::uint32_t MATH_FIDELITY = {test_config.get('math_fidelity', MathFidelity.LoFi).value};"
