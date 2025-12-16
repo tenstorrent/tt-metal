@@ -122,6 +122,8 @@ def test_clip_encoder(
     logger.info("executing text encoder...")
     start_time = time.time()
 
+    ttnn.ReadDeviceProfiler(mesh_device)
+
     tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")

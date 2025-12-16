@@ -13,6 +13,7 @@ from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
+CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 
 @pytest.mark.parametrize(
@@ -194,6 +195,68 @@ def test_sdxl_vae_encode_perf_device():
     )
     prep_device_perf_report(
         model_name=f"sdxl_vae_encode",
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
+
+
+@pytest.mark.models_device_performance_bare_metal
+def test_sdxl_clip_encoder_1_perf_device():
+    expected_device_perf_cycles_per_iteration = 13_265_699
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+
+    command = f"pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_1'"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    batch_size = 1
+
+    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
+    post_processed_results = run_device_perf(
+        command,
+        subdir="sdxl_clip_encoder_1",
+        num_iterations=CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
+        cols=cols,
+        batch_size=batch_size,
+    )
+    expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
+    expected_results = check_device_perf(
+        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+    )
+    prep_device_perf_report(
+        model_name=f"sdxl_clip_encoder_1",
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
+
+
+@pytest.mark.models_device_performance_bare_metal
+def test_sdxl_clip_encoder_2_perf_device():
+    expected_device_perf_cycles_per_iteration = 63_966_660
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+
+    command = f"pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_2'"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    batch_size = 1
+
+    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
+    post_processed_results = run_device_perf(
+        command,
+        subdir="sdxl_clip_encoder_2",
+        num_iterations=CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
+        cols=cols,
+        batch_size=batch_size,
+    )
+    expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
+    expected_results = check_device_perf(
+        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+    )
+    prep_device_perf_report(
+        model_name=f"sdxl_clip_encoder_2",
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
