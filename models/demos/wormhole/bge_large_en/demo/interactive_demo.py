@@ -34,7 +34,6 @@ def compute_ttnn_embeddings(
 
     all_embeddings = []
     all_sentences = []
-    num_batches = (len(sentences) + batch_size - 1) // batch_size
     sentence_bert_module = None
 
     for i in tqdm(range(0, len(sentences), batch_size), desc="Batches"):
@@ -123,6 +122,9 @@ def run_interactive_demo_inference(device, model_name, sequence_length, batch_si
     logger.info("Note: Queries are automatically prefixed with retrieval instruction")
     logger.info("=" * 80 + "\n")
 
+    # Initialize tokenizer once (outside the loop for efficiency)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+
     while True:
         logger.info("Ready for semantic search. Please enter your query ('exit' to quit):")
         query = input("Query: ").strip()
@@ -134,13 +136,8 @@ def run_interactive_demo_inference(device, model_name, sequence_length, batch_si
         # Add instruction prefix to query (recommended for BGE retrieval)
         query_with_instruction = RETRIEVAL_INSTRUCTION + query
 
-        orig_batch_size = 1
-        if orig_batch_size < batch_size:
-            batch_sentences = list(islice(cycle([query_with_instruction]), batch_size))
-        else:
-            batch_sentences = [query_with_instruction]
-
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+        # Pad query to batch_size by repeating (required for TTNN model)
+        batch_sentences = list(islice(cycle([query_with_instruction]), batch_size))
         encoded_input = tokenizer(
             batch_sentences, padding="max_length", max_length=sequence_length, truncation=True, return_tensors="pt"
         )
@@ -154,7 +151,9 @@ def run_interactive_demo_inference(device, model_name, sequence_length, batch_si
         logger.info("Computing semantic similarity...")
         query_embeddings = ttnn.to_torch(ttnn_output, mesh_composer=model_instance.runner_infra.output_mesh_composer)
 
-        similarities = cosine_similarity(query_embeddings.detach().cpu().numpy(), kb_embeddings.detach().cpu().numpy())[
+        # Slice to get only the first embedding (the actual query, not the padded duplicates)
+        query_embedding = query_embeddings[0:1]
+        similarities = cosine_similarity(query_embedding.detach().cpu().numpy(), kb_embeddings.detach().cpu().numpy())[
             0
         ]
 

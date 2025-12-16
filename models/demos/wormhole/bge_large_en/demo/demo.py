@@ -53,7 +53,7 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
     reference_module = load_torch_model(
         reference_module, target_prefix="", model_location_generator=model_location_generator
     )
-    Reference_sentence_embeddings = reference_module(
+    reference_sentence_embeddings = reference_module(
         input_ids,
         extended_attention_mask=extended_mask,
         token_type_ids=token_type_ids,
@@ -79,7 +79,7 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
     )
 
     # Calculate cosine similarity for reference model
-    cosine_sim_matrix1 = cosine_similarity(Reference_sentence_embeddings.detach().squeeze().cpu().numpy())
+    cosine_sim_matrix1 = cosine_similarity(reference_sentence_embeddings.detach().squeeze().cpu().numpy())
     upper_triangle1 = np.triu(cosine_sim_matrix1, k=1)
     similarities1 = upper_triangle1[upper_triangle1 != 0]
     mean_similarity1 = similarities1.mean()

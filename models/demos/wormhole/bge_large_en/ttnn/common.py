@@ -16,7 +16,6 @@ import ttnn
 core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
 
 BGE_L1_SMALL_SIZE = 0
-# BGE_SEQ_LENGTH = 512
 BGE_SEQ_LENGTH = 384
 
 seqL = BGE_SEQ_LENGTH
@@ -53,7 +52,6 @@ ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     per_core_N=dim_t__x * 4,
     transpose_mcast=False,
     fused_activation=(ttnn.UnaryOpType.GELU, True),
-    # fused_activation=None,
 )
 
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
