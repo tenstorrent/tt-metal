@@ -9,16 +9,149 @@
 
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn-pybind/export_enum.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::program_descriptors {
 
+using CoreCoord = tt::tt_metal::CoreCoord;
+
+// Helper class to enable Python syntax: rtargs[i][j] = [arg1, arg2, ...]
+// This translates to: rtargs.push_back({CoreCoord(i, j), {arg1, arg2, ...}})
+class RuntimeArgsRowProxy {
+public:
+    RuntimeArgsRowProxy(tt::tt_metal::KernelDescriptor::RuntimeArgs& args, size_t row) : args_(args), row_(row) {}
+
+    void set_item(size_t col, const std::vector<uint32_t>& values) { args_.push_back({CoreCoord(col, row_), values}); }
+
+private:
+    tt::tt_metal::KernelDescriptor::RuntimeArgs& args_;
+    size_t row_;
+};
+
+// Wrapper class that provides 2D indexing syntax for RuntimeArgs
+class RuntimeArgsWrapper {
+public:
+    RuntimeArgsWrapper() = default;
+
+    RuntimeArgsRowProxy get_row(size_t row) { return RuntimeArgsRowProxy(args_, row); }
+
+    // Allow direct append with CoreCoord
+    void append(const CoreCoord& coord, const std::vector<uint32_t>& values) { args_.push_back({coord, values}); }
+
+    // Get the underlying vector for passing to KernelDescriptor
+    tt::tt_metal::KernelDescriptor::RuntimeArgs& get() { return args_; }
+    const tt::tt_metal::KernelDescriptor::RuntimeArgs& get() const { return args_; }
+
+    // Allow iteration and inspection
+    size_t size() const { return args_.size(); }
+
+    std::pair<CoreCoord, std::vector<uint32_t>>& at(size_t idx) { return args_.at(idx); }
+
+    void clear() { args_.clear(); }
+
+private:
+    tt::tt_metal::KernelDescriptor::RuntimeArgs args_;
+};
+
 void py_module_types(py::module& module) {
+    // Bind RuntimeArgs helper classes for Python 2D indexing syntax: rtargs[i][j] = [args]
+    py::class_<RuntimeArgsRowProxy>(module, "RuntimeArgsRowProxy", R"pbdoc(
+        Proxy class for setting runtime args at a specific row.
+        Used internally to enable rtargs[i][j] = [args] syntax.
+    )pbdoc")
+        .def(
+            "__setitem__",
+            &RuntimeArgsRowProxy::set_item,
+            py::arg("col"),
+            py::arg("values"),
+            R"pbdoc(
+                Set runtime args for a specific core coordinate.
+
+                Args:
+                    col: Column (x) coordinate of the core
+                    values: List of runtime argument values
+            )pbdoc");
+
+    py::class_<RuntimeArgsWrapper>(module, "RuntimeArgs", R"pbdoc(
+        Wrapper for kernel runtime arguments that supports 2D indexing.
+
+        Enables Python syntax: rtargs[i][j] = [arg1, arg2, ...]
+        This translates to storing runtime args for core at coordinate (j, i).
+
+        Note: The indexing is rtargs[row][col] where row=y and col=x of the CoreCoord.
+
+        Example:
+            >>> rtargs = ttnn.RuntimeArgs()
+            >>> rtargs[0][0] = [1, 2, 3]  # Args for core (0, 0)
+            >>> rtargs[0][1] = [4, 5, 6]  # Args for core (1, 0)
+            >>> rtargs[1][0] = [7, 8, 9]  # Args for core (0, 1)
+            >>> kernel_desc.runtime_args = rtargs
+    )pbdoc")
+        .def(py::init<>(), R"pbdoc(
+            Create an empty RuntimeArgs container.
+        )pbdoc")
+        .def(
+            "__getitem__",
+            &RuntimeArgsWrapper::get_row,
+            py::arg("row"),
+            R"pbdoc(
+                Get a row proxy for setting args at a specific y-coordinate.
+
+                Args:
+                    row: Row (y) coordinate
+
+                Returns:
+                    RuntimeArgsRowProxy for setting column values
+            )pbdoc")
+        .def(
+            "append",
+            &RuntimeArgsWrapper::append,
+            py::arg("coord"),
+            py::arg("values"),
+            R"pbdoc(
+                Append runtime args for a specific core coordinate.
+
+                Args:
+                    coord: CoreCoord specifying the core
+                    values: List of runtime argument values
+            )pbdoc")
+        .def("__len__", &RuntimeArgsWrapper::size)
+        .def(
+            "get",
+            [](RuntimeArgsWrapper& self, size_t idx) { return self.at(idx); },
+            py::arg("idx"),
+            R"pbdoc(
+                Get runtime args entry by index.
+
+                Args:
+                    idx: Index into the list of (CoreCoord, args) pairs
+
+                Returns:
+                    Tuple of (CoreCoord, list of args)
+            )pbdoc")
+        .def(
+            "to_list",
+            [](RuntimeArgsWrapper& self) { return self.get(); },
+            R"pbdoc(
+                Get all runtime args as a list of (CoreCoord, args) pairs.
+
+                Returns:
+                    List of (CoreCoord, list of args) tuples
+            )pbdoc")
+        .def("clear", &RuntimeArgsWrapper::clear, "Clear all runtime args")
+        .def(
+            "__iter__",
+            [](RuntimeArgsWrapper& self) { return py::make_iterator(self.get().begin(), self.get().end()); },
+            py::keep_alive<0, 1>(),
+            "Iterate over (CoreCoord, args) pairs");
+
     // Bind TileDescriptor first
     py::class_<tt::tt_metal::TileDescriptor>(module, "TileDescriptor", R"pbdoc(
         Descriptor for tile dimensions.
@@ -368,7 +501,38 @@ void py_module_types(py::module& module) {
             "Named arguments provided at compile time")
         .def_readwrite(
             "defines", &tt::tt_metal::KernelDescriptor::defines, "Preprocessor definitions for kernel compilation")
-        .def_readwrite("runtime_args", &tt::tt_metal::KernelDescriptor::runtime_args, "Arguments provided at runtime")
+        .def_property(
+            "runtime_args",
+            [](tt::tt_metal::KernelDescriptor& self) -> tt::tt_metal::KernelDescriptor::RuntimeArgs& {
+                return self.runtime_args;
+            },
+            [](tt::tt_metal::KernelDescriptor& self, py::object value) {
+                // Accept either RuntimeArgsWrapper or the raw RuntimeArgs type
+                if (py::isinstance<RuntimeArgsWrapper>(value)) {
+                    self.runtime_args = py::cast<RuntimeArgsWrapper&>(value).get();
+                } else {
+                    self.runtime_args = py::cast<tt::tt_metal::KernelDescriptor::RuntimeArgs>(value);
+                }
+            },
+            R"pbdoc(
+                Runtime arguments for the kernel.
+
+                Can be set using either:
+                1. A RuntimeArgs wrapper with 2D indexing: rtargs[i][j] = [args]
+                2. A list of (CoreCoord, args) pairs directly
+
+                Example using RuntimeArgs wrapper:
+                    >>> rtargs = ttnn.RuntimeArgs()
+                    >>> rtargs[0][0] = [1, 2, 3]
+                    >>> kernel_desc.runtime_args = rtargs
+
+                Example using direct list:
+                    >>> kernel_desc.runtime_args = [(ttnn.CoreCoord(0, 0), [1, 2, 3])]
+            )pbdoc")
+        .def_readwrite(
+            "common_runtime_args",
+            &tt::tt_metal::KernelDescriptor::common_runtime_args,
+            "Common runtime arguments shared across all cores")
         .def_readwrite("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
 
     // Bind SemaphoreDescriptor
