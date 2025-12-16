@@ -98,7 +98,9 @@ bool experimental::ProgramExecutionUID::operator<(const experimental::ProgramExe
 
 bool experimental::ProgramAnalysisData::operator==(const experimental::ProgramAnalysisData& other) const {
     return this->program_execution_uid == other.program_execution_uid &&
-           this->program_analyses_results == other.program_analyses_results;
+           this->program_analyses_results == other.program_analyses_results &&
+           this->core_count == other.core_count &&
+           this->num_available_cores == other.num_available_cores;
 }
 
 bool experimental::ProgramAnalysisData::operator<(const experimental::ProgramAnalysisData& other) const {
