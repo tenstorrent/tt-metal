@@ -2552,3 +2552,36 @@ def test_matmul_block_sharded_input_with_padding(device):
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def test_matmul_activation_with_sharded_input(device):
+    # Create input tensors
+    torch_input_a = torch.randn(32, 1024, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1024, 1024, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with DRAM interleaved layout
+    input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Width sharded output config
+    # When we specify only the sharding type without full shard spec,
+    # and pass it to matmul with activation, unary op needs to have full shard spec
+    output_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
+    )
+
+    # This should not crash with "validate_shard_spec" error because:
+    # 1. matmul gets called with activation="silu" and partial memory config
+    # 2. matmul internally calls unary (silu) with the output tensor's memory config
+    # 3. unary's compute_output_specs creates TensorLayout with the output tensor's full config
+    try:
+        output = ttnn.matmul(
+            input_a, input_b, memory_config=output_mem_config, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+        )
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception {e}")
