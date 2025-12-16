@@ -92,7 +92,7 @@ def devices_on_same_dispatch_axis(device_a, device_b, mesh_shape, cluster_axis):
     )
 
 
-def get_dte_intermediate(indices_tensor, mapping_tensor, mesh_shape, cluster_axis):
+def get_dte_intermediate(indices_tensor, scores_tensor, mapping_tensor, mesh_shape, cluster_axis):
     """
     Create DTE (Dispatch-To-Expert) intermediate tensor.
 
@@ -132,6 +132,7 @@ def get_dte_intermediate(indices_tensor, mapping_tensor, mesh_shape, cluster_axi
     # Reshape indices to [devices, tokens_per_device, K]
     # Assuming indices_tensor can be reshaped this way (tokens are distributed across devices)
     indices_reshaped = indices_tensor.reshape(devices, -1, indices_tensor.shape[-1])
+    scores_reshaped = scores_tensor.reshape(devices, -1, scores_tensor.shape[-1])
     tokens_per_device = indices_reshaped.shape[1]
 
     # Initialize: tokens_per_device means "no token sent for this slot"
@@ -141,11 +142,14 @@ def get_dte_intermediate(indices_tensor, mapping_tensor, mesh_shape, cluster_axi
         * tokens_per_device
     )
 
+    dte_scores = torch.zeros_like(dte_intermediate, dtype=scores_tensor.dtype)
+
     # Iterate over each source device
     for source_device_idx in range(devices):
         source_axis_pos = get_axis_position(source_device_idx, mesh_shape, cluster_axis)
         chunk_position = 0
 
+        num_chunks = [tokens_per_device] * experts
         for t in range(tokens_per_device):
             for k in range(selected_experts_k):
                 expert_id = indices_reshaped[source_device_idx, t, k].item()
@@ -161,10 +165,13 @@ def get_dte_intermediate(indices_tensor, mapping_tensor, mesh_shape, cluster_axi
                     # This uniquely identifies each (token, local_expert) pair
                     local_expert_idx = expert_id % experts_per_device
                     flat_idx = t * experts_per_device + local_expert_idx
-                    dte_intermediate[target_device, source_axis_pos, flat_idx] = chunk_position
-                    chunk_position += 1
+                    if num_chunks[expert_id] == tokens_per_device:
+                        num_chunks[expert_id] = 0
+                    dte_intermediate[target_device, source_axis_pos, flat_idx] = num_chunks[expert_id]
+                    dte_scores[target_device, source_axis_pos, flat_idx] = scores_reshaped[source_device_idx, t, k]
+                    num_chunks[expert_id] += 1
 
-    return dte_intermediate
+    return dte_intermediate, dte_scores
 
 
 @pytest.mark.parametrize(
@@ -178,13 +185,13 @@ def get_dte_intermediate(indices_tensor, mapping_tensor, mesh_shape, cluster_axi
     "mesh_shape, mesh_device", [pytest.param((1, 8), (1, 8), id="1x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_col"])
-@pytest.mark.parametrize("experts", [8])
+@pytest.mark.parametrize("experts", [16])
 @pytest.mark.parametrize("selected_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "batch, seq_len",
     [
-        (1, 1),
+        (2, 1),
     ],
     ids=["b32s1"],
 )
@@ -232,21 +239,29 @@ def test_all_to_all_dispatch_selective_tilize_no_trace_batch32(
         expert_indices_along_dispatch_axis.append(per_batch_indices)
 
     expert_indices = (
-        torch.cat(expert_indices_along_dispatch_axis, dim=0)
-        .repeat(mesh_shape[1 - cluster_axis], 1, 1, 1)
-        .repeat(mesh_shape[1 - cluster_axis], 1, 1, 1)
-    )
+        torch.cat(expert_indices_along_dispatch_axis, dim=0).repeat(mesh_shape[1 - cluster_axis], 1, 1, 1)
+    ).to(torch.uint16)
+
+    expert_scores = (
+        torch.rand_like(expert_indices, dtype=tt_to_torch_dtype(dtype)) + 1e-5
+    )  # add small epsilon to avoid division by zero
+    expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
 
     expert_mapping = gen_expert_mapping(experts, mesh_shape=mesh_shape, cluster_axis=cluster_axis)
 
-    logger.info(f"Expert Indices: {expert_indices}")
-    logger.info(f"Expert Mapping: {expert_mapping}")
+    logger.info(f"Expert Indices: {expert_indices} with shape {expert_indices.shape}")
+    logger.info(f"Expert Mapping: {expert_mapping} with shape {expert_mapping.shape}")
 
-    dte_intermediate = get_dte_intermediate(
-        indices_tensor=expert_indices, mapping_tensor=expert_mapping, mesh_shape=mesh_shape, cluster_axis=cluster_axis
+    dte_intermediate, dte_scores = get_dte_intermediate(
+        indices_tensor=expert_indices,
+        mapping_tensor=expert_mapping,
+        scores_tensor=expert_scores,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
     )
 
-    logger.info(f"DTE Intermediate: {dte_intermediate}")
+    logger.info(f"DTE Intermediate: {dte_intermediate} with shape {dte_intermediate.shape}")
+    logger.info(f"DTE Scores: {dte_scores} with shape {dte_scores.shape}")
 
     # mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, 2)
 
