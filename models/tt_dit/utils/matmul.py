@@ -102,32 +102,15 @@ grid_12_10_configs = {
     (9472, 3456, 5120): (8, 4, 8, (1, 2)),
 }
 
-grid_11_10_configs = {
-    (512, 5120, 2560): (2, 5, 8, (1, 4)),
-    (2368, 5120, 3840): (4, 8, 12, (1, 4)),
-    (2368, 5120, 1280): (8, 4, 4, (1, 4)),
-    (2368, 5120, 3456): (8, 2, 12, (2, 2)),
-    (2368, 3456, 5120): (4, 4, 8, (1, 4)),
-    (9472, 5120, 3840): (16, 4, 4, (1, 4)),
-    (9472, 5120, 1280): (16, 8, 4, (1, 4)),
-    (9472, 5120, 3456): (16, 8, 4, (1, 4)),
-    (9472, 3456, 5120): (16, 3, 4, (1, 4)),
+grid_12_9_configs = {
+    (9472, 5120, 1280): (10, 8, 8, (2, 1)),
+    (2368, 5120, 1280): (10, 8, 6, (2, 1)),
+    (128, 5120, 1280): (1, 16, 8, (1, 2)),
+    (9472, 5120, 3456): (9, 5, 12, (1, 2)),
+    (2368, 5120, 3456): (7, 5, 12, (1, 2)),
+    (9472, 5120, 3840): (7, 5, 16, (1, 2)),
+    (2368, 5120, 3840): (7, 5, 16, (1, 2)),
 }
-
-
-_BH_GALAXY_MIN_DEVICES = 32
-_BH_GALAXY_MAX_CORE_GRID = (11, 10)
-
-
-def get_matmul_core_grid(mesh_device):
-    """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
-    core_grid = mesh_device.compute_with_storage_grid_size()
-    if mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
-        core_grid = ttnn.CoreCoord(
-            min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
-            min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
-        )
-    return core_grid
 
 
 def get_matmul_config(M, K, N, core_grid, default_block_size=None):
@@ -155,8 +138,8 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
-    elif getattr(core_grid, "x", None) == 11 and getattr(core_grid, "y", None) == 10:
-        config_tuple = grid_11_10_configs.get((M, K, N))
+    elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 9:
+        config_tuple = grid_12_9_configs.get((M, K, N))
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
