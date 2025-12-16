@@ -124,6 +124,12 @@ TEST(MeshGraphValidation, TestMGDConnections) {
 }
 
 TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
+    const std::filesystem::path cluster_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "cluster_descriptor.yaml";
+    tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->serialize_to_file(
+        cluster_desc_path.string());
+
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
