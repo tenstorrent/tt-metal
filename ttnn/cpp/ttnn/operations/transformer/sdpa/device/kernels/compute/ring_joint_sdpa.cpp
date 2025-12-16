@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -117,6 +118,7 @@ void MAIN {
         // Find out if there's any work to do on this ring iter.
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
         if (!ring_iter_does_work) {
+            DPRINT << "Ring iter does no work" << ENDL();
             continue;
         }
 
@@ -140,6 +142,7 @@ void MAIN {
 
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
+                    DPRINT << "ring id: " << ring_id << " KV chunk is beyond logical N" << ENDL();
                     continue;
                 }
 
@@ -150,6 +153,10 @@ void MAIN {
                     should_mask = true;
                 } else if (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) {
                     should_mask = true;
+                }
+
+                if (should_mask) {
+                    UNPACK(DPRINT << "ring id: " << ring_id << " Masking k_chunk: " << k_chunk << ENDL());
                 }
 
                 /* QK = Q_CHUNK @ K_CHUNK */

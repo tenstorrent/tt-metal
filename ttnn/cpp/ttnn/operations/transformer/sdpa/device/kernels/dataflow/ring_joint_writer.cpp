@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -118,11 +119,14 @@ void kernel_main() {
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
             if (ring_iter_needs_global_n_mask) {
+                DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_n);
             } else if (ring_iter_needs_local_n_mask) {
+                DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, local_padded_N);
             }
             if (ring_iter_needs_joint_n_mask) {
+                DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, L);
             }
             // /*
@@ -158,7 +162,7 @@ void kernel_main() {
             uint32_t lse_seq_start_tile;
             uint32_t lse_seq_end_tile;
             if (is_joint_q) {
-                lse_seq_start_tile = padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
                 lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
                 lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
                 lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
