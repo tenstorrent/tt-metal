@@ -251,18 +251,20 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
+            Wt_next_block_up = 56;
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
+            Wt_next_block_up = 112;
         }
     }
     if (large_tensor_needed) {
-        in0_t = 2 * block_size;
-        im0_t = 2 * block_size;  // buffer for saving xmm
-        im3_t = 2 * block_size;  // buffer for xmm^2
-        in5_t = 2 * block_size;  // buffer for gamma
-        in6_t = 2 * block_size;  // buffer for beta
+        in0_t = Wt_next_block_up;
+        im0_t = Wt_next_block_up;  // buffer for saving xmm
+        im3_t = Wt_next_block_up;  // buffer for xmm^2
+        in5_t = Wt_next_block_up;  // buffer for gamma
+        in6_t = Wt_next_block_up;  // buffer for beta
         if (b) {
-            im6_t = 2 * block_size;
+            im6_t = Wt_next_block_up;
             in0_t = 2 * block_size;
         }
     }
