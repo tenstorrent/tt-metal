@@ -82,7 +82,7 @@ public:
 };
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
-static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 8;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
