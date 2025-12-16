@@ -174,7 +174,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
+    auto path =
+        fmt::format("{}/{}", compute_root_sharded, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
