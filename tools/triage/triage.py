@@ -754,7 +754,7 @@ def main():
         if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
             progress.update(scripts_task, total=len(args["--run"]))
             for script_name in args["--run"]:
-                progress.update(scripts_task, description=f"Running {script.name}")
+                progress.update(scripts_task, description=f"Running {script_name}")
                 run_script(script_name, args, context)
                 progress.advance(scripts_task)
         else:
