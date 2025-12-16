@@ -360,6 +360,7 @@ class Generator:
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
                 logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
 
+            # We have to dispatch copy to host to avoid corruption by the next user's prefill
             out_list.append(logits.cpu(blocking=False))
 
         # Process the logits after all the prefill are done in data parallel mode
@@ -368,6 +369,8 @@ class Generator:
             last_token_idx = seq_len - 1
             user_id = empty_slots[idx]
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
+
+            # Ensure all copying is done
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
