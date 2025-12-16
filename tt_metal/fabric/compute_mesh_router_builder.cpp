@@ -395,11 +395,8 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
         uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
 
         // Setup producer → consumer connection
-        if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-            erisc_builder_->setup_downstream_vc_connection(downstream_erisc_builder, vc, vc, internal_channel_id);
-        } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
-            erisc_builder_->setup_downstream_vc_connection(downstream_tensix_builder, vc, vc, internal_channel_id);
-        }
+        // setup_downstream_vc_connection handles type checking internally
+        erisc_builder_->setup_downstream_vc_connection(downstream_builder, vc, vc, internal_channel_id);
         // Record connection in registry if present
         if (connection_registry_) {
             RouterConnectionRecord record{
