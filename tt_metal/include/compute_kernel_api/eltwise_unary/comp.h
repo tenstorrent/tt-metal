@@ -57,6 +57,9 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_ne_int32<APPROX>(idst, param0)));
 }
 
+ALWI void unary_ne_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_ne_uint32<APPROX>(idst, param0)));
+}
 // unary eq : if x == value --> 1.0, else 0.0
 // clang-format off
 /**
@@ -100,6 +103,9 @@ ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_eq_init
 // clang-format on
 ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_eq_int32<APPROX>(idst, param0)));
+}
+ALWI void unary_eq_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_eq_uint32<APPROX>(idst, param0)));
 }
 
 // unary gt : if x > value --> 1.0, else 0.0
@@ -146,6 +152,9 @@ ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init
 ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_gt_int32<APPROX>(idst, param0)));
 }
+ALWI void unary_gt_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_gt_uint32<APPROX>(idst, param0)));
+}
 
 // unary ge : if x >= value --> 1.0, else 0.0
 // clang-format off
@@ -191,6 +200,9 @@ ALWI void unary_ge_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ge_init
 ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_ge_int32<APPROX>(idst, param0)));
 }
+ALWI void unary_ge_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_ge_uint32<APPROX>(idst, param0)));
+}
 
 // unary lt : if x < value --> 1.0, else 0.0
 // clang-format off
@@ -231,7 +243,9 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
 ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_lt_int32<APPROX>(idst, param0)));
 }
-
+ALWI void unary_lt_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_lt_uint32<APPROX>(idst, param0)));
+}
 /**
  * Please refer to documentation for any_init.
  */
@@ -276,7 +290,9 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
 ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_le_int32<APPROX>(idst, param0)));
 }
-
+ALWI void unary_le_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_le_uint32<APPROX>(idst, param0)));
+}
 /**
  * Please refer to documentation for any_init.
  */

@@ -64,6 +64,7 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_relational_int.cpp
+        test_relational_uint.cpp
         test_rsub_int.cpp
         test_sub_int.cpp
 )
