@@ -39,6 +39,12 @@ inline void llk_math_eltwise_unary_sfpu_round(uint dst_index, int decimals, int 
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_stochastic_round(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_calculate_stochastic_round_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_frac(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_frac_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
