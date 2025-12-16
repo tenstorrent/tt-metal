@@ -255,6 +255,9 @@ static std::vector<Tensor> pool2d_invoke(
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
+    std::cout << "Shard height halo: " << haloed_tensor.memory_config().shard_spec().value().shape[0]
+              << " Shard width halo: " << haloed_tensor.memory_config().shard_spec().value().shape[1] << std::endl;
+
     if (deallocate_input || is_input_tensor_in_dram) {
         input_tensor_sharded.deallocate(/*force*/ true);
     }
