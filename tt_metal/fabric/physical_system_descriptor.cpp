@@ -61,7 +61,7 @@ TrayID get_tray_id_for_chip(
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
-    return TrayID{tray_id};
+    return TrayID{static_cast<unsigned int>(tray_id)};
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
@@ -89,7 +89,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
                 const auto& devices_on_tunnel = tunnels[tunnel];
                 auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
                 if (device_it != devices_on_tunnel.end()) {
-                    asic_location = ASICLocation{device_it - devices_on_tunnel.begin()};
+                    asic_location = ASICLocation{static_cast<unsigned int>(device_it - devices_on_tunnel.begin())};
                     break;
                 }
             }
@@ -164,13 +164,13 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
                 distributed_context_->recv(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
-                    Rank{rank},
+                    Rank{static_cast<int>(rank)},
                     Tag{0});
                 std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
                 distributed_context_->recv(
                     tt::stl::as_writable_bytes(
                         tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
-                    Rank{rank},
+                    Rank{static_cast<int>(rank)},
                     Tag{0});
 
                 hostnames.push_back(std::string(serialized_peer_hostname.begin(), serialized_peer_hostname.end()));
@@ -183,7 +183,7 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
                 distributed_context_->send(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
-                    Rank{rank},
+                    Rank{static_cast<int>(rank)},
                     Tag{0});
             }
         }
@@ -429,12 +429,12 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
         for (auto rank : receiver_ranks) {
             distributed_context_->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
 
             distributed_context_->send(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
         }
     } else {
@@ -443,13 +443,13 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
             distributed_context_->recv(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
             distributed_context_->recv(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
             this->validate_eth_fw_versions(
