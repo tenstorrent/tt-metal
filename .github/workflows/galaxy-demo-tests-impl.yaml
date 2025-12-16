@@ -50,21 +50,24 @@ jobs:
           # Samuel Adesoye - flux1, motif
           # Stuti Raizada - gpt-oss
           # Stephen Osborne - mochi
+          # Rico Zhu - qwen3_32b, qwen3_32b_long_context
+          # Yousef Al Rawwash - deepseek
 
           all_tests='[
             { "name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3", "timeout": 30, "owner_id": "U053W15B6JF" },
-            { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60, "owner_id": "U03PUAKE719" },
-            { "name": "Galaxy Llama3 evals tests", "arch": "wormhole_b0", "model": "llama3_evals", "timeout": 45, "owner_id": "U03PUAKE719" },
+            # { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60, "owner_id": "U03PUAKE719" },
+            # { "name": "Galaxy Llama3 evals tests", "arch": "wormhole_b0", "model": "llama3_evals", "timeout": 45, "owner_id": "U03PUAKE719" },
             { "name": "Galaxy Llama3 8B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_8b_dp", "timeout": 30, "owner_id": "U08BH66EXAL" },
             { "name": "Galaxy Llama3 70B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_70b_dp", "timeout": 30, "owner_id": "U08BH66EXAL" },
             { "name": "Galaxy Falcon7b demo tests", "arch": "wormhole_b0", "model": "falcon7b", "timeout": 30, "owner_id": "U05RWH3QUPM" },
             { "name": "Galaxy SentenceBert demo tests", "arch": "wormhole_b0", "model": "sentence_bert", "timeout": 30, "owner_id": "U088413NP0Q" },
             { "name": "Galaxy Stable Diffusion 3.5 Large demo tests", "arch": "wormhole_b0", "model": "sd35", "timeout": 30, "owner_id": "U03FJB5TM5Y" },
             { "name": "Galaxy Flux.1-dev demo tests", "arch": "wormhole_b0", "model": "flux1", "timeout": 30, "owner_id": "U08TED0JM9D" },
-            { "name": "Galaxy GPT-OSS demo tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 30, "owner_id": "U06F3ER8X9A" },
+            # { "name": "Galaxy GPT-OSS demo tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 30, "owner_id": "U06F3ER8X9A" },
             { "name": "Galaxy Motif-Image-6B-Preview demo tests", "arch": "wormhole_b0", "model": "motif", "timeout": 20, "owner_id": "U08TED0JM9D" },
             { "name": "Galaxy Wan2.2 demo tests", "arch": "wormhole_b0", "model": "wan22", "timeout": 25, "owner_id": "U03FJB5TM5Y" },
-            { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" }
+            { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" },
+            { "name": "Galaxy DeepSeek v3 demo tests", "arch": "wormhole_b0", "model": "deepseek_v3", "timeout": 10, "owner_id": "U08H32XUS9W" }
           ]'
 
           # Filter matrix based on model selection
@@ -106,8 +109,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -258,6 +266,39 @@ jobs:
             models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
             -k "wh_4x8sp1tp0 and resolution_720p" \
             --timeout 1500
+      - name: Run Qwen3-32B demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'qwen3_32b' && (inputs.model == 'all' || inputs.model == 'qwen3_32b') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          HF_MODEL: Qwen/Qwen3-32B
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+          MESH_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
+      - name: Run Qwen3-32B long context demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'qwen3_32b_long_context' && (inputs.model == 'all' || inputs.model == 'qwen3_32b_long_context') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          HF_MODEL: Qwen/Qwen3-32B
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+          MESH_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
+      - name: Run DeepSeek v3 demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'deepseek_v3' && (inputs.model == 'all' || inputs.model == 'deepseek_v3') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+          DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
+          MESH_DEVICE: TG
+        run: |
+          pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

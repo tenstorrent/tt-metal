@@ -182,6 +182,7 @@ from ttnn.types import (
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    corerange_to_cores,
     Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
@@ -208,14 +209,20 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    DataMovementProcessor,
+    NOC,
+    NOC_MODE,
+    TileDescriptor,
     CBFormatDescriptor,
     CBDescriptor,
     ReaderConfigDescriptor,
     WriterConfigDescriptor,
+    DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
 
@@ -269,6 +276,7 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    split_work_to_cores,
     get_current_command_queue_id_for_thread,
 )
 

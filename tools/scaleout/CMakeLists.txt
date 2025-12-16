@@ -72,12 +72,22 @@ target_link_libraries(
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
+# We are adding yaml-cpp include like this to avoid including
+# scaleout_tools headers because that would cause protobuf issues.
+target_include_directories(
+    run_cluster_validation
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
 target_link_libraries(
     run_cluster_validation
     PRIVATE
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
+        cxxopts::cxxopts
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)

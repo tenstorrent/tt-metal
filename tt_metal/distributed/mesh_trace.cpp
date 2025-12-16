@@ -33,6 +33,7 @@
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -157,7 +158,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
-    auto trace_region_size = mesh_cq.device()->allocator()->get_config().trace_region_size;
+    auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
     TT_FATAL(
         mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",

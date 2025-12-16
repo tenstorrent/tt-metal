@@ -123,6 +123,20 @@ run_ccl_T3000_test() {
     fi
 }
 
+run_trace_only_resnet() {
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -p --device-trace-profiler -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+
+    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+    then
+        echo "No verification as test was skipped"
+    else
+        echo "Test ran successfully"
+    fi
+}
+
 run_profiling_test() {
     run_async_test
 
@@ -134,9 +148,11 @@ run_profiling_test() {
 
     run_mid_run_data_dump
 
+    run_trace_only_resnet
+
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
-    pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
+    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
 
     remove_default_log_locations
 }
