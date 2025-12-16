@@ -64,14 +64,14 @@ void log_external_operation(const operation::ExternalOperation& operation, const
     auto attributes = operation.attributes();
     if (not attributes.empty()) {
         log_debug(tt::LogOp, "Attributes:");
-        for (auto&& [name, value] : attributes) {
+        for ([[maybe_unused]] auto&& [name, value] : attributes) {
             log_debug(tt::LogOp, "\t{} = {}", name, value);
         }
     }
 
     log_debug(tt::LogOp, "Input std::vector<Tensor>:");
     for (auto index = 0; index < input_tensors.size(); index++) {
-        const auto& tensor = input_tensors[index];
+        [[maybe_unused]] const auto& tensor = input_tensors[index];
         log_debug(tt::LogOp, "\t{}: {}", index, tensor);
     }
 

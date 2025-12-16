@@ -49,6 +49,8 @@ void ttnn_device(nb::module_& mod) {
     mod.def(
         "open_device",
         &ttnn::open_mesh_device,
+        nb::sig("def open_device(\\*, device_id: int, l1_small_size: int, trace_region_size: int, "
+                "dispatch_core_config: ttnn.device.DispatchCoreConfig, worker_l1_size: int)"),
         nb::kw_only(),
         nb::arg("device_id"),
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
@@ -75,6 +77,7 @@ void ttnn_device(nb::module_& mod) {
                 >>> device_id = 0
                 >>> device = ttnn.open_device(device_id=device_id)
                 >>> print(device)
+                <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
     mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
