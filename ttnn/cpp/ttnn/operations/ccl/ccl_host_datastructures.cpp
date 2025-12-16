@@ -9,8 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 std::size_t EriscDatamoverConfig::get_eth_channel_sync_size_bytes() { return eth_channel_sync_size_bytes; }
 
@@ -56,11 +55,8 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
     return buffer_size;
 }
 
-// TODO: #24600
 CCLOpConfig::CCLOpConfig(
     std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
-    page_size(0),
-    shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
     topology(topology),
     input_sharded(input_tensors.at(0).is_sharded()),
     output_sharded(output_tensors.at(0).is_sharded()),
@@ -85,8 +81,6 @@ bool CCLOpConfig::is_input_sharded() const { return this->input_sharded; }
 
 bool CCLOpConfig::is_output_sharded() const { return this->output_sharded; }
 
-bool CCLOpConfig::get_shard_grid_size() const { return this->shard_grid_size; }
-
 Tensor const& CCLOpConfig::get_input_tensor(std::size_t i) const { return input_tensors->at(i); }
 
 Tensor const& CCLOpConfig::get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
@@ -110,5 +104,4 @@ std::map<std::string, std::string> CCLOpConfig::emit_worker_defines() const {
     return worker_defines;
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

@@ -1318,11 +1318,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 }  // namespace bmm_op_utils
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -2970,8 +2966,4 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
         chosen_program_config);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

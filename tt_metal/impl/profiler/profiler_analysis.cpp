@@ -50,9 +50,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::ERISC, "ERISC"}});
 }  // namespace tracy
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // INVALID_NUM_PROGRAM_EXECUTION_UID and INVALID_NUM must be equal to ensure proper translation between TTDeviceMarker
 // IDs and ProgramExecutionUID. INVALID_NUM cannot be used directly because ProgramExecutionUID is exposed in the public
@@ -230,7 +228,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
             const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
-                .device_id = marker.chip_id,
+                .device_id = static_cast<ChipId>(marker.chip_id),
                 .device_arch = device_arch,
                 .program_name = marker.op_name,
                 .num_fw_cores = 0,
@@ -473,6 +471,4 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     }
     return configs;
 }
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

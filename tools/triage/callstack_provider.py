@@ -35,7 +35,7 @@ from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import WARN, BLUE, GREEN, ORANGE, RED, RST
+from utils import WARN
 
 import socket
 import threading
@@ -121,11 +121,11 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     cwd = Path.cwd()
 
     for i, frame in enumerate(callstack):
-        line = f"  #{i:<{frame_number_width}} "
+        line = f"#{i:<{frame_number_width}} "
         if frame.pc is not None:
-            line += f"{BLUE}0x{frame.pc:08X}{RST} in "
+            line += f"[blue]0x{frame.pc:08X}[/] in "
         if frame.function_name is not None:
-            line += f"{ORANGE}{frame.function_name}{RST} () "
+            line += f"[yellow]{frame.function_name}[/] () "
         if frame.file is not None:
             # Convert absolute path to relative path with ./ prefix
             file_path = Path(frame.file)
@@ -139,11 +139,11 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
                 # Path is not relative to cwd, keep as is
                 display_path = frame.file
 
-            line += f"at {GREEN}{display_path}{RST}"
+            line += f"at [green]{display_path}[/]"
             if frame.line is not None:
-                line += f" {GREEN}{frame.line}{RST}"
+                line += f" [green]{frame.line}[/]"
                 if frame.column is not None:
-                    line += f"{GREEN}:{frame.column}{RST}"
+                    line += f"[green]:{frame.column}[/]"
         result.append(line)
     return result
 
@@ -154,7 +154,7 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
 
     if callstack_with_message.message is not None:
         return "\n".join(
-            [f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
+            [f"[error]{callstack_with_message.message}[/]"] + _format_callstack(callstack_with_message.callstack)
         )
     else:
         return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
@@ -205,6 +205,8 @@ class CallstackProvider:
         location: OnChipCoordinate,
         risc_name: str,
         rewind_pc_for_ebreak: bool = False,
+        use_full_callstack: bool | None = None,
+        use_gdb_callstack: bool | None = None,
     ) -> CallstacksData:
         dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
         risc_debug = location.noc_block.get_risc_debug(risc_name)
@@ -224,7 +226,7 @@ class CallstackProvider:
                 rewind_pc_for_ebreak=rewind_pc_for_ebreak,
             )
         else:
-            if self.gdb_callstack:
+            if use_gdb_callstack or (use_gdb_callstack is None and self.gdb_callstack):
                 if risc_name == "ncrisc":
                     # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
                     error_message = (
@@ -286,7 +288,7 @@ class CallstackProvider:
                     risc_name,
                     dispatcher_core_data,
                     self.elfs_cache,
-                    self.full_callstack,
+                    use_full_callstack or (use_full_callstack is None and self.full_callstack),
                     rewind_pc_for_ebreak=rewind_pc_for_ebreak,
                 )
 

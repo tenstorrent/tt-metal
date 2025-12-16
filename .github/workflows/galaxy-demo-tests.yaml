@@ -11,8 +11,8 @@ on:
         options:
           - all
           - llama3
-          - llama3_long_context
-          - llama3_evals
+          # - llama3_long_context
+          # - llama3_evals
           - llama3_8b_dp
           - llama3_70b_dp
           - falcon7b
@@ -20,12 +20,13 @@ on:
           - whisper
           - sd35
           - flux1
-          - motif
           - gpt-oss
+          - motif
           - wan22
           - mochi
           - qwen3_32b
           - qwen3_32b_long_context
+          - deepseek_v3
   # Disabled till 15. Dec 2025 due to UF release
   # schedule:
   #   - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC

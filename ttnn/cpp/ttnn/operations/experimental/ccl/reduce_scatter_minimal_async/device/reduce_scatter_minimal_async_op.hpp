@@ -17,6 +17,9 @@
 
 #include "ttnn/run_operation.hpp"
 
+// Include the new device operation types to get ReduceScatterProgramArtifacts
+#include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
+
 #include <optional>
 #include <utility>
 #include <vector>
@@ -24,6 +27,10 @@
 namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
+
+// Import the ReduceScatterProgramArtifacts from the detail namespace for backward compatibility
+using ReduceScatterProgramArtifacts =
+    operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
 
 struct ReduceScatterMinimalAsync {
     uint32_t dim;
@@ -107,16 +114,6 @@ struct ReduceScatterMinimalAsync {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
-};
-
-struct ReduceScatterProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
 };
 
 void reduce_scatter_common_validates(
@@ -295,9 +292,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
@@ -315,8 +310,6 @@ Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

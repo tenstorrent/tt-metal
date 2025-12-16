@@ -1068,12 +1068,6 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 // processed.  Then it repeats again. Note: exec_buf_state struct must be
 // initialized to start using this function.
 void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_state) {
-    // This function also resets the cmd_ptr when it is at the end of cmddat_q.
-    // That is the only thing related to cmd_ptr in this function.
-    if (cmd_ptr == cmddat_q_end) {
-        cmd_ptr = cmddat_q_base;
-    }
-
     uint32_t page_id = exec_buf_state.page_id;
     uint32_t base_addr = exec_buf_state.base_addr;
     uint32_t log_page_size = exec_buf_state.log_page_size;
@@ -1082,7 +1076,15 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     uint32_t read_ptr = exec_buf_state.read_ptr;
     constexpr uint32_t INITIAL_FETCH_SIZE = 16 * 1024;                           // 16KB (OPTIMIZE HERE)
     constexpr uint32_t PREFETCH_FETCH_SIZE = cmddat_q_size - INITIAL_FETCH_SIZE;  // the rest
-    ASSERT(INITIAL_FETCH_SIZE % (1 << log_page_size) == 0);                       // must be multiple of page_size
+
+    // To handle cmddat_q that are non multiples of page_size
+    uint32_t trace_q_end = cmddat_q_base + (((cmddat_q_end - cmddat_q_base) >> log_page_size) << log_page_size);
+
+    // This function also resets the cmd_ptr when it is at the end of cmddat_q.
+    // That is the only thing related to cmd_ptr in this function.
+    if (cmd_ptr == trace_q_end) {
+        cmd_ptr = cmddat_q_base;
+    }
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
     // set transaction ID to 1 for all read
@@ -1124,11 +1126,10 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     if (exec_buf_state.pages > 0) {
         // wrap around to prefetch from beginning again
         uint32_t max_prefetch_size = PREFETCH_FETCH_SIZE;
-        if (read_ptr == cmddat_q_end) {
+        if (read_ptr == trace_q_end) {
             max_prefetch_size = INITIAL_FETCH_SIZE;
             read_ptr = cmddat_q_base;
         }
-        ASSERT(max_prefetch_size % (1 << log_page_size) == 0);  // must be multiple of page_size
         uint32_t prefetch_read_pages = max_prefetch_size >> log_page_size;
         uint32_t prefetch_pages_at_once = (prefetch_read_pages > pages) ? pages : prefetch_read_pages;
         uint32_t prefetch_read_length = prefetch_pages_at_once << log_page_size;

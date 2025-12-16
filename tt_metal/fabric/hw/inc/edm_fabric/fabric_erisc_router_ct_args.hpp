@@ -96,7 +96,9 @@ constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX);
-constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX);
+constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC1_CT_ARG_IDX + 1;
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
 constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
 
@@ -110,16 +112,18 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 39,
-    "wait_for_host_signal_IDX must be 39 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 4 "
-    "config args)");
+    wait_for_host_signal_IDX == 40,
+    "wait_for_host_signal_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
+    "num_downstream_senders_vc1, wait_for_host_signal)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 40,
-    "MAIN_CT_ARGS_START_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 5 "
-    "config args)");
+    MAIN_CT_ARGS_START_IDX == 41,
+    "MAIN_CT_ARGS_START_IDX must be 41 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
+    "num_downstream_senders_vc1, wait_for_host_signal)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -136,6 +140,7 @@ constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_ID
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 
 constexpr size_t VC0_RECEIVER_CHANNEL = 0;
+constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
 // Doesn't REALLY matter but for consistency I picked the next available ID
 constexpr size_t worker_info_offset_past_connection_semaphore = 32;
@@ -150,10 +155,11 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 11;
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 
@@ -184,8 +190,6 @@ constexpr size_t CHANNEL_POOL_COLLECTION_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 using channel_pools_args =
     ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
 constexpr size_t NUM_POOLS = channel_pools_args::num_channel_pools;
-static_assert(NUM_SENDER_CHANNELS <= 5, "NUM_SENDER_CHANNELS must be less than or equal to 5");
-static_assert(NUM_RECEIVER_CHANNELS <= 2, "NUM_RECEIVER_CHANNELS must be less than or equal to 2");
 // Parse channel-to-pool mappings (after all pool data)
 constexpr size_t CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX  = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
 static_assert(
@@ -243,14 +247,16 @@ static_assert(
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
 // Downstream sender num buffers comes after channel mappings
+// Sized to MAX_NUM_RECEIVER_CHANNELS (one per VC) to match host side array
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX + 1;
-constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
-    fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
+constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
+    fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, MAX_NUM_RECEIVER_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[1];
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
-constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
+constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + MAX_NUM_RECEIVER_CHANNELS;
 static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_2_IDX) == ANOTHER_SPECIAL_TAG_2,
     "ANOTHER_SPECIAL_TAG_2 not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
