@@ -76,13 +76,13 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
             tp_size));
     }
 
-    auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
+    const auto weight_shape = ttnn::Shape({1, 1, out_features, in_features});
     uint32_t rank = 4U;
     const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
 
     auto weight = init::uniform_init(weight_shape, init::UniformRange{-init_k, init_k});
 
-    std::unique_ptr<ttnn::distributed::TensorToMesh> mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U, m_shard_dim);
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U, m_shard_dim);
     m_weight = autograd::create_tensor(
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, mapper.get()));
 
@@ -149,14 +149,14 @@ void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out
 
     auto weight = init::uniform_init(weight_shape, init::UniformRange{-init_k, init_k});
 
-    auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 2U, m_shard_dim);
+    const auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 2U, m_shard_dim);
     m_weight = autograd::create_tensor(
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight, device, ttnn::Layout::TILE, weight_mapper.get()));
 
     if (has_bias) {
-        auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
-        auto bias = init::uniform_init(bias_shape, init::UniformRange{-init_k, init_k});
-        auto bias_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U, m_shard_dim);
+        const auto bias_shape = ttnn::Shape({1, 1, 1, out_features});
+        const auto bias = init::uniform_init(bias_shape, init::UniformRange{-init_k, init_k});
+        const auto bias_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, rank - 1U, m_shard_dim);
         m_bias = autograd::create_tensor(
             ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(bias, device, ttnn::Layout::TILE, bias_mapper.get()));
     }
