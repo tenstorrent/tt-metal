@@ -996,18 +996,30 @@ LinkMetricsResult send_traffic_and_validate_links(
     }
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     std::vector<ChipId> device_ids;
     for (auto chip : cluster.all_chip_ids()) {
         device_ids.push_back(chip);
     }
-
-    auto devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-        device_ids,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+    // This is a non-trivial operation, since it loads management firmware onto all
+    // cores in the cluster.
+    // Issue a global barrier after this to ensure that all hosts in the cluster are ready
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices = {};
+    try {
+        devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+            device_ids,
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+    } catch (const std::exception& e) {
+        log_info(tt::LogDistributed, "Error starting devices to send traffic on rank: {}", *distributed_context.rank());
+        log_output_rank0("Error details: " + std::string(e.what()));
+        throw;
+    }
+    // Barrier here ensures that all ranks successfully started their devices before proceeding
+    distributed_context.barrier();
 
     ClusterContext ctx{physical_system_descriptor, asic_id_to_chip_id, devices};
 
@@ -1029,7 +1041,6 @@ LinkMetricsResult send_traffic_and_validate_links(
             bool did_hang_locally = (local_result == WorkloadResult::TimedOut);
 
             // Check if any rank experienced a hang/timeout
-            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
             bool any_rank_hung = false;
             distributed_context.all_reduce(
                 tt::stl::Span<bool>(&did_hang_locally, 1),
