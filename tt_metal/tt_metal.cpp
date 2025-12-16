@@ -613,10 +613,8 @@ void read_pages_to_host_helper(
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
         auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * aligned_page_size);
         MetalContext::instance().get_cluster().read_core(
-            host_buffer + host_buffer_start,
-            aligned_page_size,
-            tt_cxy_pair(device->id(), core_coordinates),
-            absolute_address);
+            page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+        std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     } else {
         auto bank_local_address = dev_buffer.address() + (core_page_id * aligned_page_size);
         ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, std::span<uint8_t>(page.data(), page.size()));
@@ -629,6 +627,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
 
     uint32_t page_size = buffer.page_size();
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
+
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
