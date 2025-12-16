@@ -11,13 +11,19 @@ This test suite verifies:
 4. Backward compatibility: MLP2D.from_model_args() works correctly
 """
 
+from functools import cached_property
+
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoConfig, AutoModelForCausalLM
+from transformers.modeling_utils import no_init_weights
 
 import ttnn
-from models.common.modules.mlp.mlp_2d import MLP2D
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.mlp.mlp_2d import MLP2D, MeshContext2D, MLP2DConfig
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tt.ccl import TT_CCL
 
 # ============================================================================
 # Unit Tests - No device required
@@ -460,21 +466,9 @@ def test_mlp_2d_vs_reference(
     This test uses MLP2DConfig directly instead of from_model_args() to verify
     the low-level API works correctly. Loads HF model config and uses dummy weights.
     """
-    import os
-    from functools import cached_property
-
-    from transformers import AutoConfig, AutoModelForCausalLM
-    from transformers.modeling_utils import no_init_weights
-
-    from models.common.modules.lazy_weight import LazyWeight
-    from models.common.modules.mlp.mlp_2d import MeshContext2D, MLP2DConfig
-    from models.tt_transformers.tt.ccl import TT_CCL
 
     seed = 1234
     torch.manual_seed(seed)
-
-    # Get HF model from env (default to small model for fast testing)
-    hf_model_name = os.getenv("HF_MODEL", hf_model_name)
 
     # Load HF config and create model with dummy weights
     config = AutoConfig.from_pretrained(hf_model_name)
@@ -498,7 +492,8 @@ def test_mlp_2d_vs_reference(
     w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
     w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
     w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
-    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+    # [INFO] PyTorch's nn.Linear operates on the last dimension regardless of tensor rank.
+    torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
 
     # Create TT_CCL and MeshContext2D directly
     mesh_ctx = MeshContext2D(mesh_device=ttnn_mesh_device, tt_ccl=TT_CCL(ttnn_mesh_device))
@@ -573,7 +568,7 @@ def test_mlp_2d_vs_reference(
         mesh_composer = ttnn.create_mesh_composer(ttnn_mesh_device, expected_composer_cfg)
         tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
     else:
-        raise RuntimeError("Bug fixed: use auto_compose: tt_output_torch = to_torch_auto_compose(tt_output)")
+        raise RuntimeError("Bug fixed: use auto_compose -- tt_output_torch = to_torch_auto_compose(tt_output)")
 
     # Compare
     pcc_required = 0.99
