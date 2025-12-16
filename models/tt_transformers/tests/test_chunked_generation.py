@@ -151,6 +151,7 @@ def test_chunked_prefill_single_user(
                 prefill_input_trimmed,
                 page_table=static_page_table,
                 kv_cache=[tt_kv_cache],
+                enable_trace=False,
                 start_pos=[start_pos],
             )
             ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
