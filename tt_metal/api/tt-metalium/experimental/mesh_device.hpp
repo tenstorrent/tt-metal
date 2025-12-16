@@ -16,6 +16,8 @@ namespace tt::tt_metal::experimental::MeshDevice {
  *
  * Associates a shared pointer to user-defined data with a key on the given MeshDevice.
  * If the key already exists, the previous value is replaced. This function is thread-safe.
+ * Whatever data is pointed to cannot reference the MeshDevice in its destructor, as all MeshDevice shared pointers will
+ * be invalid at that point.
  *
  * @param mesh_device Reference to the MeshDevice on which to store the data.
  * @param key Unique identifier for the user data (typically derived from a pointer or type hash).
