@@ -22,41 +22,12 @@ namespace {
 
 namespace ttm = tt::tt_metal::experimental;
 
-py::dict to_py_dict(const ttm::ProgramExecutionUID& uid) {
-    py::dict d;
-    d["runtime_id"] = uid.runtime_id;
-    d["trace_id"] = uid.trace_id;
-    d["trace_id_counter"] = uid.trace_id_counter;
-    return d;
-}
-
-py::dict to_py_dict(const ttm::ProgramSingleAnalysisResult& result) {
-    py::dict d;
-    d["start_timestamp"] = result.start_timestamp;
-    d["end_timestamp"] = result.end_timestamp;
-    d["duration"] = result.duration;
-    return d;
-}
-
-py::dict to_py_dict(const ttm::ProgramAnalysisData& data) {
-    py::dict d;
-    d["program_execution_uid"] = to_py_dict(data.program_execution_uid);
-
-    py::dict analyses;
-    for (const auto& [name, single_result] : data.program_analyses_results) {
-        analyses[py::str(name)] = to_py_dict(single_result);
-    }
-    d["program_analyses_results"] = std::move(analyses);
-
-    return d;
-}
-
-py::dict convert_programs_perf_data(const std::map<tt::ChipId, std::set<ttm::ProgramAnalysisData>>& perf_data) {
+py::dict convert_sets_to_lists(const std::map<tt::ChipId, std::set<ttm::ProgramAnalysisData>>& perf_data) {
     py::dict out;
     for (const auto& [chip_id, program_set] : perf_data) {
         py::list programs;
         for (const auto& program_data : program_set) {
-            programs.append(to_py_dict(program_data));
+            programs.append(py::cast(program_data));
         }
         out[py::int_(chip_id)] = std::move(programs);
     }
@@ -159,14 +130,14 @@ void ProfilerModule(py::module& m_profiler) {
 
     m_profiler.def(
         "GetLatestProgramsPerfData",
-        []() { return convert_programs_perf_data(tt::tt_metal::experimental::GetLatestProgramsPerfData()); },
+        []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetLatestProgramsPerfData()); },
         R"doc(
         Get performance results for all programs that were read in the most recent call to `ttnn.ReadDeviceProfile()`.
     )doc");
 
     m_profiler.def(
         "GetAllProgramsPerfData",
-        []() { return convert_programs_perf_data(tt::tt_metal::experimental::GetAllProgramsPerfData()); },
+        []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetAllProgramsPerfData()); },
         R"doc(
         Get performance results for all programs that have been read so far across all calls to `ttnn.ReadDeviceProfile()`.
     )doc");
