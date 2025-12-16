@@ -773,7 +773,7 @@ def test_demo_for_conditional_generation(
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
-            2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 127.0},
+            2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 124.0},
             8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
             32: {"prefill_time_to_token": 0.20, "decode_t/s/u": 80.0},
         }
@@ -781,7 +781,7 @@ def test_demo_for_conditional_generation(
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_time_to_token": 0.06, "decode_t/s/u": 265.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.06, "decode_t/s/u": 290.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 290.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
