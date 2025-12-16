@@ -41,6 +41,7 @@ Note: The 0.5 absolute tolerance is already quite relaxed, yet the test still fa
 - **OS:** Ubuntu 22.04.5 LTS
 - **Kernel:** 6.8.0-87-generic
 - **tt-metal version:** v0.66.0-dev20251214-34-g228e5783f0
+- **tt-metal base commit:** `403df4beb0` (Update submodules when new ref is checked out for release models image (#34402))
 - **Build type:** Debug (standalone tt-train build)
 
 ### Build Commands
