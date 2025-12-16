@@ -130,7 +130,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
     )
     ttnn.deallocate(key_value_states)
     fused_kv = ttnn.to_memory_config(fused_kv, WHISPER_MEMORY_CONFIG)
-    fused_kv = unsqueeze_to_4D_at_dim_1(fused_kv)  # 1, 1, S, 2xHxd
+    fused_kv = unsqueeze_to_4D_at_dim_1(fused_kv)  # B, 1, S, 2xHxd
     key_states = fused_kv[:, :, :, :hidden_size]
     value_states = fused_kv[:, :, :, hidden_size:]
 
@@ -343,7 +343,9 @@ def whisper_attention(
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
         query_states = ttnn.transpose(query_states, 1, 2)  # B, S, 1, Hxd
-        query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size)) # B, S, H, d
+        query_states = ttnn.reshape(
+            query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size)
+        )  # B, S, H, d
         query_states = ttnn.transpose(query_states, 1, 2)  # B, H, S, d
         # Use cached cross-attention K/V if cache is valid, otherwise compute and copy to pre-allocated cache
         if cross_attn_cache is not None and cross_attn_cache_valid:
