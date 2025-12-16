@@ -39,6 +39,9 @@ from models.tt_transformers.tt.common import create_tt_model, get_block_size, ge
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import ModelArgs
 
+# Import optimized vision encoder
+from models.tt_transformers.tt.multimodal.ttnn_optimized_vit_smolvla import create_smolvla_vision_encoder
+
 # Get Logger
 logger = logging.getLogger(__name__)
 
@@ -1261,6 +1264,11 @@ class SmolVLAVisionEncoder(nn.Module):
     - Patch embedding: 16x16 patches from 512x512 images -> 1024 patches
     - 12 transformer layers with 768 hidden size, 12 attention heads
     - Position embeddings added after patch embedding
+
+    The encoder supports two TT implementations:
+    1. use_optimized_tt=True: Uses ttnn_optimized_vit_smolvla.py with fold+linear
+       for maximum performance (similar to OpenVLA's optimized ViT)
+    2. use_optimized_tt=False: Uses manual TT implementation (legacy)
     """
 
     def __init__(
@@ -1268,11 +1276,13 @@ class SmolVLAVisionEncoder(nn.Module):
         config: SmolVLAConfig,
         state_dict: Optional[Dict[str, torch.Tensor]] = None,
         ttnn_device: Optional[Any] = None,
+        use_optimized_tt: bool = True,
     ):
         super().__init__()
         self.config = config
         self.ttnn_device = ttnn_device
         self.embed_dim = config.vision_hidden_size
+        self.use_optimized_tt = use_optimized_tt
 
         # Build CPU vision model (for weight storage and fallback)
         vlm_config = AutoConfig.from_pretrained(config.vlm_model_name, trust_remote_code=True)
@@ -1290,6 +1300,7 @@ class SmolVLAVisionEncoder(nn.Module):
         self.tt_embed_params = None
         self.tt_layer_params = None
         self.tt_position_embedding = None
+        self.optimized_encoder = None  # For optimized TT path
 
         if self.ttnn_device is not None:
             self._init_tt_params()
@@ -1312,6 +1323,19 @@ class SmolVLAVisionEncoder(nn.Module):
         """Initialize TT tensor parameters from the CPU model."""
         logger.info("Initializing TT vision encoder parameters...")
 
+        # Use optimized encoder if requested
+        if self.use_optimized_tt:
+            logger.info("Using optimized TT vision encoder (ttnn_optimized_vit_smolvla)")
+            self.optimized_encoder = create_smolvla_vision_encoder(
+                self.vision_model,
+                self.ttnn_device,
+            )
+            self.tt_params_initialized = True
+            logger.info("Optimized TT vision encoder initialized successfully")
+            return
+
+        # Legacy manual TT implementation (fallback)
+        logger.info("Using legacy manual TT vision encoder")
         device = self.ttnn_device
         vision_model = self.vision_model.vision_model
 
@@ -1496,6 +1520,11 @@ class SmolVLAVisionEncoder(nn.Module):
         Uses block sharding across cores to handle the large attention matrices
         (1024x1024 per head) that would otherwise exceed L1 memory.
         """
+        # Use optimized encoder if available
+        if self.optimized_encoder is not None:
+            return self.optimized_encoder(pixel_values)
+
+        # Legacy manual implementation
         device = self.ttnn_device
         batch_size = pixel_values.shape[0]
 
@@ -3296,10 +3325,18 @@ class SmolVLAForActionPrediction(nn.Module):
             v_attn = ttnn.reshape(v, (batch_size, seq_len, num_kv_heads, head_dim))
             v_attn = ttnn.permute(v_attn, (0, 2, 1, 3))
 
-            # GQA: repeat K/V for each query head group
+            # GQA: repeat_interleave K/V for each query head group
+            # CRITICAL: Must use repeat_interleave, NOT repeat!
+            # repeat_interleave: [h0,h0,h0,h1,h1,h1,...] (correct for GQA)
+            # repeat:           [h0-4, h0-4, h0-4]       (WRONG - tiles whole tensor)
             n_rep = num_heads // num_kv_heads  # 3
-            k_attn = ttnn.repeat(k_attn, (1, n_rep, 1, 1))
-            v_attn = ttnn.repeat(v_attn, (1, n_rep, 1, 1))
+            k_attn = ttnn.repeat_interleave(k_attn, n_rep, dim=1)
+            v_attn = ttnn.repeat_interleave(v_attn, n_rep, dim=1)
+
+            # Assertion to prevent GQA regression (k/v heads must match q heads after expansion)
+            assert (
+                k_attn.shape[1] == num_heads and v_attn.shape[1] == num_heads
+            ), f"GQA expansion failed: k_heads={k_attn.shape[1]}, v_heads={v_attn.shape[1]}, expected={num_heads}"
 
             # Scaled dot-product attention
             scale = 1.0 / math.sqrt(head_dim)
@@ -3531,11 +3568,14 @@ class SmolVLAForActionPrediction(nn.Module):
         else:
             text_prompt = f"{image_tokens}What action should the robot take?"
 
+        CHECKPOINTS.checkpoint("start_PROCESSOR_CPU")
         inputs = self.processor(
             images=images if images else None,
             text=text_prompt,
             return_tensors="pt",
         )
+        CHECKPOINTS.checkpoint("end_PROCESSOR_CPU")
+
         pixel_values = inputs.get("pixel_values", inputs.get("images"))
         if pixel_values is not None:
             pixel_values = pixel_values.to(torch.bfloat16)
@@ -3838,7 +3878,7 @@ class SmolVLAForActionPrediction(nn.Module):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("iterations", [1])
+@pytest.mark.parametrize("iterations", [5])
 def test_smolvla_model(mesh_device, iterations):
     """
     Test SmolVLA model on TT hardware.
@@ -3880,8 +3920,9 @@ def test_smolvla_model(mesh_device, iterations):
         avg_results = {k: round(v / max(len(results) - 1, 1), 6) for k, v in combined_results.items()}
         avg_results = dict(sorted(avg_results.items(), key=lambda x: x[1], reverse=True))
 
-        logger.info(f"Predicted action shape: {action.shape}")
-        logger.info(f"Timings after {iterations} iterations: {json.dumps(avg_results, indent=4)}")
+        print(f"\nPredicted Action: {action}")
+        print(f"Predicted action shape: {action.shape}")
+        print(f"Timings after {iterations} iterations: {json.dumps(avg_results, indent=4)}")
 
 
 @pytest.mark.parametrize("repo_id", ["lerobot/smolvla_base"])
