@@ -10,6 +10,7 @@
 
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal {
 
