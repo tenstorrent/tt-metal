@@ -522,8 +522,18 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = std::bit_floor(space_per_risc_ / space_needed_for_max_channels);
-    TT_FATAL(num_buffers_per_channel_ > 0, "num_buffers_per_channel_ must be non-zero");
+
+    size_t number_of_buffers_per_channel = std::bit_floor(space_per_risc_ / space_needed_for_max_channels);
+    TT_FATAL(number_of_buffers_per_channel > 0, "number of buffers per channel must be non-zero");
+
+    // To prevent overflow of num_buffers_per_channel_ (which is uint8_t), we max number of buffers per channel to 128
+    if (number_of_buffers_per_channel >= std::numeric_limits<uint8_t>::max()) {
+        log_warning(
+            tt::LogMetal, "Number of buffers per channel overflows uint8_t, setting to 128 to prevent byte overflow");
+        num_buffers_per_channel_ = 128;
+    } else {
+        num_buffers_per_channel_ = static_cast<uint8_t>(number_of_buffers_per_channel);
+    }
 
     // Build buffer counts map for each mux channel type (all use same buffer count for now)
     for (const auto& [type, channel_count] : mux_channel_counts_) {

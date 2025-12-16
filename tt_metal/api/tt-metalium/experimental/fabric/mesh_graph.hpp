@@ -24,8 +24,8 @@
 
 namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
+class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
-
 namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;
@@ -101,7 +101,6 @@ class MeshGraph {
 public:
     explicit MeshGraph(
         const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config = std::nullopt);
-    MeshGraph() = delete;
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -147,6 +146,10 @@ public:
         const std::string& root_dir,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
+    // Generate a mesh graph of a specific shape (used by topology mapper)
+    static MeshGraph generate_mesh_graph_of_shape(
+        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction);
+
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
 
@@ -165,6 +168,9 @@ public:
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
 private:
+    // Private constructor for static factory functions
+    MeshGraph() = default;
+
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord,

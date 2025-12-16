@@ -70,8 +70,14 @@ uint32_t default_workers(
     // for 2 workers. for ring, half the data is moved per link, so we divide by 2
     double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ccl::Topology::Ring ? 2 : 1);
-    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
+    // At a single packet size (4KB) we should just have one worker with the optimal packet size and save on mux
+    // overheads At 256KB we observe that the perf improves if we have four workers per link
+    constexpr double DATA_THRESHOLD = 256.0 * 1024;
+    constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
+    if (data_moved_per_link_bytes > DATA_THRESHOLD) {
         candidate_worker_counts = {4, 2, 1};
+    } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
+        candidate_worker_counts = {1};
     } else {
         candidate_worker_counts = {2, 1};
     }
@@ -388,8 +394,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
+    // scatter-write currently supports 4 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 4;
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
