@@ -13,8 +13,8 @@ import pytest
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-import ttml  # noqa: E402
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+import _ttml as ttml  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

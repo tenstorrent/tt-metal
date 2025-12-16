@@ -21,7 +21,10 @@ import torch
 from pathlib import Path
 
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/tests/python')
 import _ttml as ttml  # noqa: E402
+
+from test_utils import compute_pcc, save_hf_model_to_safetensors  # noqa: E402
 
 transformers = pytest.importorskip("transformers", reason="transformers not installed")
 from transformers import BertModel  # noqa: E402
@@ -47,11 +50,7 @@ class BERTPaddingMaskValidator:
         )
 
         # Save HuggingFace model to safetensors
-        safetensors_path = Path(f"/tmp/{model_name.replace('/', '_')}.safetensors")
-        if not safetensors_path.exists():
-            from safetensors.torch import save_file
-
-            save_file(self.hf_model.state_dict(), str(safetensors_path))
+        safetensors_path = save_hf_model_to_safetensors(self.hf_model, model_name)
 
         # Create TTML model
         ttml_config = ttml.models.bert.BertConfig()
@@ -69,23 +68,9 @@ class BERTPaddingMaskValidator:
         self.ttml_model = ttml.models.bert.create(ttml_config)
         self.ttml_model.load_model_from_safetensors(str(safetensors_path))
 
-    def compute_pcc(self, tensor1, tensor2):
-        """Compute Pearson Correlation Coefficient."""
-        tensor1_flat = tensor1.flatten()
-        tensor2_flat = tensor2.flatten()
-
-        mean1 = np.mean(tensor1_flat)
-        mean2 = np.mean(tensor2_flat)
-
-        numerator = np.sum((tensor1_flat - mean1) * (tensor2_flat - mean2))
-        denominator = np.sqrt(np.sum((tensor1_flat - mean1) ** 2) * np.sum((tensor2_flat - mean2) ** 2))
-
-        if denominator == 0:
-            return 0.0
-
-        return numerator / denominator
-
-    def validate_single_case(self, input_ids_np, token_type_ids_np, attention_mask_np, case_name: str):
+    def validate_single_case(
+        self, input_ids_np, token_type_ids_np, attention_mask_np, case_name: str
+    ):
         """Run single validation case."""
 
         # HuggingFace forward pass
@@ -106,17 +91,23 @@ class BERTPaddingMaskValidator:
             input_ids_np.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            token_type_ids_np.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
+            token_type_ids_np.astype(np.uint32).reshape(
+                self.batch_size, 1, 1, self.seq_len
+            )
         )
         attention_mask_ttml = ttml.autograd.Tensor.from_numpy(
-            attention_mask_np.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+            attention_mask_np.astype(np.float32).reshape(
+                self.batch_size, 1, 1, self.seq_len
+            )
         )
 
-        ttml_output = self.ttml_model(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
+        ttml_output = self.ttml_model(
+            input_ids_ttml, attention_mask_ttml, token_type_ids_ttml
+        )
         ttml_output_np = ttml_output.to_numpy()
 
         # Compute metrics
-        pcc = self.compute_pcc(hf_output, ttml_output_np)
+        pcc = compute_pcc(hf_output, ttml_output_np)
         mean_diff = np.mean(np.abs(hf_output - ttml_output_np))
         max_diff = np.max(np.abs(hf_output - ttml_output_np))
 
@@ -142,11 +133,15 @@ class BERTPaddingMaskValidator:
         # Test 1: No padding (baseline - all masks = 1)
         print("Test 1: No padding (all tokens active)...")
         np.random.seed(42)
-        input_ids = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
         attention_mask = np.ones((self.batch_size, self.seq_len), dtype=np.int32)
 
-        result = self.validate_single_case(input_ids, token_type_ids, attention_mask, "No padding")
+        result = self.validate_single_case(
+            input_ids, token_type_ids, attention_mask, "No padding"
+        )
         results.append(result)
         print(
             f"  {'✅' if result['passed'] else '❌'} PCC={result['pcc']:.6f}, "
@@ -156,14 +151,18 @@ class BERTPaddingMaskValidator:
         # Test 2: Variable lengths - first sequence full, second sequence half
         print("\nTest 2: Variable lengths (seq1=full, seq2=half)...")
         np.random.seed(42)
-        input_ids = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
         attention_mask = np.ones((self.batch_size, self.seq_len), dtype=np.int32)
         # Second sequence only uses first half, rest is padding
         attention_mask[1, self.seq_len // 2 :] = 0
         input_ids[1, self.seq_len // 2 :] = 0  # PAD token
 
-        result = self.validate_single_case(input_ids, token_type_ids, attention_mask, "Variable lengths")
+        result = self.validate_single_case(
+            input_ids, token_type_ids, attention_mask, "Variable lengths"
+        )
         results.append(result)
         print(
             f"  {'✅' if result['passed'] else '❌'} PCC={result['pcc']:.6f}, "
@@ -173,7 +172,9 @@ class BERTPaddingMaskValidator:
         # Test 3: Both sequences with different amounts of padding
         print("\nTest 3: Both sequences with different padding...")
         np.random.seed(42)
-        input_ids = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
         attention_mask = np.ones((self.batch_size, self.seq_len), dtype=np.int32)
         # First sequence: 3/4 length
@@ -183,7 +184,9 @@ class BERTPaddingMaskValidator:
         attention_mask[1, self.seq_len // 2 :] = 0
         input_ids[1, self.seq_len // 2 :] = 0
 
-        result = self.validate_single_case(input_ids, token_type_ids, attention_mask, "Different padding")
+        result = self.validate_single_case(
+            input_ids, token_type_ids, attention_mask, "Different padding"
+        )
         results.append(result)
         print(
             f"  {'✅' if result['passed'] else '❌'} PCC={result['pcc']:.6f}, "
@@ -193,14 +196,18 @@ class BERTPaddingMaskValidator:
         # Test 4: Short sequences (1/4 length)
         print("\nTest 4: Short sequences (1/4 length)...")
         np.random.seed(42)
-        input_ids = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
         attention_mask = np.ones((self.batch_size, self.seq_len), dtype=np.int32)
         # Both sequences: only first 1/4 active
         attention_mask[:, self.seq_len // 4 :] = 0
         input_ids[:, self.seq_len // 4 :] = 0
 
-        result = self.validate_single_case(input_ids, token_type_ids, attention_mask, "Short sequences")
+        result = self.validate_single_case(
+            input_ids, token_type_ids, attention_mask, "Short sequences"
+        )
         results.append(result)
         print(
             f"  {'✅' if result['passed'] else '❌'} PCC={result['pcc']:.6f}, "
@@ -232,7 +239,9 @@ class BERTPaddingMaskValidator:
         print("DETAILED TEST RESULTS")
         print("=" * 80)
         print()
-        print(f"{'Test Case':<30} {'Status':<8} {'PCC':>10} {'Mean Diff':>15} {'Max Diff':>15}")
+        print(
+            f"{'Test Case':<30} {'Status':<8} {'PCC':>10} {'Mean Diff':>15} {'Max Diff':>15}"
+        )
         print("-" * 80)
 
         for result in results:

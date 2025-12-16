@@ -23,7 +23,10 @@ import torch
 from pathlib import Path
 
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/tests/python')
 import _ttml as ttml  # noqa: E402
+
+from test_utils import compute_pcc, save_hf_model_to_safetensors  # noqa: E402
 
 transformers = pytest.importorskip("transformers", reason="transformers not installed")
 from transformers import BertModel, BertConfig  # noqa: E402
@@ -49,11 +52,7 @@ class BERTIsolatedLayerValidator:
         )
 
         # Save HuggingFace model to safetensors
-        safetensors_path = Path(f"/tmp/{model_name.replace('/', '_')}.safetensors")
-        if not safetensors_path.exists():
-            from safetensors.torch import save_file
-
-            save_file(self.hf_model.state_dict(), str(safetensors_path))
+        safetensors_path = save_hf_model_to_safetensors(self.hf_model, model_name)
 
         # Create TTML model
         ttml_config = ttml.models.bert.BertConfig()
@@ -71,33 +70,23 @@ class BERTIsolatedLayerValidator:
         self.ttml_model = ttml.models.bert.create(ttml_config)
         self.ttml_model.load_model_from_safetensors(str(safetensors_path))
 
-    def compute_pcc(self, tensor1, tensor2):
-        """Compute Pearson Correlation Coefficient."""
-        tensor1_flat = tensor1.flatten()
-        tensor2_flat = tensor2.flatten()
-
-        mean1 = np.mean(tensor1_flat)
-        mean2 = np.mean(tensor2_flat)
-
-        numerator = np.sum((tensor1_flat - mean1) * (tensor2_flat - mean2))
-        denominator = np.sqrt(np.sum((tensor1_flat - mean1) ** 2) * np.sum((tensor2_flat - mean2) ** 2))
-
-        if denominator == 0:
-            return 0.0
-
-        return numerator / denominator
-
-    def get_hf_layer_inputs_and_outputs(self, input_ids, token_type_ids, attention_mask):
+    def get_hf_layer_inputs_and_outputs(
+        self, input_ids, token_type_ids, attention_mask
+    ):
         """Run HuggingFace BERT and capture input/output for each layer."""
         layer_data = {}
 
         with torch.no_grad():
             # Get embeddings (input to first block)
-            embeddings = self.hf_model.embeddings(input_ids, token_type_ids=token_type_ids)
+            embeddings = self.hf_model.embeddings(
+                input_ids, token_type_ids=token_type_ids
+            )
             layer_data["embeddings_output"] = embeddings.numpy()
 
             # Prepare attention mask
-            extended_attention_mask = self.hf_model.get_extended_attention_mask(attention_mask, input_ids.shape)
+            extended_attention_mask = self.hf_model.get_extended_attention_mask(
+                attention_mask, input_ids.shape
+            )
 
             # Run through each encoder layer
             hidden_states = embeddings
@@ -122,7 +111,9 @@ class BERTIsolatedLayerValidator:
 
         # Generate deterministic input
         np.random.seed(42)
-        input_ids = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
         attention_mask = np.ones((self.batch_size, self.seq_len), dtype=np.int32)
 
@@ -139,7 +130,9 @@ class BERTIsolatedLayerValidator:
         )
 
         # Prepare TTML attention mask
-        attention_mask_ttml_np = attention_mask.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+        attention_mask_ttml_np = attention_mask.astype(np.float32).reshape(
+            self.batch_size, 1, 1, self.seq_len
+        )
         attention_mask_ttml = ttml.autograd.Tensor.from_numpy(attention_mask_ttml_np)
 
         results = []
@@ -151,17 +144,27 @@ class BERTIsolatedLayerValidator:
             input_ids.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            token_type_ids.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
+            token_type_ids.astype(np.uint32).reshape(
+                self.batch_size, 1, 1, self.seq_len
+            )
         )
 
-        ttml_embeddings = self.ttml_model.get_embeddings(input_ids_ttml, token_type_ids_ttml)
+        ttml_embeddings = self.ttml_model.get_embeddings(
+            input_ids_ttml, token_type_ids_ttml
+        )
         ttml_embeddings_np = ttml_embeddings.to_numpy()
 
-        embeddings_pcc = self.compute_pcc(hf_layer_data["embeddings_output"], ttml_embeddings_np)
+        embeddings_pcc = compute_pcc(
+            hf_layer_data["embeddings_output"], ttml_embeddings_np
+        )
         embeddings_pass = embeddings_pcc >= 0.95
 
-        mean_diff = np.mean(np.abs(hf_layer_data["embeddings_output"] - ttml_embeddings_np))
-        max_diff = np.max(np.abs(hf_layer_data["embeddings_output"] - ttml_embeddings_np))
+        mean_diff = np.mean(
+            np.abs(hf_layer_data["embeddings_output"] - ttml_embeddings_np)
+        )
+        max_diff = np.max(
+            np.abs(hf_layer_data["embeddings_output"] - ttml_embeddings_np)
+        )
 
         print(
             f"  {'✅' if embeddings_pass else '❌'} Embeddings: PCC={embeddings_pcc:.6f}, "
@@ -188,7 +191,9 @@ class BERTIsolatedLayerValidator:
             hf_block_output = hf_layer_data[f"block_{block_idx}_output"]
 
             # Feed reference input to TTML block
-            block_input_ttml = ttml.autograd.Tensor.from_numpy(hf_block_input.astype(np.float32))
+            block_input_ttml = ttml.autograd.Tensor.from_numpy(
+                hf_block_input.astype(np.float32)
+            )
 
             # Run through TTML block
             ttml_block = self.ttml_model.get_block(block_idx)
@@ -196,7 +201,7 @@ class BERTIsolatedLayerValidator:
             ttml_block_output_np = ttml_block_output.to_numpy()
 
             # Compare outputs
-            block_pcc = self.compute_pcc(hf_block_output, ttml_block_output_np)
+            block_pcc = compute_pcc(hf_block_output, ttml_block_output_np)
             block_pass = block_pcc >= 0.95
 
             mean_diff = np.mean(np.abs(hf_block_output - ttml_block_output_np))
@@ -249,14 +254,22 @@ class BERTIsolatedLayerValidator:
         print("DETAILED LAYER BREAKDOWN")
         print("=" * 80)
         print()
-        print(f"{'Layer':<20} {'Status':<8} {'PCC':>10} {'Mean Diff':>15} {'Max Diff':>15}")
+        print(
+            f"{'Layer':<20} {'Status':<8} {'PCC':>10} {'Mean Diff':>15} {'Max Diff':>15}"
+        )
         print("-" * 80)
 
         for result in results:
             status = "✅ PASS" if result["passed"] else "❌ FAIL"
-            mean_diff_str = f"{result.get('mean_diff', 0):.6e}" if "mean_diff" in result else "N/A"
-            max_diff_str = f"{result.get('max_diff', 0):.6e}" if "max_diff" in result else "N/A"
-            print(f"{result['layer']:<20} {status:<8} {result['pcc']:>10.6f} {mean_diff_str:>15} {max_diff_str:>15}")
+            mean_diff_str = (
+                f"{result.get('mean_diff', 0):.6e}" if "mean_diff" in result else "N/A"
+            )
+            max_diff_str = (
+                f"{result.get('max_diff', 0):.6e}" if "max_diff" in result else "N/A"
+            )
+            print(
+                f"{result['layer']:<20} {status:<8} {result['pcc']:>10.6f} {mean_diff_str:>15} {max_diff_str:>15}"
+            )
 
         return passed_layers == total_layers
 

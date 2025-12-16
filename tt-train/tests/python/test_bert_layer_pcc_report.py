@@ -21,24 +21,12 @@ from pathlib import Path
 from typing import Dict, List
 
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/tests/python')
 import _ttml as ttml  # noqa: E402
 
+from test_utils import compute_pcc, save_hf_model_to_safetensors  # noqa: E402
+
 transformers = pytest.importorskip("transformers", reason="transformers not installed")
-
-
-def compute_pcc(golden: np.ndarray, actual: np.ndarray) -> float:
-    """Compute Pearson Correlation Coefficient."""
-    golden_flat = golden.flatten()
-    actual_flat = actual.flatten()
-
-    if len(golden_flat) != len(actual_flat):
-        return 0.0
-
-    mean_golden = np.mean(golden_flat)
-    mean_actual = np.mean(actual_flat)
-    numerator = np.sum((golden_flat - mean_golden) * (actual_flat - mean_actual))
-    denominator = np.sqrt(np.sum((golden_flat - mean_golden) ** 2) * np.sum((actual_flat - mean_actual) ** 2))
-    return numerator / denominator if denominator > 0 else (1.0 if numerator == 0 else 0.0)
 
 
 class BERTLayerPCCReporter:
@@ -55,11 +43,7 @@ class BERTLayerPCCReporter:
         self.hf_config = self.hf_model.config
 
         # Save to safetensors
-        safetensors_path = Path(f"/tmp/{model_name.replace('/', '_')}.safetensors")
-        if not safetensors_path.exists():
-            from safetensors.torch import save_file
-
-            save_file(self.hf_model.state_dict(), str(safetensors_path))
+        safetensors_path = save_hf_model_to_safetensors(self.hf_model, model_name)
 
         # Create TTML model
         ttml_config = ttml.models.bert.BertConfig()
@@ -85,7 +69,9 @@ class BERTLayerPCCReporter:
 
         with torch.no_grad():
             # Get embeddings
-            embeddings = self.hf_model.embeddings(input_ids, token_type_ids=token_type_ids)
+            embeddings = self.hf_model.embeddings(
+                input_ids, token_type_ids=token_type_ids
+            )
             outputs["embeddings"] = embeddings.numpy()
 
             # Run through each encoder layer
@@ -114,7 +100,9 @@ class BERTLayerPCCReporter:
         """Generate clean PCC report for all layers."""
         # Generate deterministic input
         np.random.seed(42)
-        input_ids_np = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids_np = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids_np = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
         attention_mask_np = np.ones((self.batch_size, self.seq_len), dtype=np.float32)
 
@@ -122,7 +110,9 @@ class BERTLayerPCCReporter:
         input_ids_torch = torch.tensor(input_ids_np, dtype=torch.long)
         token_type_ids_torch = torch.tensor(token_type_ids_np, dtype=torch.long)
 
-        hf_outputs = self.get_hf_intermediate_outputs(input_ids_torch, token_type_ids_torch)
+        hf_outputs = self.get_hf_intermediate_outputs(
+            input_ids_torch, token_type_ids_torch
+        )
 
         # Get TTML outputs (convert to uint32 for TTML)
         # IMPORTANT: TTNN embedding expects UINT32 indices, not float32 or int32
@@ -130,7 +120,9 @@ class BERTLayerPCCReporter:
             input_ids_np.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            token_type_ids_np.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
+            token_type_ids_np.astype(np.uint32).reshape(
+                self.batch_size, 1, 1, self.seq_len
+            )
         )
         attention_mask_ttml = ttml.autograd.Tensor.from_numpy(
             attention_mask_np.reshape(self.batch_size, 1, 1, self.seq_len)
@@ -144,7 +136,9 @@ class BERTLayerPCCReporter:
         report = []
 
         # Embeddings
-        emb_pcc = compute_pcc(hf_outputs["embeddings"], ttml_intermediates.embeddings.to_numpy())
+        emb_pcc = compute_pcc(
+            hf_outputs["embeddings"], ttml_intermediates.embeddings.to_numpy()
+        )
         report.append(("Embeddings", emb_pcc))
 
         # Each block
@@ -162,7 +156,9 @@ class BERTLayerPCCReporter:
             report.append((f"Block {block_idx} Out", output_pcc))
 
         # Final
-        final_pcc = compute_pcc(hf_outputs["final"], ttml_intermediates.final_output.to_numpy())
+        final_pcc = compute_pcc(
+            hf_outputs["final"], ttml_intermediates.final_output.to_numpy()
+        )
         report.append(("Final", final_pcc))
 
         return report
@@ -174,7 +170,9 @@ def print_multi_model_report(models: List[str]):
     print("BERT LAYER-BY-LAYER PCC REPORT")
     print("=" * 100)
     print("\nComparing HuggingFace reference vs TTML implementation")
-    print("Note: Each layer receives output from previous TTML layer (cumulative errors)")
+    print(
+        "Note: Each layer receives output from previous TTML layer (cumulative errors)"
+    )
     print("=" * 100)
 
     # Collect reports for all models
@@ -227,7 +225,9 @@ def print_multi_model_report(models: List[str]):
     # Summary statistics
     print("\nSUMMARY STATISTICS")
     print("-" * 100)
-    print(f"{'Model':<40} {'Layers':<10} {'Pass/Total':<15} {'Min PCC':<12} {'Max PCC':<12} {'Avg PCC':<12}")
+    print(
+        f"{'Model':<40} {'Layers':<10} {'Pass/Total':<15} {'Min PCC':<12} {'Max PCC':<12} {'Avg PCC':<12}"
+    )
     print("-" * 100)
 
     for model_name in models:

@@ -22,7 +22,10 @@ import torch
 from pathlib import Path
 
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/tests/python')
 import _ttml as ttml  # noqa: E402
+
+from test_utils import compute_pcc, save_hf_model_to_safetensors  # noqa: E402
 
 transformers = pytest.importorskip("transformers", reason="transformers not installed")
 from transformers import BertModel  # noqa: E402
@@ -48,11 +51,7 @@ class BERTEmbeddingDecompositionValidator:
         )
 
         # Save HuggingFace model to safetensors
-        safetensors_path = Path(f"/tmp/{model_name.replace('/', '_')}.safetensors")
-        if not safetensors_path.exists():
-            from safetensors.torch import save_file
-
-            save_file(self.hf_model.state_dict(), str(safetensors_path))
+        safetensors_path = save_hf_model_to_safetensors(self.hf_model, model_name)
 
         # Create TTML model
         ttml_config = ttml.models.bert.BertConfig()
@@ -69,22 +68,6 @@ class BERTEmbeddingDecompositionValidator:
 
         self.ttml_model = ttml.models.bert.create(ttml_config)
         self.ttml_model.load_model_from_safetensors(str(safetensors_path))
-
-    def compute_pcc(self, tensor1, tensor2):
-        """Compute Pearson Correlation Coefficient."""
-        tensor1_flat = tensor1.flatten()
-        tensor2_flat = tensor2.flatten()
-
-        mean1 = np.mean(tensor1_flat)
-        mean2 = np.mean(tensor2_flat)
-
-        numerator = np.sum((tensor1_flat - mean1) * (tensor2_flat - mean2))
-        denominator = np.sqrt(np.sum((tensor1_flat - mean1) ** 2) * np.sum((tensor2_flat - mean2) ** 2))
-
-        if denominator == 0:
-            return 0.0
-
-        return numerator / denominator
 
     def get_hf_embedding_components(self, input_ids, token_type_ids):
         """Extract HuggingFace embedding sub-components."""
@@ -104,11 +87,15 @@ class BERTEmbeddingDecompositionValidator:
             components["position_embeddings"] = position_embeddings.numpy()
 
             # 3. Token type embeddings
-            token_type_embeddings = embeddings_module.token_type_embeddings(token_type_ids)
+            token_type_embeddings = embeddings_module.token_type_embeddings(
+                token_type_ids
+            )
             components["token_type_embeddings"] = token_type_embeddings.numpy()
 
             # 4. Pre-LayerNorm (sum of all three)
-            embeddings_sum = word_embeddings + position_embeddings + token_type_embeddings
+            embeddings_sum = (
+                word_embeddings + position_embeddings + token_type_embeddings
+            )
             components["pre_layernorm"] = embeddings_sum.numpy()
 
             # 5. Post-LayerNorm (final embeddings)
@@ -127,7 +114,9 @@ class BERTEmbeddingDecompositionValidator:
 
         # Generate deterministic input
         np.random.seed(42)
-        input_ids = np.random.randint(100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32)
+        input_ids = np.random.randint(
+            100, 1000, size=(self.batch_size, self.seq_len), dtype=np.int32
+        )
         token_type_ids = np.zeros((self.batch_size, self.seq_len), dtype=np.int32)
 
         print(f"Input IDs (first 10): {input_ids[0, :10].tolist()}\n")
@@ -137,17 +126,23 @@ class BERTEmbeddingDecompositionValidator:
         input_ids_torch = torch.tensor(input_ids, dtype=torch.long)
         token_type_ids_torch = torch.tensor(token_type_ids, dtype=torch.long)
 
-        hf_components = self.get_hf_embedding_components(input_ids_torch, token_type_ids_torch)
+        hf_components = self.get_hf_embedding_components(
+            input_ids_torch, token_type_ids_torch
+        )
 
         # Get TTML embeddings
         input_ids_ttml = ttml.autograd.Tensor.from_numpy(
             input_ids.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            token_type_ids.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
+            token_type_ids.astype(np.uint32).reshape(
+                self.batch_size, 1, 1, self.seq_len
+            )
         )
 
-        ttml_embeddings = self.ttml_model.get_embeddings(input_ids_ttml, token_type_ids_ttml)
+        ttml_embeddings = self.ttml_model.get_embeddings(
+            input_ids_ttml, token_type_ids_ttml
+        )
         ttml_embeddings_np = ttml_embeddings.to_numpy()
 
         results = []
@@ -157,10 +152,12 @@ class BERTEmbeddingDecompositionValidator:
         print("\nTesting Final Combined Embeddings (Post-LayerNorm)...")
 
         # Compare TTML final embeddings with HF post-LayerNorm
-        final_pcc = self.compute_pcc(hf_components["post_layernorm"], ttml_embeddings_np)
+        final_pcc = compute_pcc(hf_components["post_layernorm"], ttml_embeddings_np)
         final_pass = final_pcc >= 0.95
 
-        mean_diff = np.mean(np.abs(hf_components["post_layernorm"] - ttml_embeddings_np))
+        mean_diff = np.mean(
+            np.abs(hf_components["post_layernorm"] - ttml_embeddings_np)
+        )
         max_diff = np.max(np.abs(hf_components["post_layernorm"] - ttml_embeddings_np))
 
         print(
@@ -223,7 +220,9 @@ class BERTEmbeddingDecompositionValidator:
         print("  2. Position embeddings only")
         print("  3. Token type embeddings only")
         print("  4. Pre-LayerNorm combined embeddings")
-        print("\nFor now, we validate the final combined output, which shows PCC > 0.9999.")
+        print(
+            "\nFor now, we validate the final combined output, which shows PCC > 0.9999."
+        )
         print("=" * 80)
 
         return passed_components == total_components
