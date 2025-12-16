@@ -47,9 +47,12 @@ on:
         type: boolean
         default: true
         description: "Make resulting artifact available in the workflow"
+      publish-package:
+        required: false
+        type: boolean
+        default: true
+        description: "Make resulting debian packages available in the workflow"
       skip-tt-train:
-        # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
-        #        Fow now enabling an opt-out. But this should get removed.
         required: false
         type: boolean
         default: true
@@ -347,6 +350,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: ☁️ Upload packages
+        if: ${{ inputs.publish-package }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
