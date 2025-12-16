@@ -9,6 +9,25 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 #include "accessor/tensor_accessor.h"
 
+#if defined(WATCHER_OVERHEAD_OK)
+template <bool is_output_cb, bool is_wr_ptr>
+void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
+    noc_async_read_barrier();
+    noc_async_write_barrier();
+    for (uint8_t i = 0; i < 32; ++i) {
+        DPRINT << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                      is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
+                      is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
+                      true,
+                      true)
+               << ENDL();
+    }
+}
+#endif
+
 template <uint32_t tile_bytes>
 void clear_mantissa_range(
     ArrayView<uint32_t, CBAccessType::CB_BACK_RW>& uint32_arr,
@@ -146,69 +165,6 @@ inline void fill_diag_subtile_zeros_bfp4(
             uint32_datums_per_face_row,
             bf4_mant_per_uint32);
     }
-}
-
-template <uint32_t tile_bytes>
-void async_fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
-    static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-    fill_zeros_async(write_addr, tile_bytes);
-}
-
-template <uint32_t tile_bytes, typename TensorAccessorType>
-uint32_t async_read_chunk_with_padding(
-    const TensorAccessorType& reader,
-    const uint32_t cb_id,
-    uint32_t start_tile_id,
-    const uint32_t src_rows,
-    const uint32_t src_cols,
-    const uint32_t dst_rows,
-    const uint32_t dst_cols,
-    const uint32_t barrier_threshold,
-    const bool transpose = false) {
-    /*
-    Method always reads tiles from memory in row-major order.
-    It assumes that the block of rows x cols in stored in contiguous tile order.
-    That means, it won't work if the chunk to read is a slice of the last dimension.
-
-    This handles the case where the dst CB is larger than the src CB, with some padding on the
-    rows or cols of the DST CB.
-    */
-    // Read Q chunk
-    const uint32_t num_tiles = dst_rows * dst_cols;
-    cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
-    uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
-    uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
-
-    uint32_t barrier_count = 0;
-    for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-        for (uint32_t col = 0; col < src_cols; ++col) {
-            uint64_t noc_addr = reader.get_noc_addr(start_tile_id);
-            noc_async_read(noc_addr, write_ptr, tile_bytes);
-            start_tile_id += 1;
-            write_ptr += inner_ptr_stride;
-
-            if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-    }
-
-    // Zero out the padding
-    for (uint32_t row = 0; row < dst_rows; ++row) {
-        for (uint32_t col = 0; col < dst_cols; ++col) {
-            if (row < src_rows && col < src_cols) {
-                continue;
-            }
-            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes>(cb_id, tile_id);
-        }
-    }
-
-    return num_tiles;
 }
 
 void kernel_main() {
@@ -360,7 +316,7 @@ void kernel_main() {
                     const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
                     // Read K chunk
-                    auto k_chunk_ntiles = async_read_chunk_with_padding<k_tile_bytes>(
+                    auto k_chunk_ntiles = read_chunk_with_padding<k_tile_bytes, decltype(k_reader), false>(
                         k_reader,
                         cb_k_in,
                         k_start_tile_id,
@@ -411,7 +367,7 @@ void kernel_main() {
                             if (q_start_idx >= window_low_idx && q_end_idx <= window_high_idx &&
                                 k_start_idx >= window_low_idx && k_end_idx <= window_high_idx) {
                                 if (zero_tile_idx == -1) {
-                                    async_fill_tile_zeros<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
+                                    fill_tile_zeros<mask_tile_bytes>(cb_mask_in, in_mask_tile_id, false);
                                 } else {
                                     copy_tile<mask_tile_bytes>(
                                         noc_write_addr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
@@ -469,6 +425,11 @@ void kernel_main() {
                                 }
                             } while (window_low_idx < window_high_idx && covered_window_q_end_idx < q_end_idx &&
                                      covered_window_k_end_idx < k_end_idx);
+
+                            DPRINT_ARRAY_VIEW({
+                                DPRINT << "  [COL ITER] WINDOW tile: in_mask_tile_id: " << in_mask_tile_id << ENDL();
+                                (dprint_cb_tile<true, true>(cb_mask_in, in_mask_tile_id));
+                            });
                         }
                     }
                     // sync up the read and writes, push back the mask cb, after processing each chunk

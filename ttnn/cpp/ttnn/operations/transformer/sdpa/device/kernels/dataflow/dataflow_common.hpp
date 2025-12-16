@@ -14,7 +14,6 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // Fill tile with zeros
     uint32_t bytes_left = tile_bytes;
@@ -29,13 +28,15 @@ void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     }
 }
 
-template <uint32_t tile_bytes>
+template <uint32_t tile_bytes, bool wait_for_barrier = true>
 void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
 
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     fill_zeros_async(write_addr, tile_bytes);
-    noc_async_read_barrier();
+    if (wait_for_barrier) {
+        noc_async_read_barrier();
+    }
 }
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
@@ -51,6 +52,23 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
+}
+
+template <typename PageTableArgs>
+const volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
+    uint32_t cb_id,
+    uint32_t batch_idx,
+    const PageTableArgs& page_table_args,
+    uint32_t page_table_addr,
+    uint32_t page_table_stick_size) {
+    cb_reserve_back(cb_id, 1);
+    uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id);
+    const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
+    uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(batch_idx);
+    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+    noc_async_read_barrier();
+    cb_push_back(cb_id, 1);
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 }
 
 class TensorTileShape {
@@ -77,8 +95,8 @@ public:
     }
 };
 
-template <uint32_t tile_bytes, typename ReaderType>
-void read_chunk_with_padding(
+template <uint32_t tile_bytes, typename ReaderType, bool push_num_tiles = true>
+uint32_t read_chunk_with_padding(
     const ReaderType& reader,
     const uint32_t cb_id,
     uint32_t start_tile_id,
@@ -90,14 +108,13 @@ void read_chunk_with_padding(
     const bool transpose = false,
     const uint32_t skip_src_cols = 0) {
     /*
-    Method always reads tiles from memory in row-major order.
-    It assumes that the block of rows x cols in stored in contiguous tile order.
-    That means, it won't work if the chunk to read is a slice of the last dimension.
+      Method always reads tiles from memory in row-major order.
+      It assumes that the block of rows x cols in stored in contiguous tile order.
+      That means, it won't work if the chunk to read is a slice of the last dimension.
 
-    This handles the case where the dst CB is larger than the src CB, with some padding on the
-    rows or cols of the DST CB.
+      This handles the case where the dst CB is larger than the src CB, with some padding on the
+      rows or cols of the DST CB.
     */
-    // Read Q chunk
     const uint32_t num_tiles = dst_rows * dst_cols;
     cb_reserve_back(cb_id, num_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
@@ -117,7 +134,7 @@ void read_chunk_with_padding(
                 barrier_count = 0;
             }
         }
-        start_tile_id += skip_src_cols;  // Skip src cols if needed
+        start_tile_id += skip_src_cols;
     }
 
     // Zero out the padding
@@ -127,12 +144,17 @@ void read_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+            fill_tile_zeros<tile_bytes>(cb_id, tile_id, false);
         }
     }
     noc_async_read_barrier();
 
-    cb_push_back(cb_id, num_tiles);
+    if constexpr (push_num_tiles) {
+        cb_push_back(cb_id, num_tiles);
+        return 0;
+    } else {
+        return num_tiles;
+    }
 }
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
