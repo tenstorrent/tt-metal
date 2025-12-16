@@ -19,9 +19,8 @@ void run_kernel()
 {
     tdma_descriptor_t td_val_A;
     tdma_descriptor_t td_val_B;
-    const uint BUF_DESC_ID_A        = 0;
-    const uint BUF_DESC_ID_B        = 1;
-    const uint num_tiles_per_unpack = TILE_CNT;
+    const uint BUF_DESC_ID_A = 0;
+    const uint BUF_DESC_ID_B = 1;
 
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -52,8 +51,11 @@ void run_kernel()
     TileShape tile_shape_A = {.num_faces = num_faces, .face_r_dim = TEST_FACE_R_DIM, .face_c_dim = TEST_FACE_C_DIM, .narrow_tile = false};
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-    _llk_unpack_reduce_init_<BUF_DESC_ID_A, BUF_DESC_ID_B, REDUCE_DIM>(num_tiles_per_unpack, tile_shape_A);
-    _llk_unpack_reduce_(0, 0);
+    _llk_unpack_reduce_init_<BUF_DESC_ID_A, BUF_DESC_ID_B, REDUCE_DIM>(1 /*num_tiles_per_pack*/, tile_shape_A);
+    for (int i = 0; i < TILE_CNT; ++i)
+    {
+        _llk_unpack_reduce_(i, 0);
+    }
 }
 
 #endif
@@ -76,8 +78,7 @@ void run_kernel()
     constexpr DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */, src_format, src_format>();
 
-    constexpr ckernel::MathFidelity math_fidelity = static_cast<ckernel::MathFidelity>(MATH_FIDELITY);
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, math_fidelity>(tile_shape_A);
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, static_cast<MathFidelity>(MATH_FIDELITY)>(tile_shape_A);
     for (int i = 0; i < TILE_CNT; ++i)
     {
         _llk_math_reduce_(i);
@@ -95,8 +96,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    uint32_t const BUF_DESC       = 8;
-    const uint num_tiles_per_pack = TILE_CNT;
+    uint32_t const BUF_DESC = 8;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -114,9 +114,12 @@ void run_kernel()
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0, BUF_DESC>(num_tiles_per_pack);
+    _llk_pack_init_<p_pacr::PACK0, BUF_DESC>(1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>();
-    _llk_pack_<p_pacr::PACK0>(0, 0);
+    for (int i = 0; i < TILE_CNT; ++i)
+    {
+        _llk_pack_<p_pacr::PACK0>(i, i);
+    }
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_reduce_mask_clear_();
 }

@@ -15,7 +15,6 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
-from helpers.tilize_untilize import untilize
 from helpers.utils import passed_test
 
 # Helper dictionary to map reduce dimensions to math operations
@@ -87,6 +86,5 @@ def test_reduce(test_name, formats, dest_acc, reduce_dim, pool_type):
     assert len(res_from_L1) == len(golden_tensor)
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    res_tensor = untilize(res_tensor, formats.output_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
