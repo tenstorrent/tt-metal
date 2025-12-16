@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "(Galaxy) DeepSeek module tests", arch: wormhole_b0, model: deepseek, timeout: 100, owner_id: U03HY7MK4BT}, # Mark O'Connor
+          { name: "(Galaxy) DeepSeek module tests", arch: wormhole_b0, model: deepseek, timeout: 130, owner_id: U03HY7MK4BT}, # Mark O'Connor
         ]
     runs-on:
       - arch-wormhole_b0
@@ -48,7 +48,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf/tt_dnn-models/deepseek-ai:/mnt/MLPerf/tt_dnn-models/deepseek-ai:rw
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
