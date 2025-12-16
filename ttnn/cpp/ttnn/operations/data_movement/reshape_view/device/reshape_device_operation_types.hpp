@@ -17,7 +17,6 @@ struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool recreate_mapping_tensor;
     std::optional<CoreRangeSet> sub_core_grid;
-    std::optional<bool> on_device_mappings;
 };
 
 struct tensor_args_t {
