@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
         //                      Write Read Unaligned L1 Interleaved Buffer
         ////////////////////////////////////////////////////////////////////////////
         uint32_t l1_buffer_size =
-            single_tile_size * 4 +
+            (single_tile_size * 4) +
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
         tt_metal::InterleavedBufferConfig l1_interleaved_buffer_config{
             .device = device,
