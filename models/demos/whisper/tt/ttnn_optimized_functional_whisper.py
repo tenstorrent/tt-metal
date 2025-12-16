@@ -35,7 +35,7 @@ def unsqueeze_to_4D_at_dim_1(tensor):
     if rank == 3:
         return ttnn.unsqueeze(tensor, 1)
     if rank == 2:
-        return ttnn.unsqueeze(tensor, 1).unsqueeze(tensor, 1)
+        return ttnn.unsqueeze(ttnn.unsqueeze(tensor, 1), 1)
     else:
         raise ValueError(f"Unsupported shape: {tensor.shape}")
 
