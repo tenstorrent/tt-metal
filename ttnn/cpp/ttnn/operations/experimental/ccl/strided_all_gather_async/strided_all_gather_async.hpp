@@ -21,7 +21,6 @@ struct ExecuteStridedAllGatherAsync {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<uint32_t> cluster_axis = std::nullopt,
-        std::optional<uint32_t> tiles_per_chunk = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
         std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
         std::optional<uint32_t> mm_cores_y = std::nullopt,
