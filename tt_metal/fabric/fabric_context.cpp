@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -40,6 +41,26 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
+bool FabricContext::should_use_1D_big_packet_header() const {
+    if (this->is_2D_routing_enabled_) {
+        return false;
+    }
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
+    for (auto mesh_id : mesh_ids) {
+        const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::LOCAL);
+        uint32_t max_dim = 0;
+        for (size_t dim = 0; dim < mesh_shape.dims(); ++dim) {
+            max_dim = std::max<uint32_t>(max_dim, mesh_shape[dim]);
+        }
+        if (max_dim >= MAX_CHIPS_LOWLAT_1D) {
+            return true;
+        }
+    }
+    return false;
+}
+
 tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
@@ -66,9 +87,9 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
     } else {
         if (this->is_2D_routing_enabled()) {
             return sizeof(tt::tt_fabric::HybridMeshPacketHeader);
-        } else {
-            return sizeof(tt::tt_fabric::PacketHeader);
         }
+        return this->use_1D_big_packet_header_ ? sizeof(tt::tt_fabric::BigLowLatencyPacketHeader)
+                                               : sizeof(tt::tt_fabric::LowLatencyPacketHeader);
     }
 }
 
@@ -91,6 +112,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
 
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
     this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
+    this->use_1D_big_packet_header_ = this->should_use_1D_big_packet_header();
 
     this->packet_header_size_bytes_ = this->compute_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->compute_max_payload_size_bytes();
@@ -106,7 +128,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     // Builder context will be lazy-initialized on first access
     builder_context_ = nullptr;
 
-    set_routing_mode(this->topology_);
+    set_routing_mode(this->topology_, this->is_2D_routing_enabled_ ? 2 : 1, this->use_1D_big_packet_header_);
 }
 
 // Destructor needed because of unique_ptr with forward-declared FabricBuilderContext

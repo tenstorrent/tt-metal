@@ -39,8 +39,8 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
     };
 #endif
 }
-
-FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
+template <typename LowLatencyPacketHeader>
+FORCE_INLINE void print_pkt_hdr_routing_fields(volatile LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
 #endif
@@ -77,7 +77,8 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const p
 #endif
 }
 
-FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
+template <typename LowLatencyPacketHeader>
+FORCE_INLINE void print_pkt_header(volatile LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
     DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
@@ -301,13 +302,20 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
+    packet_header->routing_fields.value =
+        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+}
+
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::BigLowLatencyPacketHeader* packet_header,
+    tt::tt_fabric::BigLowLatencyRoutingFields cached_routing_fields) {
     uint64_t routing_value = cached_routing_fields.value;
     if ((routing_value >> 32) == 0) [[likely]] {
         uint32_t lower_bits = static_cast<uint32_t>(routing_value);
         packet_header->routing_fields.value =
-            static_cast<uint64_t>(lower_bits >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH);
+            static_cast<uint64_t>(lower_bits >> tt::tt_fabric::BigLowLatencyRoutingFields::FIELD_WIDTH);
     } else {
-        packet_header->routing_fields.value = routing_value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+        packet_header->routing_fields.value = routing_value >> tt::tt_fabric::BigLowLatencyRoutingFields::FIELD_WIDTH;
     }
 }
 
