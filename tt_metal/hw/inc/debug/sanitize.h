@@ -598,7 +598,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast) \
     debug_sanitize_check_linked_transactions(noc_id, 0, 0, 0, multicast, DEBUG_SANITIZE_NOC_WRITE);
-#define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_addr(addr, l) debug_sanitize_l1_access(addr, l);
+#define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_access(addr, l);
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {

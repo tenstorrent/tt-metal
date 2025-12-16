@@ -542,7 +542,7 @@ std::vector<IDevice*> MeshDevice::get_devices() const {
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
-    return get_device(MeshCoordinate{row_idx, col_idx});
+    return get_device(MeshCoordinate{static_cast<uint32_t>(row_idx), static_cast<uint32_t>(col_idx)});
 }
 
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }

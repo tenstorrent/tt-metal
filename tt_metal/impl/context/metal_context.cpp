@@ -132,7 +132,7 @@ void MetalContext::initialize_device_manager(
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-    DeviceManager::initialize(
+    device_manager_->initialize(
         device_ids,
         num_hw_cqs,
         l1_small_size,
@@ -471,6 +471,8 @@ MetalContext::MetalContext() {
         worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
+    device_manager_ = std::make_unique<DeviceManager>();
+
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
@@ -498,7 +500,10 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     return distributed_context_;
 }
 
-MetalContext::~MetalContext() { teardown_base_objects(); }
+MetalContext::~MetalContext() {
+    device_manager_.reset();
+    teardown_base_objects();
+}
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
@@ -603,7 +608,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
         cluster_->write_core(
             go_msg.data(),
             go_msg.size(),
-            {device_id, virtual_eth_core},
+            {static_cast<size_t>(device_id), virtual_eth_core},
             hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG));
     };
 
@@ -630,7 +635,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DeviceManager::is_initialized() || DeviceManager::instance().get_all_active_devices().empty(),
+        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -640,7 +645,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DeviceManager::is_initialized() || DeviceManager::instance().get_all_active_devices().empty(),
+        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
@@ -815,7 +820,24 @@ void MetalContext::initialize_control_plane_impl() {
     // If no custom mesh graph descriptor use auto discovery to generate mesh graph
     log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
-    this->construct_control_plane();
+    if (*distributed_context_->size() == 1) {
+        this->construct_control_plane();
+    } else {
+        auto cluster_type = cluster_->get_cluster_type();
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+        std::filesystem::path mesh_graph_desc_path =
+            tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+                cluster_type, rtoptions_.get_root_dir(), fabric_type);
+
+        log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
+
+        TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Mesh graph descriptor file not found: {}",
+            mesh_graph_desc_path.string());
+        this->construct_control_plane(mesh_graph_desc_path);
+    }
 }
 
 void MetalContext::reset_cores(ChipId device_id) {
@@ -1059,23 +1081,23 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         "Size of bank_to_noc table is greater than available space");
 
     cluster_->write_core(
-        &dram_bank_to_noc_xy_[device_id][0],
+        dram_bank_to_noc_xy_[device_id].data(),
         dram_to_noc_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         mem_bank_to_noc_addr);
     uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
     cluster_->write_core(
-        &l1_bank_to_noc_xy_[device_id][0], l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
+        l1_bank_to_noc_xy_[device_id].data(), l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
 
     uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
     cluster_->write_core(
-        &dram_bank_offset_map_[device_id][0],
+        dram_bank_offset_map_[device_id].data(),
         dram_offset_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         dram_offset_addr);
     uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
     cluster_->write_core(
-        &l1_bank_offset_map_[device_id][0],
+        l1_bank_offset_map_[device_id].data(),
         l1_offset_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         l1_offset_addr);
@@ -1102,7 +1124,7 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
 
     uint64_t logical_col_to_virtual_col_addr = logical_to_virtual_map_addr;
     cluster_->write_core(
-        &worker_logical_col_to_virtual_col_[device_id][0],
+        worker_logical_col_to_virtual_col_[device_id].data(),
         logical_col_to_virtual_col_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_col_to_virtual_col_addr);
@@ -1111,7 +1133,7 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
     // Therefore, we must adjust the address to account for the full grid size.
     uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + (firmware_grid_size_x * sizeof(uint8_t));
     cluster_->write_core(
-        &worker_logical_row_to_virtual_row_[device_id][0],
+        worker_logical_row_to_virtual_row_[device_id].data(),
         logical_row_to_virtual_row_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_row_to_virtual_row_addr);
@@ -1329,7 +1351,11 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
-
+    core_info.core_magic_number() =
+        programmable_core_type == HalProgrammableCoreType::TENSIX
+            ? dev_msgs::CoreMagicNumber::WORKER
+            : (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? dev_msgs::CoreMagicNumber::ACTIVE_ETH
+                                                                             : dev_msgs::CoreMagicNumber::IDLE_ETH);
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0);
     // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
     // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
@@ -1501,7 +1527,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
             cluster_->write_core_immediate(
                 core_info.data(),
                 core_info.size(),
-                {device_id, worker_core},
+                {static_cast<size_t>(device_id), worker_core},
                 hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
             initialize_firmware(
                 device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
@@ -1542,7 +1568,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
         cluster_->write_core_immediate(
             core_info.data(),
             core_info.size(),
-            {device_id, virtual_core},
+            {static_cast<size_t>(device_id), virtual_core},
             hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
@@ -1566,7 +1592,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
         cluster_->write_core_immediate(
             core_info.data(),
             core_info.size(),
-            {device_id, virtual_core},
+            {static_cast<size_t>(device_id), virtual_core},
             hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
@@ -1650,7 +1676,8 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     DeviceAddr launch_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
 
-    cluster_->read_core(launch_msg.data(), launch_msg.size(), {device_id, virtual_core}, launch_addr);
+    cluster_->read_core(
+        launch_msg.data(), launch_msg.size(), {static_cast<size_t>(device_id), virtual_core}, launch_addr);
 
     launch_msg.view().kernel_config().exit_erisc_kernel() = 1;
     llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg.view(), go_msg.view(), false);
@@ -1671,7 +1698,5 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
 }
-
-DeviceManager* MetalContext::device_manager() { return &(DeviceManager::instance()); }
 
 }  // namespace tt::tt_metal

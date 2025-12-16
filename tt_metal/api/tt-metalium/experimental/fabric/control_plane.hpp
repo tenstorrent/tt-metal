@@ -226,6 +226,8 @@ public:
     // Returns empty vector if no switch meshes are on this host
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
+    tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
