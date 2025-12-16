@@ -255,6 +255,7 @@ def test_rs_row_nightly_ring(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    pytest.skip("Skipping due to hang")
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:

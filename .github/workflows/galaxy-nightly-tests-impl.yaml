@@ -98,7 +98,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/nightly", timeout: 40, owner_id: U05ACKAJTHS} # Naif Tarafdar, Camilo Vega
+          { name: "Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS} # Naif Tarafdar, Camilo Vega
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
