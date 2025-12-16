@@ -16,7 +16,10 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
-    // state_configure<Operation::UNARY>(icb, ocb);
+    // TODO(issue #34432): reset_state_tracker is a workaround for an existing problem - needs more investigation
+    reset_state_tracker();
+    state_configure<OperationType::UNARY>(icb, ocb);
+
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
@@ -38,7 +41,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
  */
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
-    // state_configure<Operation::UNARY>(icb);
+    state_configure<OperationType::UNARY>(icb);
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));

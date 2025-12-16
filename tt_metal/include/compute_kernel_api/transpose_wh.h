@@ -28,7 +28,9 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
-    state_configure<Operation::TRANSPOSE>(icb, ocb);
+    // TODO(issue #34432): reset_state_tracker is a workaround for an existing problem - needs more investigation
+    reset_state_tracker();
+    state_configure<OperationType::TRANSPOSE>(icb, ocb);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
@@ -59,7 +61,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb) {
-    state_configure<Operation::TRANSPOSE>(icb);
+    state_configure<OperationType::TRANSPOSE>(icb);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;

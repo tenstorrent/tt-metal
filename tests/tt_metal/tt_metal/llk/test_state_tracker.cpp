@@ -1,51 +1,22 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
 #include <stdint.h>
-#include <tt-metalium/bfloat8.hpp>
-#include <bit>
-#include <chrono>
-#include <functional>
 #include <map>
-#include <memory>
 #include <string>
-#include <thread>
-#include <variant>
 #include <vector>
 
 #include <impl/context/metal_context.hpp>
-
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "device_fixture.hpp"
-#include "tests/tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/packing.hpp"
-#include <umd/device/types/arch.hpp>
-#include <impl/debug/watcher_server.hpp>
-#include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+#include "device_fixture.hpp"
 
 namespace tt::tt_metal {
 
@@ -63,8 +34,6 @@ struct ReconfigConfig {
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
 };
-
-using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>>;
 
 /// @param test_config - Configuration of the test -- see struct
 /// @return
@@ -127,6 +96,8 @@ bool single_core_state_tracker(
     std::map<std::string, std::string> defines;
 
     defines["TT_METAL_STATE_TRACKER_TESTING_ENABLED"] = "1";  // Define to enable state tracker testing interface
+    defines["FORCE_WATCHER_OFF"] = "1";
+    defines["TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"] = "1";
 
     auto compute_kernel = tt_metal::CreateKernel(
         program_,
@@ -179,12 +150,6 @@ protected:
 };
 
 TEST_F(MeshStateTrackerFixture, TensixComputeStateTracker) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    // Test that should pass
     unit_tests::compute::state_tracker::ReconfigConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};
 

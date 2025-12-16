@@ -29,7 +29,9 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
-    state_configure<Operation::BINARY>(icb0, icb1, ocb);
+    // TODO(issue #34432): reset_state_tracker is a workaround for an existing problem - needs more investigation
+    reset_state_tracker();
+    state_configure<OperationType::BINARY>(icb0, icb1, ocb);
 
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
@@ -59,7 +61,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    state_configure<Operation::BINARY>(icb0, icb1);
+    state_configure<OperationType::BINARY>(icb0, icb1);
 
     MATH((
         llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(icb0, icb1, acc_to_dest)));
@@ -199,7 +201,7 @@ template <
     EltwiseBinaryType eltwise_binary_type = ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
-    // state_configure<Operation::UNARY>(icb0);
+    state_configure<OperationType::UNARY>(icb0);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
 }
