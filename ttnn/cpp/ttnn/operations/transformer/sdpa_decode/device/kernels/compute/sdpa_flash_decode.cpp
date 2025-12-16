@@ -538,7 +538,7 @@ void MAIN {
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
                 // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
-                compute_kernel_lib::untilize<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final, 1);
+                compute_kernel_lib::untilize<out_chunk_tiles, cb_out_accumulate_im, cb_out_final>(1);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);

@@ -261,8 +261,9 @@ void MAIN {
                             }
 
                             // After reduction (if any), untilize result using helper
-                            compute_kernel_lib::untilize<matmul_N_t, true, true, true>(
-                                cb_matmul_interm_tiled, cb_matmul_result_rm, matmul_M_t, 1, output_tiles);
+                            compute_kernel_lib::
+                                untilize<matmul_N_t, cb_matmul_interm_tiled, cb_matmul_result_rm, true, true, true>(
+                                    matmul_M_t, 1, output_tiles);
                         }
                     }
                 }

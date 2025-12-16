@@ -23,13 +23,13 @@ void MAIN {
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
     // Untilize input (single row, no uninit needed)
-    compute_kernel_lib::untilize<Wt, true, false>(in_cb, untilized_in_cb, 1);
+    compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb, true, false>(1);
 
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache - DEST limit auto-detected
-        compute_kernel_lib::untilize<Wt>(cache_cb, untilized_cache_cb, 1);
+        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);

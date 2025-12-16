@@ -61,7 +61,7 @@ void MAIN {
 
                     // untilize tile and write to CBIndex::c_25
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    compute_kernel_lib::untilize<onetile>(cb_intermed0, cb_intermed1, 1);
+                    compute_kernel_lib::untilize<onetile, cb_intermed0, cb_intermed1>(1);
 
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
                     mm_init_short(cb_in0, cb_in1, transpose_hw);
