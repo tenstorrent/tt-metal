@@ -51,7 +51,7 @@ endif()
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this
 include(ProcessorCount)
-ProcessorCount(numProcs)
+processorcount(numProcs)
 if(numProcs EQUAL 0)
     set(numProcs 1)
 endif()
