@@ -81,7 +81,7 @@ endif
 OPTIONS_LINK	:= -fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
 
 INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc \
-			-I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I$(HEADER_DIR) -Ifirmware/riscv/common \
+			-I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I$(HEADER_DIR) \
 			-Isfpi/include -Ihelpers/include
 
 OPTIONS_COMPILE += $(INCLUDES)
