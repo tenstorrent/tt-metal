@@ -33,7 +33,7 @@ void py_bind_rotate(py::module& module) {
                                                     at ((W-1)/2, (H-1)/2)
             fill (float): Fill value for areas outside the rotated tensor. Default: 0.0
             expand (bool): If True, return error. Only False is supported (same output dimensions). Default: False
-            interpolation_mode (str): Interpolation method - "bilinear" (smooth) or "nearest" (sharp, faster). Default: "nearest"
+            interpolation_mode (str): Interpolation method - only "nearest" (sharp, faster) is supported. Default: "nearest"
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Default: DRAM_INTERLEAVED
 
         Returns:

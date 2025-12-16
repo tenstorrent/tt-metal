@@ -54,7 +54,7 @@ void RotateDeviceOperation::validate_inputs(
     // Interpolation mode validation
     TT_FATAL(
         operation_attributes.interpolation_mode == "nearest",
-        "interpolation_mode supported is 'nearest', got '{}'",
+        "Only 'nearest' interpolation_mode is supported, got '{}'",
         operation_attributes.interpolation_mode);
 }
 

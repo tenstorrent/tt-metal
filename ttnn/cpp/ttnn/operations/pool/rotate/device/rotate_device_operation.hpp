@@ -29,8 +29,7 @@ struct RotateDeviceOperation {
     struct NearestProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};   // No compute kernel needed for nearest
-            tt::tt_metal::KernelHandle reader1_kernel_id{};  // Second reader for split mode
+            tt::tt_metal::KernelHandle writer_kernel_id{};  // No compute kernel needed for nearest
             std::size_t num_cores{};
             std::size_t num_cores_y{};
             bool enable_split_reader{};
