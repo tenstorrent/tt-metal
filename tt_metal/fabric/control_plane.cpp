@@ -155,7 +155,8 @@ UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
         auto ubb_asic_id = bus_id & 0x0F;
-        return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
+        return UbbId{
+            static_cast<uint32_t>(tray_bus_id_it - tray_bus_ids.begin() + 1), static_cast<uint32_t>(ubb_asic_id)};
     }
     return UbbId{0, 0};  // Invalid UBB ID if not found
 }
@@ -328,8 +329,9 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // When unset, assume host rank 0.
     const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
-    const MeshHostRankId host_rank =
-        (host_rank_str == nullptr) ? MeshHostRankId{0} : MeshHostRankId{std::stoi(host_rank_str)};
+    const MeshHostRankId host_rank = (host_rank_str == nullptr)
+                                         ? MeshHostRankId{0}
+                                         : MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
 
     // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
@@ -355,7 +357,8 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     }
 
     // Otherwise, use the value from the environment variable.
-    auto local_mesh_binding = LocalMeshBinding{.mesh_ids = {MeshId{std::stoi(mesh_id_str)}}, .host_rank = host_rank};
+    auto local_mesh_binding = LocalMeshBinding{
+        .mesh_ids = {MeshId{static_cast<unsigned int>(std::stoi(mesh_id_str))}}, .host_rank = host_rank};
 
     log_debug(
         tt::LogDistributed,
@@ -1061,12 +1064,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     // Assign this edge to all links on the local chip part of this intramesh connection
                     for (const auto& neighbor_host : neighbor_hosts) {
                         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-                        auto neighbor_mesh_id = this->global_logical_bindings_
-                                                    .at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank})
-                                                    .first;
+                        auto neighbor_mesh_id =
+                            this->global_logical_bindings_
+                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
+                                .first;
                         auto neighbor_mesh_host_rank =
                             this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank})
+                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
                                 .second;
                         if (neighbor_mesh_id == mesh_id && neighbor_mesh_host_rank == connected_host_rank_id) {
                             const auto& neighbor_exit_nodes =
@@ -1637,7 +1641,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
 
 // Write routing table to Tensix cores' L1 on a specific chip
 void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const {
-    FabricNodeId src_fabric_node_id{mesh_id, chip_id};
+    FabricNodeId src_fabric_node_id{mesh_id, static_cast<uint32_t>(chip_id)};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
     routing_l1_info_t routing_info = {};
@@ -1738,7 +1742,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
             chip_id);
         return;
     }
-    FabricNodeId src_fabric_node_id{mesh_id, chip_id};
+    FabricNodeId src_fabric_node_id{mesh_id, static_cast<uint32_t>(chip_id)};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_worker_connections = {};
@@ -2355,13 +2359,13 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
             distributed_context.broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{bcast_root});
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
             serialized_remote_data.clear();
             serialized_remote_data.resize(remote_data_size_bytes);
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
-                tt::tt_metal::distributed::multihost::Rank{bcast_root});
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
 
             RouterPortDirectionsData deserialized_remote_data =
                 tt::tt_fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
@@ -2506,12 +2510,14 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
         // Skip if neighbor host is not in our global logical bindings
-        if (this->global_logical_bindings_.find(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank}) ==
-            this->global_logical_bindings_.end()) {
+        if (this->global_logical_bindings_.find(tt::tt_metal::distributed::multihost::Rank{
+                static_cast<int>(neighbor_host_rank)}) == this->global_logical_bindings_.end()) {
             continue;
         }
         auto neighbor_mesh_id =
-            this->global_logical_bindings_.at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank}).first;
+            this->global_logical_bindings_
+                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
+                .first;
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {
@@ -2607,12 +2613,12 @@ void ControlPlane::forward_descriptors_to_controller(
             distributed_context.recv(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
-                Rank{peer_rank},
+                Rank{static_cast<int>(peer_rank)},
                 Tag{0});
             serialized_table.resize(serialized_table_size);
             distributed_context.recv(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
-                Rank{peer_rank},
+                Rank{static_cast<int>(peer_rank)},
                 Tag{0});
             auto peer_port_descriptors = deserialize_port_descriptors_from_bytes(serialized_table);
             TT_FATAL(peer_port_descriptors.size() == 1, "Expecting peer port id table to have exactly one mesh");
@@ -2641,12 +2647,12 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
             distributed_context.send(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
-                Rank{peer_rank},
+                Rank{static_cast<int>(peer_rank)},
                 Tag{0});
             distributed_context.send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
-                Rank{peer_rank},
+                Rank{static_cast<int>(peer_rank)},
                 Tag{0});
         }
     } else {

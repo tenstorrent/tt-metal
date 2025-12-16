@@ -532,16 +532,16 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const std::vector<uint32_t> values = {
         connection.edm_direction,
         edm_noc_xy.to_uint32(),
-        connection.edm_buffer_base_addr,
-        connection.num_buffers_per_channel,
-        connection.edm_l1_sem_addr,
-        connection.edm_connection_handshake_addr,
-        connection.edm_worker_location_info_addr,
-        connection.buffer_size_bytes,
-        connection.buffer_index_semaphore_id,
-        sender_worker_flow_control_semaphore_id,
-        sender_worker_terminate_semaphore_id,
-        sender_worker_buffer_index_semaphore_id};
+        static_cast<uint32_t>(connection.edm_buffer_base_addr),
+        static_cast<uint32_t>(connection.num_buffers_per_channel),
+        static_cast<uint32_t>(connection.edm_l1_sem_addr),
+        static_cast<uint32_t>(connection.edm_connection_handshake_addr),
+        static_cast<uint32_t>(connection.edm_worker_location_info_addr),
+        static_cast<uint32_t>(connection.buffer_size_bytes),
+        static_cast<uint32_t>(connection.buffer_index_semaphore_id),
+        static_cast<uint32_t>(sender_worker_flow_control_semaphore_id),
+        static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
+        static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -552,7 +552,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
     const std::vector<uint32_t> values = {
-        eth_channel, sender_worker_terminate_semaphore_id, sender_worker_buffer_index_semaphore_id};
+        eth_channel,
+        static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
+        static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -607,7 +609,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     }
 
     const std::vector<uint32_t> values = {
-        eth_channel, sender_worker_terminate_semaphore_id, sender_worker_buffer_index_semaphore_id};
+        eth_channel,
+        static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
+        static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
@@ -954,39 +958,39 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
     const std::vector<uint32_t> main_args_part1 = {
-        num_sender_channels,
-        num_receiver_channels,
-        config.num_fwd_paths,
+        static_cast<uint32_t>(num_sender_channels),
+        static_cast<uint32_t>(num_receiver_channels),
+        static_cast<uint32_t>(config.num_fwd_paths),
         num_vc0_downstream_edms,
-        this->wait_for_host_signal ? 1 : 0,
+        static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0),
 
-        this->firmware_context_switch_interval,
+        static_cast<uint32_t>(this->firmware_context_switch_interval),
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction_),
         control_plane.is_cross_host_eth_link(local_physical_chip_id, this->my_eth_channel),
         is_handshake_master,
-        this->handshake_address,
-        this->channel_buffer_size,
+        static_cast<uint32_t>(this->handshake_address),
+        static_cast<uint32_t>(this->channel_buffer_size),
         this->has_tensix_extension,
         this->enable_first_level_ack,
         enable_risc_cpu_data_cache};
 
     const std::vector<uint32_t> main_args_part2 = {
-        config.sender_channels_worker_conn_info_base_address[0],
-        config.sender_channels_worker_conn_info_base_address[1],
-        config.sender_channels_worker_conn_info_base_address[2],
-        config.sender_channels_worker_conn_info_base_address[3],
-        config.sender_channels_worker_conn_info_base_address[4],
-        config.sender_channels_worker_conn_info_base_address[5],
-        config.sender_channels_worker_conn_info_base_address[6],
-        config.sender_channels_worker_conn_info_base_address[7],
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[0]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[1]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[2]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[3]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[4]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[5]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[6]),
+        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[7]),
 
-        this->termination_signal_ptr,
-        this->edm_local_sync_ptr,
-        this->edm_local_tensix_sync_ptr,
-        this->edm_status_ptr,
+        static_cast<uint32_t>(this->termination_signal_ptr),
+        static_cast<uint32_t>(this->edm_local_sync_ptr),
+        static_cast<uint32_t>(this->edm_local_tensix_sync_ptr),
+        static_cast<uint32_t>(this->edm_status_ptr),
 
-        config.notify_worker_of_read_counter_update_src_address,
+        static_cast<uint32_t>(config.notify_worker_of_read_counter_update_src_address),
         0x7a9b3c4d,  // DELETEME Issue #33360 special tag marker to catch incorrect ct args
 
         this->is_sender_channel_serviced_[risc_id][0],
@@ -1002,9 +1006,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),
-        config.sender_txq_id,
-        config.receiver_txq_id,
-        config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks(),
+        static_cast<uint32_t>(config.sender_txq_id),
+        static_cast<uint32_t>(config.receiver_txq_id),
+        static_cast<uint32_t>(config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks()),
         fabric_context.is_2D_routing_enabled(),
         this->direction_,
         soc_desc.get_num_eth_channels(),
@@ -1019,7 +1023,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         my_eth_channel_,
 
         risc_id,
-        this->get_configured_risc_count(),
+        static_cast<uint32_t>(this->get_configured_risc_count()),
 
         update_pkt_hdr_on_rx_ch,
 
@@ -1140,23 +1144,23 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     std::vector<uint32_t> rt_args = {
-        this->sender_channels_connection_semaphore_id[0],
-        this->sender_channels_connection_semaphore_id[1],
-        this->sender_channels_connection_semaphore_id[2],
-        this->sender_channels_connection_semaphore_id[3],
-        this->sender_channels_connection_semaphore_id[4],
-        this->sender_channels_connection_semaphore_id[5],
-        this->sender_channels_connection_semaphore_id[6],
-        this->sender_channels_connection_semaphore_id[7],
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[0]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[1]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[2]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[3]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[4]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[5]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[6]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[7]),
 
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[3],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[5],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[6],
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[7],
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[3]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[5]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[6]),
+        static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[7]),
     };
 
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);
