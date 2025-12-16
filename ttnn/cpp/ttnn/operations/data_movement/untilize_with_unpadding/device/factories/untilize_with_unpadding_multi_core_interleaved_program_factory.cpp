@@ -237,7 +237,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
         .cores = cores,
         .ncores = ncores};
 
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{std::move(program), shared_variables)};
 }
 
 void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_arguments(
