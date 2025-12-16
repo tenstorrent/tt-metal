@@ -12,7 +12,6 @@
 #endif
 
 // Forward declaration
-template <std::size_t CTA_OFFSET>
 struct MeshGcoreAccessorArgs;
 
 /**
@@ -31,7 +30,7 @@ struct MeshGcoreAccessorArgs;
  *
  * **Example:**
  * @code
- *   auto args = MeshGcoreAccessorArgs<0>();
+ *   auto args = MeshGcoreAccessorArgs();
  *   MeshGcoreAccessor accessor(args);
  *   uint32_t gcore[3] = {1, 5, 10};
  *   auto result = accessor.get_fabric_node_and_noc_addr(gcore);
@@ -50,10 +49,9 @@ struct MeshGcoreAccessor {
      */
     struct MeshConfig {
         uint32_t num_dims;
-        std::array<uint32_t, MAX_DIMS> dim;      // mesh dimensions (e.g., 2x2x2)
-        std::array<uint32_t, MAX_DIMS> strides;  // pre-computed mesh strides for indexing
-
-        constexpr MeshConfig() : num_dims(0), dim{}, strides{} {}
+        uint32_t dim[MAX_DIMS];      // mesh dimensions (e.g., 2x2x2)
+        uint32_t strides[MAX_DIMS];  // pre-computed mesh strides for indexing
+        // No constructor - trivially default constructible (uninitialized)
     };
 
     /**
@@ -61,10 +59,9 @@ struct MeshGcoreAccessor {
      */
     struct GridConfig {
         uint32_t num_dims;
-        std::array<uint32_t, MAX_DIMS> dim;      // grid dimensions (e.g., 16,16)
-        std::array<uint32_t, MAX_DIMS> strides;  // pre-computed grid strides for indexing
-
-        constexpr GridConfig() : num_dims(0), dim{}, strides{} {}
+        uint32_t dim[MAX_DIMS];      // grid dimensions (e.g., 16,16)
+        uint32_t strides[MAX_DIMS];  // pre-computed grid strides for indexing
+        // No constructor - trivially default constructible (uninitialized)
     };
 
     /**
@@ -89,38 +86,51 @@ struct MeshGcoreAccessor {
      */
     struct GridToFabricNodeMapping {
         uint32_t num_grids;
-        std::array<std::pair<uint32_t, uint32_t>, MAX_DIMS> fabric_node_ids;  // (mesh_id, chip_id) for each grid
+        uint32_t fabric_mesh_ids[MAX_DIMS];  // mesh_id for each grid
+        uint32_t fabric_chip_ids[MAX_DIMS];  // chip_id for each grid
+        // No constructor - trivially default constructible (uninitialized)
+    };
 
-        constexpr GridToFabricNodeMapping() : num_grids(0), fabric_node_ids{} {}
+    /**
+     * @brief Worker core to NOC coordinate mapping
+     * Maps linearized worker core index to NOC (x, y) coordinates
+     * Note: Actual size is determined by NUM_WORKER_CORES compile-time define
+     */
+    struct WorkerCoreNocMapping {
+        uint32_t num_cores;
+        uint8_t noc_x[NUM_WORKER_CORES];  // NOC x coordinate for each core
+        uint8_t noc_y[NUM_WORKER_CORES];  // NOC y coordinate for each core
+        // No constructor - trivially default constructible (uninitialized)
     };
 
 private:
     MeshConfig mesh_config_;
     GridConfig grid_config_;
     GridToFabricNodeMapping fabric_node_mapping_;
+    WorkerCoreNocMapping worker_core_noc_mapping_;
 
 public:
     /**
+     * @brief Default constructor - trivially default constructible
+     *
+     * Must call init() before use. No member initialization to avoid
+     * generating .init_array entries (bare-metal compatible).
+     */
+    MeshGcoreAccessor() = default;
+
+    /**
+     * @brief Initialize accessor from MeshGcoreAccessorArgs
+     *
+     * @param args MeshGcoreAccessorArgs containing preprocessor define readers
+     */
+    void init(const MeshGcoreAccessorArgs& args);
+
+    /**
      * @brief Construct a MeshGcoreAccessor from MeshGcoreAccessorArgs
      *
-     * Extracts mesh and grid configuration from preprocessor defines.
-     * The defines are provided during kernel compilation.
-     *
-     * @tparam CTA_OFFSET Offset of compile-time arguments (for API compatibility)
-     * @param args MeshGcoreAccessorArgs (offset parameter kept for API compatibility)
+     * @param args MeshGcoreAccessorArgs containing preprocessor define readers
      */
-    template <std::size_t CTA_OFFSET>
-    MeshGcoreAccessor(const MeshGcoreAccessorArgs<CTA_OFFSET>& args) :
-        mesh_config_(), grid_config_(), fabric_node_mapping_() {
-        // Populate mesh config from args (which reads from defines)
-        args.populate_mesh_config(mesh_config_);
-
-        // Populate grid config from args (which reads from defines)
-        args.populate_grid_config(grid_config_);
-
-        // Populate fabric node mapping from args (which reads from defines)
-        args.populate_fabric_node_mapping(fabric_node_mapping_);
-    }
+    MeshGcoreAccessor(const MeshGcoreAccessorArgs& args);
 
     // ==================== Methods ====================
 
@@ -185,13 +195,19 @@ public:
         GridBankMapping mapping = get_grid_and_bank_id(gcore_coord);
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        // Get NOC address from bank_id using hardware address generation (L1 access)
-        uint64_t noc_addr = get_noc_addr_from_bank_id<false>(static_cast<uint32_t>(mapping.bank_id), offset, noc);
+        // Get NOC coordinates from worker core mapping (bank_id is the linearized core index)
+        uint32_t core_idx = static_cast<uint32_t>(mapping.bank_id);
+        uint32_t noc_x = worker_core_noc_mapping_.noc_x[core_idx];
+        uint32_t noc_y = worker_core_noc_mapping_.noc_y[core_idx];
+
+        // Build NOC address using get_noc_addr which handles coordinate transformations
+        uint64_t noc_addr = get_noc_addr(noc_x, noc_y, offset, noc);
 
         // Get fabric node IDs for the grid
-        const auto& fabric_node = fabric_node_mapping_.fabric_node_ids[mapping.grid_id];
+        uint32_t fabric_mesh_id = fabric_node_mapping_.fabric_mesh_ids[mapping.grid_id];
+        uint32_t fabric_chip_id = fabric_node_mapping_.fabric_chip_ids[mapping.grid_id];
 
-        return NocAddrWithFabricNode{noc_addr, fabric_node.first, fabric_node.second};
+        return NocAddrWithFabricNode{noc_addr, fabric_mesh_id, fabric_chip_id};
 #else
         // Compile-time error: this method cannot be called from host code
         static_assert(false, "get_noc_addr() can only be called from kernel/firmware code (KERNEL_BUILD or FW_BUILD)");
@@ -225,9 +241,7 @@ public:
  * 8. FABRIC_MESH_IDS - constexpr array of fabric mesh IDs {id0, id1, ...}
  * 9. FABRIC_CHIP_IDS - constexpr array of fabric chip IDs {id0, id1, ...}
  *
- * @tparam CTA_OFFSET Kept for API compatibility (not used)
  */
-template <std::size_t CTA_OFFSET>
 struct MeshGcoreAccessorArgs {
     static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
 
@@ -304,11 +318,53 @@ struct MeshGcoreAccessorArgs {
 
         mapping.num_grids = NUM_GRIDS;
 
-        constexpr uint32_t fabric_mesh_ids[] = FABRIC_MESH_IDS;
-        constexpr uint32_t fabric_chip_ids[] = FABRIC_CHIP_IDS;
+        constexpr uint32_t fabric_mesh_ids_arr[] = FABRIC_MESH_IDS;
+        constexpr uint32_t fabric_chip_ids_arr[] = FABRIC_CHIP_IDS;
 
         for (uint32_t i = 0; i < NUM_GRIDS; ++i) {
-            mapping.fabric_node_ids[i] = std::make_pair(fabric_mesh_ids[i], fabric_chip_ids[i]);
+            mapping.fabric_mesh_ids[i] = fabric_mesh_ids_arr[i];
+            mapping.fabric_chip_ids[i] = fabric_chip_ids_arr[i];
+        }
+    }
+
+    /**
+     * @brief Populate WorkerCoreNocMapping from preprocessor defines
+     */
+    template <typename MappingT>
+    static void populate_worker_core_noc_mapping(MappingT& mapping) {
+#ifndef NUM_WORKER_CORES
+        static_assert(false, "NUM_WORKER_CORES must be defined");
+#endif
+#ifndef WORKER_CORE_NOC_X
+        static_assert(false, "WORKER_CORE_NOC_X must be defined");
+#endif
+#ifndef WORKER_CORE_NOC_Y
+        static_assert(false, "WORKER_CORE_NOC_Y must be defined");
+#endif
+
+        mapping.num_cores = NUM_WORKER_CORES;
+
+        constexpr uint32_t noc_x_arr[] = WORKER_CORE_NOC_X;
+        constexpr uint32_t noc_y_arr[] = WORKER_CORE_NOC_Y;
+
+        for (uint32_t i = 0; i < NUM_WORKER_CORES; ++i) {
+            mapping.noc_x[i] = static_cast<uint8_t>(noc_x_arr[i]);
+            mapping.noc_y[i] = static_cast<uint8_t>(noc_y_arr[i]);
         }
     }
 };
+
+// ==================== MeshGcoreAccessor method definitions ====================
+// (defined after MeshGcoreAccessorArgs to avoid incomplete type errors)
+
+inline void MeshGcoreAccessor::init(const MeshGcoreAccessorArgs& args) {
+    args.populate_mesh_config(mesh_config_);
+    args.populate_grid_config(grid_config_);
+    args.populate_fabric_node_mapping(fabric_node_mapping_);
+    args.populate_worker_core_noc_mapping(worker_core_noc_mapping_);
+}
+
+inline MeshGcoreAccessor::MeshGcoreAccessor(const MeshGcoreAccessorArgs& args) :
+    mesh_config_(), grid_config_(), fabric_node_mapping_(), worker_core_noc_mapping_() {
+    init(args);
+}

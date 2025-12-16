@@ -34,6 +34,8 @@
 #include "tests/tt_metal/udm/test_udm_utils.hpp"
 #include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
 
+#include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
+
 #include "tt_metal/udm/mesh_kernel.hpp"
 #include "tt_metal/udm/mesh_utils.hpp"
 #include "tt_metal/udm/mesh_circular_buffer.hpp"
@@ -147,10 +149,11 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto cb_output = tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, output_cb_config);
 
     // ===== SEMAPHORES =====
-    auto reduce_sender_semaphore_id =
-        tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, INVALID);
-    auto reduce_receiver_semaphore_id =
-        tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, INVALID);
+    // GlobalSemaphore provides the same L1 address on all devices
+    // Initialize to 0 so increment/wait semantics work correctly
+    auto reduce_sender_semaphore_addr = tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, 0);
+    auto reduce_receiver_semaphore_addr =
+        tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, 0);
 
     // ===== CORE SETS =====
     // Each row has independent reduction: first core in row is sender, rest are receivers
@@ -175,17 +178,18 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     }
 
     // ===== COMPILE-TIME ARGS =====
-    bfloat16 bfloat_winv = bfloat16(1.0f / block_wt);
-    uint32_t packed_winv = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv});
+    // For SUM reduction, scaler should be 1.0 (not 1/W which is for MEAN)
+    bfloat16 bfloat_scaler = bfloat16(1.0f);
+    uint32_t packed_winv = pack_two_bfloat16_into_uint32({bfloat_scaler, bfloat_scaler});
 
     // Get coordinate dimensions from any gcore
     uint32_t coord_dims = gcores[0].global_coord.dims();
 
-    // Sender kernel args: sem_recv, sem_send, num_blocks, block_ht, rows_per_worker, rows_per_worker_last, winv,
-    // coord_dims
+    // Sender kernel args: sem_recv_addr, sem_send_addr, num_blocks, block_ht, rows_per_worker, rows_per_worker_last,
+    // winv, coord_dims
     std::vector<uint32_t> reader_sender_compile_time_args = {
-        reduce_receiver_semaphore_id.at(0),  // Get semaphore for grid 0
-        reduce_sender_semaphore_id.at(0),
+        reduce_receiver_semaphore_addr.at(0),  // GlobalSemaphore address (same on all devices)
+        reduce_sender_semaphore_addr.at(0),
         (uint32_t)num_cores_x,
         (uint32_t)block_ht,
         (uint32_t)num_rows_per_worker,
@@ -193,11 +197,11 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         packed_winv,
         (uint32_t)coord_dims};
 
-    // Receiver kernel args: sem_recv, sem_send, num_blocks, block_ht, rows_per_worker, rows_per_worker_last, winv,
-    // coord_dims
+    // Receiver kernel args: sem_recv_addr, sem_send_addr, num_blocks, block_ht, rows_per_worker, rows_per_worker_last,
+    // winv, coord_dims
     std::vector<uint32_t> reader_receiver_compile_time_args = {
-        reduce_receiver_semaphore_id.at(0),  // Get semaphore for grid 0
-        reduce_sender_semaphore_id.at(0),
+        reduce_receiver_semaphore_addr.at(0),  // GlobalSemaphore address (same on all devices)
+        reduce_sender_semaphore_addr.at(0),
         (uint32_t)num_cores_x,
         (uint32_t)block_ht,
         (uint32_t)num_rows_per_worker,
@@ -206,6 +210,8 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         (uint32_t)coord_dims};
 
     // ===== CREATE READER KERNELS =====
+    auto mesh_defines = mesh_builder.get_compile_time_defines();
+
     auto reader_sender_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
         program,
@@ -214,7 +220,8 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_sender_compile_time_args});
+            .compile_args = reader_sender_compile_time_args,
+            .defines = mesh_defines});
 
     auto reader_receiver_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
@@ -224,7 +231,8 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_receiver_compile_time_args});
+            .compile_args = reader_receiver_compile_time_args,
+            .defines = mesh_defines});
 
     // ===== COMPUTE COMPILE-TIME ARGS =====
     // Compute kernel args: num_blocks, block_ht, block_wt
@@ -236,7 +244,8 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         program,
         "tests/tt_metal/udm/kernels/compute_sharded_reduce.cpp",
         all_gcores,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_all_to_all_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = true, .compile_args = compute_all_to_all_args, .defines = mesh_defines});
 
     // ===== SET RUNTIME ARGS =====
     // Set runtime args for each row independently
@@ -311,62 +320,43 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
  *   - input (2, 32, 128) → output (2, 32, 1) where output[i,j] = sum(input[i,j,:])
  *   - input (3, 4, 5, 100) → output (3, 4, 5, 1) where output[i,j,k] = sum(input[i,j,k,:])
  */
-void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor) {
+void validate(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    const tt::tt_metal::Shape& global_input_shape,
+    const tt::tt_metal::Shape& global_output_shape) {
     auto* mesh_device = input_tensor.device();
+
+    // Convert from sharded to interleaved before aggregation
+    // The shard spec is designed for local tensor shape, not global shape
+    tt::tt_metal::MemoryConfig interleaved_mem_config(
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+    auto input_interleaved = ttnn::to_memory_config(input_tensor, interleaved_mem_config);
+    auto output_interleaved = ttnn::to_memory_config(output_tensor, interleaved_mem_config);
 
     // Aggregate tensors from distributed format
     // Input is block-sharded, output is height-sharded (replicated on width)
-    auto input_composer = create_block_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank());
-    auto input_data = ttnn::distributed::aggregate_tensor(input_tensor, *input_composer).to_vector<bfloat16>();
+    auto input_composer = create_block_sharded_mesh_composer(mesh_device, input_interleaved.padded_shape().rank());
+    auto input_data = ttnn::distributed::aggregate_tensor(input_interleaved, *input_composer).to_vector<bfloat16>();
+    auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_interleaved.padded_shape().rank());
+    auto output_data = ttnn::distributed::aggregate_tensor(output_interleaved, *output_composer).to_vector<bfloat16>();
 
-    auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_tensor.padded_shape().rank());
-    auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *output_composer).to_vector<bfloat16>();
-
-    // Get input shape
-    const auto& input_shape = input_tensor.padded_shape();
-    uint32_t rank = input_shape.rank();
+    // Use passed global shapes
+    uint32_t rank = global_input_shape.rank();
     TT_ASSERT(rank >= 1, "Tensor must have at least 1 dimension");
 
-    // Get output shape
-    const auto& output_shape = output_tensor.padded_shape();
+    uint32_t global_height = global_input_shape[-2];
+    uint32_t global_width = global_input_shape[-1];
+    uint32_t output_last_dim = global_output_shape[-1];
 
     // Log shapes
-    std::string input_shape_str = "(";
-    std::string output_shape_str = "(";
-    for (uint32_t i = 0; i < rank; ++i) {
-        if (i > 0) {
-            input_shape_str += ", ";
-            output_shape_str += ", ";
-        }
-        input_shape_str += std::to_string(input_shape[i]);
-        output_shape_str += std::to_string(output_shape[i]);
-    }
-    input_shape_str += ")";
-    output_shape_str += ")";
+    log_info(tt::LogTest, "Global input shape: ({}, {})", global_height, global_width);
+    log_info(tt::LogTest, "Global output shape: ({}, {})", global_output_shape[-2], global_output_shape[-1]);
 
-    log_info(tt::LogTest, "Input shape: {}", input_shape_str);
-    log_info(tt::LogTest, "Output shape: {}", output_shape_str);
+    // Compute number of "rows" to validate
+    uint32_t num_rows = global_height;
 
-    // Verify all dimensions except the last match
-    for (uint32_t i = 0; i < rank - 1; ++i) {
-        TT_ASSERT(
-            output_shape[i] == input_shape[i],
-            "Output shape dimension {} must match input (expected {}, got {})",
-            i,
-            input_shape[i],
-            output_shape[i]);
-    }
-
-    // Compute number of "rows" to validate (product of all dims except last)
-    uint32_t num_rows = 1;
-    for (uint32_t i = 0; i < rank - 1; ++i) {
-        num_rows *= input_shape[i];
-    }
-
-    uint32_t input_last_dim = input_shape[rank - 1];
-    uint32_t output_last_dim = output_shape[rank - 1];
-
-    log_info(tt::LogTest, "Validating {} rows, reducing {} elements per row", num_rows, input_last_dim);
+    log_info(tt::LogTest, "Validating {} rows, reducing {} elements per row", num_rows, global_width);
 
     // Build expected and actual vectors for PCC comparison
     std::vector<bfloat16> expected_values;
@@ -375,10 +365,10 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
     actual_values.reserve(num_rows);
 
     for (uint32_t row = 0; row < num_rows; ++row) {
-        // Compute expected sum for this row (sum across last dimension)
+        // Compute expected sum for this row (sum across global width)
         float expected_sum = 0.0f;
-        for (uint32_t last_idx = 0; last_idx < input_last_dim; ++last_idx) {
-            uint32_t input_idx = row * input_last_dim + last_idx;
+        for (uint32_t last_idx = 0; last_idx < global_width; ++last_idx) {
+            uint32_t input_idx = row * global_width + last_idx;
             expected_sum += float(input_data[input_idx]);
         }
         expected_values.push_back(bfloat16(expected_sum));
@@ -386,11 +376,20 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
         // Get actual value from output (first element along last dimension)
         uint32_t output_idx = row * output_last_dim;
         actual_values.push_back(output_data[output_idx]);
+
+        // Debug: Print first 16 rows and any mismatches
+        float actual_f = float(output_data[output_idx]);
+        float expected_f = expected_sum;
+        float diff = std::abs(actual_f - expected_f);
+        if (row < 16 || diff > 0.1f * std::abs(expected_f)) {
+            log_info(
+                tt::LogTest, "  Row {}: expected={:.2f}, actual={:.2f}, diff={:.2f}", row, expected_f, actual_f, diff);
+        }
     }
 
     // Check PCC between expected and actual values
     float pcc = check_bfloat16_vector_pcc(expected_values, actual_values);
-    const float pcc_threshold = 0.99f;
+    const float pcc_threshold = 0.9999f;
 
     log_info(tt::LogTest, "PCC: {:.6f} (threshold: {:.2f})", pcc, pcc_threshold);
 
@@ -403,42 +402,69 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
 
 /**
  * @brief Create a block-sharded bfloat16 tensor for reduction
- * TODO: Move this to test_udm_utils.hpp once stabilized
+ * @param grid_size The grid shape {num_cores_x, num_cores_y} to use for sharding within each device
+ *
+ * Two-step pattern:
+ * 1. Create host tensor with global_shape and INTERLEAVED memory config
+ * 2. Distribute across mesh devices
+ * 3. Convert to BLOCK_SHARDED using ttnn::to_memory_config
  */
 inline ttnn::Tensor create_block_sharded_bfloat16_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
-    const tt::tt_metal::Shape& local_shape) {
-    // Get device grid for sharding
-    auto compute_grid = mesh_device->compute_with_storage_grid_size();
-
-    // Calculate how many cores to use in each dimension
-    // Ensure at least 1 tile (32 elements) per core in width
-    constexpr uint32_t TILE_WIDTH = 32;
-    uint32_t num_cores_x = std::min((uint32_t)compute_grid.x, local_shape[-1] / TILE_WIDTH);
-    uint32_t num_cores_y = compute_grid.y;
+    const tt::tt_metal::Shape& local_shape,
+    std::pair<uint32_t, uint32_t> grid_size) {
+    uint32_t num_cores_x = grid_size.first;
+    uint32_t num_cores_y = grid_size.second;
 
     // Calculate shard shape (height and width per shard in elements)
     uint32_t shard_height = local_shape[-2] / num_cores_y;
     uint32_t shard_width = local_shape[-1] / num_cores_x;
 
-    // Create shard spec for block sharding
-    // When num_cores_x = 1, this effectively becomes height sharding
-    auto shard_spec = ShardSpec(
-        CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
-        std::array<uint32_t, 2>{shard_height, shard_width},
-        ShardOrientation::ROW_MAJOR);
+    // In tiles
+    uint32_t local_height_tiles = local_shape[-2] / 32;
+    uint32_t local_width_tiles = local_shape[-1] / 32;
+    uint32_t shard_height_tiles = shard_height / 32;
+    uint32_t shard_width_tiles = shard_width / 32;
+    uint32_t num_shards_height = local_height_tiles / shard_height_tiles;
+    uint32_t num_shards_width = local_width_tiles / shard_width_tiles;
 
-    // Use BLOCK_SHARDED memory layout with bfloat16 and shard spec
-    tt::tt_metal::MemoryConfig mem_config(
-        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+    log_info(
+        tt::LogTest,
+        "create_block_sharded_bfloat16_tensor: local_shape=({}, {})=({}, {}) tiles, grid={}x{}, shard_shape=({}, "
+        "{})=({}, {}) tiles",
+        local_shape[-2],
+        local_shape[-1],
+        local_height_tiles,
+        local_width_tiles,
+        num_cores_x,
+        num_cores_y,
+        shard_height,
+        shard_width,
+        shard_height_tiles,
+        shard_width_tiles);
+    log_info(
+        tt::LogTest,
+        "  -> num_shards: {}x{} = {}, grid_cores: {}x{} = {}",
+        num_shards_height,
+        num_shards_width,
+        num_shards_height * num_shards_width,
+        num_cores_x,
+        num_cores_y,
+        num_cores_x * num_cores_y);
 
-    tt::tt_metal::TensorSpec tensor_spec(
+    // Step 1: Create host tensor with global_shape and INTERLEAVED memory config
+    tt::tt_metal::MemoryConfig interleaved_mem_config(
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+
+    tt::tt_metal::TensorSpec host_tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            interleaved_mem_config));
 
-    // Create host tensor with random bfloat16 values
+    // Create host tensor with global data
     uint32_t volume = 1;
     for (size_t i = 0; i < global_shape.rank(); ++i) {
         volume *= global_shape[i];
@@ -448,54 +474,98 @@ inline ttnn::Tensor create_block_sharded_bfloat16_tensor(
 
     // Generate random data in bfloat16 range
     std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(0.0f, 10.0f);
+    std::mt19937 gen(42);                                    // Fixed seed for reproducibility
+    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);  // Small values to avoid overflow when summing
     for (uint32_t i = 0; i < volume; ++i) {
         src_data[i] = bfloat16(dis(gen));
     }
 
-    auto host_tensor = ttnn::Tensor::from_vector(src_data, tensor_spec);
+    auto host_tensor = ttnn::Tensor::from_vector(src_data, host_tensor_spec);
 
-    // Use block-sharded mapper
+    // Step 2: Distribute across mesh devices (creates interleaved device tensors)
     auto mapper = create_block_sharded_mesh_mapper(mesh_device, global_shape.rank());
-    return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
-}
+    auto distributed_tensor = ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 
-/**
- * @brief Create a height-sharded bfloat16 tensor (replicated across width dimension)
- * Used for reduction outputs where width is reduced to a single tile
- */
-inline ttnn::Tensor create_height_sharded_bfloat16_tensor(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const tt::tt_metal::Shape& global_shape,
-    const tt::tt_metal::Shape& local_shape) {
-    // Get device grid for sharding
-    auto compute_grid = mesh_device->compute_with_storage_grid_size();
-
-    // For height-sharded: use only 1 core in X, full grid in Y
-    uint32_t num_cores_x = 1;
-    uint32_t num_cores_y = compute_grid.y;
-
-    // Calculate shard shape
-    uint32_t shard_height = local_shape[-2] / num_cores_y;
-    uint32_t shard_width = local_shape[-1];  // Full width per core
-
-    // Create shard spec - single column of cores
+    // Step 3: Convert to BLOCK_SHARDED using ttnn::to_memory_config
     auto shard_spec = ShardSpec(
         CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
         std::array<uint32_t, 2>{shard_height, shard_width},
         ShardOrientation::ROW_MAJOR);
 
-    // Use BLOCK_SHARDED memory layout (effectively height sharding with 1 core in X)
-    tt::tt_metal::MemoryConfig mem_config(
+    tt::tt_metal::MemoryConfig sharded_mem_config(
         tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
 
-    tt::tt_metal::TensorSpec tensor_spec(
+    auto result = ttnn::to_memory_config(distributed_tensor, sharded_mem_config);
+    return result;
+}
+
+/**
+ * @brief Create a height-sharded bfloat16 tensor (replicated across width dimension)
+ * Used for reduction outputs where width is reduced to a single tile
+ * @param grid_size The grid shape {num_cores_x, num_cores_y} to use for sharding within each device
+ *
+ * Two-step pattern:
+ * 1. Create host tensor with global_shape and INTERLEAVED memory config
+ * 2. Distribute across mesh devices (height-sharded, replicated on width)
+ * 3. Convert to BLOCK_SHARDED using ttnn::to_memory_config
+ */
+inline ttnn::Tensor create_height_sharded_bfloat16_tensor(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    const tt::tt_metal::Shape& local_shape,
+    std::pair<uint32_t, uint32_t> grid_size) {
+    // For height-sharded output: use only 1 core in X (width reduced to single tile)
+    uint32_t num_cores_x = 1;
+    uint32_t num_cores_y = grid_size.second;
+
+    // Calculate shard shape
+    uint32_t shard_height = local_shape[-2] / num_cores_y;
+    uint32_t shard_width = local_shape[-1];  // Full width per core (single tile after reduction)
+
+    // In tiles
+    uint32_t local_height_tiles = local_shape[-2] / 32;
+    uint32_t local_width_tiles = local_shape[-1] / 32;
+    uint32_t shard_height_tiles = shard_height / 32;
+    uint32_t shard_width_tiles = shard_width / 32;
+    uint32_t num_shards_height = (shard_height_tiles > 0) ? local_height_tiles / shard_height_tiles : 0;
+    uint32_t num_shards_width = (shard_width_tiles > 0) ? local_width_tiles / shard_width_tiles : 0;
+
+    log_info(
+        tt::LogTest,
+        "create_height_sharded_bfloat16_tensor: local_shape=({}, {})=({}, {}) tiles, grid={}x{}, shard_shape=({}, "
+        "{})=({}, {}) tiles",
+        local_shape[-2],
+        local_shape[-1],
+        local_height_tiles,
+        local_width_tiles,
+        num_cores_x,
+        num_cores_y,
+        shard_height,
+        shard_width,
+        shard_height_tiles,
+        shard_width_tiles);
+    log_info(
+        tt::LogTest,
+        "  -> num_shards: {}x{} = {}, grid_cores: {}x{} = {}",
+        num_shards_height,
+        num_shards_width,
+        num_shards_height * num_shards_width,
+        num_cores_x,
+        num_cores_y,
+        num_cores_x * num_cores_y);
+
+    // Step 1: Create host tensor with global_shape and INTERLEAVED memory config
+    tt::tt_metal::MemoryConfig interleaved_mem_config(
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+
+    tt::tt_metal::TensorSpec host_tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            interleaved_mem_config));
 
-    // Create host tensor with zeros (output will be written by kernel)
+    // Create host tensor with global data (zeros for output)
     uint32_t volume = 1;
     for (size_t i = 0; i < global_shape.rank(); ++i) {
         volume *= global_shape[i];
@@ -503,22 +573,37 @@ inline ttnn::Tensor create_height_sharded_bfloat16_tensor(
 
     std::vector<bfloat16> src_data(volume, bfloat16(0.0f));
 
-    auto host_tensor = ttnn::Tensor::from_vector(src_data, tensor_spec);
+    auto host_tensor = ttnn::Tensor::from_vector(src_data, host_tensor_spec);
 
-    // Use height-sharded mapper (shard on height, replicate on width)
+    // Step 2: Distribute across mesh devices (height-sharded, replicated on width)
     auto mapper = create_height_sharded_mesh_mapper(mesh_device, global_shape.rank());
-    return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+    auto distributed_tensor = ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+
+    // Step 3: Convert to HEIGHT_SHARDED using ttnn::to_memory_config
+    // Use HEIGHT_SHARDED since we only shard along height (width is single tile)
+    auto shard_spec = ShardSpec(
+        CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
+        std::array<uint32_t, 2>{shard_height, shard_width},
+        ShardOrientation::ROW_MAJOR);
+
+    tt::tt_metal::MemoryConfig sharded_mem_config(
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+
+    auto result = ttnn::to_memory_config(distributed_tensor, sharded_mem_config);
+    return result;
 }
 
 /**
  * @brief Run width reduction test
+ * @param grid_size The grid shape {num_cores_x, num_cores_y} to use for sharding within each device
  */
 void run_width_reduction_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
-    const tt::tt_metal::Shape& local_shape) {
+    const tt::tt_metal::Shape& local_shape,
+    std::pair<uint32_t, uint32_t> grid_size) {
     // Create input tensor - block-sharded bfloat16
-    auto input_tensor = create_block_sharded_bfloat16_tensor(mesh_device, global_shape, local_shape);
+    auto input_tensor = create_block_sharded_bfloat16_tensor(mesh_device, global_shape, local_shape, grid_size);
 
     // Create output tensor for reduced result
     // Output shape is same as input except last dimension is reduced to 32 (one tile)
@@ -528,10 +613,13 @@ void run_width_reduction_test(
     output_global_shape[-1] = 32;  // Reduce last dimension to single tile
     output_local_shape[-1] = 32;
 
-    auto output_tensor = create_height_sharded_bfloat16_tensor(mesh_device, output_global_shape, output_local_shape);
+    auto output_tensor =
+        create_height_sharded_bfloat16_tensor(mesh_device, output_global_shape, output_local_shape, grid_size);
 
     // Build tensor builder from input tensor
     auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
+    // Log tensor shape info for debugging
+    log_tensor_shape_info(input_mesh_tensor_builder, input_tensor);
 
     // Create reduction program
     auto program = create_program(input_mesh_tensor_builder, *input_tensor.buffer(), *output_tensor.buffer());
@@ -542,7 +630,7 @@ void run_width_reduction_test(
     run_program(input_tensor, tensor_mesh_device, program);
 
     // Validate result
-    validate(input_tensor, output_tensor);
+    validate(input_tensor, output_tensor, global_shape, output_global_shape);
 }
 
 /**
@@ -570,25 +658,37 @@ void run_width_reduction_test(
 using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFixture;
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Small) {
-    // Small 2D tensor: (4, 16) tiles = (128, 512) elements
-    // Mesh: 1×4, so block_ht = 4/1 = 4 tiles, num_cores_x = 4
-    // Constraint satisfied: block_ht (4) >= num_cores_x (4) ✓
-    // Each device gets (4, 4) tiles = (128, 128) elements locally
-    tt::tt_metal::Shape global_shape({128, 512});
-    tt::tt_metal::Shape local_shape({128, 128});
+    // Small 2D tensor: (8, 16) tiles = (256, 512) elements
+    // Mesh: 1×4, each device gets (8, 4) tiles = (256, 128) elements locally
+    // Grid: 2x1 - shard shape = (256, 64) = (8, 2) tiles per core
+    tt::tt_metal::Shape global_shape({256, 512});
+    tt::tt_metal::Shape local_shape({256, 128});
+    std::pair<uint32_t, uint32_t> grid_size = {2, 1};
 
-    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape);
+    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Medium) {
-    // Medium 2D tensor: (8, 32) tiles = (256, 1024) elements
-    // Mesh: 1×4, so block_ht = 8/1 = 8 tiles, num_cores_x = 4
-    // Constraint satisfied: block_ht (8) >= num_cores_x (4) ✓
-    // Each device gets (8, 8) tiles = (256, 256) elements locally
-    tt::tt_metal::Shape global_shape({256, 1024});
-    tt::tt_metal::Shape local_shape({256, 256});
+    // Medium 2D tensor: (16, 32) tiles = (512, 1024) elements
+    // Mesh: 1×4, each device gets (16, 8) tiles = (512, 256) elements locally
+    // Grid: 2x2 - shard shape = (256, 128) = (8, 4) tiles per core
+    tt::tt_metal::Shape global_shape({512, 1024});
+    tt::tt_metal::Shape local_shape({512, 256});
+    std::pair<uint32_t, uint32_t> grid_size = {2, 2};
 
-    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape);
+    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
+}
+
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Large) {
+    // Large 2D tensor: (64, 128) tiles = (2048, 4096) elements
+    // Mesh: 1×4, each device gets (64, 32) tiles = (2048, 1024) elements locally
+    // Grid: 4x4 - shard shape = (512, 256) = (16, 8) tiles per core
+    // Constraint: block_ht = 64/4 = 16, num_cores_x = 4*4 = 16, so 16 >= 16 ✓
+    tt::tt_metal::Shape global_shape({2048, 4096});
+    tt::tt_metal::Shape local_shape({2048, 1024});
+    std::pair<uint32_t, uint32_t> grid_size = {4, 4};
+
+    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
 }
 
 }  // namespace tt::tt_metal::experimental::udm_tests

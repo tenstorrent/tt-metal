@@ -14,6 +14,24 @@
 
 namespace tt::tt_fabric::experimental::udm {
 
+// ==================== Type Traits for Accessor Detection ====================
+
+/**
+ * @brief Type trait to detect if a type is a valid mesh accessor
+ *
+ * A valid accessor has a get_fabric_node_and_noc_addr method.
+ * This is used to disambiguate between accessor-version and coord-only-version overloads.
+ */
+template <typename T, typename = void>
+struct is_mesh_accessor : std::false_type {};
+
+template <typename T>
+struct is_mesh_accessor<T, std::void_t<decltype(std::declval<const T&>().get_fabric_node_and_noc_addr(0u, 0u, 0))>>
+    : std::true_type {};
+
+template <typename T>
+constexpr bool is_mesh_accessor_v = is_mesh_accessor<T>::value;
+
 /**
  * @brief Helper to check if destination fabric node is local
  *
@@ -47,20 +65,19 @@ inline bool dest_is_local(uint32_t dest_fabric_mesh_id, uint32_t dest_fabric_chi
  *
  * @return Pair of [accessor reference, is_newly_initialized]
  */
-inline std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
-    static MeshGcoreAccessor* accessor = nullptr;
+FORCE_INLINE std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
+    static MeshGcoreAccessor* accessor_ptr = nullptr;
     static bool initialized = false;
 
     if (!initialized) {
-        // Build accessor from compile-time defines on first use
-        auto gcore_args = MeshGcoreAccessorArgs<0>();
-        static MeshGcoreAccessor acc(gcore_args);
-        accessor = &acc;
+        static MeshGcoreAccessor accessor;
+        auto gcore_args = MeshGcoreAccessorArgs();
+        accessor.init(gcore_args);
+        accessor_ptr = &accessor;
         initialized = true;
-        return {*accessor, true};
     }
 
-    return {*accessor, false};
+    return {*accessor_ptr, initialized};
 }
 
 // ==================== Unified Mesh Accessor APIs ====================
@@ -83,7 +100,7 @@ inline std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
  * @param offset Offset within the page/core (default 0)
  * @param noc NOC index to use
  */
-template <typename AccessorT, typename CoordT>
+template <typename AccessorT, typename CoordT, typename = std::enable_if_t<is_mesh_accessor_v<AccessorT>>>
 inline void async_read(
     const AccessorT& accessor,
     const CoordT& coord,
@@ -123,7 +140,11 @@ inline void async_read(
  * @param offset Offset within the page/core (default 0)
  * @param noc NOC index to use
  */
-template <uint8_t posted = 0, typename AccessorT, typename CoordT>
+template <
+    uint8_t posted = 0,
+    typename AccessorT,
+    typename CoordT,
+    typename = std::enable_if_t<is_mesh_accessor_v<AccessorT>>>
 inline void async_write(
     const AccessorT& accessor,
     const CoordT& coord,
@@ -251,7 +272,11 @@ inline void async_write(
  * @param offset Offset within the gcore's L1 (semaphore address, default 0)
  * @param noc NOC index to use
  */
-template <uint8_t posted = 0, typename AccessorT, typename CoordT>
+template <
+    uint8_t posted = 0,
+    typename AccessorT,
+    typename CoordT,
+    typename = std::enable_if_t<is_mesh_accessor_v<AccessorT>>>
 inline void semaphore_inc(
     const AccessorT& accessor, const CoordT& coord, uint32_t incr_val, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);

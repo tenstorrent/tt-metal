@@ -133,13 +133,28 @@ inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_block_sharded_mes
 /**
  * @brief Create mesh composer for aggregating height-sharded tensors
  * Concatenates shards from mesh rows, takes first replica from columns
+ *
+ * For a height-sharded distribution (Shard{height}, Replicate{}):
+ * - Mesh dim 0: sharded on tensor height → concat along height_dim
+ * - Mesh dim 1: replicated (all devices have same data) → take first replica
+ *
+ * We use mesh_shape_override to set mesh dim 1 to size 1, which takes only
+ * the first replica from the replicated dimension.
  */
 inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_height_sharded_mesh_composer(
     tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
     int height_dim = static_cast<int>(tensor_rank) - 2;
+    int width_dim = static_cast<int>(tensor_rank) - 1;
+
+    // Get mesh shape to determine actual sharding
+    const auto& mesh_shape = mesh_device->shape();
+    uint32_t mesh_dim0_size = mesh_shape[0];  // Size of dimension sharded on height
 
     tt::tt_metal::distributed::MeshComposerConfig config;
-    config.dims = {height_dim};
+    // 2D config matching mesh dimensions
+    config.dims = {height_dim, width_dim};
+    // Override mesh dim 1 to size 1 to take first replica (not concat all replicas)
+    config.mesh_shape_override = tt::tt_metal::distributed::MeshShape(mesh_dim0_size, 1);
 
     return ttnn::distributed::create_mesh_composer(*mesh_device, config);
 }

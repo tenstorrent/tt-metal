@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "tt_metal/hw/inc/udm/udm_api.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 /**
  * @brief Sender (coordinator) kernel for distributed SUM reduction
@@ -20,11 +21,15 @@
  * @note Based on LayerNorm mcast_sender style but simplified for SUM reduction only
  */
 void kernel_main() {
+    // TODO: move fabric counter init to fw kernel init
+    tt::tt_fabric::udm::fabric_local_state_init();
+
     // ============================================================================
     // Compile-time arguments
     // ============================================================================
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    // Note: With GlobalSemaphore, these are L1 addresses (same on all devices), not semaphore IDs
+    constexpr uint32_t receiver_semaphore_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t sender_semaphore_addr = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);  // num_cores_x
     constexpr uint32_t block_ht = get_compile_time_arg_val(3);    // Height per core
     constexpr uint32_t num_rows_per_worker = get_compile_time_arg_val(4);
@@ -53,6 +58,7 @@ void kernel_main() {
     // ============================================================================
     // CB definitions
     // ============================================================================
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;       // Input (globally allocated)
     constexpr uint32_t cb_scaler = tt::CBIndex::c_1;    // Scaler for reduction
     constexpr uint32_t cb_partial = tt::CBIndex::c_2;   // Local partial results
     constexpr uint32_t cb_reduced = tt::CBIndex::c_3;   // Global reduced results
@@ -63,10 +69,6 @@ void kernel_main() {
     // Setup
     // ============================================================================
     const uint32_t single_tile_size_bytes = get_tile_size(cb_partial);
-
-    // Get semaphore L1 addresses
-    const uint32_t receiver_semaphore_addr = get_semaphore(reduce_receiver_semaphore_id);
-    const uint32_t sender_semaphore_addr = get_semaphore(reduce_sender_semaphore_id);
 
     // ============================================================================
     // Phase 1: Generate scaler tile for reduction
@@ -83,14 +85,11 @@ void kernel_main() {
     // ============================================================================
     // Phase 3: Coordinate partials - wait for all cores
     // ============================================================================
-    // Wait for all receivers to signal their partials are ready
     tt::tt_fabric::experimental::udm::semaphore_wait(receiver_semaphore_addr, num_blocks - 1);
     tt::tt_fabric::experimental::udm::semaphore_set(receiver_semaphore_addr, 0);
 
     // Signal all receivers to proceed with reading partials
-    // TODO: Once UDM supports multicast, replace this unicast loop with mcast
-    for (uint32_t i = 1; i < num_blocks; ++i) {  // Skip index 0 (self)
-        // semaphore_inc(coord, incr_val, offset) - offset is the semaphore L1 address on remote
+    for (uint32_t i = 1; i < num_blocks; ++i) {
         tt::tt_fabric::experimental::udm::semaphore_inc(all_coords[i], 1, sender_semaphore_addr);
     }
     tt::tt_fabric::experimental::udm::atomic_barrier();
@@ -172,4 +171,7 @@ void kernel_main() {
         tt::tt_fabric::experimental::udm::semaphore_inc(all_coords[i], 1, sender_semaphore_addr);
     }
     tt::tt_fabric::experimental::udm::atomic_barrier();
+
+    // TODO: remove once we have persistent connection across programs
+    tt::tt_fabric::udm::close_fabric_connection();
 }
