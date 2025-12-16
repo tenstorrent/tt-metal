@@ -24,7 +24,7 @@ struct Rotate {
      *   center: Optional rotation center point (cx, cy). Default: tensor center
      *   fill: Fill value for areas outside the rotated tensor. Default: 0.0
      *   expand: Must be false. Only same-size rotation is supported
-     *   interpolation_mode: Interpolation method - "bilinear" or "nearest". Default: "nearest"
+     *   interpolation_mode: Interpolation method - only "nearest" is supported. Default: "nearest"
      *   memory_config: Memory configuration for the output tensor
      *
      * Returns:

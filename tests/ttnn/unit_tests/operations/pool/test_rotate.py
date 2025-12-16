@@ -98,7 +98,7 @@ def test_custom_center(device, center):
 
     # TTNN - note center format is (x, y) for ttnn
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, center=(float(center[1]), float(center[0])))
+    ttnn_output = ttnn.rotate(ttnn_input, angle=angle, center=(float(center[0]), float(center[1])))
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Use tolerances based on nightly test patterns
