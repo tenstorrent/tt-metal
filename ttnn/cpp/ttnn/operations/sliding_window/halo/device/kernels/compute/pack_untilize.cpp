@@ -19,16 +19,18 @@ void MAIN {
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 
     // Initialize once before the loop
-    compute_kernel_lib::untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
+    compute_kernel_lib::untilize_init<tiles_per_row, src_cb_id, out_cb_id0>();
 
     for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
-        const uint32_t out_cb_id = (block_idx % 2 == 0) ? out_cb_id0 : out_cb_id1;
-
         // Use unified untilize with init=false, uninit=false since we handle those outside the loop
-        compute_kernel_lib::untilize<tiles_per_row, false, false>(src_cb_id, out_cb_id, 1, block_size);
+        if (block_idx % 2 == 0) {
+            compute_kernel_lib::untilize<tiles_per_row, src_cb_id, out_cb_id0, false, false>(1, block_size);
+        } else {
+            compute_kernel_lib::untilize<tiles_per_row, src_cb_id, out_cb_id1, false, false>(1, block_size);
+        }
     }
 
     // Uninit after loop
-    compute_kernel_lib::untilize_uninit<tiles_per_row>(src_cb_id, out_cb_id0);
+    compute_kernel_lib::untilize_uninit<tiles_per_row, src_cb_id, out_cb_id0>();
 }
 }  // namespace NAMESPACE

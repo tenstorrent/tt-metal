@@ -24,16 +24,16 @@ void MAIN {
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
     // Initialize once before the loop
-    compute_kernel_lib::untilize_init<Wt>(in_cb, untilized_in_cb);
+    compute_kernel_lib::untilize_init<Wt, in_cb, untilized_in_cb>();
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         // Untilize input (init done before loop, no uninit needed)
-        compute_kernel_lib::untilize<Wt, false, false>(in_cb, untilized_in_cb, 1);
+        compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb, false, false>(1);
 
         reconfig_data_format_srca(in_cb, cache_cb);
         for (uint32_t u = 0; u < u_count; ++u) {
             // Untilize cache blocks
-            compute_kernel_lib::untilize<Wt>(cache_cb, untilized_cache_cb, granularity);
+            compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(granularity);
 
             reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
             pack_reconfig_data_format(untilized_cache_cb, out_cb);
@@ -53,7 +53,7 @@ void MAIN {
         reconfig_data_format_srca(cache_cb, in_cb);
 
         // Re-initialize for next iteration
-        compute_kernel_lib::untilize_init<Wt>(in_cb, untilized_in_cb);
+        compute_kernel_lib::untilize_init<Wt, in_cb, untilized_in_cb>();
     }
 }
 }  // namespace NAMESPACE

@@ -594,8 +594,8 @@ void MAIN {
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
                     // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
-                    compute_kernel_lib::untilize<out_block_w>(
-                        matmul_partials_cb, out_cb_id, in0_num_subblocks * out_subblock_h);
+                    compute_kernel_lib::untilize<out_block_w, matmul_partials_cb, out_cb_id>(
+                        in0_num_subblocks * out_subblock_h);
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
