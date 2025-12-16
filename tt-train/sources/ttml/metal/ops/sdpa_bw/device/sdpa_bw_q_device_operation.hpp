@@ -50,4 +50,3 @@ constexpr auto ttml_sdpa_q_bw = ttnn::
     register_operation<"ttnn::prim::ttml_sdpa_q_bw", ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation>();
 
 }  // namespace ttnn::prim
-
