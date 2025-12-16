@@ -1032,7 +1032,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (value) {
                 this->inspector_settings.log_path = std::filesystem::path(value);
             } else {
-                this->inspector_settings.log_path = std::filesystem::path(this->get_root_dir()) / "generated/inspector";
+                this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
             }
             break;
 
