@@ -37,7 +37,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
         // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
-        this->downstream_edms_connected |= (1 << compact_index);
+        this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
 
         // Store addresses indexed by [vc_idx][compact_index]
         // NOTE: For INTRA_MESH connections, this works fine (one connection per compact_index)
@@ -51,7 +51,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(compact_index) =
             adapter_spec.buffer_index_semaphore_id;
     } else {
-        this->downstream_edms_connected = 1;
+        this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) = 1;
 
         // For 1D, store at compact index 0
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
@@ -106,13 +106,12 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         if (vc_idx == 0) {
             num_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
         } else {
-            // VC1: Use actual connection count (3 for XY, 4 for Z)
-            // This is safe because VC1 channels are only created when intermesh is configured
-            num_downstream_edms = downstream_edms_connected_by_vc[vc_idx].size();
+            // VC1: Use fixed count based on 2D routing (3 for XY, 4 for Z intermesh)
+            num_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
         }
 
         // Pack connection mask (bit mask indicating which slots are valid)
-        args_out.push_back(this->downstream_edms_connected);
+        args_out.push_back(this->downstream_edms_connected_by_vc_mask.at(vc_idx));
 
         // Pack buffer base addresses (one per compact index)
         for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
@@ -141,7 +140,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     } else {
         // For 1D: single downstream connection (only VC0 supported)
         TT_FATAL(vc_idx == 0, "VC1 is not supported for 1D routing");
-        bool has_connection = this->downstream_edms_connected != 0;
+        bool has_connection = this->downstream_edms_connected_by_vc_mask.at(vc_idx) != 0;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
@@ -189,10 +188,6 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     }
 }
 
-uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected() const {
-    return this->downstream_edms_connected;
-}
-
 uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const {
     return encode_noc_ord_for_2d(
         this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.y; });
@@ -230,15 +225,22 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     }
 }
 
-void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const {
+void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(
+    std::vector<uint32_t>& ct_args_out, size_t /*num_fwd_paths*/) const {
+    // Always emit MAX_NUM_RECEIVER_CHANNELS elements (one per VC) to match device side array size
     ct_args_out.insert(
         ct_args_out.end(),
         this->downstream_sender_channels_num_buffers.begin(),
-        this->downstream_sender_channels_num_buffers.begin() + num_fwd_paths);
+        this->downstream_sender_channels_num_buffers.begin() + builder_config::num_max_receiver_channels);
 
-    for (size_t i = 0; i < num_fwd_paths; i++) {
-        if (this->downstream_edms_connected_by_vc_set.find(i) != this->downstream_edms_connected_by_vc_set.end()) {
-            TT_FATAL(this->downstream_sender_channels_num_buffers[i] != 0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
+    // Validate that all connected VCs have non-zero buffer counts
+    // downstream_sender_channels_num_buffers is indexed by VC (receiver channel), not by sender channel
+    for (size_t vc_idx = 0; vc_idx < builder_config::num_max_receiver_channels; vc_idx++) {
+        if (this->downstream_edms_connected_by_vc_set.find(vc_idx) != this->downstream_edms_connected_by_vc_set.end()) {
+            TT_FATAL(
+                this->downstream_sender_channels_num_buffers[vc_idx] != 0,
+                "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}",
+                vc_idx);
         }
     }
 }
