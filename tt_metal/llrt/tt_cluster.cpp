@@ -1403,6 +1403,14 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) con
     return is_external_cable;
 }
 
+uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
+    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+        return this->hal_.get_dma_alignment();
+    } else {
+        return 1;
+    }
+}
+
 }  // namespace tt
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {

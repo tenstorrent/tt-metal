@@ -436,6 +436,8 @@ public:
     uint32_t get_alignment(HalMemType memory_type) const;
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
+    uint32_t get_dma_alignment(
+        void) const;  // tt::tt_metal::Cluster& cluster, tt_cxy_pair& core, uint32_t size_in_bytes) const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -607,6 +609,16 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
     uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_write_alignments_.size());
     return this->mem_write_alignments_[index];
+}
+
+inline uint32_t Hal::get_dma_alignment(void) const {
+    // DMA transfers are only available on Wormhole B0 devices today.
+    switch (arch_) {
+        case tt::ARCH::WORMHOLE_B0: return 4;
+        default:
+            // This branch should never be reached. Only Wormhole B0 devices support DMA transfers today.
+            return 1;
+    }
 }
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {

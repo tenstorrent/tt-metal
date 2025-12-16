@@ -347,6 +347,8 @@ public:
     // return enum for connection type, Internal, QSFP, Other, Unknown
     bool is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const;
 
+    uint32_t get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const;
+
     const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
         return this->frequent_retrain_cores_.at(chip_id);
     }
