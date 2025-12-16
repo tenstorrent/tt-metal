@@ -5,6 +5,7 @@
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -393,6 +394,9 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
+        logger.info(
+            f"xqkv linear:\nmemory_config: {ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG}\nprogram_config: {self.model_config['XQKV_DECODE_PROGCFG']}"
+        )
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -538,6 +542,9 @@ class Attention(LightweightModule):
         if self.use_fused_all_gather_matmul:
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
+            )
+            logger.info(
+                f"all_gather_matmul:\nmemory_config_ag: {self.model_config['ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG']}\nmemory_config_mm: {self.model_config['DECODE_RESIDUAL_MEMCFG']}\nprogram_config: {self.model_config['ATTN_ALL_GATHER_MATMUL_PROGCFG']}"
             )
             _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
                 attn_output_cat,
