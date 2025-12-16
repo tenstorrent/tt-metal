@@ -17,10 +17,10 @@ def tensor_map(request):
 def test_max_pool2d_stride_3x3_no_padding(device, tensor_map):
     run_max_pool2d(
         [1, 32, 9, 9],
-        (3, 3),
-        (0, 0),
-        (3, 3),
-        (1, 1),
+        (3, 3),  # kernel size
+        (0, 0),  # padding
+        (3, 3),  # stride
+        (1, 1),  # dilatation
         device,
         tensor_map,
         ttnn.bfloat16,
