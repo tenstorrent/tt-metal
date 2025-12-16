@@ -98,6 +98,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
+    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(logical_n), tt::constants::TILE_HEIGHT);
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -325,6 +326,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         static_cast<uint32_t>(logical_n),
         logical_nt,
         Lt,
+        L,
         num_local_q_chunks,
         num_joint_q_chunks,
         num_local_k_chunks,
@@ -353,43 +355,27 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     reader_compile_time_args.push_back(receiver_semahpore_id);
     reader_compile_time_args.push_back(valid_semahpore_id);
 
-    // Calculate which K chunks contain the mask boundaries
-    // If a tensor does not require masking, set to MAX_UINT32. This avoids a
-    // bug in the mask generation code, which would mask a full, valid chunk
-    // with -inf.
-    const uint32_t mask_chunk_0 =
-        (logical_n != global_N) ? (logical_n / k_chunk_size) : (uint32_t)(-1);  // idx of last chunk in first sequence
-    const uint32_t mask_chunk_1 =
-        (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in second sequence
-
-    log_debug(tt::LogOp, "mask_chunk_0: {}", mask_chunk_0);
-    log_debug(tt::LogOp, "mask_chunk_1: {}", mask_chunk_1);
-
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
+        local_padded_N,
         local_padded_Nt,
         padded_Nt,
+        logical_n,
+        logical_nt,
         Lt,
-        padded_Lqt,
-        padded_Lkt,
-        static_cast<uint32_t>(logical_n),
         L,
-        num_cores,
+        num_local_q_chunks,
+        num_joint_q_chunks,
+        num_local_k_chunks,
+        num_joint_k_chunks,
+        num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        static_cast<uint32_t>(use_joint_mask),
-        mask_chunk_0,
-        mask_chunk_1,
-        ring_size,
-        N_k_num_chunks_local,
-        L_k_num_chunks,
-        global_logical_NK_chunks,
-        global_padded_NK_chunks,
-        num_q_chunks};
+        ring_size};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -398,10 +384,22 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     std::vector<uint32_t> compute_compile_time_args = {
         B,
         NH,
-        cat_Skt,
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
+        local_padded_N,
+        local_padded_Nt,
+        padded_Nt,
+        logical_n,
+        logical_nt,
+        Lt,
+        L,
+        num_local_q_chunks,
+        num_joint_q_chunks,
+        num_local_k_chunks,
+        num_joint_k_chunks,
+        num_q_chunks,
+        ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -414,15 +412,6 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        static_cast<uint32_t>(use_joint_mask),
-        mask_chunk_0,
-        mask_chunk_1,
-        ring_size,
-        N_k_num_chunks_local,
-        L_k_num_chunks,
-        global_logical_NK_chunks,
-        global_padded_NK_chunks,
-        num_q_chunks,
         scale_union.u};
 
     std::map<std::string, std::string> defines;
@@ -639,13 +628,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
     // Evenly distribute flat global q chunks across cores
-    const uint32_t total_q_chunks = B * NH * q_num_chunks;
+    const uint32_t total_q_chunks = B * NH * num_q_chunks;
     const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
     const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
     uint32_t next_global_chunk = 0;
 
     auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
-        const uint32_t head_span = q_num_chunks;
+        const uint32_t head_span = num_q_chunks;
         const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
         const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
         const uint32_t batch = (NH == 0) ? 0 : (head_index / NH);
@@ -672,7 +661,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         uint32_t flat_chunk = next_global_chunk;
         while (remaining > 0) {
             auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = q_num_chunks - q_chunk_idx;
+            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
             uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
 
             work.head_work.push_back(CoreHeadWork{

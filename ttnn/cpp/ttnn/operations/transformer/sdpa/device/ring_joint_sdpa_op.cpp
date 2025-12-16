@@ -188,7 +188,7 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        N_local % ttnn::constants::TILE_HEIGHT == 0,
+        N_local % tt::constants::TILE_HEIGHT == 0,
         "Local sequence length must be divisible by q_chunk_size. Got N_local: {}, q_chunk_size: {}",
         N_local,
         q_chunk_size);

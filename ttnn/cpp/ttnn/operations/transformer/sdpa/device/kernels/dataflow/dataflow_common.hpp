@@ -715,10 +715,13 @@ struct PaddedAddrGenerator {
 struct Slice {
     uint32_t d0;        // batch dimension
     uint32_t d1;        // head dimension
+
     uint32_t d2_start;  // sequence start
     uint32_t d2_end;    // sequence end
     uint32_t d3_start;  // feature start
     uint32_t d3_end;    // feature end
+
+    Slice() = default;
 
     Slice(uint32_t d0, uint32_t d1, uint32_t d2_start, uint32_t d2_end, uint32_t d3_start, uint32_t d3_end) :
         d0(d0), d1(d1), d2_start(d2_start), d2_end(d2_end), d3_start(d3_start), d3_end(d3_end) {}
@@ -761,8 +764,7 @@ void write_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
     const uint32_t cb_id,
-    const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t tile_bytes) {
     const uint32_t dst_rows = dst_slice.get_d2_size();
     const uint32_t dst_cols = dst_slice.get_d3_size();
     const uint32_t num_tiles = dst_rows * dst_cols;
@@ -779,12 +781,6 @@ void write_block(
             uint32_t did_write = cat_addr_generator.maybe_write_tile(
                 dst_slice.d0, dst_slice.d1, dst_slice.d2_start + row, dst_slice.d3_start + col, read_ptr);
             read_ptr += inner_ptr_stride;
-
-            barrier_count += did_write;
-            if (barrier_count == barrier_threshold) {
-                noc_async_writes_flushed();
-                barrier_count = 0;
-            }
         }
     }
     noc_async_write_barrier();

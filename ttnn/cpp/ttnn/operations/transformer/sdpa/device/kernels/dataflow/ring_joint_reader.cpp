@@ -19,14 +19,15 @@ void kernel_main() {
     constexpr uint32_t logical_n = get_compile_time_arg_val(8);
     constexpr uint32_t logical_nt = get_compile_time_arg_val(9);
     constexpr uint32_t Lt = get_compile_time_arg_val(10);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
+    constexpr uint32_t L = get_compile_time_arg_val(11);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(17);
 
-    constexpr auto q_args = TensorAccessorArgs<17>();
+    constexpr auto q_args = TensorAccessorArgs<18>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -134,8 +135,14 @@ void kernel_main() {
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        // When indexing into the gathered KV tensor, we need to offset based on the ring index.
-        const uint32_t global_k_row_tile_offset = ring_id * local_padded_Nt;
+        // Find out if there's any work to do on this ring iter.
+        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
+        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+        if (!ring_iter_does_work) {
+            continue;
+        }
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
@@ -146,21 +153,17 @@ void kernel_main() {
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
             Slice q_slice;
-            PaddedAddrGenerator current_q_generator;
-
             if (is_joint_q) {
                 // Get row index into the joint Q tensor
                 const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
                 q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                current_q_generator = joint_q_generator;
             } else {
                 // Index into the Q input tensor
                 q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-                current_q_generator = q_generator;
             }
 
             read_block(
-                current_q_generator, q_slice, cb_q_in, q_tile_bytes, false /*transpose*/
+                is_joint_q ? joint_q_generator : q_generator, q_slice, cb_q_in, q_tile_bytes, false /*transpose*/
             );
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
@@ -180,29 +183,21 @@ void kernel_main() {
                 }
 
                 Slice kv_slice;
-                PaddedAddrGenerator current_k_generator;
-                PaddedAddrGenerator current_v_generator;
 
                 if (kv_chunk_is_joint) {
                     const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
                     const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
                     kv_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                    current_k_generator = joint_k_generator;
-                    current_v_generator = joint_v_generator;
                 } else {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        current_k_generator = local_k_generator;
-                        current_v_generator = local_v_generator;
                     } else {
                         // Gathered KV
                         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                        current_k_generator = gathered_k_generator;
-                        current_v_generator = gathered_v_generator;
                     }
                 }
 
@@ -214,7 +209,12 @@ void kernel_main() {
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (is_injector || !is_chain_participant || (nb != chain_batch || nq != chain_head)) {
                     read_block(
-                        current_k_generator, kv_slice, cb_k_in, k_tile_bytes, true /*transpose*/
+                        kv_chunk_is_joint ? joint_k_generator
+                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
+                        kv_slice,
+                        cb_k_in,
+                        k_tile_bytes,
+                        true /*transpose*/
                     );
                 } else {
                     // Receive forwarded K chunk from previous core
@@ -240,7 +240,12 @@ void kernel_main() {
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                 if (is_injector || !is_chain_participant || (nb != chain_batch || nq != chain_head)) {
                     read_block(
-                        current_v_generator, kv_slice, cb_v_in, v_tile_bytes, false /*transpose*/
+                        kv_chunk_is_joint ? joint_v_generator
+                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
+                        kv_slice,
+                        cb_v_in,
+                        v_tile_bytes,
+                        false /*transpose*/
                     );
                 } else {
                     // Receive forwarded V chunk from previous core
