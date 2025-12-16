@@ -17,12 +17,12 @@ namespace tt::tt_metal {
 // Forward declaration
 class SubDeviceImpl;
 
+// TODO(river): Revisit this class and either remove it or bring sub-device APIs over
+
 class SubDevice {
 public:
-    // Public constructor (for external use)
     explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
-
-    // Internal constructor (for tt_metal/ internal use)
+    // Internal constructor (internal use only)
     SubDevice(SubDeviceImpl&& impl);
 
     // Special member functions
@@ -32,7 +32,6 @@ public:
     SubDevice& operator=(SubDevice&& other) noexcept;
     ~SubDevice();
 
-    // Query methods
     const CoreRangeSet& cores(HalProgrammableCoreType core_type) const;
 
     SubDeviceImpl* impl();

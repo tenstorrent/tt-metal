@@ -20,17 +20,30 @@ namespace tt::tt_metal {
 // SubDeviceImpl implementation
 
 SubDeviceImpl::SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores) : cores_(cores) {
-    validate();
+    this->validate();
+}
+
+SubDeviceImpl::SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores) {
+    TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
+    std::copy(cores.begin(), cores.end(), this->cores_.begin());
+    this->validate();
 }
 
 SubDeviceImpl::SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores) : cores_(std::move(cores)) {
     validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores) {
-    TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
-    std::copy(cores.begin(), cores.end(), this->cores_.begin());
-    validate();
+void SubDeviceImpl::validate() const {
+    auto num_core_types = MetalContext::instance().hal().get_programmable_core_type_count();
+    for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
+        TT_FATAL(
+            this->cores_[i].empty(),
+            "CoreType {} is not allowed in SubDevice",
+            static_cast<HalProgrammableCoreType>(i));
+    }
+    TT_FATAL(
+        this->cores_[static_cast<uint32_t>(HalProgrammableCoreType::IDLE_ETH)].empty(),
+        "CoreType IDLE_ETH is not allowed in SubDevice");
 }
 
 bool SubDeviceImpl::has_core_type(HalProgrammableCoreType core_type) const {
@@ -45,19 +58,6 @@ const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& SubDeviceImpl::core
 
 const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) const {
     return this->cores_[static_cast<uint32_t>(core_type)];
-}
-
-void SubDeviceImpl::validate() const {
-    auto num_core_types = MetalContext::instance().hal().get_programmable_core_type_count();
-    for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
-        TT_FATAL(
-            this->cores_[i].empty(),
-            "CoreType {} is not allowed in SubDevice",
-            static_cast<HalProgrammableCoreType>(i));
-    }
-    TT_FATAL(
-        this->cores_[static_cast<uint32_t>(HalProgrammableCoreType::IDLE_ETH)].empty(),
-        "CoreType IDLE_ETH is not allowed in SubDevice");
 }
 
 // SubDevice implementation
