@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
+#include "../../../../sdpa/device/kernels/dataflow/dataflow_common.hpp"
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -12,54 +13,21 @@
  ******************************************************************************/
 
 /******************************************************************************
- *                   Generic Utility Functions                                 *
- ******************************************************************************/
-template <uint32_t tile_bytes, uint32_t num_readers>
-constexpr uint32_t get_barrier_read_threshold() {
-    return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
-}
-
-/******************************************************************************
- *                   Page Cache Functions            *
- ******************************************************************************/
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
-    // Given some index in the sequence tiles in range [0, max_seq_len_t]
-    // Return the physical tile id for that tile row
-    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
-    const uint32_t head_offset = cur_head * block_size_t * Wt;
-
-    const uint32_t virtual_block = seq_tile_idx / block_size_t;
-
-    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
-    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
-    const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + head_offset + block_offset;
-}
-
-// Backward-compatible overload (defaults to uint32_t page table entries)
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
-    return virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
-        seq_tile_idx, cur_head, page_table_ptr);
-}
-
-/******************************************************************************
  *                   Generic Tile Manipulation Functions                       *
  ******************************************************************************/
 template <uint32_t tile_bytes>
-void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
-    noc_async_read(
-        noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
-}
-
-template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     if (val == 0) {
+        constexpr uint32_t num_zeros_reads = tile_bytes / MEM_ZEROS_SIZE;
+        uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
         uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-        fill_zeros_async(write_addr, tile_bytes);
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+
+        // Fill tile with zeros
+        for (uint32_t i = 0; i < num_zeros_reads; ++i) {
+            noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
+            write_addr += MEM_ZEROS_SIZE;
+        }
         noc_async_read_barrier();
     } else {
         // Fill 2 uint16 datums in each writes to optimize for performance

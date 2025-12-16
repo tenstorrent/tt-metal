@@ -8,7 +8,6 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
-#include "../../../../sdpa/device/kernels/dataflow/dataflow_common.hpp"
 
 void kernel_main() {
     /*
@@ -284,7 +283,7 @@ void kernel_main() {
                             (is_page_table_sharded)
                                 ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
                                       virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                                : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
+                                : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
                                       virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                         for (uint32_t col = 0; col < DHt; ++col) {
                             noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
@@ -338,8 +337,11 @@ void kernel_main() {
                                           num_kv_heads,
                                           block_size_t,
                                           DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
-                                    : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
-                                          virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
+                                    : virtual_seq_tile_id_to_physical_tile_id<
+                                          uint32_t,
+                                          num_kv_heads,
+                                          block_size_t,
+                                          DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
                             for (uint32_t col = 0; col < vDHt; ++col) {
                                 noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
                                 physical_v_tile_id += 1;

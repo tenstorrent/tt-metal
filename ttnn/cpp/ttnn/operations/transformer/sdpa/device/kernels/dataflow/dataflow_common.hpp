@@ -39,23 +39,23 @@ void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     }
 }
 
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
+    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
 }
 
 template <typename PageTableArgs>
-const volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
+volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
     uint32_t cb_id,
     uint32_t batch_idx,
     const PageTableArgs& page_table_args,
@@ -144,7 +144,7 @@ uint32_t read_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes>(cb_id, tile_id, false);
+            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
         }
     }
     noc_async_read_barrier();
@@ -184,7 +184,7 @@ void read_paged_chunk_with_padding(
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         uint32_t virtual_row_num = chunk_start_row + row;
-        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(
+        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
             virtual_row_num, cur_head, page_table_ptr);
 
         for (uint32_t col = 0; col < src_cols; ++col) {
