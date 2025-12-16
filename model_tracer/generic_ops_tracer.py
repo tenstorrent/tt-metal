@@ -580,7 +580,7 @@ class OperationsTracingPlugin:
                 print(f"🎯 Filtered to {len(filtered_operations)} TTNN operations (from {len(original_operations)} total)")
 
                 # Update master JSON file with unique configurations
-                master_file = os.path.join(self.output_dir, 'ttnn_operations_master.json')
+                master_file = os.path.join(self.output_dir, 'ttnn_operations_new.json')
                 # Use the source tag we set in pytest_runtest_setup
                 # If current_test_source is None (test skipped before setup), use item.name as fallback
                 test_source = getattr(self, 'current_test_source', None)
