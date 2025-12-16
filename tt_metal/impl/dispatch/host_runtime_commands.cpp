@@ -26,6 +26,9 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/debug/dprint_server.hpp>
+#include <impl/debug/watcher_server.hpp>
 
 using namespace tt::tt_metal;
 
@@ -65,7 +68,7 @@ inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
-    uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
+    uint32_t command_queue_id, IDevice* /*device*/, SystemMemoryManager& manager) :
     command_queue_id(command_queue_id), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {

@@ -93,9 +93,17 @@ def convert_vision_hf_to_meta(state_dict, head_dim):
     return state_dict
 
 
+def convert_hf_qkv_to_meta_format_mllama(state_dict, head_dim):
+    vision_state_dict, text_state_dict, other_state_dict = map_vision_hf_to_meta_keys_split_to_submodels(state_dict)
+    cross_attn_text_state_dict = {k: v for k, v in text_state_dict.items() if "cross_attn" in k}
+    text_state_dict = {k: v for k, v in text_state_dict.items() if k not in cross_attn_text_state_dict}
+    text_state_dict = convert_hf_qkv_to_meta_format(text_state_dict, head_dim)
+    return {**vision_state_dict, **cross_attn_text_state_dict, **text_state_dict, **other_state_dict}
+
+
 def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     state_dict = split_hf_keys(state_dict)
-    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = convert_hf_qkv_to_meta_format_mllama(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
     state_dict = convert_pos_embeddings(state_dict)
     state_dict = flatten_conv_linear(state_dict)
@@ -136,9 +144,9 @@ def map_vision_hf_to_meta_keys_split_to_submodels(state_dict):
     other_state_dict = dict()
 
     for k, v in state_dict.items():
-        if k.startswith("visual"):
+        if k.startswith("visual") or k.startswith("vision_model"):
             selected_dict = vision_state_dict
-        elif k.startswith("model") or k.startswith("lm_head"):
+        elif k.startswith("model") or k.startswith("lm_head") or k.startswith("language_model"):
             selected_dict = text_state_dict
         else:
             selected_dict = other_state_dict
@@ -554,7 +562,12 @@ def map_hf_to_meta_keys_mllama(loaded_weights, config):
             ]
         replacements.extend(cur_replacements)
 
-    return replace_keys(loaded_weights, replacements)
+    state_dict = replace_keys(loaded_weights, replacements)
+
+    state_dict["text_model.learnable_embedding.weight"] = state_dict["text_model.tok_embeddings.weight"][-8:]
+    state_dict["text_model.tok_embeddings.weight"] = state_dict["text_model.tok_embeddings.weight"][:-8]
+
+    return state_dict
 
 
 def convert_pos_embeddings(state_dict):
@@ -566,7 +579,9 @@ def convert_pos_embeddings(state_dict):
 
 
 def invert_pre_compute_positional_embedding(precomputed_embeddings):
-    """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148"""
+    """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148
+    Note: original embeddings can't be reconstructed since non-used parts (non-supported aspect ratios) are random numbers
+    """
 
     # TBD: remove hardcode
     if tuple(precomputed_embeddings.shape) == (9, 5120):
@@ -635,6 +650,18 @@ def map_meta_to_hf_keys(state_dict):
     You can use this to support other models by adding more mappings.
     See replace_keys for more details on the format of replacements.
     """
+    tok_embeddings_layers = [layer for layer in state_dict if ("tok_embeddings" in layer) or ("emb.weight" in layer)]
+    learnable_embedding_layers = [layer for layer in state_dict if "learnable_embedding" in layer]
+    assert len(learnable_embedding_layers) <= len(tok_embeddings_layers) <= 1
+    if len(learnable_embedding_layers) == 1:
+        state_dict[tok_embeddings_layers[0]] = torch.cat(
+            [
+                state_dict[tok_embeddings_layers[0]],
+                state_dict.pop(learnable_embedding_layers[0]),
+            ],
+            dim=0,
+        )
+
     replacements = [
         ("layers", "model.layers"),
         ("attention_norm", "input_layernorm"),

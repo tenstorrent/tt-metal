@@ -21,18 +21,18 @@
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 // Helper template for static_assert in visitor - must be defined before use
 template <class>
@@ -94,11 +94,7 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Linear", Topology::Linear},
     {"Mesh", Topology::Mesh},
     {"Torus", Topology::Torus},
-});
-
-static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"LowLatency", RoutingType::LowLatency},
-    {"Dynamic", RoutingType::Dynamic},
+    {"NeighborExchange", Topology::NeighborExchange},
 });
 
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
@@ -127,6 +123,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
+    {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 // Optimized string concatenation utility to avoid multiple allocations
@@ -408,10 +405,8 @@ public:
 
         return built_tests;
     }
-    // Helper function to check if a test should be skipped based on:
-    // 1. topology and device count
-    // 2. architecture or cluster type
-    bool should_skip_test(const ParsedTestConfig& test_config) const {
+    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const {
         // Skip if the test declares platforms to skip and this platform matches
         if (test_config.skip.has_value()) {
             // Determine current platform identifiers
@@ -425,6 +420,11 @@ public:
                 }
             }
         }
+        return false;
+    }
+
+    // Helper function to check if a test should be skipped based on topology incompatibilities.
+    bool should_skip_test_on_topology(const ParsedTestConfig& test_config) const {
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
@@ -455,11 +455,11 @@ private:
         resolved_test.patterns = parsed_test.patterns;
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
-        resolved_test.global_sync_configs = parsed_test.global_sync_configs;
-        resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.sync_configs = parsed_test.sync_configs;
+        resolved_test.performance_test_mode = parsed_test.performance_test_mode;
         resolved_test.global_sync = parsed_test.global_sync;
-        resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
+        resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
@@ -658,8 +658,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -684,8 +684,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -784,25 +784,39 @@ private:
             "Test '{}': Multicast pattern for sender on device {} must have a destination specified by 'hops'.",
             test.name,
             sender.device);
+        TT_FATAL(
+            test.fabric_setup.topology != tt::tt_fabric::Topology::NeighborExchange,
+            "Test '{}': Multicast pattern is not supported for NeighborExchange topology.",
+            test.name);
     }
 
     void validate_sync_pattern(
         const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+        // The NeighborExchange topology uses unicast sync patterns, so we perform a different check
+        if (test.fabric_setup.topology == tt::tt_fabric::Topology::NeighborExchange) {
+            TT_FATAL(
+                pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_UNICAST,
+                "Test '{}': Line sync pattern for sender on device {} must use CHIP_UNICAST for NeighborExchange "
+                "topology.",
+                test.name,
+                sender.device);
+        } else {
+            TT_FATAL(
+                pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
+                "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
+                test.name,
+                sender.device);
+        }
+
         TT_FATAL(
-            pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST,
-            "Test '{}': Line sync pattern for sender on device {} must use CHIP_MULTICAST.",
+            pattern.destination.has_value() && pattern.destination->hops.has_value(),
+            "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
             test.name,
             sender.device);
 
         TT_FATAL(
             pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
             "Test '{}': Line sync pattern for sender on device {} must use NOC_UNICAST_ATOMIC_INC.",
-            test.name,
-            sender.device);
-
-        TT_FATAL(
-            pattern.destination.has_value() && pattern.destination->hops.has_value(),
-            "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
             test.name,
             sender.device);
 
@@ -834,7 +848,8 @@ private:
 
         // Validate line sync patterns if present
         if (test.global_sync) {
-            for (const auto& sync_sender : test.global_sync_configs) {
+            for (const auto& sync_config : test.sync_configs) {
+                const auto& sync_sender = sync_config.sender_config;
                 for (const auto& sync_pattern : sync_sender.patterns) {
                     validate_sync_pattern(sync_pattern, sync_sender, test);
                 }
@@ -892,6 +907,8 @@ private:
                 expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
             } else if (pattern.type == "all_devices_uniform_pattern") {
                 expand_all_devices_uniform_pattern(test, defaults);
+            } else if (pattern.type == "neighbor_exchange") {
+                expand_neighbor_exchange(test, defaults);
             } else if (pattern.type == "sequential_all_to_all") {
                 expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
             } else {
@@ -1055,6 +1072,14 @@ private:
         }
     }
 
+    void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
+        auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+        if (!neighbor_pairs.empty()) {
+            add_senders_from_pairs(test, neighbor_pairs, base_pattern);
+        }
+    }
+
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         log_debug(LogTest, "Expanding full_or_half_ring pattern for test: {}", test.name);
@@ -1131,63 +1156,71 @@ private:
 
         // Create sync patterns based on topology - returns multiple patterns per device for mcast
         for (const auto& src_device : all_devices) {
-            const auto& sync_patterns_and_sync_val_pair = create_sync_patterns_for_topology(src_device, all_devices);
+            const auto& sync_patterns_and_sync_val_pair =
+                create_sync_patterns_for_topology(src_device, all_devices, test.fabric_setup.topology);
 
             const auto& sync_patterns = sync_patterns_and_sync_val_pair.first;
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
+
+            log_debug(
+                LogTest,
+                "Generated {} sync patterns for device {}, with sync value {}",
+                sync_patterns.size(),
+                src_device.chip_id,
+                sync_val);
 
             // Create sender config with all split sync patterns
             // Sync always uses link 0 (no override allowed)
             SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns, .link_id = 0};
 
-            test.global_sync_configs.push_back(std::move(sync_sender));
-
-            // global sync value
-            test.global_sync_val = sync_val;
+            // Generate a SyncConfig for this device
+            SyncConfig sync_config = {.sync_val = sync_val, .sender_config = std::move(sync_sender)};
+            test.sync_configs.push_back(std::move(sync_config));
         }
 
-        log_debug(
-            LogTest,
-            "Generated {} line sync configurations, line_syn_val: {}",
-            test.global_sync_configs.size(),
-            test.global_sync_val);
+        log_debug(LogTest, "Generated {} line sync configurations", test.sync_configs.size());
     }
 
     std::pair<std::vector<TrafficPatternConfig>, uint32_t> create_sync_patterns_for_topology(
-        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) {
+        const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices, tt::tt_fabric::Topology topology) {
         std::vector<TrafficPatternConfig> sync_patterns;
+        uint32_t sync_val = 0;
 
         // Common sync pattern characteristics
         TrafficPatternConfig base_sync_pattern;
-        base_sync_pattern.ftype = ChipSendType::CHIP_MULTICAST;         // Global sync across devices
+        // Edge case: NeighborExchange topology does not support multicast sync patterns, so we create unicast sync
+        // patterns separately
+        base_sync_pattern.ftype = topology == tt::tt_fabric::Topology::NeighborExchange
+                                      ? ChipSendType::CHIP_UNICAST
+                                      : ChipSendType::CHIP_MULTICAST;   // Global sync across devices
         base_sync_pattern.ntype = NocSendType::NOC_UNICAST_ATOMIC_INC;  // Sync signal via atomic increment
         base_sync_pattern.size = 0;                                     // No payload, just sync signal
         base_sync_pattern.num_packets = 1;                              // Single sync signal
         base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
 
-        // Topology-specific routing - get multi-directional hops first
-        auto [multi_directional_hops, global_sync_val] =
+        // Start by calculating multi-directional hops
+        auto [multi_directional_hops, multi_directional_sync_val] =
             this->route_manager_.get_sync_hops_and_val(src_device, devices);
 
-        // Split multi-directional hops into single-direction patterns
+        sync_val = multi_directional_sync_val;
+
+        // Split multi-directional hops into single-directional patterns
         auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
 
         log_debug(
             LogTest,
-            "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
+            "Splitting sync pattern for device {} from 1 multi-directional to {} single-directional patterns",
             src_device.chip_id,
             split_hops_vec.size());
-
-        // Create separate sync pattern for each mcast direction. This is required since test infra only handle mcast
-        // for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
+        // Create separate sync pattern for each mcast direction. This is required since test infra only handle
+        // mcast for one direction. Ex, mcast to E/W will split into EAST and WEST patterns.
         sync_patterns.reserve(split_hops_vec.size());
         for (const auto& single_direction_hops : split_hops_vec) {
             TrafficPatternConfig sync_pattern = base_sync_pattern;
             sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
             sync_patterns.push_back(std::move(sync_pattern));
         }
-
-        return {sync_patterns, global_sync_val};
+        return {sync_patterns, sync_val};
     }
 
     void add_senders_from_pairs(
@@ -1475,10 +1508,6 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
-    static std::string to_string(RoutingType rtype) {
-        return detail::routing_type_mapper.to_string(rtype, "RoutingType");
-    }
-
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
@@ -1568,9 +1597,12 @@ private:
             out << YAML::Value << config.seed;
         }
 
-        if (config.benchmark_mode) {
+        if (config.performance_test_mode == PerformanceTestMode::BANDWIDTH) {
             out << YAML::Key << "benchmark_mode";
-            out << YAML::Value << config.benchmark_mode;
+            out << YAML::Value << true;
+        } else if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
+            out << YAML::Key << "latency_test_mode";
+            out << YAML::Value << true;
         }
 
         if (config.global_sync) {
@@ -1651,10 +1683,6 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "topology";
         out << YAML::Value << to_string(config.topology);
-        if (config.routing_type.has_value()) {
-            out << YAML::Key << "routing_type";
-            out << YAML::Value << to_string(config.routing_type.value());
-        }
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());
@@ -1673,5 +1701,4 @@ private:
     }
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

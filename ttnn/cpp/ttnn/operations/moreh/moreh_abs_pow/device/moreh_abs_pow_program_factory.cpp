@@ -17,7 +17,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = input.device();
+    auto* device = input.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -92,10 +92,10 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/"
         "reader_moreh_abs_pow.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/"
         "writer_moreh_abs_pow.cpp";
 
@@ -111,7 +111,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> compute_defines{};
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/"
         "moreh_abs_pow_kernel.cpp";
 

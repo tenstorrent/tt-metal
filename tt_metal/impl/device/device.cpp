@@ -5,10 +5,8 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include <device_pool.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
-#include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <tt-metalium/program_cache.hpp>
@@ -55,14 +53,14 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <impl/debug/watcher_server.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
@@ -86,11 +84,10 @@ Device::Device(
     size_t trace_region_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
-    uint32_t worker_thread_core,
+    uint32_t /*worker_thread_core*/,
     uint32_t completion_queue_reader_core,
     size_t worker_l1_size) :
-    id_(device_id),
-    completion_queue_reader_core_(completion_queue_reader_core) {
+    id_(device_id), completion_queue_reader_core_(completion_queue_reader_core) {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
@@ -164,14 +161,13 @@ void Device::initialize_default_sub_device_state(
         sub_devices);
 }
 
-std::unique_ptr<Allocator> Device::initialize_allocator(
+std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto config = L1BankingAllocator::generate_config(
         this->id(),
         this->num_hw_cqs(),
@@ -180,12 +176,6 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         worker_l1_unreserved_start,
         {l1_bank_remap.begin(), l1_bank_remap.end()});
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
-        this->compute_cores_.insert(core);
-    }
-    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
-        this->storage_only_cores_.insert(core);
-    }
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
     }
@@ -307,9 +297,6 @@ void Device::init_command_queue_device() {
         MetalContext::instance().get_cluster().write_core(
             &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
-    const auto& storage_only_cores = tt::get_logical_storage_cores(
-        id_, num_hw_cqs_, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
-    auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         watcher_lock = MetalContext::instance().watcher_server()->get_lock();
@@ -317,10 +304,8 @@ void Device::init_command_queue_device() {
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
             CoreCoord logical_core(x, y);
-            if (!storage_only_cores_set.count(logical_core)) {
-                reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
-                reset_go_message_index(logical_core, CoreType::WORKER);
-            }
+            reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
+            reset_go_message_index(logical_core, CoreType::WORKER);
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
@@ -377,7 +362,7 @@ void Device::configure_fabric() {
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
-    // don't get the GO mailbox (eg, storage cores) have all landed
+    // don't get the GO mailbox have all landed
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
@@ -470,8 +455,6 @@ bool Device::close() {
 
     sub_device_manager_tracker_.reset(nullptr);
 
-    this->compute_cores_.clear();
-    this->storage_only_cores_.clear();
     this->ethernet_cores_.clear();
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
@@ -598,12 +581,18 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     }
 }
 
-const std::unique_ptr<Allocator>& Device::allocator() const {
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
+const std::unique_ptr<Allocator>& Device::allocator() const { return this->allocator_impl()->view(); }
+
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(sub_device_id);
+}
+
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 uint32_t Device::num_sub_devices() const {
@@ -678,9 +667,9 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
@@ -846,6 +835,4 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

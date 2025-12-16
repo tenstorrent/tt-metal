@@ -15,14 +15,13 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab, create_resnet_dtype_config
-from models.experimental.panoptic_deeplab.tt.tt_normalization import TtImageNetNormalization
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
     PDL_L1_SMALL_SIZE,
+    preprocess_nchw_input_tensor,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
     create_panoptic_visualization,
@@ -30,6 +29,7 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     save_predictions,
     preprocess_input_params,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 def run_panoptic_deeplab_demo(
@@ -40,7 +40,6 @@ def run_panoptic_deeplab_demo(
     target_size: Tuple[int, int] = (512, 1024),
     resnet_dtype_config: str = "all_bfloat16",
     center_threshold: float = 0.05,
-    use_imagenet_norm: bool = True,
     model_category=PANOPTIC_DEEPLAB,
 ):
     """
@@ -53,7 +52,6 @@ def run_panoptic_deeplab_demo(
         output_dir: Directory to save outputs
         target_size: Input size as (height, width)
     """
-    disable_persistent_kernel_cache()
 
     logger.info(f"Running Panoptic DeepLab demo on {image_path}")
     logger.info(f"Target size: {target_size}")
@@ -70,7 +68,7 @@ def run_panoptic_deeplab_demo(
 
     # Preprocess image
     logger.info("Preprocessing image...")
-    input_tensor = preprocess_image(image_path, target_size, use_imagenet_norm)
+    input_tensor = preprocess_image(image_path, target_size)
 
     # Load original image for visualization
     original_image = cv2.imread(image_path)
@@ -135,31 +133,11 @@ def run_panoptic_deeplab_demo(
         return
 
     # Prepare inputs for both models
-    # Convert to TTNN format (values still in [0,1] range)
-    ttnn_input = ttnn.from_torch(
-        input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-    )
-    # Initialize ImageNet normalization module once for this inference
-    imagenet_normalizer = None
+    # Both models have normalization fused into conv1, so they both receive unnormalized input
+    logger.info("Preprocessing input for TTNN model...")
+    ttnn_input = preprocess_nchw_input_tensor(device, input_tensor)
 
-    # Apply ImageNet normalization
-    if use_imagenet_norm:
-        logger.info("Initializing ImageNet normalization module...")
-        imagenet_normalizer = TtImageNetNormalization(device, target_size)
-
-        logger.info("Applying ImageNet normalization...")
-
-        # Apply normalization on device for TTNN using the efficient module
-        ttnn_input = imagenet_normalizer.forward(ttnn_input)
-
-        # For PyTorch: Apply normalization on CPU
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-        pytorch_input = (input_tensor - mean) / std
-        pytorch_input = pytorch_input.to(dtype=torch.bfloat16)
-    else:
-        # No normalization case - just convert PyTorch input to bfloat16
-        pytorch_input = input_tensor.to(dtype=torch.bfloat16)
+    pytorch_input = input_tensor.to(dtype=torch.bfloat16)
 
     logger.info("Running PyTorch inference...")
     with torch.no_grad():
@@ -168,6 +146,50 @@ def run_panoptic_deeplab_demo(
     # Run inference
     logger.info("Running TTNN inference...")
     ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
+
+    # Validate outputs with PCC and relative error checks
+    logger.info("Validating outputs with PCC and relative error checks...")
+    logger.info("=" * 80)
+    logger.info(f"Validation Results for {os.path.basename(image_path)} ({model_category}):")
+    logger.info("=" * 80)
+
+    # Check semantic output with PCC and relative errors
+    check_ttnn_output(
+        layer_name="semantic",
+        pytorch_output=pytorch_semantic_logits,
+        ttnn_output=ttnn_semantic_logits,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=0.958,
+        exp_abs_err=1.769,
+        exp_rel_err=0.150,
+    )
+
+    # Check instance outputs (only for PANOPTIC_DEEPLAB)
+    if model_category == PANOPTIC_DEEPLAB:
+        check_ttnn_output(
+            layer_name="center",
+            pytorch_output=pytorch_center_logits,
+            ttnn_output=ttnn_center_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=0.980,
+            exp_abs_err=0.006,
+            exp_rel_err=21.08,
+        )
+
+        check_ttnn_output(
+            layer_name="offset",
+            pytorch_output=pytorch_offset_logits,
+            ttnn_output=ttnn_offset_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=0.984,
+            exp_abs_err=9.630,
+            exp_rel_err=1.675,
+        )
+
+    logger.info("=" * 80)
 
     # Process TTNN results
     logger.info("Processing TTNN results...")
@@ -264,20 +286,15 @@ def run_panoptic_deeplab_demo(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
-    "output_dir, use_imagenet_norm",
+    "output_dir",
     [
-        (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../demo_outputs")),
-            True,
-        ),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../demo_outputs")),
     ],
 )
 @pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
-def test_panoptic_deeplab_demo(device, output_dir, model_category, use_imagenet_norm, model_location_generator):
+def test_panoptic_deeplab_demo(device, output_dir, model_category, model_location_generator):
     skip_if_not_blackhole_20_cores(device)
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )
-    run_panoptic_deeplab_demo(
-        device, images[0], weights_path, output_dir, model_category=model_category, use_imagenet_norm=use_imagenet_norm
-    )
+    run_panoptic_deeplab_demo(device, images[0], weights_path, output_dir, model_category=model_category)

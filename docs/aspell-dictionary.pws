@@ -68,8 +68,10 @@ EventSynchronize
 FW
 FileCopyrightText
 GGGG
+GetAllProgramsPerfData
 GetCircularBufferConfig
 GetCommandQueue
+GetLatestProgramsPerfData
 GetNumAvailableDevices
 GetNumPCIeDevices
 GetRuntimeArgs

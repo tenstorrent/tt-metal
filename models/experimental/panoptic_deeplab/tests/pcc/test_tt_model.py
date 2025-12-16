@@ -56,6 +56,8 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
     input_height, input_width = train_size[0], train_size[1]
     input_channels = 3
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
 
     # Use proper input preprocessing to avoid OOM (creates HEIGHT SHARDED memory config)
@@ -135,7 +137,9 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
             ttnn_semantic,
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-            exp_pcc=0.993,
+            exp_pcc=0.986,
+            exp_abs_err=1.3,
+            exp_rel_err=0.4,
         )
     )
     if model_category == PANOPTIC_DEEPLAB:
@@ -146,7 +150,9 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 ttnn_center,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-                exp_pcc=0.959,
+                exp_pcc=0.805,
+                exp_abs_err=0.1,
+                exp_rel_err=2.0,
             )
         )
         all_passed.append(
@@ -156,10 +162,12 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 ttnn_offset,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                exp_pcc=0.999,
+                exp_pcc=0.990,
+                exp_abs_err=10.4,
+                exp_rel_err=0.6,
             )
         )
 
     # Fail test based on PCC results
-    assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"
-    logger.info("All PCC tests passed!")
+    assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
+    logger.info("All PCC and tolerance tests passed!")

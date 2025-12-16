@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
-
 #include <array>
 #include <cstdint>
 

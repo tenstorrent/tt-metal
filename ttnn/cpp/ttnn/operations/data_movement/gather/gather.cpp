@@ -153,7 +153,8 @@ Tensor ExecuteGather::invoke(
     const Tensor& input_index_tensor,
     const bool sparse_grad,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Input tensor
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
@@ -197,7 +198,13 @@ Tensor ExecuteGather::invoke(
     }
 
     Tensor gather_tensor = ttnn::prim::gather(
-        padded_input_tensor, dim, padded_index_tensor, sparse_grad, memory_config_value, optional_output_tensor_value);
+        padded_input_tensor,
+        dim,
+        padded_index_tensor,
+        sparse_grad,
+        memory_config_value,
+        optional_output_tensor_value,
+        sub_core_grids);
 
     return CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor, gather_tensor, dim, input_index_tensor_is_dim_last_idx, original_index_tensor_lshape);

@@ -40,7 +40,7 @@ void validate_tensors(
     const MorehSumOperation::operation_attributes_t& operation_attributes,
     const MorehSumOperation::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    auto& output = tensor_args.output;
+    const auto& output = tensor_args.output;
 
     check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
     check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});

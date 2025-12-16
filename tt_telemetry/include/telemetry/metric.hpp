@@ -10,9 +10,10 @@
  * Metric (i.e., telemetry point) types that we track. Various telemetry values derive from these.
  */
 
- #include <vector>
+#include <vector>
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <fmt/ranges.h>
@@ -61,15 +62,41 @@ public:
         return changed_since_transmission_;
     }
 
-    void mark_transmitted() {
-        changed_since_transmission_ = false;
-    }
+    void mark_transmitted() { changed_since_transmission_ = false; }
 
     virtual ~Metric() {
     }
 
     uint64_t timestamp() const {
         return timestamp_;
+    }
+
+    // Custom label support for Prometheus
+    // Labels are immutable key-value pairs that appear in Prometheus output alongside path-derived labels.
+    // Derived metric classes can override this method to provide custom labels by constructing a map on-demand.
+    //
+    // Example usage:
+    //   class EthernetMetric : public UIntMetric {
+    //       int channel_;
+    //       int asic_location_;
+    //   public:
+    //       EthernetMetric(int channel, int asic) : channel_(channel), asic_location_(asic) {}
+    //
+    //       std::unordered_map<std::string, std::string> labels() const override {
+    //           return {
+    //               {"channel", std::to_string(channel_)},
+    //               {"asic", std::to_string(asic_location_)}
+    //           };
+    //       }
+    //   };
+    //
+    // Prometheus output:
+    //   my_metric{hostname="...",device="0",channel="5",asic="0"} 42
+    //
+    // Labels must be set at construction time and remain immutable. This simplifies delta transmission
+    // since labels only need to be sent once (in the initial snapshot).
+    virtual std::unordered_map<std::string, std::string> labels() const {
+        return {};  // Default: no custom labels
     }
 
 protected:
@@ -92,8 +119,8 @@ public:
     }
 
     void set_value(bool value) {
+        changed_since_transmission_ = (value_ != value);
         value_ = value;
-        changed_since_transmission_ = true;
         set_timestamp_now();
     }
 
@@ -110,8 +137,8 @@ public:
     }
 
     void set_value(uint64_t value) {
+        changed_since_transmission_ = (value_ != value);
         value_ = value;
-        changed_since_transmission_ = true;
         set_timestamp_now();
     }
 
@@ -126,11 +153,27 @@ public:
     double value() const { return value_; }
 
     void set_value(double value) {
+        changed_since_transmission_ = (value_ != value);
         value_ = value;
-        changed_since_transmission_ = true;
         set_timestamp_now();
     }
 
 protected:
     double value_ = 0.0;
+};
+
+class StringMetric : public Metric {
+public:
+    StringMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
+
+    std::string_view value() const { return value_; }
+
+    void set_value(std::string value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = std::move(value);
+        set_timestamp_now();
+    }
+
+protected:
+    std::string value_;
 };

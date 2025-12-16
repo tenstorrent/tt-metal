@@ -11,8 +11,8 @@
 #include <chrono>
 #include <random>
 #include "gmock/gmock.h"
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/socket.h"
@@ -58,7 +58,7 @@ static ParsedSenderPage parse_sender_page(
     parsed.bytes_acked.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         uint32_t v = 0;
-        auto bytes_acked_addr = page_base + ack_base + (i * ack_stride);
+        const auto* bytes_acked_addr = page_base + ack_base + (i * ack_stride);
         EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(bytes_acked_addr) % l1_alignment);
         std::memcpy(&v, bytes_acked_addr, sizeof(uint32_t));
         parsed.bytes_acked[i] = v;
@@ -70,7 +70,7 @@ static ParsedSenderPage parse_sender_page(
     parsed.encodings.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         sender_downstream_encoding enc{};
-        auto encoding_addr = page_base + enc_base + (i * enc_stride);
+        const auto* encoding_addr = page_base + enc_base + (i * enc_stride);
         EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(encoding_addr) % l1_alignment);
         std::memcpy(&enc, encoding_addr, sizeof(sender_downstream_encoding));
         parsed.encodings[i] = enc;

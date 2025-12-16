@@ -11,14 +11,14 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace system_health_tests {
+namespace tt::tt_fabric::system_health_tests {
 
 enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
 
@@ -39,6 +39,8 @@ std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
 
 ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
     auto arch = cluster.arch();
     auto board_type = cluster.get_board_type(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -46,7 +48,7 @@ ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t ch
             if (cluster.is_external_cable(chip_id, eth_core)) {
                 return ConnectorType::QSFP;
             }
-            auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+            auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
             if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
                 return ConnectorType::LK1;
             } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
@@ -146,7 +148,10 @@ bool is_chip_on_corner_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterTyp
 }
 
 std::string get_ubb_id_str(ChipId chip_id) {
-    auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
+    auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
 
@@ -295,7 +300,9 @@ TEST(Cluster, ReportSystemHealth) {
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 eth_ss << " link UP " << connection_type;
                 CoreCoord connected_eth_core = CoreCoord{0, 0};
-                if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
+                auto eth_conn_it = eth_connections.find(chip_id);
+                if (eth_conn_it != eth_connections.end() &&
+                    eth_conn_it->second.find(chan) != eth_conn_it->second.end()) {
                     ChipId connected_chip_id = 0;
                     std::tie(connected_chip_id, connected_eth_core) =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
@@ -399,6 +406,10 @@ TEST(Cluster, TestMeshFullConnectivity) {
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X8) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 8;
+        num_connections_per_side = 2;
+    } else if (cluster_type == tt::tt_metal::ClusterType::P300_X2) {
+        num_expected_chips = 4;
+        num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);
@@ -530,5 +541,4 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 }
 
-}  // namespace system_health_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::system_health_tests

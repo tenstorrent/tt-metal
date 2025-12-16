@@ -79,7 +79,7 @@ ALWI void sigmoid_tile_init() {
 // clang-format on
 template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx>(idst, vec_mode)));
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
 
 /**
@@ -87,7 +87,7 @@ ALWI void sigmoid_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -97,16 +97,19 @@ ALWI void log_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * Note: The base scale is the bit representation of the inverse of the log base.
+ * e.g. 1/ln(2) for log2(x) is 0x3fb8aa3b.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
 /**
@@ -114,7 +117,8 @@ ALWI void log_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP):
+                                                                                                        // move out init
 }
 
 // clang-format off
@@ -129,22 +133,25 @@ ALWI void log_with_base_tile_init() {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | base_scale      | The log base                                                               | uint32_t | Postive integers                                      | True     |
+ * | base_scale      | Bit representation of Inverse of log base e.g. 1/ln(2) to compute log2(x)  | uint32_t | Postive integers                                      | True     |
  */
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx>(idst, base_scale)));
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst, base_scale)));
 }
 
 // TODO: Move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
  */
+template <bool fast_and_approx = false>
 ALWI void tanh_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_tanh_init<APPROX>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_tanh_init<fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
-
 
 // TODO: Move to trigonometry.h
 // clang-format off
@@ -154,14 +161,20 @@ ALWI void tanh_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
  */
- // clang-format on
-ALWI void tanh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tanh<APPROX>(idst))); }
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_tanh<fast_and_approx, DST_ACCUM_MODE>(idst)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -471,11 +484,13 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
  * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
  * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
+template <bool stable_sort = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE>(
+    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE, stable_sort>(
         idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
@@ -507,11 +522,12 @@ ALWI void topk_local_sort(
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool idir = false>
+template <bool idir = false, bool stable_sort = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir, stable_sort>(idst, m_iter, k)));
 }
 
 // topK rebuild
@@ -544,10 +560,13 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
+ * | stable_sort     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
+template <bool stable_sort = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE>(idst, idir, m_iter, k, logk, skip_second)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE, stable_sort>(
+        idst, idir, m_iter, k, logk, skip_second)));
 }
 
 /**
@@ -610,25 +629,67 @@ ALWI void max_reduce_with_indices_init() {
 template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst) {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
-    static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
+    static_assert(
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
+        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
     MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
 }
 
 /**
- * Please refer to documentation for any_init.
+ * @brief Initialization for SFPU reduce kernel.
+ *        Must be called before sfpu_reduce() to set up the necessary configurations for reduction operations.
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam format The data format, currently supported: (Float32, Int32, UInt32, UInt16, Float16_b)
  */
-template <DataFormat format>
+template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_init() {
+    static_assert(
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
+        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
+
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
+}
+
+// clang-format off
+/**
+ * Performs element-wise add_top_row operation between the top rows of two tiles in DST register.
+ * Takes the top row of tile at dst_tile_0 and adds it with the top row of tile at dst_tile_1,
+ * storing the result in the top row of tile at dst_tile_out.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only 32x32 tile dimensions are supported.
+ * All tile indices must reference valid tiles within the DST register.
+ *
+ * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | dst_tile_0      | The index of the first tile in DST register                              | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_1      | The index of the second tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | dst_tile_out    | The index of the output tile in DST register                             | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32                                | True     |
+ */
+// clang-format on
+template <DataFormat format>
+ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
     static_assert(
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
-    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
+
+    MATH((llk_math_eltwise_binary_sfpu_add_top_row<format>(dst_tile_0, dst_tile_1, dst_tile_out)));
 }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void sfpu_add_top_row_init() { MATH((llk_math_eltwise_binary_sfpu_add_top_row_init())); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.

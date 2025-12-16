@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "circular_buffer_constants.h"
+#include "tt-metalium/circular_buffer_constants.h"
 #include "risc_attribs.h"
 
 constexpr static std::uint32_t REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE = L1_ALIGNMENT;

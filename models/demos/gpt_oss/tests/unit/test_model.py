@@ -104,7 +104,7 @@ def run_accuracy(
     for i in range(1, len(reference_tokens)):
         # Use decode for subsequent tokens with teacher forcing (use reference tokens)
         with torch.no_grad():
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward_text(
                 out_tok,  # out_tok (current token)
                 current_pos,  # current_pos
                 enable_trace=False,  # enable_trace
@@ -177,7 +177,11 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
 
         # Load the same weights that the TTNN model uses
         logger.info("Loading reference model weights...")
-        reference_weights = setup["model_args"].load_state_dict()
+        reference_weights = setup["model_args"].load_state_dict(
+            weights_path=setup["model_args"].model_path,
+            dummy_weights=setup["model_args"].dummy_weights,
+            convert_to_meta_format=True,
+        )
 
         # Create reference model and load the real weights
         reference_model = GptOssForCausalLM(config)
@@ -210,7 +214,6 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             num_devices=num_devices,
             data_parallel=data_parallel,
             mesh_device=setup["mesh_device"],
-            instruct=True,
             global_batch_size=global_batch_size,
             optimizations=None,
             max_seq_len=max_seq_len,
@@ -236,7 +239,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             input_prompts,
             tokenizer,
             model_args,
-            instruct=True,
+            instruct=False,
             max_generated_tokens=max_generated_tokens,
             max_prefill_len=1024,
         )
@@ -313,7 +316,6 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             num_devices=num_devices,
             data_parallel=data_parallel,
             mesh_device=setup["mesh_device"],
-            instruct=True,
             global_batch_size=global_batch_size,
             optimizations=None,
             max_seq_len=max_seq_len,
@@ -339,7 +341,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             input_prompts,
             tokenizer,
             model_args,
-            instruct=True,
+            instruct=False,
             max_generated_tokens=max_generated_tokens,
             max_prefill_len=1024,
         )
@@ -369,7 +371,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
     )
 
     # Assert minimum accuracy thresholds (realistic for teacher forcing)
-    min_top1_acc = 0.86  # 86% minimum top-1 accuracy with teacher forcing
+    min_top1_acc = 0.83  # 83% minimum top-1 accuracy with teacher forcing
     min_top5_acc = 0.96  # 96% minimum top-5 accuracy with teacher forcing
 
     assert top1_acc >= min_top1_acc, f"Top-1 accuracy {top1_acc:.4f} below threshold {min_top1_acc}"

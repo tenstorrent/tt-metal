@@ -35,17 +35,19 @@
 #include "trace/trace_node.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <impl/debug/dprint_server.hpp>
+#include <impl/debug/watcher_server.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 namespace {
@@ -78,10 +80,10 @@ HWCommandQueue::HWCommandQueue(
     IDevice* device,
     std::shared_ptr<CQSharedState> cq_shared_state,
     uint32_t id,
-    NOC noc_index,
+    NOC /*noc_index*/,
     uint32_t completion_queue_reader_core) :
     id_(id),
-    size_B_(0),
+
     completion_queue_reader_core_(completion_queue_reader_core),
     manager_(device->sysmem_manager()),
     cq_shared_state_(std::move(cq_shared_state)),
@@ -145,7 +147,7 @@ HWCommandQueue::HWCommandQueue(
         this->config_buffer_mgr_,
         this->expected_num_workers_completed_,
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-        device_->allocator()->get_config().l1_unreserved_base);
+        device_->allocator_impl()->get_config().l1_unreserved_base);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -183,7 +185,7 @@ void HWCommandQueue::reset_worker_state(
         this->config_buffer_mgr_,
         this->expected_num_workers_completed_,
         device_->num_sub_devices(),
-        device_->allocator()->get_config().l1_unreserved_base);
+        device_->allocator_impl()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
             this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
@@ -315,7 +317,7 @@ void HWCommandQueue::enqueue_write_buffer(
     TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
-    auto* data = std::visit(
+    const auto* data = std::visit(
         tt::stl::overloaded{
             [](const void* raw_data) -> const void* { return raw_data; },
             [](const auto& data) -> const void* { return data->data(); }},

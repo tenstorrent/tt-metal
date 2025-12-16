@@ -62,7 +62,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node1[1] == "1"
     assert node1[2] == "2"
     assert node1[3] == "nullopt"
-    assert node1[4] == "0"
+    assert node1[4] == "nullopt"
 
     # ttnn::prim::permute
     node4 = captured_graph[4]["arguments"]
@@ -79,24 +79,24 @@ def test_graph_capture_with_all_parameters(device):
     assert node4[4] == "0"
 
     # PermuteDeviceOperation
-    node6 = captured_graph[6]["arguments"]
+    node5 = captured_graph[5]["arguments"]
     assert (
-        node6[0]
+        node5[0]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>]"
     )
     assert (
-        node6[1]
+        node5[1]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]"
     )
 
     # tt::tt_metal::create_device_tensor
-    node7 = captured_graph[7]["arguments"]
-    assert node7[0] == "Shape([1, 4, 2048, 128])"
-    assert node7[1] == "DataType::BFLOAT16"
-    assert node7[2] == "Layout::ROW_MAJOR"
-    assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    node6 = captured_graph[6]["arguments"]
+    assert node6[0] == "Shape([1, 4, 2048, 128])"
+    assert node6[1] == "DataType::BFLOAT16"
+    assert node6[2] == "Layout::ROW_MAJOR"
+    assert node6[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
-        node7[4]
+        node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
@@ -156,24 +156,24 @@ def test_graph_capture_without_memory_config(device):
     assert node6[5] == "nullopt"
 
     # MorehDotOperation
-    node9 = captured_graph[9]["arguments"]
+    node7 = captured_graph[7]["arguments"]
     assert (
-        node9[0]
+        node7[0]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]"
     )
     assert (
-        node9[1]
+        node7[1]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]"
     )
 
     # tt::tt_metal::create_device_tensor
-    node10 = captured_graph[10]["arguments"]
-    assert node10[0] == "Shape([1, 1, 1, 1])"
-    assert node10[1] == "DataType::BFLOAT16"
-    assert node10[2] == "Layout::TILE"
-    assert node10[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    node8 = captured_graph[8]["arguments"]
+    assert node8[0] == "Shape([1, 1, 1, 1])"
+    assert node8[1] == "DataType::BFLOAT16"
+    assert node8[2] == "Layout::TILE"
+    assert node8[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
-        node10[4]
+        node8[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
@@ -208,24 +208,24 @@ def test_graph_capture_without_dtype(device):
     assert node4[4] == "nullopt"
 
     # FullLikeOperation
-    node6 = captured_graph[6]["arguments"]
+    node5 = captured_graph[5]["arguments"]
     assert (
-        node6[0]
+        node5[0]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>]"
     )
     assert (
-        node6[1]
+        node5[1]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::tensor_args_t const>]"
     )
 
     # tt::tt_metal::create_device_tensor
-    node7 = captured_graph[7]["arguments"]
-    assert node7[0] == "Shape([32, 32])"
-    assert node7[1] == "DataType::INT32"
-    assert node7[2] == "Layout::TILE"
-    assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    node6 = captured_graph[6]["arguments"]
+    assert node6[0] == "Shape([32, 32])"
+    assert node6[1] == "DataType::INT32"
+    assert node6[2] == "Layout::TILE"
+    assert node6[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
-        node7[4]
+        node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
@@ -279,7 +279,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert item0["arguments"][1]["arg1"] == "1"
     assert item0["arguments"][2]["arg2"] == "2"
     assert item0["arguments"][3]["arg3"] == "nullopt"
-    assert item0["arguments"][4]["arg4"] == "0"
+    assert item0["arguments"][4]["arg4"] == "nullopt"
 
     # Content item 1
     item1 = data["content"][1]
@@ -590,3 +590,45 @@ def test_graph_capture_without_dtype_json_output(device):
     assert mem_config_item3["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
     assert mem_config_item3["buffer_type"] == "BufferType::DRAM"
     assert mem_config_item3["shard_spec"] == "std::nullopt"
+
+
+def test_extract_levelized_graph(device):
+    """Test extract_levelized_graph API"""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((64,), dtype=torch.bfloat16)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = input_tensor + 3
+    output_tensor = ttnn.to_torch(output_tensor, torch_rank=1)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Test with default max_level (1)
+    levelized_graph = ttnn.graph.extract_levelized_graph(captured_graph)
+    assert isinstance(levelized_graph, list)
+    assert len(levelized_graph) > 0
+
+    # Verify structure of first vertex
+    if len(levelized_graph) > 0:
+        vertex = levelized_graph[0]
+        assert "counter" in vertex
+        assert "stacking_level" in vertex
+        assert "name" in vertex
+        assert "in_edges" in vertex
+        assert "out_edges" in vertex
+        assert "internals" in vertex
+        assert "output_shape" in vertex
+        assert isinstance(vertex["in_edges"], list)
+        assert isinstance(vertex["out_edges"], list)
+        assert isinstance(vertex["internals"], list)
+
+    # Test with explicit max_level = 1
+    levelized_graph_1 = ttnn.graph.extract_levelized_graph(captured_graph, max_level=1)
+    assert isinstance(levelized_graph_1, list)
+    assert len(levelized_graph_1) == len(levelized_graph)  # Should be same as default
+
+    # Test with max_level = 2
+    levelized_graph_2 = ttnn.graph.extract_levelized_graph(captured_graph, max_level=2)
+    assert isinstance(levelized_graph_2, list)
+    # Level 2 should have at least as many vertices as level 1 (possibly more)
+    assert len(levelized_graph_2) >= len(levelized_graph_1)

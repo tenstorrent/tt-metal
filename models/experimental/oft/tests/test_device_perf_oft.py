@@ -10,8 +10,8 @@ from models.perf.device_perf_utils import run_model_device_perf_test
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         (
-            "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet -k bfp16_use_device_oft",
-            204_613_230,
+            "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet",
+            194_101_249,
             "oft_oftnet",
             "oft_oftnet",
             1,
@@ -31,9 +31,9 @@ from models.perf.device_perf_utils import run_model_device_perf_test
         ),
         (
             "pytest models/experimental/oft/demo/demo.py::test_demo_inference",
-            207_612_082,
-            "oft_full_demo",
-            "oft_full_demo",
+            196_845_002,
+            "oft_demo",
+            "oft_demo",
             1,
             1,
             0.015,
@@ -43,7 +43,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
     ids=[
         "device_perf_oft_oftnet",
         "device_perf_oft_decoder",
-        "device_perf_oft_full",
+        "device_perf_oft_demo",
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

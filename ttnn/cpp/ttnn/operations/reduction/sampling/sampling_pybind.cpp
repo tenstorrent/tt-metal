@@ -2,18 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sampling_pybind.hpp"
+#include "ttnn/operations/reduction/sampling/sampling_pybind.hpp"
+
+#include <cstdint>
+#include <optional>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn-pybind/decorators.hpp"
-
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
+
 void bind_reduction_sampling_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
           Samples from the :attr:`input_values_tensor` based on provided top-k and top-p constraints.
 
@@ -140,29 +144,22 @@ void bind_reduction_sampling_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::sampling);
+
     bind_registered_operation(
         module,
         ttnn::sampling,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const ttnn::Tensor& input_values_tensor,
-               const ttnn::Tensor& input_indices_tensor,
-               const ttnn::Tensor& k,
-               const ttnn::Tensor& p,
-               const ttnn::Tensor& temp,
+               const Tensor& input_values_tensor,
+               const Tensor& input_indices_tensor,
+               const Tensor& k,
+               const Tensor& p,
+               const Tensor& temp,
                const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_values_tensor,
-                    input_indices_tensor,
-                    k,
-                    p,
-                    temp,
-                    seed,
-                    sub_core_grids,
-                    optional_output_tensor);
+               const std::optional<Tensor>& output_tensor) {
+                return self(input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
             },
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),

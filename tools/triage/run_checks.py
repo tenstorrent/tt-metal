@@ -27,15 +27,16 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script
+from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from utils import ORANGE, RST
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data"],
+    depends=["inspector_data", "metal_device_id_mapping"],
 )
 
 # List of block types that script returns, can be extended if other block types are needed
@@ -75,8 +76,18 @@ class CheckResult:
 
 
 @dataclass
+class DeviceDescription:
+    device: Device
+    use_unique_id: bool
+
+
+def device_description_serializer(device_desc: DeviceDescription) -> str:
+    return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device._id)
+
+
+@dataclass
 class PerDeviceCheckResult(CheckResult):
-    device: Device = triage_field("Dev")
+    device_description: DeviceDescription = triage_field("Dev", device_description_serializer)
 
 
 @dataclass
@@ -118,15 +129,44 @@ def get_block_locations_to_check(block_type: BlockType, device: Device) -> list[
             return device.get_block_locations(block_type)
 
 
-def get_devices(devices: list[str], inspector_data: InspectorData | None, context: Context) -> list[Device]:
+def _convert_metal_device_ids_to_device_ids(
+    metal_device_ids: list[int],
+    metal_device_id_mapping: MetalDeviceIdMapping,
+    context: Context,
+) -> list[int]:
+    device_ids = []
+    for metal_device_id in metal_device_ids:
+        unique_id = metal_device_id_mapping.get_unique_id(metal_device_id)
+        found = False
+        for device_id, device in context.devices.items():
+            if device.unique_id == unique_id:
+                device_ids.append(int(device_id))
+                found = True
+                break
+        log_check(
+            found,
+            f"Device with unique_id {unique_id} (metal_device_id {metal_device_id}) not found in context.devices",
+        )
+    return device_ids
+
+
+def get_devices(
+    devices: list[str],
+    inspector_data: InspectorData | None,
+    metal_device_id_mapping: MetalDeviceIdMapping,
+    context: Context,
+) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
-            device_ids = list(inspector_data.getDevicesInUse().deviceIds)
-            if len(device_ids) == 0:
+            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+
+            if len(metal_device_ids) == 0:
                 print(
                     f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
+            else:
+                device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
         else:
             print(f"  {ORANGE}Using all available devices.{RST}")
             device_ids = [int(id) for id in context.devices.keys()]
@@ -134,17 +174,29 @@ def get_devices(devices: list[str], inspector_data: InspectorData | None, contex
         device_ids = [int(id) for id in context.devices.keys()]
     else:
         device_ids = [int(id) for id in devices]
+
     return [context.devices[id] for id in device_ids]
 
 
 class RunChecks:
-    def __init__(self, devices: list[Device]):
+    def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
-        # Pre-compute block locations for all devices and block types
+        self.metal_device_id_mapping = metal_device_id_mapping
+        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
+        self._use_unique_id = any(
+            metal_device_id_mapping.has_metal_device_id(device._id)
+            and metal_device_id_mapping.get_unique_id(device._id) != device.unique_id
+            for device in devices
+        )
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices
         }
+        # Pre-compute unique_id to device mapping for fast lookup
+        self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
+
+    def get_device_by_unique_id(self, unique_id: int) -> Device | None:
+        return self._unique_id_to_device.get(unique_id)
 
     def _collect_results(
         self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
@@ -171,8 +223,12 @@ class RunChecks:
         for device in self.devices:
             check_result = check(device)
             # Use the common result collection helper
-            self._collect_results(result, check_result, PerDeviceCheckResult, device=device)
-
+            self._collect_results(
+                result,
+                check_result,
+                PerDeviceCheckResult,
+                device_description=DeviceDescription(device, self._use_unique_id),
+            )
         return result if len(result) > 0 else None
 
     def run_per_block_check(
@@ -194,7 +250,7 @@ class RunChecks:
                         result,
                         check_result,
                         PerBlockCheckResult,
-                        device=device,
+                        device_description=DeviceDescription(device, self._use_unique_id),
                         location=location,
                     )
             return result if len(result) > 0 else None
@@ -238,7 +294,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device=location._device,
+                    device_description=DeviceDescription(location._device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
                 )
@@ -253,8 +309,9 @@ class RunChecks:
 def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
-    devices = get_devices(devices_to_check, inspector_data, context)
-    return RunChecks(devices)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
+    return RunChecks(devices, metal_device_id_mapping)
 
 
 if __name__ == "__main__":

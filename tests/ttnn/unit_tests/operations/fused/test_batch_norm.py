@@ -19,6 +19,7 @@ from models.common.utility_functions import comp_pcc
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 128, 14, 14]),
     ],
 )
 @pytest.mark.parametrize(
@@ -35,8 +36,9 @@ from models.common.utility_functions import comp_pcc
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("eps", [1.0, 1e-05])
 @pytest.mark.parametrize("momentum", [0.0, 0.1])
-def test_batch_norm_tests_fp32(
-    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype="float32"
+@pytest.mark.parametrize("testing_dtype", ["float32", "bfloat16"])
+def test_batch_norm_tests(
+    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype
 ):
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype

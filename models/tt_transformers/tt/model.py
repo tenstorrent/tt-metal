@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import torch
 from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -127,6 +129,19 @@ class Transformer(LightweightModule):
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
+
+        # Initialize on-device sampling if supported
+        # Sampling on device is supported only if each device has maximum logits size of 64*1024
+        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
+        self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
+        if self._supports_on_device_sampling:
+            self.sampling = SamplingGenerator(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+            )
+        else:
+            self.sampling = None
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
@@ -314,7 +329,7 @@ class Transformer(LightweightModule):
         )
         return tt_tokens
 
-    def concat_host_output(self, tt_out):
+    def concat_host_output(self, tt_out, is_log_probs=False):
         """
         Concatenate the output of the devices into a single host tensor.
         """
@@ -326,7 +341,14 @@ class Transformer(LightweightModule):
 
         rows, cols = self.args.cluster_shape
         mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
-        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+        if is_log_probs:
+            row_concatenated = []
+            for row in mesh_shape:
+                row_reshaped = [tensor.reshape(1, 1, -1, 1) for tensor in row]
+                row_concatenated.append(torch.cat(row_reshaped, dim=col_dim))
+        else:
+            row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+
         return torch.cat(row_concatenated, dim=row_dim)
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -336,13 +358,16 @@ class Transformer(LightweightModule):
         """
         return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        if is_tokens:
-            return self.concat_host_output(tt_out)[0, 0, :B, 0]
-
+        if is_tokens or is_log_probs:
+            # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
+            padded_batch_size = 32
+            if not is_log_probs:
+                tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
+            return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
@@ -391,7 +416,8 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
+        sampling_on_device=False,
+        capture_sampling_trace=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -409,6 +435,18 @@ class Transformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+
+        if sampling_on_device and self.sampling is not None:
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            if capture_sampling_trace:
+                return tt_logits
+            tt_toks, tt_log_probs = self.sampling.sample(
+                tt_logits,
+                tt_out_tok=x,
+                enable_trace=False,
+            )
+
+            return tt_toks, tt_log_probs
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -431,19 +469,11 @@ class Transformer(LightweightModule):
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
-        if argmax_on_device:
-            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-
-            # Update device tensors for the next iteration
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-
-            # Update input tokens with sampled tokens for the next iteration
-            ttnn.copy(tt_logits.reshape(x.shape), x)
-        elif not self.args.is_galaxy:
+        if not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
-        return tt_logits
+        return tt_logits, None
 
     def forward(
         self,

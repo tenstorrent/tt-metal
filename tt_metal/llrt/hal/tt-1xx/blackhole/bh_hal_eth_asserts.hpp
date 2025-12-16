@@ -11,7 +11,6 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
-#include "tt_metal/lite_fabric/hw/inc/blackhole/lf_dev_mem_map.hpp"
 
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
@@ -32,12 +31,7 @@ static_assert(
     (MEM_AERISC_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(MEM_AERISC_MAILBOX_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-// Ensure Lite Fabric and Dev mem map values are consistent
-static_assert(MEM_L1_BARRIER == LITE_FABRIC_BARRIER);                               // NOLINT(misc-redundant-expression)
-static_assert(MEM_ERISC_LITE_FABRIC_RESERVED_BASE == MEM_LITE_FABRIC_MEMORY_BASE);  // NOLINT(misc-redundant-expression)
-static_assert(MEM_ERISC_LITE_FABRIC_RESERVED_SIZE == MEM_LITE_FABRIC_MEMORY_SIZE);  // NOLINT(misc-redundant-expression)
-static_assert(
-    MEM_NOC_ATOMIC_RET_VAL_ADDR == MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR);  // NOLINT(misc-redundant-expression)
-static_assert(MEMORY_LAYOUT_END < MEM_LITE_FABRIC_MEMORY_END);
+static_assert(MEM_AERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
+static_assert(MEM_IERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
 // This is where base firmware starts
 static_assert(MEM_ERISC_MAX_SIZE < 0x70000);

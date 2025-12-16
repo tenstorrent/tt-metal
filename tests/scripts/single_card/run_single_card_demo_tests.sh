@@ -40,13 +40,13 @@ run_qwen25_vl_perfunc() {
   qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
+  HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
   for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
     cache_path=$TT_CACHE_HOME/$qwen_model
-    MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+    HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
     echo "LOG_METAL: Tests for $qwen_model on N300 completed"
   done
 
@@ -56,8 +56,11 @@ run_qwen25_vl_perfunc() {
 }
 
 run_ds_r1_qwen_func() {
-  ds_r1_qwen=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
-  HF_MODEL=$ds_r1_qwen MESH_DEVICE=N300 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
+  ds_r1_qwen_14b=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+  HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
+
+  ds_r1_qwen_1_5b=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 pytest models/experimental/tt_transformers_v2/ds_r1_qwen.py
 }
 
 run_gemma3_func() {
@@ -88,7 +91,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest models/demos/sentence_bert/demo/demo.py
+  pytest models/demos/wormhole/sentence_bert/demo/demo.py
 
 }
 
@@ -134,7 +137,7 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2 demo
-  pytest models/demos/ufld_v2/demo/demo.py
+  pytest models/demos/wormhole/ufld_v2/demo/demo.py
 }
 
 run_vgg_func() {
@@ -369,7 +372,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  pytest models/demos/vgg_unet/demo/demo.py
+  pytest models/demos/wormhole/vgg_unet/demo/demo.py
 }
 
 
@@ -383,6 +386,12 @@ run_yolov12x_demo() {
 run_vovnet_demo(){
 
  pytest models/experimental/vovnet/demo/demo.py
+
+}
+
+run_vit_demo(){
+
+ pytest models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 

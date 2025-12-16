@@ -14,9 +14,10 @@
 #include <tt-metalium/program.hpp>
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"
+#include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
@@ -101,14 +102,14 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();
         log_info(tt::LogTest, "Finished running test on device {}.", device->id());
     }
 
     void DetectDispatchMode() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "Running test using Slow Dispatch");
             this->slow_dispatch_ = true;

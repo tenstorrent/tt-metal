@@ -53,7 +53,7 @@ metal-wh-15 slots=1
 #
 # Run using:
 #
-# mpirun -x TT_METAL_HOME -hostfile hosts.txt ./run_telemetry.sh
+# mpirun -hostfile hosts.txt ./run_telemetry.sh
 #
 
 # Get MPI rank
@@ -76,10 +76,10 @@ else
 fi
 ```
 
-3. Use `mpirun` and make sure that TT_METAL_HOME is exported.
+3. Use `mpirun` to run the script across nodes. TT_METAL_HOME is no longer required.
 
 ```
-mpirun -x TT_METAL_HOME -hostfile hosts.txt /home/btrzynadlowski/tt-metal/run_telemetry.sh
+mpirun -hostfile hosts.txt /home/btrzynadlowski/tt-metal/run_telemetry.sh
 ```
 
 # Docker

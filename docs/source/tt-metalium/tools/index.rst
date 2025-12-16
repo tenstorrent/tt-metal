@@ -36,6 +36,13 @@ Device program profiler brings visibility to execution of device side programs b
 .. toctree::
     :maxdepth: 1
 
+    lightweight_kernel_asserts
+
+Lightweight kernel asserts provide a mechanism for assertion checks within the kernel.
+
+.. toctree::
+    :maxdepth: 1
+
     inspector
 
 The Inspector is a tool that provides insights into Metal host runtime.

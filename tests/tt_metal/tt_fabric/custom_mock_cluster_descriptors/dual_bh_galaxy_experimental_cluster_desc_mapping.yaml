@@ -1,0 +1,3 @@
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/g08blx03_cluster_descriptor.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/g08blx04_cluster_descriptor.yaml"

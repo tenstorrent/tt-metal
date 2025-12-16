@@ -26,8 +26,6 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout);
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id);
 
-void tensor_print(const Tensor& input_tensor);
-
 Tensor tensor_pad(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& output_padded_shape,
@@ -48,5 +46,12 @@ Tensor tensor_reshape(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
+
+Tensor tensor_view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
+Tensor tensor_view(
+    const Tensor& input_tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
+Tensor tensor_to_dtype(const Tensor& input_tensor, DataType dtype);
 
 }  // namespace tt::tt_metal::tensor_ops

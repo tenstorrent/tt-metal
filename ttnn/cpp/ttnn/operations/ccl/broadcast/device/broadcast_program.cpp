@@ -6,7 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/broadcast/device/broadcast_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -14,7 +14,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -30,8 +29,6 @@
 #include <optional>
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-
-using namespace tt::constants;
 
 namespace ttnn {
 
@@ -53,7 +50,7 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -297,7 +294,7 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            auto& output = output_tensors[0];
+            const auto& output = output_tensors[0];
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
             log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", barrier_semaphore.address());
