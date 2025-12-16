@@ -12,8 +12,7 @@ namespace ttnn {
 
 enum class TileReshapeMapMode {
     CACHE,
-    RECREATE,
-
+    RECREATE
 };
 
 namespace operations::data_movement {
