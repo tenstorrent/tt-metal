@@ -243,9 +243,7 @@ void run_sliced_op(
     auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
 
     if (dram_slice_config.num_slices == 1) {
-        // This causes non-deterministic behaviour.
-        // If num_slices is 1, the output would be in L1.
-        // If num_slices is greater than 1, the output would be in DRAM.
+        output_tensor.deallocate(true);
         output_tensor = op_slice_attr->run_L1_op(input_tensor, {0, 0}, {output_height, output_width});
         output_tensor = ttnn::to_memory_config(
             output_tensor,
