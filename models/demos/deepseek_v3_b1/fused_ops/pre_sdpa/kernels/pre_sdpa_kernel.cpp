@@ -80,6 +80,10 @@ KERNEL_ENTRY {
         get_arg_val<uint32_t>(2),  // receiver_data_addr
     };
 
+    // Gather dst CB args for copy operation (receiver CB, used on input core)
+    constexpr uint32_t gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
+    constexpr uint32_t gather_dst_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
+
 // ============================================================================
 // BRISC (Writer + Mcast Receiver) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: rmsnorm writer, mcast receiver, matmul writer, gather receiver
@@ -205,5 +209,50 @@ KERNEL_ENTRY {
         deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_input_core, true> gather;
         gather(gather_args);
     }
+
+    // ========================================================================
+    // Copy gather output to RMSNorm input CB with zero padding
+    // Gather dst cb has 1536 bytes (1.5 half tiles), pad to 2048 bytes (32x32 tile)
+    // Only runs on BRISC on input core (where gather receiver runs)
+    // ========================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (Core::is_input_core) {
+        DeviceZoneScopedN("GATHER_TO_RMSNORM_HACK");
+
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t gather_data_size_bytes = 1536 * 2;  // 1.5 half tiles
+        constexpr uint32_t rmsnorm_tile_size_bytes = 4096;     // 2 tiles (32x32 each) in bfloat16
+        constexpr uint32_t padding_size_bytes = rmsnorm_tile_size_bytes - gather_data_size_bytes;
+
+        // Wait for gather dst cb data (already pushed by gather receiver)
+        cb_wait_front(gather_dst_cb, gather_dst_num_pages);
+
+        // Get source and destination addresses
+        uint32_t src_addr = get_read_ptr(gather_dst_cb);
+        uint32_t dst_addr = get_write_ptr(rmsnorm_input_cb);
+
+        // Reserve space in rmsnorm input cb (2 tiles)
+        cb_reserve_back(rmsnorm_input_cb, 2);
+
+        // Copy gather data to rmsnorm cb using local NOC read
+        uint64_t src_noc_addr = get_noc_addr(src_addr);
+        noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
+        noc_async_read_barrier();
+
+        // Zero-pad the remaining bytes (last half tile)
+        volatile tt_l1_ptr uint16_t* pad_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr + gather_data_size_bytes);
+        constexpr uint32_t padding_elements = padding_size_bytes / sizeof(uint16_t);
+        for (uint32_t i = 0; i < padding_elements; ++i) {
+            pad_ptr[i] = 0;
+        }
+
+        // Push the completed 2 tiles to rmsnorm cb
+        cb_push_back(rmsnorm_input_cb, 2);
+
+        // Pop the gather dst cb
+        cb_pop_front(gather_dst_cb, gather_dst_num_pages);
+    }
+#endif
 }
 KERNEL_END

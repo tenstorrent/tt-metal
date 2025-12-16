@@ -284,6 +284,7 @@ class PreSDPA:
         # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
         # Plus grid info for computing per-core offset
         gather_src_num_pages = 1  # Matmul output tiles per core (single 1x32 tile)
+        gather_dst_num_pages = gather_num_senders  # One page per sender
         gather_sender_named_compile_time_args = [
             ("gather_dest_noc_x", gather_dest_noc_core.x),
             ("gather_dest_noc_y", gather_dest_noc_core.y),
@@ -296,12 +297,13 @@ class PreSDPA:
             ("gather_sender_grid_end_x", gather_sender_grid_end_x),
             ("gather_sender_grid_end_y", gather_sender_grid_end_y),
             ("gather_row_major", 1),  # 1 = row-major linearization
+            ("gather_dst_cb", output_cb),  # Destination CB for gather (used by copy on input core)
+            ("gather_dst_num_pages", gather_dst_num_pages),  # Number of pages in gather dst cb
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
         # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
         # Plus destination CB info for reserve/push
-        gather_dst_num_pages = gather_num_senders  # One page per sender
         gather_receiver_named_compile_time_args = [
             ("gather_noc0_num_senders", gather_noc0_num_senders),
             ("gather_noc1_num_senders", gather_noc1_num_senders),
