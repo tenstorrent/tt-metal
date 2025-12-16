@@ -886,22 +886,75 @@ def get_weight_config(
     )
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
+    module_name = getattr(ModuleClass, "__name__", str(ModuleClass))
+    logger.info(
+        "DeepSeek weight cache check: module={} cache_dir={} config_file={} weights_dir={}",
+        module_name,
+        weight_cache_path,
+        config_path,
+        weight_path,
+    )
     for _ in range(1):
         if force_recalculate:
+            logger.info(
+                "DeepSeek weight cache bypassed (force_recalculate=True): regenerating converted weights for module={} into {}",
+                module_name,
+                weight_cache_path,
+            )
             break
         if not config_path.exists():
+            logger.info(
+                "DeepSeek weight cache miss: {} does not exist; regenerating converted weights for module={} into {}",
+                config_path,
+                module_name,
+                weight_cache_path,
+            )
             break
-        weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
-        if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
+        try:
+            weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
+        except Exception as e:
+            logger.warning(
+                "DeepSeek weight cache invalid: failed to load/parse {} ({}); regenerating converted weights for module={} into {}",
+                config_path,
+                e,
+                module_name,
+                weight_cache_path,
+            )
             break
-        logger.info(f"Using weights cached at {weight_cache_path}")
+
+        fail_reasons: list[str] = []
+        if not _check_weights_exist_and_convert(weight_cache_path, weight_config, _fail_reasons=fail_reasons):
+            reason = fail_reasons[0] if fail_reasons else "unknown reason"
+            logger.warning(
+                "DeepSeek weight cache invalid: {}; regenerating converted weights for module={} into {}",
+                reason,
+                module_name,
+                weight_cache_path,
+            )
+            break
+        logger.info(
+            "DeepSeek weight cache hit: using cached weights for module={} at {}", module_name, weight_cache_path
+        )
         return weight_config
 
     # Only prepare state dicts if we need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
+    logger.info(
+        "DeepSeek weight cache regenerate: converting weights for module={} into {}", module_name, weight_cache_path
+    )
     if state_dicts is None:
         from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
 
+        if random_weights:
+            logger.info(
+                "DeepSeek weight cache regenerate inputs: generating random weights from reference model (module={})",
+                module_name,
+            )
+        else:
+            logger.info(
+                "DeepSeek weight cache regenerate inputs: loading HF weights from model_path={} (module={})",
+                model_path,
+                module_name,
+            )
         model_state = prepare_model_state_dict(
             hf_config=hf_config,
             random_weights=random_weights,
@@ -911,15 +964,23 @@ def get_weight_config(
         state_dicts = (model_state,)
 
     # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
+    logger.info(
+        "DeepSeek weight cache regenerate: converting weights to TTNN SavedWeight format (module={})...", module_name
+    )
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
-    logger.info("Converting weights to TTNN SavedWeight format...done")
+    logger.info(
+        "DeepSeek weight cache regenerate complete: wrote config={} (module={})",
+        config_path,
+        module_name,
+    )
     return weight_config
 
 
-def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfig) -> bool:
+def _check_weights_exist_and_convert(
+    root_path: Path, weight_config: WeightConfig, *, _fail_reasons: list[str] | None = None
+) -> bool:
     if isinstance(weight_config, dict):
         entries = weight_config.values()
     else:
@@ -928,21 +989,23 @@ def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfi
         if entry is None:
             continue
         if isinstance(entry, SavedWeight):
-            if (
-                not (entry.path.is_absolute())
-                and not (root_path / entry.path).exists()
-                or entry.path.suffix != TENSOR_CACHE_EXTENSION
-            ):
+            if entry.path.suffix != TENSOR_CACHE_EXTENSION:
+                if _fail_reasons is not None:
+                    _fail_reasons.append(
+                        f"bad weight file extension for {entry.path} (expected *{TENSOR_CACHE_EXTENSION})"
+                    )
                 return False
-            elif (
-                not (entry.path.is_absolute())
-                and (root_path / entry.path).exists()
-                and entry.path.suffix == TENSOR_CACHE_EXTENSION
-            ):
-                entry.path = root_path / entry.path
-            elif entry.path.is_absolute() and (not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION):
+
+            resolved_path = entry.path if entry.path.is_absolute() else (root_path / entry.path)
+            if not resolved_path.exists():
+                if _fail_reasons is not None:
+                    _fail_reasons.append(f"missing cached weight file {resolved_path} (from {entry.path})")
                 return False
-        elif not _check_weights_exist_and_convert(root_path, entry):
+
+            # Normalize to absolute path for downstream consumers
+            if not entry.path.is_absolute():
+                entry.path = resolved_path
+        elif not _check_weights_exist_and_convert(root_path, entry, _fail_reasons=_fail_reasons):
             return False
     return True
 
