@@ -61,13 +61,14 @@ class LogProbsCalculator:
         mesh_device: MeshDevice to use for all-gather operations
     """
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, sub_core_grids: ttnn.CoreRangeSet = None):
+    def __init__(self, mesh_device: ttnn.MeshDevice, sub_core_grids: ttnn.CoreRangeSet = None, tt_ccl=None):
         self.global_max = None
         self.global_exp_sum = None
         self.mesh_device = mesh_device
         self.enable_log_probs = False  # default to False
         self.cluster_shape = list(mesh_device.shape)
         self.sub_core_grids = sub_core_grids
+        self.tt_ccl = tt_ccl
         self.common_args = filter_none(
             {
                 "sub_core_grids": sub_core_grids,
@@ -113,6 +114,33 @@ class LogProbsCalculator:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    def _get_buffer_key(self, buffer_key: str):
+        if self.tt_ccl is None:
+            return None
+        return buffer_key
+
+    def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
+        if self.mesh_device.get_num_devices() == 32 and self.tt_ccl is not None:
+            # llama all_gather with persistent buffer support
+            buffer_key = self._get_buffer_key(buffer_key)
+            return self.tt_ccl.line_all_gather(
+                tensor,
+                dim=dim,
+                num_links=num_links,
+                memory_config=tensor.memory_config(),
+                cluster_axis=0,
+                buffer_key=buffer_key,
+            )
+        else:
+            return ttnn.all_gather(
+                tensor,
+                dim=dim,
+                num_links=num_links,
+                memory_config=tensor.memory_config(),
+                cluster_axis=None,
+                topology=ttnn.Topology.Linear,
+            )
+
     def set_log_probs_mode(self, enable_log_probs: bool | list[bool] = False):
         if isinstance(enable_log_probs, list):
             # If any of the users in the batch have log_probs enabled,
@@ -142,19 +170,19 @@ class LogProbsCalculator:
             local_max_tensor,
             dim=1,
             num_links=1,
-            buffer_key=self.persistent_buffers["MAX_REDUCTION"],
+            buffer_key="LOGPROBS_MAX_REDUCTION",
         )
 
-        # All-gather local max to get global max
-        gathered_max_tensors = ttnn.all_gather(
-            local_max_tensor,
-            dim=1,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=0,
-            topology=ttnn.Topology.Linear,
-            **self.common_args,
-        )
+        # # All-gather local max to get global max
+        # gathered_max_tensors = ttnn.all_gather(
+        #     local_max_tensor,
+        #     dim=1,
+        #     num_links=1,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cluster_axis=0,
+        #     topology=ttnn.Topology.Linear,
+        #     **self.common_args,
+        # )
         # TODO: Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         # print(f"gathered_max_tensors layout: {gathered_max_tensors.layout}")
         # gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
@@ -167,16 +195,22 @@ class LogProbsCalculator:
         exp_tensor = ttnn.exp(subtracted_tensor, **self.common_args)
         sum_exp_tensor = ttnn.sum(exp_tensor, dim=-1, keepdim=True, **self.common_args)
 
-        # All-gather stable local sum-exp to get global sum-exp
-        gathered_sum_exp_tensors = ttnn.all_gather(
+        gathered_sum_exp_tensors = self._perform_all_gather(
             sum_exp_tensor,
             dim=1,
             num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cluster_axis=0,
-            topology=ttnn.Topology.Linear,
-            **self.common_args,
+            buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
         )
+        # # All-gather stable local sum-exp to get global sum-exp
+        # gathered_sum_exp_tensors = ttnn.all_gather(
+        #     sum_exp_tensor,
+        #     dim=1,
+        #     num_links=1,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cluster_axis=0,
+        #     topology=ttnn.Topology.Linear,
+        #     **self.common_args,
+        # )
         # TODO: Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         # print(f"gathered_sum_exp_tensors layout: {gathered_sum_exp_tensors.layout}")
         # gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
@@ -195,27 +229,6 @@ class LogProbsCalculator:
         self.global_exp_sum = ttnn.to_layout(self.global_exp_sum, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
         self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32), **self.common_args)
         self.global_exp_sum = ttnn.to_layout(self.global_exp_sum, ttnn.TILE_LAYOUT, **self.common_args)
-
-    def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
-        if self.mesh_device.get_num_devices() == 32:
-            # llama all_gather with persistent buffer support
-            return self.tt_ccl.line_all_gather(
-                tensor,
-                dim=dim,
-                num_links=num_links,
-                memory_config=tensor.memory_config(),
-                cluster_axis=0,
-                buffer_key=buffer_key,
-            )
-        else:
-            return ttnn.all_gather(
-                tensor,
-                dim=dim,
-                num_links=num_links,
-                memory_config=tensor.memory_config(),
-                cluster_axis=None,
-                topology=ttnn.Topology.Linear,
-            )
 
     def _prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
         """
@@ -271,7 +284,7 @@ class LogProbsCalculator:
             selected_logits_tensor,
             dim=1,
             num_links=1,
-            buffer_key=self.persistent_buffers["LOGPROBS_LOGITS"],
+            buffer_key="LOGPROBS_LOGITS",
         )
 
         # Apply sum over device dimension to get logits for each user on all chips

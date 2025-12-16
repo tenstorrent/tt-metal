@@ -182,6 +182,8 @@ class TT_CCL:
         - LAYERNORM: (1, 1, 32, 128)
         - SAMPLING_VALUES: (1, 1, 32, 256)
         - SAMPLING_INDICES: (1, 1, 32, 256)
+        - LOGPROBS_MAX_REDUCTION: (1, 8, 32, 1)
+        - LOGPROBS_SUM_EXP_REDUCTION: (1, 8, 32, 1)
         - LOGPROBS_LOGITS: (1, 8, 32, 1)
         - BINARY_MUL: (1, 1, 32, 3584)
 
@@ -267,6 +269,35 @@ class TT_CCL:
             )
         )
         persistent_buffers["SAMPLING"] = tt_buffer
+
+        # LogProbs
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 8, 32, 1)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        persistent_buffers["LOGPROBS_MAX_REDUCTION"] = tt_buffer
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 8, 32, 1)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        persistent_buffers["LOGPROBS_SUM_EXP_REDUCTION"] = tt_buffer
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 8, 32, 1)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        persistent_buffers["LOGPROBS_LOGITS"] = tt_buffer
 
         # Binary Mult + Silu
         tt_buffer = (
