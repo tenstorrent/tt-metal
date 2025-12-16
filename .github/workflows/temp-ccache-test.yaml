@@ -177,10 +177,14 @@ jobs:
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true
 
-          # Clear non-JIT caches but keep tt-metal-cache to test JIT compilation caching
-          echo "Clearing non-JIT caches (keeping tt-metal-cache for JIT testing)..."
+          # Clear any existing JIT cache to start fresh and force recompilation
+          echo "Clearing all caches to force JIT kernel compilation..."
           rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
+          rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
           rm -rf /work/.cpmcache/ || true
+          # Also clear any kernels in work directory
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
 
           # Set environment to force debug output
           export TT_METAL_LOGGER_LEVEL=Debug
@@ -248,8 +252,12 @@ jobs:
 
           cd /work/build/tt-train
 
-          # Keep tt-metal-cache intact to test JIT cache hits
-          echo "Keeping tt-metal-cache intact to test JIT compilation cache hits..."
+          # Force another compilation by clearing just the kernel binaries but keeping ccache
+          echo "Clearing kernel binaries to force recompilation (but keeping ccache)..."
+          # Clear from the actual JIT cache locations
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
 
           # Set environment again
           export TT_METAL_LOGGER_LEVEL=Debug
@@ -276,8 +284,12 @@ jobs:
 
           cd /work/build/tt-train
 
-          # Keep tt-metal-cache intact for third test run
-          echo "Keeping tt-metal-cache intact for third test run..."
+          # Force compilation one more time
+          echo "Clearing kernel binaries again for third test..."
+          # Clear from the actual JIT cache locations
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
 
           # Set environment again
           export TT_METAL_LOGGER_LEVEL=Debug
