@@ -900,6 +900,11 @@ class MasterConfigLoader:
                 mode_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
                 # typecast specific parameters
                 output_dtype_list = [] if operation_name in ["typecast", "ttnn::typecast"] else None
+                # gt specific parameters
+                scalar_list = [] if operation_name in ["gt", "ttnn::gt"] else None
+                # where specific parameters
+                scalar_if_true_list = [] if operation_name in ["where", "ttnn::where"] else None
+                scalar_if_false_list = [] if operation_name in ["where", "ttnn::where"] else None
 
                 invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
@@ -1012,6 +1017,16 @@ class MasterConfigLoader:
                             parsed_output_dtype = self.parse_dtype(f"DataType::{output_dtype_str}")
                             if parsed_output_dtype:
                                 output_dtype_list.append(parsed_output_dtype)
+                    # Extract gt parameters
+                    if operation_name in ["gt", "ttnn::gt"]:
+                        if "scalar" in cfg:
+                            scalar_list.append(cfg["scalar"])
+                    # Extract where parameters
+                    if operation_name in ["where", "ttnn::where"]:
+                        if "scalar_if_true" in cfg:
+                            scalar_if_true_list.append(cfg["scalar_if_true"])
+                        if "scalar_if_false" in cfg:
+                            scalar_if_false_list.append(cfg["scalar_if_false"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1129,6 +1144,19 @@ class MasterConfigLoader:
                     if output_dtype_list:
                         param_names.append("output_dtype")
                         param_lists.append(output_dtype_list)
+                # Add gt parameters
+                if operation_name in ["gt", "ttnn::gt"]:
+                    if scalar_list:
+                        param_names.append("scalar")
+                        param_lists.append(scalar_list)
+                # Add where parameters
+                if operation_name in ["where", "ttnn::where"]:
+                    if scalar_if_true_list:
+                        param_names.append("scalar_if_true")
+                        param_lists.append(scalar_if_true_list)
+                    if scalar_if_false_list:
+                        param_names.append("scalar_if_false")
+                        param_lists.append(scalar_if_false_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
