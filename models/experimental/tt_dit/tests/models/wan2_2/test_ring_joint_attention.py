@@ -94,12 +94,7 @@ def test_ring_joint_sdpa(
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    chunk_divisor = max(q_chunk_size, k_chunk_size)
-    try:
-        padded_seq_len = get_padded_vision_seq_len(base_seq_len, chunk_divisor, mesh_device_shape[rp_axis])
-    except AssertionError:
-        pytest.skip("Padding is not supported for this model input shape")
-        return
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
 
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     logger.debug(f"submesh: {submesh.shape}")
@@ -121,7 +116,7 @@ def test_ring_joint_sdpa(
         up_axis,
         all_gather_topology,
         skip_check,
-        0.99,
+        0.994,
     )
 
 
