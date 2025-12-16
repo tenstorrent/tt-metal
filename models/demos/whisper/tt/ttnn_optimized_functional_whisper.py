@@ -32,9 +32,9 @@ def unsqueeze_to_4D_at_dim_1(tensor):
     rank = len(tensor.shape)
     if rank == 4:
         return tensor
-    if rank == 3:
+    elif rank == 3:
         return ttnn.unsqueeze(tensor, 1)
-    if rank == 2:
+    elif rank == 2:
         return ttnn.unsqueeze(ttnn.unsqueeze(tensor, 1), 1)
     else:
         raise ValueError(f"Unsupported shape: {tensor.shape}")
@@ -342,9 +342,9 @@ def whisper_attention(
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
-        query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
-        query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
+        query_states = ttnn.transpose(query_states, 1, 2)  # B, S, 1, Hxd
+        query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size)) # B, S, H, d
+        query_states = ttnn.transpose(query_states, 1, 2)  # B, H, S, d
         # Use cached cross-attention K/V if cache is valid, otherwise compute and copy to pre-allocated cache
         if cross_attn_cache is not None and cross_attn_cache_valid:
             key_states, value_states = cross_attn_cache[0], cross_attn_cache[1]
@@ -390,7 +390,7 @@ def whisper_attention(
             # Create QKV heads
             (
                 query_states,  # S, H, B, d
-                key_states,  # S, H, B, S
+                key_states,  # S, H, B, d
                 value_states,  # S, H, B, d
             ) = ttnn.experimental.nlp_create_qkv_heads_decode(
                 fused_qkv,
@@ -422,14 +422,14 @@ def whisper_attention(
                 program_config=sdpa_decode_progcfg,
                 compute_kernel_config=sdpa_decode_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # 1, bsz, H, D
+            )  # B, bsz, H, D
             attn_output = ttnn.reshape(attn_output, (bsz, attn_output.shape[-2], 1, attn_output.shape[-1]))
         else:
             # Encoder-attention or no-KV-cache-decoder-attention
             (
-                query_states,  # 1, H, S, d
-                key_states,  # 1, H, d, S
-                value_states,  # 1, H, S, d
+                query_states,  # B, H, S, d
+                key_states,  # B, H, d, S
+                value_states,  # B, H, S, d
             ) = ttnn.experimental.nlp_create_qkv_heads(
                 fused_qkv,
                 num_heads=config.decoder_attention_heads,
