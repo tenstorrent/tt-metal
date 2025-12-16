@@ -27,6 +27,14 @@ namespace deepseek_b1_ops {
 //     - Reserves: dst_cb (dst_num_pages)
 //     - Pushes: dst_cb (dst_num_pages)
 //   TRISC: No-op
+//
+// Semaphore States (separate semaphore per NOC):
+//   Sender: Assumes both noc0/noc1 semaphores start at 0, increments one after sending
+//           (which NOC depends on sender's position in grid)
+//   Receiver: Waits for noc0_semaphore == noc0_num_senders and noc1_semaphore == noc1_num_senders,
+//             then resets both to 0
+//
+// Note: Sender assumes that receiver's dst_cb is ready to receive at the beginning of NCRISC execution.
 // ============================================================================
 struct Gather {
     // ========================================================================
@@ -128,6 +136,8 @@ struct Gather {
                     (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
                 noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
+                noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
+                noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
 
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);

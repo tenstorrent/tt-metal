@@ -83,9 +83,6 @@ template <
     uint8_t cmd_buf>
 FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     constexpr uint32_t noc = noc_index;
-    if constexpr (loopback) {
-        static_assert(is_part_of_receiver_grid, "Loopback mode is only supported for receiver grid");
-    }
     constexpr uint32_t num_dests =
         loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
@@ -188,6 +185,12 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint64_t mcast_flag_noc_addr)
 //     - Reserves: dst_cb (dst_num_pages)
 //     - Pushes: dst_cb (dst_num_pages)
 //   TRISC: No-op
+//
+// Semaphore States:
+//   Sender: Assumes sender_semaphore contains VALID (set during init)
+//   Receiver: Waits for receiver_semaphore == VALID, then resets to INVALID
+//
+// Note: Sender assumes that receiver's dst_cb is ready to receive at the beginning of NCRISC execution.
 // ============================================================================
 struct Mcast {
     // ========================================================================
@@ -195,12 +198,13 @@ struct Mcast {
     // Only what MUST be compile-time (used as template parameters)
     // ========================================================================
 
-    // Sender CTArgs (NCRISC): mcast_num_cores, loopback, is_part_of_receiver_grid
-    template <uint32_t McastNumCores, bool Loopback, bool IsPartOfReceiverGrid>
+    // Sender CTArgs (NCRISC): mcast_num_cores, is_part_of_receiver_grid
+    // loopback is inferred: if sender is part of receiver grid, it needs loopback to receive its own mcast
+    template <uint32_t McastNumCores, bool IsPartOfReceiverGrid>
     struct SenderCTArgs {
         static constexpr uint32_t mcast_num_cores = McastNumCores;
-        static constexpr bool loopback = Loopback;
         static constexpr bool is_part_of_receiver_grid = IsPartOfReceiverGrid;
+        static constexpr bool loopback = IsPartOfReceiverGrid;  // Inferred from is_part_of_receiver_grid
     };
 
     // Receiver CTArgs (BRISC): none needed

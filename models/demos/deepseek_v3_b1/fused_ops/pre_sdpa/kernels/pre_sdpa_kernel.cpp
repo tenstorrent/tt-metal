@@ -32,10 +32,8 @@ KERNEL_ENTRY {
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs =
         deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_tiny_tile") == 1>;
-    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast_num_cores"),
-        get_named_compile_time_arg_val("mcast_loopback") == 1,
-        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1>;
+    using McastCTArgs = deepseek_b1_ops::Mcast::
+        SenderCTArgs<get_named_compile_time_arg_val("mcast_num_cores"), Core::is_input_core && Core::is_matmul_core>;
 
     // RMSNorm reader runtime args
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{

@@ -108,24 +108,30 @@ class PreSDPA:
         matmul_weights_memory_config = matmul_weights_tensor.memory_config()
         matmul_weights_core_grid = matmul_weights_memory_config.shard_spec.grid
 
-        # Mcast setup: sender core (rmsnorm) -> receiver grid (matmul cores)
-        mcast_core = rmsnorm_core
-        mcast_grid = matmul_weights_core_grid
+        # ========================================================================
+        # Mcast grid configuration (decoupled from matmul weights tensor)
+        # Mcast to full logical grid; only matmul cores participate in receive
+        # P150: (0,0)-(11,7), non-P150: (0,0)-(10,7)
+        # ========================================================================
+        MCAST_GRID_START_X = 0
+        MCAST_GRID_START_Y = 0
+        MCAST_GRID_END_X = device_grid_size.x - 1  # 11 for P150, 10 for non-P150
+        MCAST_GRID_END_Y = 7
+        main_grid = ttnn.CoreRange(
+            ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
+            ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
+        )
 
-        # Get mcast grid range (first range from the grid)
-        mcast_grid_ranges = list(mcast_grid.ranges())
-        mcast_grid_range = mcast_grid_ranges[0]
+        # Mcast setup: sender core (rmsnorm) -> full mcast grid
+        # Only matmul cores (is_matmul_core=true) will actually participate in receive
+        mcast_core = rmsnorm_core
 
         # Get NOC coordinates for mcast destination
-        mcast_dest_noc_start_core = device.worker_core_from_logical_core(mcast_grid_range.start)
-        mcast_dest_noc_end_core = device.worker_core_from_logical_core(mcast_grid_range.end)
+        mcast_dest_noc_start_core = device.worker_core_from_logical_core(main_grid.start)
+        mcast_dest_noc_end_core = device.worker_core_from_logical_core(main_grid.end)
 
-        # Calculate number of mcast cores
-        mcast_num_cores = mcast_grid_range.grid_size().x * mcast_grid_range.grid_size().y
-
-        # Determine if sender is part of receiver grid
-        mcast_is_part_of_receiver_grid = mcast_grid.contains(mcast_core)
-        mcast_loopback = mcast_is_part_of_receiver_grid
+        # Calculate number of mcast cores (full grid)
+        mcast_num_cores = main_grid.grid_size().x * main_grid.grid_size().y
 
         # Semaphore IDs for mcast synchronization
         mcast_data_sender_semaphore_id = 0
@@ -186,8 +192,6 @@ class PreSDPA:
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
             ("mcast_num_cores", mcast_num_cores),
-            ("mcast_loopback", 1 if mcast_loopback else 0),
-            ("mcast_is_part_of_receiver_grid", 1 if mcast_is_part_of_receiver_grid else 0),
             ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
             ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
@@ -365,7 +369,8 @@ class PreSDPA:
         # CB 5: Matmul weights (created from sharded tensor) - not used yet
         matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_weights_cb, matmul_weights_tensor)
 
-        # CB 8: Matmul input buffer (1x32 tiles, on matmul cores, receives mcast data)
+        # CB 8: Matmul input buffer (1x32 tiles, receives mcast data)
+        # Allocated on full mcast grid since mcast writes to all cores in the grid
         # Note: TILE_1x32, matmul_input_page_size, and matmul_input_total_size
         # were already calculated above for mcast page count calculation
         matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -377,11 +382,11 @@ class PreSDPA:
         )
         matmul_input_cb_descriptor = ttnn.CBDescriptor(
             total_size=matmul_input_total_size,
-            core_ranges=mcast_grid,
+            core_ranges=ttnn.CoreRangeSet([main_grid]),
             format_descriptors=[matmul_input_cb_format],
         )
 
-        # CB 6: Matmul output buffer (single tile, on matmul cores)
+        # CB 9: Matmul output buffer (single tile, on matmul cores only)
         matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         matmul_output_cb_format = ttnn.CBFormatDescriptor(
@@ -392,7 +397,7 @@ class PreSDPA:
         )
         matmul_output_cb_descriptor = ttnn.CBDescriptor(
             total_size=matmul_output_page_size,  # Single tile
-            core_ranges=mcast_grid,
+            core_ranges=matmul_weights_core_grid,
             format_descriptors=[matmul_output_cb_format],
         )
 
