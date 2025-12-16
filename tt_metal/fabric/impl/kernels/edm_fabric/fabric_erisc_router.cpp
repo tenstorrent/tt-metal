@@ -1517,7 +1517,7 @@ FORCE_INLINE
 #endif
     bool
     run_sender_channel_step(
-        size_t const my_eth_channel_,  
+        size_t const my_eth_channel_,
         EthSenderChannels& local_sender_channels,
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
         ReceiverPointersT& outbound_to_receiver_channel_pointers,
