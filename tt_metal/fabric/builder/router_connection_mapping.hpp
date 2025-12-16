@@ -92,9 +92,7 @@ public:
      * @return Configured RouterConnectionMapping for mesh router
      */
     static RouterConnectionMapping for_mesh_router(
-        Topology topology,
-        RoutingDirection direction,
-        bool has_z);
+        Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1 = false);
 
     /**
      * @brief Factory method for Z router connection mapping
