@@ -291,7 +291,7 @@ void HWCommandQueue::read_completion_queue() {
 }
 
 void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
-    TT_FATAL(false, "HWCommandQueue::finish is disabled and should not be used.");  
+    TT_FATAL(false, "HWCommandQueue::finish is disabled and should not be used.");
 }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
