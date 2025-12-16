@@ -13,8 +13,6 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Sequence
-from loguru import logger
-
 
 FREEZE_MESSAGE = "Legacy pybind11 bindings are deprecated. Use nanobind bindings."
 PYBIND_TOKEN = "pybind"
@@ -53,12 +51,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not offending_paths:
         return 0
 
-    logger.error(FREEZE_MESSAGE)
-    logger.error("Blocked files:")
+    print(FREEZE_MESSAGE)
+    print("Blocked files:")
     for rel_path in offending_paths:
-        logger.error(f"  - {rel_path}")
+        print(f"  - {rel_path}")
 
-    logger.error("Please move any new binding work to the nanobind implementation.")
+    print("Please move any new binding work to the nanobind implementation.")
 
     return 1
 
