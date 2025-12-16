@@ -329,6 +329,7 @@ models/experimental/oft @mbezuljTT @pavlepopovic @ianastasijevicTT @ddjekicTT @n
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @njovanovicTT
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
 models/demos/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/mobilenetv3 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
