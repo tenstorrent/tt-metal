@@ -917,7 +917,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
     TT_FATAL(attributes.output_dtype.has_value(), "Error: output_dtype field should have been populated");
     if (attributes.output_mem_config.is_sharded()) {
-        const auto& optional_bias = optional_input_tensors.at(0);
+        const auto& optional_bias = !optional_input_tensors.empty() && optional_input_tensors[0].has_value()
+                                        ? optional_input_tensors[0]
+                                        : std::nullopt;
         uint32_t bias_single_tile_size = 0;
         if (optional_bias.has_value()) {
             auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
