@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::ReadFromBuffer(device_dram_interleaved_buffer, result_vec_dram_interleaved_case);
         pass &= (src_vec_dram_interleaved_case == result_vec_dram_interleaved_case);
         TT_FATAL(pass, "Error");
-        log_info(LogTest, "Passed Unaligned Read Write DRAM Interleaved Buffer Test");
+        log_info(LogTest, "Passed Non-4-byte-aligned Read Write DRAM Interleaved Buffer Test");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write Read Unaligned DRAM Sharded Buffer
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::ReadFromBuffer(device_dram_sharded_buffer, result_vec_dram_sharded_case);
         pass &= (src_vec_dram_sharded_case == result_vec_dram_sharded_case);
         TT_FATAL(pass, "Error");
-        log_info(LogTest, "Passed Unaligned Read Write DRAM Sharded Buffer Test");
+        log_info(LogTest, "Passed Non-4-byte-aligned Read Write DRAM Sharded Buffer Test");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write Read Unaligned L1 Interleaved Buffer
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::ReadFromBuffer(device_l1_interleaved_buffer, result_vec_l1_interleaved_case);
         pass &= (src_vec_l1_interleaved_case == result_vec_l1_interleaved_case);
         TT_FATAL(pass, "Error");
-        log_info(LogTest, "Passed Unaligned Read Write L1 Interleaved Buffer Test");
+        log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Interleaved Buffer Test");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Write Read Unaligned L1 Sharded Buffer
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::ReadFromBuffer(device_l1_sharded_buffer, result_vec_l1_sharded_case);
         pass &= (src_vec_l1_sharded_case == result_vec_l1_sharded_case);
         TT_FATAL(pass, "Error");
-        log_info(LogTest, "Passed Unaligned Read Write L1 Sharded Buffer Test");
+        log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Sharded Buffer Test");
 
         pass &= tt_metal::CloseDevice(device);
 

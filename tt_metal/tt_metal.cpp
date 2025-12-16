@@ -440,7 +440,8 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    uint32_t aligned_page_size = buffer.aligned_page_size();
+    uint32_t aligned_page_size =
+        buffer.aligned_page_size();  // TODO: get API to return DMA alignment requirement of device
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     auto* device = buffer.device();
@@ -502,7 +503,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
         buffer.size());
 
     size_t page_size = buffer.page_size();
-    size_t aligned_page_size = buffer.aligned_page_size();
+    size_t aligned_page_size =
+        buffer.aligned_page_size();  // TODO: get API to return DMA alignment requirement of device
     size_t num_pages = buffer.num_pages();
 
     auto* device = buffer.device();
@@ -563,7 +565,8 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
     size_t page_size = buffer.page_size();
-    size_t aligned_page_size = buffer.aligned_page_size();
+    size_t aligned_page_size =
+        buffer.aligned_page_size();  // TODO: get API to return DMA alignment requirement of device
     size_t num_pages = buffer.num_pages();
 
     auto* device = buffer.device();
@@ -606,7 +609,8 @@ void read_pages_to_host_helper(
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
     uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
-    size_t aligned_page_size = dev_buffer.aligned_page_size();
+    size_t aligned_page_size =
+        dev_buffer.aligned_page_size();  // TODO: get API to return DMA alignment requirement of device
     std::vector<uint8_t> page(aligned_page_size);
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
