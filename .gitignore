@@ -141,3 +141,12 @@ Testing
 .auto_triage/logs
 .auto_triage/data
 .auto_triage/output
+/.claude/agents/code-writer.md
+/.claude/agents/communications-translator.md
+/.claude/agents/critical-reviewer.md
+/.claude/agents/git-orchestrator.md
+/.claude/agents/integration-orchestrator.md
+/.claude/agents/knowledge-curator.md
+/.claude/agents/local-file-searcher.md
+/.claude/agents/planner.md
+/.claude/agents/problem-investigator.md
