@@ -16,7 +16,7 @@ struct UntilizeMultiCoreSubCoreGridsProgramFactory {
         tt::tt_metal::KernelHandle unary_writer_kernel_id{};
         tt::tt_metal::CBHandle cb_src0{};
         tt::tt_metal::CBHandle cb_output{};
-        std::vector<CoreCoord> cores_with_rtargs{};
+        std::vector<CoreCoord> cores_with_rtargs;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

@@ -189,8 +189,8 @@ void UntilizeMultiCoreSubCoreGridsProgramFactory::override_runtime_arguments(
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores_with_rtargs = cached_program.shared_variables.cores_with_rtargs;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
     {
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const CoreCoord& core : cores_with_rtargs) {

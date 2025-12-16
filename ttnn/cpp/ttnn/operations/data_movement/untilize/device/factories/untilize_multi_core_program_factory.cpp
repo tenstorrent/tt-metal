@@ -446,8 +446,8 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cores_with_runtime_args = cached_program.shared_variables.cores_with_runtime_args;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
     bool input_is_sharded = tensor_args.input.is_sharded();
 
