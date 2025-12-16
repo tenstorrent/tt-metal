@@ -353,7 +353,7 @@ class Transformer(LightweightModule):
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor.
+        Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
         return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
