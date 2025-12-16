@@ -29,7 +29,7 @@
 
 namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
-ttnn::device_operation::CachedProgram<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t>
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_t
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::Program& program,
@@ -449,16 +449,17 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
             program, worker_sender_writer_backward_kernel_id, sender_worker_cores[link * 2], writer_backward_rt_args);
     }
 
-    shared_variables_t shared_variables;
-    shared_variables.worker_sender_reader_forward_kernel_id = worker_sender_reader_forward_kernel_id;
-    shared_variables.worker_sender_writer_forward_kernel_id = worker_sender_writer_forward_kernel_id;
-    shared_variables.worker_sender_reader_backward_kernel_id = worker_sender_reader_backward_kernel_id;
-    shared_variables.worker_sender_writer_backward_kernel_id = worker_sender_writer_backward_kernel_id;
-    shared_variables.sender_worker_cores = sender_worker_cores;
-    shared_variables.num_inputs = num_inputs;
-    shared_variables.reader_sender_rt_offset = reader_sender_rt_offset;
-    shared_variables.writer_sender_rt_offset = writer_sender_rt_offset;
-    shared_variables.num_links = num_links;
+    shared_variables_t shared_variables{
+        .worker_sender_reader_forward_kernel_id = worker_sender_reader_forward_kernel_id,
+        .worker_sender_writer_forward_kernel_id = worker_sender_writer_forward_kernel_id,
+        .worker_sender_reader_backward_kernel_id = worker_sender_reader_backward_kernel_id,
+        .worker_sender_writer_backward_kernel_id = worker_sender_writer_backward_kernel_id,
+        .sender_worker_cores = sender_worker_cores,
+        .num_inputs = num_inputs,
+        .reader_sender_rt_offset = reader_sender_rt_offset,
+        .writer_sender_rt_offset = writer_sender_rt_offset,
+        .num_links = num_links,
+    };
 
     return {std::move(program), std::move(shared_variables)};
 }

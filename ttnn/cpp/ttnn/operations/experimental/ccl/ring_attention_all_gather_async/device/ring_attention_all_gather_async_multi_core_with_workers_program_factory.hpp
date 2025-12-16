@@ -34,12 +34,6 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 
     using tensor_return_value_t = ring_attention_all_gather_async::tensor_return_value_t;
 
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
     static cached_mesh_workload_t create_mesh_workload(
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -52,9 +46,16 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static ttnn::device_operation::CachedProgram<
-        RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t>
-    ring_attention_all_gather_async_multi_core_with_workers_helper(
+private:
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create_at(
+        const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coordinate,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static cached_program_t ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::Program& program,
         const std::vector<Tensor>& input_tensor,
         IDevice* target_device,
