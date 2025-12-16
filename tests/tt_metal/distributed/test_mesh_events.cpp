@@ -118,6 +118,10 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     if (mesh_device_->num_devices() == 1) {
         GTEST_SKIP() << "Skipping test for a unit-size mesh device";
     }
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::N300) {
+        GTEST_SKIP() << "Skipping test for N300 board due to #34420";
+    }
     uint32_t num_iters = 5;
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
