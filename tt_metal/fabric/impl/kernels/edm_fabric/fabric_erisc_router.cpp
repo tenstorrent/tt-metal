@@ -2150,12 +2150,7 @@ FORCE_INLINE void initialize_fabric_telemetry() {
         reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
 
     // Zero the entire telemetry structure to clear any garbage values
-    // Using volatile pointer writes to ensure compiler doesn't optimize away
-    volatile tt_l1_ptr uint32_t* telemetry_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fabric_telemetry);
-    constexpr size_t num_words = sizeof(FabricTelemetry) / sizeof(uint32_t);
-    for (size_t i = 0; i < num_words; i++) {
-        telemetry_words[i] = 0;
-    }
+    memset(const_cast<FabricTelemetry*>(fabric_telemetry), 0, sizeof(FabricTelemetry));
 
     // Populate static_info fields with compile-time topology information
     fabric_telemetry->static_info.mesh_id = fabric_telemetry_mesh_id;
