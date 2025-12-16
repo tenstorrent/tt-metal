@@ -35,9 +35,9 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-std::map<chip_id_t, IDevice*> CreateDevices(
-    // TODO: delete this in favour of DevicePool
-    const std::vector<chip_id_t>& device_ids,
+std::map<ChipId, IDevice*> CreateDevices(
+    // TODO: delete this in favour of DeviceManager
+    const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -45,10 +45,22 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const std::vector<uint32_t>& l1_bank_remap = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
-    bool use_max_eth_core_count_on_all_devices = false,
+    [[deprecated]] bool ignored = false,  // This argument was not used
     bool initialize_fabric_and_dispatch_fw = true);
 
-void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
+void CloseDevices(const std::map<ChipId, IDevice*>& devices);
+
+/**
+ * Returns a pointer to an active device with the given ID, NULL otherwise
+ *
+ * Return value: IDevice*
+ *
+ * | Argument    | Description                                     | Data type               | Valid range      |
+ * Required |
+ * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+ * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
+ */
+IDevice* GetActiveDevice(ChipId device_id);
 
 /**
  * Copies data from a host buffer into the specified buffer

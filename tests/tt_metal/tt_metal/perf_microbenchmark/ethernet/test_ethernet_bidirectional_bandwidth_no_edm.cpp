@@ -36,6 +36,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -43,12 +44,12 @@ using namespace tt::test_utils::df;
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids{0, 1, 2, 3, 4, 5, 6, 7};
+            std::vector<ChipId> ids{0, 1, 2, 3, 4, 5, 6, 7};
             auto reserved_devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
                 ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
             for (const auto& [id, device] : reserved_devices) {
@@ -72,12 +73,12 @@ public:
         }
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct ChipSenderReceiverEthCore {

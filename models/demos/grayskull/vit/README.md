@@ -11,7 +11,6 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 To run the demo for question answering using the Bloom model, follow these instructions:
@@ -27,7 +26,7 @@ To run the demo for question answering using the Bloom model, follow these instr
 
 -  For running the inference device OPs analysis, use the following command to run the demo:
   ```sh
-  # Need to enable the profiler by building with ./build_metal.sh -p
+  # Build with ./build_metal.sh
   ./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
   ```
 

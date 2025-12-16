@@ -10,8 +10,10 @@
 #include <mutex>
 #include <queue>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <vector>
+#include <numeric>
 
 #include <httplib.h>
 
@@ -20,6 +22,19 @@
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
+#include <server/prom_formatter.hpp>
+#include <sys/stat.h>
+
+// Platform-specific headers for executable path detection
+#if defined(__linux__)
+#include <unistd.h>
+#include <climits>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <climits>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -147,17 +162,119 @@ private:
         return buffer.str();
     }
 
+    // Get the directory containing the executable (platform-specific)
+    std::string get_executable_dir() {
+#if defined(__linux__)
+        char result[PATH_MAX];
+        ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
+        if (count != -1) {
+            result[count] = '\0';
+            // Find last directory separator
+            for (ssize_t i = count - 1; i >= 0; --i) {
+                if (result[i] == '/') {
+                    result[i] = '\0';
+                    return std::string(result);
+                }
+            }
+        }
+#elif defined(__APPLE__)
+        char result[PATH_MAX];
+        uint32_t size = sizeof(result);
+        if (_NSGetExecutablePath(result, &size) == 0) {
+            // Resolve symlinks
+            char resolved[PATH_MAX];
+            if (realpath(result, resolved) != nullptr) {
+                // Find last directory separator
+                std::string path(resolved);
+                size_t last_slash = path.find_last_of('/');
+                if (last_slash != std::string::npos) {
+                    return path.substr(0, last_slash);
+                }
+            }
+        }
+#elif defined(_WIN32)
+        char result[MAX_PATH];
+        DWORD count = GetModuleFileNameA(NULL, result, MAX_PATH);
+        if (count > 0 && count < MAX_PATH) {
+            // Find last directory separator (Windows uses backslash)
+            for (DWORD i = count - 1; i > 0; --i) {
+                if (result[i] == '\\' || result[i] == '/') {
+                    result[i] = '\0';
+                    return std::string(result);
+                }
+            }
+        }
+#endif
+        return "";
+    }
+
+    // Check if a directory exists
+    bool dir_exists(const std::string& path) {
+        struct stat info;
+        if (stat(path.c_str(), &info) != 0) {
+            return false;
+        }
+        return (info.st_mode & S_IFDIR) != 0;
+    }
+
+    // Find the frontend directory by searching multiple possible locations
+    std::string find_frontend_dir(const std::string& override_path = "") {
+        std::vector<std::string> search_paths;
+
+        // If override path provided, try it first
+        if (!override_path.empty()) {
+            search_paths.push_back(join_paths(override_path, "tt_telemetry/frontend/static"));
+        }
+
+        // Get executable directory
+        std::string exe_dir = get_executable_dir();
+        if (!exe_dir.empty()) {
+            // Try relative to executable (for installed/built binaries)
+            search_paths.push_back(join_paths(exe_dir, "frontend/static"));
+
+            // Try source tree location (for dev builds running from build directory)
+            search_paths.push_back(join_paths(exe_dir, "../../tt_telemetry/frontend/static"));
+        }
+
+        // Try current working directory as fallback
+        search_paths.push_back("tt_telemetry/frontend/static");
+        search_paths.push_back("frontend/static");
+
+        // Find first existing directory
+        for (const auto& path : search_paths) {
+            if (dir_exists(path)) {
+                log_info(tt::LogAlways, "Found frontend directory at: {}", path);
+                return path;
+            }
+        }
+
+        throw std::runtime_error(
+            "Could not locate frontend directory. Searched: " +
+            std::accumulate(
+                search_paths.begin(),
+                search_paths.end(),
+                std::string(),
+                [](const std::string& a, const std::string& b) { return a + (a.empty() ? "" : ", ") + b; }));
+    }
+
 public:
     WebServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
-        if (!metal_home.empty()) {
-            metal_home_ = metal_home;
+        // Find frontend directory using search logic
+        std::string frontend_base = find_frontend_dir(metal_home);
+        // Extract base path (remove "tt_telemetry/frontend/static" or "frontend/static" suffix)
+        constexpr std::string_view tt_telemetry_frontend_suffix = "tt_telemetry/frontend/static";
+        constexpr std::string_view frontend_suffix = "frontend/static";
+
+        if (frontend_base.ends_with(tt_telemetry_frontend_suffix)) {
+            metal_home_ = frontend_base.substr(0, frontend_base.length() - tt_telemetry_frontend_suffix.length());
+        } else if (frontend_base.ends_with(frontend_suffix)) {
+            metal_home_ = frontend_base.substr(0, frontend_base.length() - frontend_suffix.length());
         } else {
-            const char* env_metal_home = std::getenv("TT_METAL_HOME");
-            if (env_metal_home != nullptr) {
-                metal_home_ = std::string(env_metal_home);
-            } else {
-                throw std::runtime_error("TT_METAL_HOME environment variable not set and no metal_home provided");
-            }
+            metal_home_ = frontend_base;
+        }
+        // Ensure metal_home_ is set to the directory that contains the frontend path we need
+        if (!metal_home_.empty() && metal_home_.back() == '/') {
+            metal_home_.pop_back();
         }
     }
 
@@ -204,15 +321,27 @@ public:
                 }
             } else {
                 // If file not found, serve index.html for SPA routing
-                std::string index_content =
-                    read_file(join_paths(metal_home_, "tt_telemetry/frontend/static/index.html"));
+                std::string full_path = join_paths(metal_home_, "tt_telemetry/frontend/static/index.html");
+                std::string index_content = read_file(full_path);
                 if (!index_content.empty()) {
                     res.set_content(index_content, "text/html");
                 } else {
                     res.status = 404;
-                    res.set_content(
-                        "<html><body><h1>Telemetry Server Running</h1><p>404: File not found</p></body></html>",
-                        "text/html");
+                    std::string error_html =
+                        "<html><body>"
+                        "<h1>Telemetry Server 404</h1>"
+                        "<p>404: Page not found: " +
+                        path +
+                        "</p>"
+                        "<p>Local path: " +
+                        full_path +
+                        "</p>"
+                        "<p>Frontend base directory: " +
+                        metal_home_ +
+                        "</p>"
+                        "<p>Frontend files not found. Use --metal-src-dir to override the search path.</p>"
+                        "</body></html>";
+                    res.set_content(error_html, "text/html");
                 }
             }
         });
@@ -226,6 +355,18 @@ public:
                 {"uptime_seconds", uptime_seconds.count()}
             };
             res.set_content(response.dump(), "application/json");
+        });
+
+        // Prometheus metrics endpoint
+        server_.Get("/api/metrics", [this](const httplib::Request&, httplib::Response& res) {
+            std::lock_guard<std::mutex> lock(snapshot_mutex_);
+            try {
+                auto prometheus_output = tt::telemetry::format_snapshot_as_prometheus(telemetry_state_);
+                res.set_content(prometheus_output, "text/plain; version=0.0.4; charset=utf-8");
+            } catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(std::string("Error formatting metrics: ") + e.what(), "text/plain; charset=utf-8");
+            }
         });
 
         // Server-Sent Events endpoint for real-time telemetry
@@ -288,6 +429,7 @@ public:
         log_info(tt::LogAlways, "  GET  /<path>          - Static assets (serves static/<path>)");
         log_info(tt::LogAlways, "  GET  /api/status      - Server status");
         log_info(tt::LogAlways, "  GET  /api/stream      - Real-time stream (SSE)");
+        log_info(tt::LogAlways, "  GET  /api/metrics     - Prometheus metrics");
 
         server_.listen("0.0.0.0", port);
     }

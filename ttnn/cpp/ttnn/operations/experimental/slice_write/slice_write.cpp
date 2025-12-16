@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_write.hpp"
-#include "device/slice_write_op.hpp"
+#include "device/slice_write_device_operation.hpp"
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -30,7 +29,7 @@ ttnn::Tensor SliceWriteOperation::invoke(
     bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
     bool rm_only_not_sharded = (input_tensor.layout() == Layout::TILE || output_tensor.layout() == Layout::TILE) &&
-                               !(input_tensor.is_sharded() || output_tensor.is_sharded() && !no_step);
+                               !(input_tensor.is_sharded() || (output_tensor.is_sharded() && !no_step));
     ttnn::Tensor input = input_tensor;
     if (rm_only_not_sharded) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
@@ -76,17 +75,6 @@ ttnn::Tensor SliceWriteOperation::invoke(
         auto shard_spec = input_tensor.shard_spec().value();
 
         auto input_cores = shard_spec.grid;
-        bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-        auto total_cores = shard_spec.grid;
-        uint32_t num_cores_nhw = total_cores.num_cores();
-        if (is_block_sharded) {
-            if (rm_orientation) {
-                num_cores_nhw = total_cores.bounding_box().grid_size().y;
-            } else {
-                num_cores_nhw = total_cores.bounding_box().grid_size().x;
-            }
-        }
 
     } else {
         for (int i = 0; i < input.logical_shape().rank(); i++) {
@@ -130,11 +118,8 @@ ttnn::Tensor SliceWriteOperation::invoke(
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
-        (void)tt::tt_metal::operation::run(
-            SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
-            {input},
-            {},
-            {output_tensor})[0];
+        (void)ttnn::prim::slice_write(
+            input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step));
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
         }

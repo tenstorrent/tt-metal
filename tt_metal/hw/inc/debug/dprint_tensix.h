@@ -208,6 +208,10 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
+#if defined(ARCH_WORMHOLE)
+            DPRINT << "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown"
+                   << ENDL();
+#endif
         }
 
         // Print the contents

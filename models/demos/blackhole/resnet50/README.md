@@ -22,13 +22,11 @@ Read more about it at:
 ```python
 pytest --disable-warnings models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample
 ```
-Where 16 (or 32) is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
 
 + Our second demo is designed to run ImageNet dataset, run it with:
 ```python
 pytest --disable-warnings models/demos/blackhole/resnet50/demo/demo.py::test_demo_trace_with_imagenet
 ```
-The 16 (or 32 )refers to batch size per device here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 16 (32 for n300), total of 1600 (3200 for n300) images.
 
 ## Testing
 ### Blackhole Device Performance
@@ -45,10 +43,10 @@ pytest models/demos/blackhole/resnet50/tests/test_perf_device_resnet50.py::test_
 pytest models/demos/blackhole/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
 ```
 + This will generate a CSV with the timings and throughputs.
-+ **Expected end-to-end perf**: For batch = 16, it is about `9,130 fps` currently. This may vary machine to machine.
-+ **Expected end-to-end perf**: For batch = 32, it is about `10,880 fps` currently. This may vary machine to machine.
++ **Expected end-to-end perf**: For batch = 16, it is about `12,600 fps` currently. This may vary machine to machine.
 
 ## Details
 + The entry point to the Metal ResNet model is `ResNet` in `ttnn_functional_resnet50.py`.
 + The model picks up certain configs and weights from TorchVision pretrained model. We have used `torchvision.models.ResNet50_Weights.IMAGENET1K_V1` version from TorchVision as our reference.
 + Our ImageProcessor on the other hand is based on `microsoft/resnet-50` from huggingface.
++ The batch size per device is 16 with 100 iterations (batches), hence the model will process 100 batches of size 16, total of 1600 images.

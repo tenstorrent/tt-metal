@@ -12,21 +12,28 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
-      num-groups:
-        required: false
-        type: number
-        default: 12
+        default: 40
       docker-image:
-        required: true
-        type: string
-      build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
         required: true
         type: string
       enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
+      merge-gate-call:
         required: false
         type: boolean
         default: false
@@ -49,63 +56,72 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
-      num-groups:
-        required: false
-        type: number
-        default: 12
+        default: 40
       docker-image:
-        required: true
-        type: string
-      build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
         required: true
         type: string
+      merge-gate-call:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
+  define-ttnn-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
+    strategy:
+      matrix:
+        default-ttnn-tests:
+          [[
+            { name: "ttnn example tests", cmd: "./tests/scripts/run_ttnn_examples.sh", merge_gate: true },
+            { name: "ttnn eltwise group 1", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn eltwise group 2", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn eltwise group 3", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn eltwise group 4", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn eltwise group 5", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn conv group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn pool group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn matmul group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn fused group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn transformers group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "ttnn reduce and misc ops group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            { name: "core ttnn unit test group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/light_metal tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
+            # { name: "ttnn fast runtime off", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off', merge_gate: false, fast_runtime_mode_off: true },
+          ]]
+    steps:
+      - name: Compute tests
+        shell: bash
+        id: compute-tests
+        run: |
+          set -euo pipefail
+          echo "[info] Outputing default values"
+          default_ttnn_tests='${{ toJSON(matrix.default-ttnn-tests) }}'
+          echo $default_ttnn_tests
+          echo $default_ttnn_tests | jq
+          requested_ttnn_tests=$default_ttnn_tests
+
+          requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ttnn_tests")
+          echo "[info] after filtering for requested workflow tests: $requested_ttnn_tests"
+
+          # Check that we have a valid test list that's not empty
+          echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
+          echo "ttnn-tests=$(echo $requested_ttnn_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "[info] Showing GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
   ttnn:
+    needs: define-ttnn-tests
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04"]
-        test-group:
-          - name: ttnn group 1
-            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 2
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 3
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 3 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 4
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 4 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 5
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 5 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 6
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 6 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 7
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 7 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 8
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 8 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 9
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 9 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 10
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 10 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 11
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 12
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
-          - name: ttnn notebook
-            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
-          - name: ttnn fast runtime off
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
-            fast_runtime_mode_off: true
-          - name: ttnn example tests
-            cmd: ./tests/scripts/run_ttnn_examples.sh
+        test-group: ${{ fromJSON(needs.define-ttnn-tests.outputs.ttnn-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    # ttnn group 1 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
@@ -121,18 +137,27 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
+          slow-dispatch-timeout: 10.0
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}

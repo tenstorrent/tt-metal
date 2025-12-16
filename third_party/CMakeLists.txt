@@ -63,7 +63,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "protobuf_BUILD_TESTS OFF"
-        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations"
         "protobuf_INSTALL OFF"
         "BUILD_TESTING OFF"
         "protobuf_BUILD_EXAMPLES OFF"
@@ -71,6 +70,38 @@ CPMAddPackage(
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
     PATCHES
         protobuf_noreturn.patch
+)
+
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
+    # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
+    get_target_property(PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+    set_target_properties(
+        libprotobuf
+        PROPERTIES
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                "${PROTOBUF_INCLUDES}"
+    )
+endif()
+
+# Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
+set_target_properties(
+    libprotobuf
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
+# Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
+# Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
+target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
+target_compile_options(
+    libprotobuf
+    PRIVATE
+        -fno-semantic-interposition
+        -Wno-deprecated-declarations
 )
 
 ############################################################################################################################
@@ -343,8 +374,3 @@ CPMAddPackage(
     PATCHES
         capnproto_capture_this.patch
 )
-
-if(capnproto_ADDED)
-    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
-    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
-endif()

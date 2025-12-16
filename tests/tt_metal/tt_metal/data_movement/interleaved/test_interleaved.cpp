@@ -25,7 +25,7 @@ struct InterleavedConfig {
     uint32_t num_pages = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
+    CoreRangeSet cores;
     bool is_dram = true;  // else is L1
     bool read_kernel = true;
     bool write_kernel = true;
@@ -250,7 +250,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocati
 
     // Cores
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     auto grid_size = device->compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {
@@ -531,7 +531,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageCoreLocation
 
     // Cores
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     auto grid_size = device->compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {

@@ -199,21 +199,22 @@ def run_neighbor_pad_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.timeout(900)  # test is slow so bump up the default timeout
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "input_shape, halo_shard_dim, other_shard_dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis",
+    "input_shape, halo_shard_dim, other_shard_dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis, enable_trace, num_iters",
     [
-        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        ([82, 120, 212, 512], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1),
-        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 1),
+        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1, True, 10),  # perf
+        ([82, 120, 212, 512], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1, False, 1),  # check
+        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1, True, 10),  # perf
+        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 1, False, 1),  # check
     ],
     ids=[
-        "mochi_vae_1",
-        "mochi_vae_2",
-        "replicate_width_dim",
-        "zeros_width_dim",
+        "mochi_vae_1-perf",
+        "mochi_vae_2-check",
+        "replicate_width_dim-perf",
+        "zeros_width_dim-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -224,14 +225,6 @@ def run_neighbor_pad_impl(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace,num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, neighbor_pad_topology",

@@ -63,11 +63,11 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const std::vector<GlobalSemaphore>& barrier_semaphores,
-               const std::vector<GlobalSemaphore>& rs_global_semaphores,
-               const std::vector<GlobalSemaphore>& ag_global_semaphores,
+               const std::optional<uint32_t> cluster_axis,
+               MeshDevice& mesh_device,
+               const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
+               const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
+               const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -104,7 +104,7 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                const ttnn::Tensor& input_tensor,
                ttnn::Tensor& buffer_tensor,
                const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
+               MeshDevice& mesh_device,
                const GlobalSemaphore& multi_device_global_semaphore,
                const std::optional<const DataType> dtype,
                const ttnn::MemoryConfig& memory_config,
@@ -163,7 +163,7 @@ void py_bind_all_reduce_async(pybind11::module& module) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             num_links (int, optional): Number of links to use for the all_reduce_async operation. Defaults to `None`, which indicates to the operation that it should choose. Note that this value will be ignored if there are fewer links available than requested.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
 
         Returns:
             ttnn.Tensor: the output tensor.

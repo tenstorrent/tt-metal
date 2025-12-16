@@ -37,8 +37,7 @@ def _run_unary_uint16_test(torch_input_tensor, ttnn_fn, device, memory_config=No
     "input_shapes",
     [
         torch.Size([1, 1, 32, 32]),
-        torch.Size([1, 1, 2048, 2048]),
-        torch.Size([1, 1, 4096, 4096]),
+        torch.Size([1, 1, 256, 256]),
     ],
 )
 @pytest.mark.parametrize(

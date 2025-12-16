@@ -47,11 +47,10 @@ def run_test_FalconModel_inference(
     pcc,
     model_config,
     tt_cache_path,
-    model_location_generator,
 ):
     num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
 
     # Prepare input ------------------------------------------------------------------------

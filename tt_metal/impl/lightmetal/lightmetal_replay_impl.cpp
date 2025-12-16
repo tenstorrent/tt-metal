@@ -7,21 +7,21 @@
 #include <iostream>
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
+#include <optional>
 #include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 //////////////////////////////////////
 // Helper Functions                 //
@@ -36,12 +36,12 @@ TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     TraceDescriptor trace_desc;
 
     // Deserialize trace_data
-    if (auto trace_data_fb = fb_desc->trace_data()) {
+    if (const auto* trace_data_fb = fb_desc->trace_data()) {
         trace_desc.data.assign(trace_data_fb->begin(), trace_data_fb->end());
     }
 
     // Deserialize sub_device_descriptors
-    if (auto sub_device_descriptors_fb = fb_desc->sub_device_descriptors()) {
+    if (const auto* sub_device_descriptors_fb = fb_desc->sub_device_descriptors()) {
         for (const auto* mapping : *sub_device_descriptors_fb) {
             if (mapping) {
                 TraceWorkerDescriptor descriptor;
@@ -58,7 +58,7 @@ TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     }
 
     // Deserialize sub_device_ids
-    if (auto sub_device_ids_fb = fb_desc->sub_device_ids()) {
+    if (const auto* sub_device_ids_fb = fb_desc->sub_device_ids()) {
         for (const auto id : *sub_device_ids_fb) {
             trace_desc.sub_device_ids.emplace_back(SubDeviceId{id});
         }
@@ -74,7 +74,7 @@ namespace detail {
 //////////////////////////////////////
 
 LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* device) :
-    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
+    binary_(std::move(binary)), device_(device) {
     if (binary_.is_empty()) {
         log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }
@@ -146,7 +146,7 @@ std::optional<TraceDescriptor> LightMetalReplayImpl::get_trace_by_id(uint32_t ta
     if (const auto* trace_descriptors = fb_binary_ ? fb_binary_->trace_descriptors() : nullptr) {
         if (const auto* fb_trace_desc_by_id = trace_descriptors->LookupByKey(target_trace_id)) {
             if (const auto* fb_desc = fb_trace_desc_by_id->desc()) {
-                return from_flatbuffer(fb_desc);
+                return std::make_optional(from_flatbuffer(fb_desc));
             }
         }
     }
@@ -243,7 +243,7 @@ void LightMetalReplayImpl::setup_devices() {
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
-    const chip_id_t mmio_device_id = 0;
+    const ChipId mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(
         {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     this->device_ = devices_map.at(mmio_device_id);
@@ -333,10 +333,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand: {
-            execute(command->cmd_as_EnqueueProgramCommand());
-            break;
-        }
         case ::tt::tt_metal::flatbuffer::CommandType::CreateKernelCommand: {
             execute(command->cmd_as_CreateKernelCommand());
             break;
@@ -366,7 +362,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
 
 // Per API command handlers.
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(EnqueueTrace) cq_id: {} tid: {} blocking: {}",
@@ -378,7 +374,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(ReplayTrace) cq_id: {} tid: {} blocking: {}",
@@ -390,7 +386,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // Get the trace descriptor from flatbuffer and load it to device.
@@ -399,7 +395,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceComm
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // ReleaseTrace(this->device_, cmd->tid());
@@ -416,8 +412,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
         EnumNameBufferType(cmd->buffer_type()));
 
     // Handle optionals
-    const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
-    const auto dist_spec = from_flatbuffer(cmd->buffer_distribution_spec());
+    const auto shard_parameters = tt_metal::from_flatbuffer(cmd->shard_parameters());
+    const auto dist_spec = tt_metal::from_flatbuffer(cmd->buffer_distribution_spec());
     auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
@@ -430,7 +426,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->address()->value(),
             cmd->size(),
             cmd->page_size(),
-            from_flatbuffer(cmd->buffer_type()),
+            tt_metal::from_flatbuffer(cmd->buffer_type()),
             BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
@@ -441,7 +437,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             this->device_,
             cmd->size(),
             cmd->page_size(),
-            from_flatbuffer(cmd->buffer_type()),
+            tt_metal::from_flatbuffer(cmd->buffer_type()),
             BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
@@ -520,7 +516,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(Finish) cq_global_id: {}", cmd->cq_global_id());
     // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    auto sub_device_ids = from_flatbuffer(cmd->sub_device_ids());
+    auto sub_device_ids = tt_metal::from_flatbuffer(cmd->sub_device_ids());
     // Issue #24955: Enable after Light-Metal rearchitecture
     // Finish(cq, sub_device_ids);
 }
@@ -528,25 +524,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::FinishCommand
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ProgramConstructor) global_id: {} ", cmd->global_id());
     add_program_to_map(cmd->global_id(), std::make_shared<Program>());
-}
-
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* cmd) {
-    auto program = get_program_from_map(cmd->program_global_id());
-    TT_FATAL(
-        program,
-        "Attempted to EnqueueProgram() program w/ global_id: {} that was not previously created.",
-        cmd->program_global_id());
-
-    log_debug(
-        tt::LogMetalTrace,
-        "LightMetalReplay(EnqueueProgram) program_global_id: {} cq_global_id: {}",
-        cmd->program_global_id(),
-        cmd->cq_global_id());
-
-    // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    // Issue #24955: Enable after Light-Metal rearchitecture
-    // EnqueueProgram(cq, *program, cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
@@ -610,8 +587,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
         "Attempted to SetRuntimeArgs() using a kernel w/ global_id: {} that was not previously created.",
         cmd->kernel_global_id());
 
-    auto core_spec = from_flatbuffer(cmd->core_spec());
-    auto runtime_args = from_flatbuffer(cmd->args());
+    auto core_spec = tt_metal::from_flatbuffer(cmd->core_spec());
+    auto runtime_args = tt_metal::from_flatbuffer(cmd->args());
     SetRuntimeArgs(*program, kernel_id, core_spec, runtime_args);
 }
 
@@ -630,7 +607,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 
     // Convert global_id to optional Shadow Buffer here to keep from_flatbuffer standalone function.
     ::tt::tt_metal::Buffer* shadow_global_buffer = nullptr;
-    auto shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
+    const auto* shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
 
     if (shadow_buf_global_id) {
         auto global_id = shadow_buf_global_id->value();
@@ -755,4 +732,4 @@ bool LightMetalReplayImpl::run() {
 }
 
 }  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal

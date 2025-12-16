@@ -113,7 +113,7 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
 // how slow is this? alternative is sotring entire route buffer which isn't ideal either...
 template <uint32_t STATIC_ID = 12345>
 FORCE_INLINE void recordRoutingFields2D(
-    const volatile tt::tt_fabric::LowLatencyMeshRoutingFields& routing_fields, const volatile uint8_t* route_buffer) {
+    const volatile tt::tt_fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {
     KernelProfilerNocEventMetadata ev_md;
     auto& routing_fields_2d = ev_md.data.fabric_routing_fields_2d;
     routing_fields_2d.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_2D;
@@ -211,7 +211,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 routing_fields_type,
                 unicast_write_cmd.noc_address,
                 unicast_write_cmd.chunk_size,
-                NOC_SCATTER_WRITE_MAX_CHUNKS);
+                unicast_write_cmd.chunk_count);
             break;
         }
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
@@ -236,11 +236,15 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 mcast_write_cmd.size_y);
             break;
         }
+        default: {
+            ASSERT(false);
+            break;
+        }
     }
 
     // following profiler event just stores the routing fields
     if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
-#if defined(FABRIC_2D) && !defined(DYNAMIC_ROUTING_ENABLED)
+#if defined(FABRIC_2D)
         recordRoutingFields2D(fabric_header_ptr->routing_fields, fabric_header_ptr->route_buffer);
 #endif
     } else if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {

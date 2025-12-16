@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -16,8 +17,6 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 
 #include <nanobind/stl/bind_map.h>
 #include <nanobind/stl/unordered_map.h>
-
-#include <core/ttnn_all_includes.hpp>
 
 #include "nb_autograd.hpp"
 #include "nb_core.hpp"
@@ -55,7 +54,7 @@ NB_MODULE(_ttml, m) {
     ttml::nanobind::core::py_module(m_core);
     ttml::nanobind::optimizers::py_module(m_optimizers);
 
-    // Add MeshDevice
+    // Add MeshDevice as non-owning
     nb::class_<tt::tt_metal::distributed::MeshDevice>(m, "MeshDevice");
 }
 

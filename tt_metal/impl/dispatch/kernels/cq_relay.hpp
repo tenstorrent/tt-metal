@@ -22,10 +22,6 @@
 #define FABRIC_2D 0
 #endif
 
-#if !defined(FABRIC_2D_DYNAMIC)
-#define FABRIC_2D_DYNAMIC 0
-#endif
-
 template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size_bytes, uint32_t header_rb>
 class CQRelayClient {
 private:
@@ -50,15 +46,13 @@ public:
         uint32_t worker_buffer_index_sem,
         uint32_t mux_status_address,
         uint32_t local_mux_status_address,
-        uint32_t my_dev_id,
-        uint32_t to_dev_id,
         uint32_t to_mesh_id,
         uint32_t ew_dim,
-        uint32_t router_direction,
         uint32_t packet_header_addr,
         uint8_t num_hops,
         uint8_t downstream_cmd_buf>
-    FORCE_INLINE void init(uint64_t downstream_noc_addr) {
+    FORCE_INLINE void init(
+        uint64_t downstream_noc_addr, uint32_t my_dev_id, uint32_t to_dev_id, uint32_t router_direction) {
         WAYPOINT("FMCW");
 #if defined(FABRIC_RELAY)
         edm.template init<fd_core_type>(
@@ -82,13 +76,9 @@ public:
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
-#if (FABRIC_2D_DYNAMIC == 1)
-            tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::MeshPacketHeader*)packet_header_addr, my_dev_id, to_dev_id, to_mesh_id, ew_dim);
-#else
 #if defined(GALAXY_CLUSTER)
             tt::tt_fabric::fabric_set_route(
-                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
+                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr,
                 (eth_chan_directions)router_direction,
                 0,  // branch forward
                 0,  // start hop
@@ -96,8 +86,7 @@ public:
                 true);
 #else
             tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
-#endif
+                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
 #endif
         } else {
             auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
@@ -211,17 +200,13 @@ public:
     }
 
     template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id>
-    FORCE_INLINE void release_pages(uint16_t n) {
+    FORCE_INLINE void release_pages(uint32_t n) {
 #if defined(FABRIC_RELAY)
         auto sem_addr = get_semaphore<fd_core_type>(dest_sem_id);
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
 
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            noc_dest_addr,
-            n,
-            std::numeric_limits<uint16_t>::max(),
-        });
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_dest_addr, n});
         tt::tt_fabric::fabric_atomic_inc<mux_num_buffers_per_channel>(edm, packet_header);
 #else
         noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<fd_core_type>(dest_sem_id)), n, noc_idx);
@@ -234,7 +219,7 @@ public:
         uint32_t downstream_sem_id,
         bool wait,
         uint8_t downstream_cmd_buf>
-    FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint16_t n) {
+    FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint32_t n) {
 #if defined(FABRIC_RELAY)
         // Writing to a HEADER only buffer is wrong. This function requires a FULL SIZE buffer
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
@@ -254,10 +239,7 @@ public:
 
         packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dst_ptr,
-                get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)),
-                n,
-                std::numeric_limits<uint16_t>::max()},
+                dst_ptr, get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n},
             length);
 
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);

@@ -9,7 +9,6 @@
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -17,6 +16,9 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/run_operation.hpp"
+
+// Include the new device operation types to get ReduceScatterProgramArtifacts
+#include "reduce_scatter_minimal_async_op_device_operation_types.hpp"
 
 #include <optional>
 #include <utility>
@@ -26,12 +28,16 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
+// Import the ReduceScatterProgramArtifacts from the detail namespace for backward compatibility
+using ReduceScatterProgramArtifacts =
+    operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
+
 struct ReduceScatterMinimalAsync {
     uint32_t dim;
     uint32_t num_links;
     uint32_t ring_size;
     const MemoryConfig output_mem_config;
-    const MemoryConfig intermediate_mem_config;
+    const std::optional<MemoryConfig> optional_intermediate_mem_config;
     const ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
@@ -47,7 +53,7 @@ struct ReduceScatterMinimalAsync {
         uint32_t num_links,
         uint32_t ring_size,
         MemoryConfig output_mem_config,
-        MemoryConfig intermediate_mem_config,
+        const std::optional<MemoryConfig>& intermediate_mem_config,
         ccl::Topology topology,
         std::vector<GlobalSemaphore> semaphore,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
@@ -61,7 +67,7 @@ struct ReduceScatterMinimalAsync {
         num_links(num_links),
         ring_size(ring_size),
         output_mem_config(std::move(output_mem_config)),
-        intermediate_mem_config(std::move(intermediate_mem_config)),
+        optional_intermediate_mem_config(intermediate_mem_config),
         topology(topology),
         semaphore(std::move(semaphore)),
         barrier_semaphore(barrier_semaphore),
@@ -81,7 +87,7 @@ struct ReduceScatterMinimalAsync {
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("intermediate_mem_config", intermediate_mem_config);
+        attrs.emplace_back("optional_intermediate_mem_config", optional_intermediate_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
@@ -108,16 +114,6 @@ struct ReduceScatterMinimalAsync {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
-};
-
-struct ReduceScatterProgramArtifacts {
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
 };
 
 void reduce_scatter_common_validates(
@@ -243,8 +239,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
 void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
-    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_links,
     uint32_t num_directions_per_link,
@@ -259,8 +255,8 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 
 void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
-    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_links,
     uint32_t num_directions_per_link,
@@ -296,9 +292,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
@@ -316,8 +310,6 @@ Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

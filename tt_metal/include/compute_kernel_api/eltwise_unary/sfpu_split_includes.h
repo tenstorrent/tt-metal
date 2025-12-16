@@ -64,8 +64,8 @@
 #include "compute_kernel_api/eltwise_unary/trigonometry.h"
 #endif
 
-#if SFPU_OP_REVERSE_FAMILY_INCLUDE
-#include "compute_kernel_api/eltwise_unary/reverseops.h"
+#if SFPU_OP_RSUB_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rsub.h"
 #endif
 
 #if SFPU_OP_IDENTITY_INCLUDE
@@ -120,6 +120,10 @@
 #include "compute_kernel_api/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_LOGSIGMOID_INCLUDE
+#include "compute_kernel_api/logsigmoid.h"
+#endif
+
 #if SFPU_OP_SELU_INCLUDE
 #include "compute_kernel_api/eltwise_unary/selu.h"
 #endif
@@ -166,6 +170,10 @@
 
 #if SFPU_OP_RPOW_INCLUDE
 #include "compute_kernel_api/eltwise_unary/rpow.h"
+#endif
+
+#if SFPU_OP_HARDMISH_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardmish.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

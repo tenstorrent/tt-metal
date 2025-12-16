@@ -8,17 +8,17 @@
 #include <chrono>
 #include <stdint.h>
 #include <vector>
+#include <fstream>
 #include <map>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
@@ -137,8 +137,8 @@ void create_mux_kernel(
     const DrainerTestConfig& drainer_test_config,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle) {
-    auto mux_kernel_config = mux_test_config.mux_kernel_config;
-    auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
+    auto* mux_kernel_config = mux_test_config.mux_kernel_config;
+    auto* drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto mux_logical_core = mux_test_config.mux_logical_core;
 
     // getting mux ct args like this will result in compilation error if fabric is not enabled
@@ -210,7 +210,7 @@ void create_drainer_kernel(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle,
     CoreCoord mux_virtual_coord) {
-    auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
+    auto* drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
@@ -260,7 +260,7 @@ void create_worker_kernel(
     const DrainerTestConfig& drainer_test_config,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle) {
-    auto mux_kernel_config = mux_test_config.mux_kernel_config;
+    auto* mux_kernel_config = mux_test_config.mux_kernel_config;
     auto channel_type = worker_test_config.channel_type;
     auto worker_id = worker_test_config.worker_id;
 
@@ -279,7 +279,7 @@ void create_worker_kernel(
         channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config->get_channel_credits_stream_id(channel_type, worker_id)};
 
-    auto worker_memory_map = worker_test_config.memory_map;
+    auto* worker_memory_map = worker_test_config.memory_map;
     std::vector<uint32_t> worker_rt_args = {
         test_params.num_packets,
         test_params.packet_payload_size_bytes,
@@ -324,7 +324,6 @@ void create_worker_kernel(
 int main(int argc, char** argv) {
     const std::string default_log_file_path =
         std::string(std::getenv("TT_METAL_HOME")) + "/generated/fabric_mux_bandwidth_temp.txt";
-    const std::string default_test_name = "default_mux_ubench";
     const size_t default_num_full_size_channels = 8;
     const size_t default_num_header_only_channels = 0;
     const size_t default_num_buffers_full_size_channel = 8;
@@ -338,7 +337,6 @@ int main(int argc, char** argv) {
     TestParams test_params;
 
     std::string log_file_path = test_args::get_command_option(input_args, "--log_file", default_log_file_path);
-    std::string test_name = test_args::get_command_option(input_args, "--test_name", default_test_name);
     test_params.num_full_size_channels =
         test_args::get_command_option_uint32(input_args, "--num_full_size_channels", default_num_full_size_channels);
     test_params.num_header_only_channels = test_args::get_command_option_uint32(
@@ -370,7 +368,7 @@ int main(int argc, char** argv) {
     tt::tt_fabric::SetFabricConfig(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    std::vector<chip_id_t> all_device_ids;
+    std::vector<tt::ChipId> all_device_ids;
     all_device_ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         all_device_ids.push_back(id);
@@ -385,7 +383,7 @@ int main(int argc, char** argv) {
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
     // need device handle to do L1 read/writes
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;

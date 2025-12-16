@@ -375,6 +375,14 @@ class MaxPool2dArgs(ModuleArgs):
         return super().__repr__()
 
 
+class GroupNormArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
+
 def infer_ttnn_module_args(*, model, run_model, device):
     if run_model is None:
         return None
@@ -442,6 +450,18 @@ def infer_ttnn_module_args(*, model, run_model, device):
                         stride=operation.module.stride,
                         padding=operation.module.padding,
                         dilation=operation.module.dilation,
+                        batch_size=input_shape[0],
+                        input_channels=input_shape[1],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        dtype=ttnn.bfloat16,
+                    )
+                elif isinstance(operation.module, torch.nn.GroupNorm):
+                    ttnn_module_args[module_name] = GroupNormArgs(
+                        num_groups=operation.module.num_groups,
+                        num_channels=operation.module.num_channels,
+                        eps=operation.module.eps,
+                        affine=operation.module.affine,
                         batch_size=input_shape[0],
                         input_height=input_shape[-2],
                         input_width=input_shape[-1],

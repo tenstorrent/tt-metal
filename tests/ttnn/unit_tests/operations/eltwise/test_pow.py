@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 
 
@@ -231,6 +231,27 @@ def test_binary_sfpu_accuracy(device, dtype):
         assert_with_ulp(torch_output_tensor, output, 1)
     else:
         assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
+
+
+def test_special_input_fp32(device):
+    a = torch.tensor(
+        [[1.0, 0.999, 0.999, 0.999, 0.999, 0.234, 0.985, 1.456, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999]],
+        dtype=torch.float32,
+    )
+    b = torch.tensor(
+        [[0.999, 1.0, 2.0, 3.0, 9.0, 0.123, 2.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]],
+        dtype=torch.float32,
+    )
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(a, b)
+
+    input_tensor_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+    assert_allclose(torch_output_tensor, output, rtol=0.001, atol=1e-6)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])

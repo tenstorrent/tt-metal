@@ -37,8 +37,6 @@ def test_perplexity(
     expected_ppl,
     expected_top1,
     expected_top5,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
@@ -48,8 +46,6 @@ def test_perplexity(
         batch_size,
         max_seq_len,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         mesh_device,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},

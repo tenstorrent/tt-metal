@@ -14,7 +14,6 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
-#include "tensix_dev_map.h"
 
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
@@ -102,14 +101,16 @@ OUTPUT_ARCH(riscv)
 #endif
 
 #elif defined (COMPILE_FOR_DM)
-#define DATA_START MEM_DM_LOCAL_BASE
+#define DM_SELECT_(BEFORE,MIDDLE,AFTER) BEFORE##MIDDLE##AFTER
+#define DM_SELECT(BEFORE,MIDDLE,AFTER) DM_SELECT_(BEFORE,MIDDLE,AFTER)
+#define DATA_START DM_SELECT(MEM_DM,COMPILE_FOR_DM,_LOCAL_BASE)
 #define DATA_SIZE MEM_DM_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_BRISC_STACK_MIN_SIZE
 #define TEXT_START MEM_DM_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_DM_FIRMWARE_SIZE
 #else
-#define TEXT_SIZE MEM_BRISC_KERNEL_SIZE
+#define TEXT_SIZE MEM_DM_KERNEL_SIZE
 #endif
 
 #else
@@ -240,10 +241,11 @@ SECTIONS
 #endif
 #endif
 
-  /* The loader uses this data to check for size overflows.
-     We don't do it here, as the failure mode would be bad (no executable to examine).  */
-  .phdrs 0 (INFO) :
+  /* The loader uses this data to trim segments and check for size overflows.
+     SEGMENT_ADDR:TRIM_BOUND:SIZE_LIMIT */
+  .segments 0 (INFO) :
   {
+    LONG(ADDR(.text)) LONG(ADDR(.text))
     LONG(TEXT_SIZE
 #if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE)) \
     && !defined(COMPILE_FOR_AERISC) && !defined(COMPILE_FOR_SUBORDINATE_AERISC) \
@@ -251,7 +253,7 @@ SECTIONS
          - (__fw_export_text_end - TEXT_START)
 #endif
          )
-    LONG(DATA_SIZE - STACK_MIN_SIZE
+   LONG(ADDR(.data)) LONG(ADDR(.data)) LONG(DATA_SIZE - STACK_MIN_SIZE
 #if defined(TYPE_KERNEL)
          - (__fw_export_ldm_end - DATA_START)
 #endif
@@ -351,5 +353,6 @@ SECTIONS
 
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_BRISC)
 /* Tensix memory mapped devices (also visible from brisc). */
-PROVIDE(__instrn_buffer = INSTRN_BUF_BASE);
+/* TODO delete when transition complete  */
+PROVIDE(__instrn_buffer = 0xFFE40000);
 #endif

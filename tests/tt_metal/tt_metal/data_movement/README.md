@@ -14,27 +14,46 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 - **Conv Hardcoded** (IDs 21-23)
 - **Reshard Hardcoded** (IDs 17-20)
 
+## Device 2.0 API Support
+This test suite now includes tests using the new device 2.0 experimental NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Test Suites:
+- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using experimental write API
+- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using experimental read API
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new experimental API.
+
 ## Tests in the Test Suite
 
-| Name                        | ID(s)                | Description                                                                             |
-| ----------                  | -----                | ----------------------------------------------------                                    |
-| DRAM Unary                  | 0-3                  | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50, 150-151       | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51, 152-153       | Read transactions between two Tensix cores.                                             |
-| One to all                  | 6-8, 52, 154-155     | Writes transaction from one core to all cores.                                          |
-| One to all Multicast        | 9-14, 53-54, 100-102 | Writes transaction from one core to all cores using multicast.                          |
-| One From All                | 15, 30, 156-157      | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16, 55               | Does a loopback operation where one cores writes to itself.                             |
-| Reshard Hardcoded           | 17-20                | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
-| Conv Hardcoded              | 21-23                | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
-| Interleaved Page Read/Write | 61-69, 71-75         | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| One Packet Read/Write       | 80-83                | Reads or writes packets between two Tensix cores.                                       |
-| Multi Interleaved           | 110-127              | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
-| Core Bidrectional           | 140-148              | Tensix core reads from and writes to another Tensix core simultaneously.                |
-| Deinterleave                | 200-201              | Tests deinterleaving. **(Slow Dispatch)**                                               |
-| All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
-| I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
+| Name                        | ID(s)                           | Description                                                                             |
+| ----------                  | -----                           | ----------------------------------------------------                                    |
+| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
+| One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
+| One to all Multicast        | 9-14, 53-54, 100-102, 173-180   | Writes transaction from one core to all cores using multicast.                          |
+| One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
+| Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
+| Conv Hardcoded              | 21-23                           | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
+| Interleaved Page Read/Write | 61-69, 71-75                    | Reads and writes pages between interleaved buffers and a Tensix core.                   |
+| One Packet Read/Write       | 80-83                           | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-87                           | Reads from sharded DRAM into one core.                                                  |
+| Multi Interleaved           | 110-127                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
+| Core Bidrectional           | 140-148                         | Tensix core reads from and writes to another Tensix core simultaneously.                |
+| Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
+| All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
+| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.  |
+| I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
+| Inline Direct Write         | 500-501                         | Inline DW transactions between two Tensix cores.                                        |
+| Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+
 
 ## Running Tests
 ### C++ Gtests
@@ -56,7 +75,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --g
 ```
 
 ### Pytest
-Before running any tests, build the repo with profiler and tests: ```./build_metal.sh --enable-profiler --build-tests```
+Before running any tests, build the repo with tests: ```./build_metal.sh --build-tests```
 Then, for performance checks and more extensive testing, our Python test can be run as follows:
 ```
 pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py <options>

@@ -34,7 +34,7 @@
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
 // compiler will complain (ODR violation when compiling with LTO).
 // Wrap the definitions in a unique namespace to avoid that.
-namespace HAL_BUILD {
+namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #endif
 
 // TODO: move these to processor specific files
@@ -54,6 +54,8 @@ namespace HAL_BUILD {
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
+#elif defined(ARCH_QUASAR)
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
@@ -82,6 +84,7 @@ constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0;
+constexpr uint32_t RUN_MSG_REPLAY_TRACE = 0xf0;
 constexpr uint32_t RUN_MSG_DONE = 0;
 
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
@@ -206,7 +209,7 @@ struct debug_waypoint_msg_t {
 };
 
 // This structure is populated by the device and read by the host
-struct debug_sanitize_noc_addr_msg_t {
+struct debug_sanitize_addr_msg_t {
     volatile uint64_t noc_addr;
     volatile uint32_t l1_addr;
     volatile uint32_t len;
@@ -217,7 +220,7 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_target;
     volatile uint8_t pad;  // CODEGEN:skip
 };
-static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
+static_assert(sizeof(debug_sanitize_addr_msg_t) % sizeof(uint32_t) == 0);
 
 // Host -> device. Populated with the information on where we want to insert delays.
 struct debug_insert_delays_msg_t {
@@ -229,7 +232,7 @@ struct debug_insert_delays_msg_t {
 
 enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
-    DebugSanitizeNocOK = 2,
+    DebugSanitizeOK = 2,
     DebugSanitizeNocAddrUnderflow = 3,
     DebugSanitizeNocAddrOverflow = 4,
     DebugSanitizeNocAddrZeroLength = 5,
@@ -241,6 +244,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeInlineWriteDramUnsupported = 11,
     DebugSanitizeNocAddrMailbox = 12,
     DebugSanitizeNocLinkedTransactionViolation = 13,
+    DebugSanitizeL1AddrOverflow = 14,
 };
 
 struct debug_assert_msg_t {
@@ -299,7 +303,7 @@ constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 struct watcher_msg_t {
     volatile uint32_t enable;
     struct debug_waypoint_msg_t debug_waypoint[MaxProcessorsPerCoreType];
-    struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
+    struct debug_sanitize_addr_msg_t sanitize[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
     uint8_t pad0;  // CODEGEN:skip
@@ -348,6 +352,12 @@ constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
 constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
 constexpr std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
 constexpr std::uint8_t CORE_COORD_INVALID = 0xFF;
+
+enum class CoreMagicNumber : uint32_t {
+    WORKER = 0x50ec09a3,
+    ACTIVE_ETH = 0xc63050d1,
+    IDLE_ETH = 0x837b6cae,
+};
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
@@ -364,6 +374,7 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
+    volatile CoreMagicNumber core_magic_number;
     uint8_t pad;  // CODEGEN:skip
 };
 
@@ -371,6 +382,7 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;

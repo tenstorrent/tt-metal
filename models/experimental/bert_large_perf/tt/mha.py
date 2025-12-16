@@ -317,6 +317,4 @@ def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location
     ),
 )
 def test_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
-    # enable_persistent_kernel_cache()
-
     run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

@@ -26,35 +26,33 @@ void validate(
         "{} op requires a {} socket",
         op_name,
         enchantum::to_string(socket_type));
-    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
-    const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
     TT_FATAL(
         mesh_socket.get_config().socket_mem_config.fifo_size >= input_tensor.buffer()->aligned_page_size(),
         "{} op requires a fifo size greater than or equal to the input tensor page size",
         op_name);
+}
 
-    auto device_ids = input_tensor.device()->get_device_ids();
-    std::unordered_set<chip_id_t> found_device_ids;
-    for (const auto& connection : socket_connection_config) {
-        chip_id_t device_id;
-        if constexpr (socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER) {
-            device_id = socket_mesh_device->get_device(connection.sender_core.device_coord)->id();
-        } else {
-            device_id = socket_mesh_device->get_device(connection.receiver_core.device_coord)->id();
-        }
-        auto found_device = std::find(device_ids.begin(), device_ids.end(), device_id);
-        if (found_device != device_ids.end()) {
-            found_device_ids.insert(*found_device);
-            if (found_device_ids.size() == device_ids.size()) {
-                break;
-            }
+template <tt::tt_metal::distributed::SocketEndpoint socket_type>
+MeshCoordinateRangeSet get_workload_coords(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    ttnn::MeshCoordinateRangeSet workload_coords;
+    const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
+
+    const auto tensor_coords_flattened = tensor_coords.coords();
+    for (const auto& connection : socket_connections) {
+        const auto& device_coord = socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER
+                                       ? connection.sender_core.device_coord
+                                       : connection.receiver_core.device_coord;
+        if (std::find(tensor_coords_flattened.begin(), tensor_coords_flattened.end(), device_coord) !=
+            tensor_coords_flattened.end()) {
+            workload_coords.merge(MeshCoordinateRange(device_coord, device_coord));
         }
     }
     TT_FATAL(
-        found_device_ids.size() == device_ids.size(),
-        "{} op input tensor devices {} is not part of the connected cores of the socket",
-        op_name,
-        device_ids);
+        !workload_coords.empty(),
+        "{} socket coordinates do not intersect with tensor coordinates.",
+        (socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER ? "Sender" : "Receiver"));
+    return workload_coords;
 }
 
 }  // namespace ttnn::send_recv_utils

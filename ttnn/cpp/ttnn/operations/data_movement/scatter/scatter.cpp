@@ -11,9 +11,8 @@
 
 #include "slice/slice.hpp"
 #include "tt_stl/small_vector.hpp"
+#include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -22,13 +21,19 @@ namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+constexpr std::string_view ALLOWED_REDUCTIONS[] = {"add", "multiply"};
+
 // validate dimension constraints before sending down to device operation working on the last dimension
 // inputs are validated according to
 // https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_ index_shape[...] <=
 // src_shape[...]: index shape can't have any dimension longer than according dimension of source shape index_shape[d !=
 // dim] <= input_shape[d != dim]: index shape must be smaller than input shape on all dimensions except the scatter one
 void validate_inputs(
-    const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const int32_t& dim,
+    const std::optional<std::string>& opt_reduction_string) {
     const auto& input_shape{input_tensor.logical_shape()};
     const auto& index_shape{index_tensor.logical_shape()};
     const auto& source_shape{source_tensor.logical_shape()};
@@ -54,6 +59,14 @@ void validate_inputs(
         "dim must follow the condition -input_rank <= dim < input_rank (dim: {}, rank: {}).",
         dim,
         static_cast<int32_t>(input_rank));
+
+    if (opt_reduction_string.has_value()) {
+        TT_FATAL(
+            std::find(std::begin(ALLOWED_REDUCTIONS), std::end(ALLOWED_REDUCTIONS), *opt_reduction_string) !=
+                std::end(ALLOWED_REDUCTIONS),
+            "reduce must be either 'add' or 'multiply' (case-sensitive), got {}",
+            *opt_reduction_string);
+    }
 
     for (uint32_t probe_dim = 0; probe_dim < input_rank; ++probe_dim) {
         TT_FATAL(
@@ -224,6 +237,26 @@ Tensor post_scatter_transform_tensor(
     return output_tensor;
 }
 
+scatter::ScatterReductionType get_scatter_reduction_type_from_string(
+    const std::optional<std::string>& opt_reduction_string) {
+    if (!opt_reduction_string.has_value()) {
+        return scatter::ScatterReductionType::INVALID;
+    }
+    if (*opt_reduction_string == "add") {
+        return scatter::ScatterReductionType::ADD;
+    }
+    if (*opt_reduction_string == "multiply") {
+        return scatter::ScatterReductionType::MULTIPLY;
+    }
+    if (*opt_reduction_string == "max" || *opt_reduction_string == "amax") {
+        return scatter::ScatterReductionType::AMAX;
+    }
+    if (*opt_reduction_string == "min" || *opt_reduction_string == "amin") {
+        return scatter::ScatterReductionType::AMIN;
+    }
+    return scatter::ScatterReductionType::INVALID;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -238,12 +271,15 @@ Tensor ScatterOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
-    const std::optional<scatter::ScatterReductionType>& opt_reduction) {
+    const std::optional<std::string>& opt_reduction_string,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
-    CMAKE_UNIQUE_NAMESPACE::check_support(input_tensor, index_tensor, source_tensor, dim);
-    CMAKE_UNIQUE_NAMESPACE::validate_inputs(input_tensor, index_tensor, source_tensor, dim);
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    check_support(input_tensor, index_tensor, source_tensor, dim);
+    validate_inputs(input_tensor, index_tensor, source_tensor, dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
@@ -260,17 +296,19 @@ Tensor ScatterOperation::invoke(
     // - transposed to have the last dimension as last axis
     // - (un)squeezed to 4D
     Shape after_transpose_shape;
-    Tensor transformed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
+    Tensor transformed_input_tensor = pre_scatter_transform_tensor(
         input_tensor, after_transpose_shape, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    Tensor transformed_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+    Tensor transformed_index_tensor =
+        pre_scatter_transform_tensor(index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    Tensor transformed_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
+    Tensor transformed_source_tensor = pre_scatter_transform_tensor(
         source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, index_tensor.logical_shape());
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
+
+    const auto reduction = get_scatter_reduction_type_from_string(opt_reduction_string);
 
     Tensor output = ttnn::prim::scatter(
         transformed_input_tensor,
@@ -278,7 +316,8 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        std::nullopt);
+        reduction,
+        sub_core_grid);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,
@@ -287,6 +326,17 @@ Tensor ScatterOperation::invoke(
         original_input_tensor_lshape,
         original_layout);
     return output;
+}
+
+Tensor ScatterAddOperation::invoke(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    return ScatterOperation::invoke(
+        input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }
 
 }  // namespace ttnn::operations::data_movement

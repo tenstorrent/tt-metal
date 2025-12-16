@@ -39,7 +39,7 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(
     distributed::MeshWorkload& workload, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(n_cbs);
@@ -85,8 +85,8 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);
-        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);
+        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, tt::CoreType::WORKER);
+        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0, tt::CoreType::WORKER);
 
         std::vector<CBHandle> cbs;
         cbs.reserve(n_cbs);

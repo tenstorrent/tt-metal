@@ -28,7 +28,10 @@ void MorehArangeOperation::validate_inputs(
     }
     TT_FATAL(output->buffer() != nullptr, "Must have 1 output tensor.");
     TT_FATAL(dtype == output->dtype(), "If output is provided as input, its dtype should match the dtype parameter.");
-    TT_FATAL(output->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(
+        output->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Output memory config layout must be INTERLEAVED but got {}",
+        output->memory_config().memory_layout());
 
     auto output_layout = output->layout();
     if (operation_attributes.untilize_out) {
@@ -80,7 +83,8 @@ MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_
     if (tensor_args.output.has_value()) {
         return tensor_args.output.value();
     }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.any.device());
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), operation_attributes.mesh_device);
 }
 
 std::tuple<MorehArangeOperation::operation_attributes_t, MorehArangeOperation::tensor_args_t>
@@ -88,22 +92,22 @@ MorehArangeOperation::invoke(
     float start,
     float end,
     float step,
-    const Tensor& any,
+    ttnn::MeshDevice* mesh_device,
     const std::optional<Tensor>& output,
     bool untilize_out,
-    const std::optional<DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config) {
+    const DataType& dtype,
+    const MemoryConfig& memory_config) {
     return {
         operation_attributes_t{
             start,
             end,
             step,
             untilize_out,
-            dtype.value_or(any.dtype()),
-            memory_config.value_or(any.memory_config()),
+            mesh_device,
+            dtype,
+            memory_config,
         },
         tensor_args_t{
-            any,
             output,
         },
     };

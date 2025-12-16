@@ -25,6 +25,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
@@ -37,7 +38,7 @@ namespace {
 std::unordered_map<int, std::string> global_mempool_names;
 std::mutex global_mempool_names_mutex;
 
-static const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
+const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
     std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
     int name_combo = (int)buffer_type * 1000 + device_id;
     if (global_mempool_names.find(name_combo) == global_mempool_names.end()) {
@@ -256,21 +257,21 @@ Buffer::Buffer(
     Private) :
     device_(device),
     size_(size),
-    page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(sharding_args.buffer_layout()),
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
+    page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->allocator().get();
+        this->allocator_ = device->allocator_impl().get();
     }
     validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
@@ -381,6 +382,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
     return buffer;
 }
+
+Allocator* Buffer::allocator() const { return allocator_->view().get(); }
 
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {

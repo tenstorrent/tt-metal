@@ -6,25 +6,29 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm::detail {
+namespace ttnn::operations::experimental::ssm::prefix_scan::program {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
-    const Tensor& a,
-    const Tensor& bx,
-    const Tensor& h,
-    Tensor& output,
-    MathFidelity math_fidelity,
-    CoreCoord compute_with_storage_grid_size) {
+PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    const auto& a = tensor_args.a;
+    const auto& bx = tensor_args.bx;
+    const auto& h_prev = tensor_args.h_prev;
+    auto& output = tensor_return_value;
 
     auto* a_buffer = a.buffer();
     auto* bx_buffer = bx.buffer();
-    auto* h_buffer = h.buffer();
+    auto* h_buffer = h_prev.buffer();
     auto* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
 
@@ -133,80 +137,85 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
         "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/ssm_prefix_scan.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
+            .math_fidelity = operation_attributes.math_fidelity,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    std::vector<CoreCoord> cores =
-        grid_to_cores(all_cores.num_cores(), compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, true);
+    auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    std::vector<CoreCoord> cores = grid_to_cores(
+        all_cores.num_cores(), device_compute_with_storage_grid_size.x, device_compute_with_storage_grid_size.y, true);
 
-    auto set_runtime_args =
-        [reader_kernel_id,
-         writer_kernel_id,
-         compute_kernel_id,
-         total_tiles,
-         total_tiles_per_row,
-         total_tiles_per_col,
-         num_chunks_per_row,
-         sharded_hidden_state_length,
-         all_cores,
-         cores,
-         cb_a_in,
-         cb_bx_in,
-         cb_h_in,
-         cb_out](Program& program, const Tensor& a, const Tensor& bx, const Tensor& h, const Tensor& output) {
-            tt::tt_metal::Buffer* a_buffer = a.buffer();
-            tt::tt_metal::Buffer* bx_buffer = bx.buffer();
-            tt::tt_metal::Buffer* h_buffer = h.buffer();
-            tt::tt_metal::Buffer* output_buffer = output.buffer();
+    // Store shared variables
+    PrefixScanSharedVariables shared_variables;
+    shared_variables.reader_kernel_id = reader_kernel_id;
+    shared_variables.writer_kernel_id = writer_kernel_id;
+    shared_variables.compute_kernel_id = compute_kernel_id;
+    shared_variables.cores = cores;
+    shared_variables.cb_a_in = cb_a_in;
+    shared_variables.cb_bx_in = cb_bx_in;
+    shared_variables.cb_h_in = cb_h_in;
+    shared_variables.cb_out = cb_out;
+    shared_variables.total_tiles = total_tiles;
+    shared_variables.total_tiles_per_row = total_tiles_per_row;
+    shared_variables.total_tiles_per_col = total_tiles_per_col;
+    shared_variables.num_chunks_per_row = num_chunks_per_row;
+    shared_variables.sharded_hidden_state_length = sharded_hidden_state_length;
 
-            UpdateDynamicCircularBufferAddress(program, cb_a_in, *a_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_bx_in, *bx_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_h_in, *h_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+    cached_program_t cached_program{std::move(program), std::move(shared_variables)};
 
-            std::vector<std::vector<uint32_t>> reader_runtime_args = {
-                cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
-            std::vector<std::vector<uint32_t>> writer_runtime_args = {
-                cores.size(), {0, 0}};  // (num_tiles_per_core, hidden_state_len)
-            std::vector<std::vector<uint32_t>> compute_runtime_args = {
-                cores.size(),
-                {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
+    // Set initial runtime args
+    override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
 
-            for (uint32_t i = 0; i < cores.size(); i++) {
-                reader_runtime_args[i][0] = total_tiles;
-                reader_runtime_args[i][1] = total_tiles_per_row;
-
-                writer_runtime_args[i][0] = total_tiles;
-                writer_runtime_args[i][1] = sharded_hidden_state_length;
-
-                compute_runtime_args[i][0] = total_tiles;
-                compute_runtime_args[i][1] = total_tiles_per_row;
-                compute_runtime_args[i][2] = total_tiles_per_col;
-                compute_runtime_args[i][3] = num_chunks_per_row;
-            }
-            SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
-            SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
-            SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
-        };
-
-    set_runtime_args(program, a, bx, h, output);
-
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        auto& a = input_tensors.at(0);
-        auto& bx = input_tensors.at(1);
-        auto& h = input_tensors.at(2);
-        auto& out = output_tensors.at(0);
-        set_runtime_args(program, a, bx, h, out);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program;
 }
 
-}  // namespace ttnn::operations::experimental::ssm::detail
+void PrefixScanProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& a = tensor_args.a;
+    const auto& bx = tensor_args.bx;
+    const auto& h_prev = tensor_args.h_prev;
+    auto& output = tensor_return_value;
+
+    tt::tt_metal::Buffer* a_buffer = a.buffer();
+    tt::tt_metal::Buffer* bx_buffer = bx.buffer();
+    tt::tt_metal::Buffer* h_buffer = h_prev.buffer();
+    tt::tt_metal::Buffer* output_buffer = output.buffer();
+
+    auto& program = cached_program.program;
+    const auto& shared_vars = cached_program.shared_variables;
+
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_a_in, *a_buffer);
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_bx_in, *bx_buffer);
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_h_in, *h_buffer);
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_out, *output_buffer);
+
+    std::vector<std::vector<uint32_t>> reader_runtime_args = {
+        shared_vars.cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
+    std::vector<std::vector<uint32_t>> writer_runtime_args = {
+        shared_vars.cores.size(), {0, 0}};  // (num_tiles_per_core, hidden_state_len)
+    std::vector<std::vector<uint32_t>> compute_runtime_args = {
+        shared_vars.cores.size(),
+        {0, 0, 0, 0}};  // (total_tiles, total_tiles_per_row, total_tiles_per_col, num_chunks_per_row)
+
+    for (uint32_t i = 0; i < shared_vars.cores.size(); i++) {
+        reader_runtime_args[i][0] = shared_vars.total_tiles;
+        reader_runtime_args[i][1] = shared_vars.total_tiles_per_row;
+
+        writer_runtime_args[i][0] = shared_vars.total_tiles;
+        writer_runtime_args[i][1] = shared_vars.sharded_hidden_state_length;
+
+        compute_runtime_args[i][0] = shared_vars.total_tiles;
+        compute_runtime_args[i][1] = shared_vars.total_tiles_per_row;
+        compute_runtime_args[i][2] = shared_vars.total_tiles_per_col;
+        compute_runtime_args[i][3] = shared_vars.num_chunks_per_row;
+    }
+    SetRuntimeArgs(program, shared_vars.reader_kernel_id, shared_vars.cores, reader_runtime_args);
+    SetRuntimeArgs(program, shared_vars.writer_kernel_id, shared_vars.cores, writer_runtime_args);
+    SetRuntimeArgs(program, shared_vars.compute_kernel_id, shared_vars.cores, compute_runtime_args);
+}
+
+}  // namespace ttnn::operations::experimental::ssm::prefix_scan::program

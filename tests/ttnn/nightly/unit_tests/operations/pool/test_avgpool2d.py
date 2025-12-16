@@ -6,9 +6,13 @@ import ttnn
 import pytest
 import math
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.demos.deepseek_v3.utils.config_helpers import (
+    COMPUTE_KERNEL_CONFIG_HIFI2,
+    COMPUTE_KERNEL_CONFIG_HIFI4,
+    COMPUTE_KERNEL_CONFIG_LOFI,
+)
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS, BS, WS
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS
 
 
 # helper to correct torch output for asymmetric padding
@@ -96,9 +100,9 @@ def run_avg_pool2d(
     run_twice=False,
     in_dtype=ttnn.bfloat16,
     nightly_skips=True,
-    skips_enabled=True,
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    compute_kernel_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -123,8 +127,7 @@ def run_avg_pool2d(
     if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
 
-    if skips_enabled:
-        # skips to avoid unimportant combinations
+    if nightly_skips:
         if divisor_override is not None:
             if count_include_pad or ceil_mode:
                 pytest.skip(
@@ -132,18 +135,14 @@ def run_avg_pool2d(
                 )
         if count_include_pad and padding == (0, 0):
             pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
-        if ceil_mode:
-            if stride == (1, 1):
-                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
-
-    # skips to speed up nightly test
-    if nightly_skips:
         if in_dtype == ttnn.bfloat8_b:
             if stride == (2, 2) or padding == (1, 1):
                 pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
             if kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (9, 9) for BF8!")
         if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
@@ -198,12 +197,8 @@ def run_avg_pool2d(
         applied_shard_scheme=shard_scheme,
         dtype=out_dtype,
         output_layout=output_layout,
+        compute_kernel_config=compute_kernel_config,
     )
-
-    # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
-    # skip run_twice for blackhole with wide Bfloat8 tensors as this currently causes PCC failures
-    if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
-        run_twice = False
 
     if run_twice:
         ttnn.deallocate(ttnn_output, True)
@@ -223,6 +218,7 @@ def run_avg_pool2d(
             applied_shard_scheme=shard_scheme,
             dtype=out_dtype,
             output_layout=output_layout,
+            compute_kernel_config=compute_kernel_config,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -271,7 +267,6 @@ def run_avg_pool2d(
         )
 
     # test for equivalence
-    pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN supports scalars only in Bfloat16 and from recently it uses
     # tie-to-even rounding for fp32->bf16 scalar conversion, which improves accuracy
@@ -285,11 +280,11 @@ def run_avg_pool2d(
     # These factors compound, especially with small divisor overrides and large kernels,
     # requiring relaxed rtol thresholds for robust comparisons.
     rtol = 0.01
-    if out_dtype == ttnn.bfloat4_b:
-        pcc_thresh = 0.98
+    if compute_kernel_config is not None:
+        if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
+            atol = 0.045  # LOFI has less precise accumulation, so relax atol further
     if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
         atol = 0.35
-    assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
@@ -449,4 +444,50 @@ def test_avg_pool2d_output_formats_and_layouts(
         in_dtype=in_dtype,
         output_layout=output_layout,
         out_dtype=out_dtype,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",  # NCHW
+    ([1, 64, 112, 112],),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((3, 3),),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((1, 1),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize(
+    "compute_kernel_config",
+    [COMPUTE_KERNEL_CONFIG_HIFI4, COMPUTE_KERNEL_CONFIG_HIFI2, COMPUTE_KERNEL_CONFIG_LOFI],
+)
+def test_avg_pool2d_compute_kernel_config(
+    device,
+    tensor_map,
+    input_shape,
+    kernel_size,
+    stride,
+    padding,
+    compute_kernel_config,
+):
+    run_avg_pool2d(
+        device,
+        tensor_map,
+        input_shape,
+        kernel_size,
+        stride,
+        padding,
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=False,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        in_dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
     )

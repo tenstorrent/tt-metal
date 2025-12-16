@@ -40,7 +40,7 @@ public:
     std::unique_lock<std::mutex> get_lock();
 
     // Helper function for manually dumping watcher contents. TODO: remove when watcher_dump tool is removed.
-    void isolated_dump(std::vector<chip_id_t>& device_ids);
+    void isolated_dump(std::vector<ChipId>& device_ids);
 
 private:
     class Impl;

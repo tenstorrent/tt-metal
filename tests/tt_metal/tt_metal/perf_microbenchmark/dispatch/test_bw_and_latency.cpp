@@ -42,12 +42,12 @@
 #include "impl/dispatch/command_queue_common.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
@@ -244,8 +244,7 @@ int main(int argc, char** argv) {
             case 0:
             default: {
                 src_mem = "FROM_PCIE";
-                vector<tt::umd::CoreCoord> pcie_cores =
-                    soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::TRANSLATED);
+                vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
                 TT_ASSERT(!pcie_cores.empty());
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
@@ -253,8 +252,7 @@ int main(int argc, char** argv) {
             } break;
             case 1: {
                 src_mem = "FROM_DRAM";
-                vector<tt::umd::CoreCoord> dram_cores =
-                    soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::TRANSLATED);
+                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
@@ -426,7 +424,7 @@ int main(int argc, char** argv) {
                             }
                         } else {
                             uint32_t* pcie_addr = ((uint32_t*)pcie_base) + offset;
-                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)&blank[0], page_size_g);
+                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)blank.data(), page_size_g);
                         }
                         page++;
                     }

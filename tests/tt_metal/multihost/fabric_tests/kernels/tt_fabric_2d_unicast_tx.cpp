@@ -67,7 +67,7 @@ void set_mcast_header(
     }
 
     fabric_set_mcast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
+        (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
@@ -99,7 +99,7 @@ void kernel_main() {
     fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
-    fabric_set_unicast_route((MeshPacketHeader*)fwd_packet_header, my_dev_id, fwd_dev_id, fwd_mesh_id, ew_dim);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)fwd_packet_header, fwd_dev_id, fwd_mesh_id);
 
     setup_connection_and_headers(fwd_fabric_connection, fwd_packet_header, noc_dest_addr, packet_payload_size_bytes);
 

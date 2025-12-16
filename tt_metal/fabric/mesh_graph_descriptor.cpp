@@ -13,8 +13,9 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include "tt-metalium/mesh_graph_descriptor.hpp"
-#include "tt-metalium/mesh_coord.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -75,10 +76,25 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
     std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> connections;
 
-    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-    const auto& topology_types = mesh_desc->device_topology().dim_types();
-    const auto& channels_count = mesh_desc->channels().count();
-    const auto& policy = mesh_desc->channels().policy();
+    const proto::TorusTopology* device_topology = nullptr;
+    const proto::Channels* channels = nullptr;
+
+    if (instance.kind == NodeKind::Mesh) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        device_topology = &mesh_desc->device_topology();
+        channels = &mesh_desc->channels();
+    } else if (instance.kind == NodeKind::Switch) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        device_topology = &switch_desc->device_topology();
+        channels = &switch_desc->channels();
+    } else {
+        TT_THROW("get_valid_connections called on non-mesh/non-switch instance");
+        return connections;
+    }
+
+    const auto& topology_types = device_topology->dim_types();
+    const uint32_t channels_count = static_cast<uint32_t>(channels->count());
+    const auto& policy = channels->policy();
 
     MeshShape mesh_shape = mesh_coord_range.shape();
     MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
@@ -109,7 +125,7 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
                 .count = channels_count,
                 .policy = policy,
                 .parent_instance_id = instance.global_id,
-                .routing_direction = direction,  // TODO: Remove after MGD 1.0 is deprecated
+                .routing_direction = direction,
             };
 
             connections[src_device_id].push_back(data);
@@ -121,7 +137,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
 
@@ -157,11 +174,36 @@ uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
 }
 
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    const auto& dim_types = mesh_desc->device_topology().dim_types();
+    if (dim_types.size() < 2) {
+        return FabricType::MESH;
+    }
+
+    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+
+    if (y_is_ring && x_is_ring) {
+        return FabricType::TORUS_XY;
+    } else if (y_is_ring) {
+        return FabricType::TORUS_Y;
+    } else if (x_is_ring) {
+        return FabricType::TORUS_X;
+    }
+    return FabricType::MESH;
+}
+
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {
         if (mesh.has_channels() && !mesh.channels().has_policy()) {
-            mesh.mutable_channels()->set_policy(proto::Policy::STRICT);
+            mesh.mutable_channels()->set_policy(proto::Policy::RELAXED);
+        }
+    }
+
+    for (auto& switch_desc : *proto.mutable_switch_descriptors()) {
+        if (switch_desc.has_channels() && !switch_desc.channels().has_policy()) {
+            switch_desc.mutable_channels()->set_policy(proto::Policy::STRICT);
         }
     }
 
@@ -188,6 +230,15 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
             }
         }
     }
+
+    for (auto& switch_desc : *proto.mutable_switch_descriptors()) {
+        if (switch_desc.device_topology().dim_types_size() < switch_desc.device_topology().dims_size()) {
+            for (int i = switch_desc.device_topology().dim_types_size(); i < switch_desc.device_topology().dims_size();
+                 i++) {
+                switch_desc.mutable_device_topology()->mutable_dim_types()->Add(proto::TorusTopology::LINE);
+            }
+        }
+    }
 }
 
 std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& proto, const bool backwards_compatible) {
@@ -196,29 +247,38 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
     // Run validation groups with early exit checkpoints
     {
         validate_basic_structure(proto, all_errors);
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     {
         validate_names(proto, all_errors);
         validate_channels(proto, all_errors);
         validate_architecture_consistency(proto, all_errors);
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     {
         validate_mesh_topology(proto, all_errors);
         validate_express_connections(proto, all_errors);
+        validate_switch_descriptors(proto, all_errors);
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     {
         if (backwards_compatible) {
             validate_legacy_requirements(proto, all_errors);
         }
-        if (!all_errors.empty()) return all_errors;
+        if (!all_errors.empty()) {
+            return all_errors;
+        }
     }
 
     return all_errors;
@@ -240,8 +300,9 @@ void MeshGraphDescriptor::populate_top_level_instance() {
 }
 
 void MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
-    if (proto.mesh_descriptors_size() == 0) {
-        errors.push_back("There must be at least one mesh descriptor");
+    // Allow either mesh descriptors or switch descriptors (switches can exist without meshes)
+    if (proto.mesh_descriptors_size() == 0 && proto.switch_descriptors_size() == 0) {
+        errors.push_back("There must be at least one mesh descriptor or switch descriptor");
     }
     if (!proto.has_top_level_instance()) {
         errors.push_back("Top level instance is required");
@@ -303,18 +364,30 @@ void MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto
             );
         }
 
-        // TYPE name cannot be DEVICE or MESH
+        // TYPE name cannot be DEVICE, MESH, or SWITCH
         const auto& type = graph.type();
-        if (type == "DEVICE" || type == "MESH") {
+        if (type == "DEVICE" || type == "MESH" || type == "SWITCH") {
             error_messages.push_back(
-                fmt::format(
-                    "Graph descriptor type cannot be DEVICE or MESH (Graph: {})",
-                    graph.name()
-                )
-            );
+                fmt::format("Graph descriptor type cannot be DEVICE, MESH, or SWITCH (Graph: {})", graph.name()));
         }
     }
 
+    unsigned int switch_counter = 0;
+
+    // Check that all switch descriptors have a unique name
+    std::unordered_set<std::string> switch_names;
+    for (const auto& switch_desc : proto.switch_descriptors()) {
+        switch_counter++;
+        if (switch_desc.name().empty()) {
+            error_messages.push_back(fmt::format("Switch descriptor {} has no name", switch_counter));
+            continue;
+        }
+        auto [it, inserted] = switch_names.insert(switch_desc.name());
+        if (!inserted) {
+            error_messages.push_back(
+                fmt::format("Switch descriptor name is not unique (Switch: {})", switch_desc.name()));
+        }
+    }
 }
 
 
@@ -378,14 +451,31 @@ void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
 }
 
 void MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-
-    // Check all architectures are the same
+    // Check all architectures are the same across meshes and switches
+    proto::Architecture first_arch = proto::Architecture::INVALID_ARCHITECTURE;
     if (proto.mesh_descriptors_size() > 0) {
-        proto::Architecture first_arch = proto.mesh_descriptors(0).arch();
+        first_arch = proto.mesh_descriptors(0).arch();
         if (!std::all_of(proto.mesh_descriptors().begin(), proto.mesh_descriptors().end(),
                         [first_arch](const auto& mesh) { return mesh.arch() == first_arch; })) {
             error_messages.push_back("All mesh descriptors must have the same architecture");
             return;
+        }
+    }
+
+    // Check switches match mesh architecture (if meshes exist)
+    if (proto.switch_descriptors_size() > 0) {
+        if (first_arch == proto::Architecture::INVALID_ARCHITECTURE && proto.mesh_descriptors_size() == 0) {
+            // No meshes, use first switch arch as reference
+            first_arch = proto.switch_descriptors(0).arch();
+        }
+        if (first_arch != proto::Architecture::INVALID_ARCHITECTURE) {
+            if (!std::all_of(
+                    proto.switch_descriptors().begin(),
+                    proto.switch_descriptors().end(),
+                    [first_arch](const auto& switch_desc) { return switch_desc.arch() == first_arch; })) {
+                error_messages.push_back("All switch descriptors must have the same architecture as meshes");
+                return;
+            }
         }
     }
 
@@ -429,6 +519,66 @@ void MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGra
 
 }
 
+void MeshGraphDescriptor::validate_switch_descriptors(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Validate basic switch properties (names and dimensions)
+    for (const auto& switch_desc : proto.switch_descriptors()) {
+        // Check that all dims are positive
+        for (const auto& dim : switch_desc.device_topology().dims()) {
+            if (dim <= 0) {
+                error_messages.push_back(
+                    fmt::format("Device topology dimensions must be positive (Switch: {})", switch_desc.name()));
+                continue;
+            }
+        }
+
+        // Check that device topology dimensions and types are the same size
+        if (switch_desc.device_topology().dim_types_size() > 0) {
+            if (switch_desc.device_topology().dims_size() != switch_desc.device_topology().dim_types_size()) {
+                error_messages.push_back(fmt::format(
+                    "Device topology dimensions and types must be the same size (Switch: {})", switch_desc.name()));
+                continue;
+            }
+        }
+
+        // Check that switch has valid architecture
+        if (switch_desc.arch() == proto::Architecture::INVALID_ARCHITECTURE) {
+            error_messages.push_back(
+                fmt::format("Switch descriptor must have a valid architecture (Switch: {})", switch_desc.name()));
+            continue;
+        }
+
+        // Validate architecture and dimension limits
+        const uint32_t max_num_dims = get_max_dimensions_for_architecture(switch_desc.arch());
+        if (max_num_dims == 0) {
+            error_messages.push_back(fmt::format("Invalid architecture (Switch: {})", switch_desc.name()));
+            continue;
+        }
+
+        // Check that the number of dimensions is not greater than the maximum allowed for the architecture
+        if (switch_desc.device_topology().dims_size() > max_num_dims) {
+            error_messages.push_back(fmt::format(
+                "Architecture devices allow a maximum of {} dimensions, but {} were provided (Switch: {})",
+                max_num_dims,
+                switch_desc.device_topology().dims_size(),
+                switch_desc.name()));
+            continue;
+        }
+
+        // Validate express connections for switches
+        uint32_t num_devices = 1;
+        for (const auto& dim : switch_desc.device_topology().dims()) {
+            num_devices *= dim;
+        }
+        for (const auto& express_conn : switch_desc.express_connections()) {
+            if (express_conn.src() >= num_devices || express_conn.dst() >= num_devices) {
+                error_messages.push_back(
+                    fmt::format("Express connection destination is out of bounds (Switch: {})", switch_desc.name()));
+            }
+        }
+    }
+}
+
 void MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Check all channel counts > 0
@@ -440,6 +590,13 @@ void MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& pr
                     mesh.name()
                 )
             );
+        }
+    }
+
+    // Check switch channel counts > 0
+    for (const auto& switch_desc : proto.switch_descriptors()) {
+        if (switch_desc.channels().count() <= 0) {
+            error_messages.push_back(fmt::format("Channel count must be positive (Switch: {})", switch_desc.name()));
         }
     }
 
@@ -554,13 +711,20 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
 }
 
 void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-    // Validate that channels count must all be exactly the same
-    const uint32_t first_channels_count = proto.mesh_descriptors(0).channels().count();
+    // Topology must be 2D
     for (const auto& mesh : proto.mesh_descriptors()) {
-        if (mesh.channels().count() != first_channels_count) {
-            error_messages.push_back(
-                fmt::format( "MGD 1.0 Compatibility requirement: Channel count must all be exactly the same (Mesh: {})", mesh.name()
-            ));
+        if (mesh.device_topology().dims_size() != 2) {
+            error_messages.push_back(fmt::format(
+                "MGD 1.0 Compatibility requirement: There can only be 2 dimensions in the device topology (Mesh: {})",
+                mesh.name()));
+        }
+    }
+
+    // Express connections are currently not supported
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (mesh.express_connections_size() > 0) {
+            error_messages.push_back(fmt::format(
+                "MGD 1.0 Compatibility requirement: Express connections are not supported (Mesh: {})", mesh.name()));
         }
     }
 
@@ -589,47 +753,6 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Connections have to be specific down to the device level
-    for (const auto& graph : proto.graph_descriptors()) {
-        for (const auto& connection : graph.connections()) {
-            for (const auto& node : connection.nodes()) {
-                if (!node.mesh().has_device_id()) {
-                    error_messages.push_back(
-                        fmt::format( "MGD 1.0 Compatibility requirement: Connections have to be specific down to the device level (Graph: {})", graph.name())
-                    );
-                }
-            }
-        }
-    }
-
-    // Disable graph layout topologies for now
-    for (const auto& graph : proto.graph_descriptors()) {
-        if (graph.has_graph_topology()) {
-            error_messages.push_back(
-                fmt::format( "MGD 1.0 Compatibility requirement: Graph layout topologies are not supported (Graph: {})", graph.name())
-            );
-        }
-    }
-
-    // Check that the directions are set properly
-    for (const auto& graph : proto.graph_descriptors()) {
-        for (const auto& connection : graph.connections()) {
-            if (connection.routing_direction_size() != connection.nodes_size()) {
-                error_messages.push_back(fmt::format(
-                    "MGD 1.0 Compatibility requirement: Routing direction must have the same number of nodes (Graph: "
-                    "{})",
-                    graph.name()));
-            }
-            for (const auto& direction : connection.routing_direction()) {
-                if (direction == proto::RoutingDirection::INVALID) {
-                    error_messages.push_back(fmt::format(
-                        "MGD 1.0 Compatibility requirement: Routing direction must be valid (Graph: {})",
-                        graph.name()));
-                }
-            }
-        }
-    }
-
     // Check that connections only have 2 nodes
     for (const auto& graph : proto.graph_descriptors()) {
         for (const auto& connection : graph.connections()) {
@@ -645,8 +768,10 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
 void MeshGraphDescriptor::populate_descriptors() {
     mesh_desc_by_name_.clear();
     graph_desc_by_name_.clear();
+    switch_desc_by_name_.clear();
     mesh_desc_by_name_.reserve(proto_->mesh_descriptors_size());
     graph_desc_by_name_.reserve(proto_->graph_descriptors_size());
+    switch_desc_by_name_.reserve(proto_->switch_descriptors_size());
     // Use string_view into proto_ storage; safe as long as proto_ outlives maps
     for (int i = 0; i < proto_->mesh_descriptors_size(); ++i) {
         const auto& mesh = proto_->mesh_descriptors(i);
@@ -655,6 +780,10 @@ void MeshGraphDescriptor::populate_descriptors() {
     for (int i = 0; i < proto_->graph_descriptors_size(); ++i) {
         const auto& graph = proto_->graph_descriptors(i);
         graph_desc_by_name_.emplace(graph.name(), &graph);
+    }
+    for (int i = 0; i < proto_->switch_descriptors_size(); ++i) {
+        const auto& switch_desc = proto_->switch_descriptors(i);
+        switch_desc_by_name_.emplace(switch_desc.name(), &switch_desc);
     }
 }
 
@@ -665,8 +794,10 @@ GlobalNodeId MeshGraphDescriptor::populate_instance(
         global_id = populate_mesh_instance(node_ref.mesh(), hierarchy);
     } else if (node_ref.has_graph()) {
         global_id = populate_graph_instance(node_ref.graph(), hierarchy);
+    } else if (node_ref.has_switch_()) {
+        global_id = populate_switch_instance(node_ref.switch_(), hierarchy);
     } else {
-        TT_THROW("Invalid NodeRef: neither mesh nor graph set");
+        TT_THROW("Invalid NodeRef: neither mesh, switch, nor graph set");
         return -1;
     }
 
@@ -689,7 +820,7 @@ GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(
     const auto* mesh_desc = it->second;
 
     InstanceData data{
-        .local_id = mesh_ref.mesh_id(),
+        .local_id = static_cast<LocalNodeId>(mesh_ref.mesh_id()),
         .name = mesh_desc->name(),
         .type = "MESH",
         .kind = NodeKind::Mesh,
@@ -704,6 +835,49 @@ GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(
     // Populate devices in the mesh
     uint32_t num_devices = 1;
     for (const auto& dim : mesh_desc->device_topology().dims()) {
+        num_devices *= dim;
+    }
+
+    instance.sub_instances.reserve(num_devices);
+    instance.sub_instances_local_id_to_global_id.reserve(num_devices);
+
+    hierarchy.push_back(instance.global_id);
+    for (LocalNodeId i = 0; i < num_devices; ++i) {
+        const auto device_id = populate_device_instance(i, hierarchy);
+
+        instance.sub_instances.insert(device_id);
+        instance.sub_instances_local_id_to_global_id.emplace(i, device_id);
+    }
+    hierarchy.pop_back();
+
+    add_to_fast_lookups(instance);
+
+    return instance.global_id;
+}
+
+GlobalNodeId MeshGraphDescriptor::populate_switch_instance(
+    const proto::SwitchRef& switch_ref, std::vector<GlobalNodeId>& hierarchy) {
+    const std::string& descriptor_name = switch_ref.switch_descriptor();
+    const auto it = switch_desc_by_name_.find(descriptor_name);
+    TT_FATAL(it != switch_desc_by_name_.end(), "Switch descriptor {} not found in instance", descriptor_name);
+    const auto* switch_desc = it->second;
+
+    InstanceData data{
+        .local_id = static_cast<LocalNodeId>(switch_ref.switch_id()),
+        .name = switch_desc->name(),
+        .type = "SWITCH",
+        .kind = NodeKind::Switch,
+        .desc = switch_desc,
+    };
+
+    const auto& [instance_it, _] = instances_.emplace(data.global_id, std::move(data));
+    auto& instance = instance_it->second;
+
+    instance.hierarchy = hierarchy;
+
+    // Populate devices in the switch
+    uint32_t num_devices = 1;
+    for (const auto& dim : switch_desc->device_topology().dims()) {
         num_devices *= dim;
     }
 
@@ -785,7 +959,7 @@ GlobalNodeId MeshGraphDescriptor::populate_graph_instance(
         // Check that the child instance created has the same type as rest of the graph descriptor
         if (child_instance.kind == NodeKind::Graph) {
             if (child_graph_type.empty()) {
-                child_graph_type = child_instance.type.c_str();
+                child_graph_type = child_instance.type;
             } else {
                 TT_FATAL(child_graph_type == child_instance.type, "Graph instance type {} does not match graph descriptor child type {}", std::string(child_graph_type), std::string(child_instance.type));
             }
@@ -812,6 +986,10 @@ void MeshGraphDescriptor::populate_connections() {
         populate_intra_mesh_connections(mesh_id);
         populate_intra_mesh_express_connections(mesh_id);
     }
+    for (const auto& switch_id : switch_instances_) {
+        populate_intra_mesh_connections(switch_id);
+        populate_intra_mesh_express_connections(switch_id);
+    }
     for (const auto & graph_id : graph_instances_) {
         populate_inter_mesh_connections(graph_id);
     }
@@ -835,6 +1013,7 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
         case NodeKind::Device:
             device_instances_.push_back(instance.global_id);
             break;
+        case NodeKind::Switch: switch_instances_.push_back(instance.global_id); break;
     }
 }
 
@@ -852,7 +1031,6 @@ void MeshGraphDescriptor::pre_populate_connections_lookups() {
         }
     }
 
-    // TODO: Remove this after MGD 1.0 is deprecated
     if (connections_by_type_.find("FABRIC") == connections_by_type_.end()) {
         connections_by_type_.emplace("FABRIC", std::vector<ConnectionId>());
     }
@@ -875,13 +1053,24 @@ void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) 
 
     auto & instance = instances_.at(mesh_id);
 
-    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    const proto::TorusTopology* device_topology = nullptr;
 
-    TT_FATAL(mesh_desc->device_topology().dims_size() == 2, "MGD currently only supports 2D meshes");
+    if (instance.kind == NodeKind::Mesh) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        device_topology = &mesh_desc->device_topology();
+    } else if (instance.kind == NodeKind::Switch) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        device_topology = &switch_desc->device_topology();
+    } else {
+        TT_THROW("populate_intra_mesh_connections called on non-mesh/non-switch instance");
+        return;
+    }
 
-    // TODO: Expand this for 2+ dimensional meshes
-    const std::uint32_t mesh_ns_size = mesh_desc->device_topology().dims(0);
-    const std::uint32_t mesh_ew_size = mesh_desc->device_topology().dims(1);
+    TT_FATAL(device_topology->dims_size() == 2, "MGD currently only supports 2D meshes/switches");
+
+    // TODO: Expand this for 2+ dimensional meshes/switches
+    const std::uint32_t mesh_ns_size = device_topology->dims(0);
+    const std::uint32_t mesh_ew_size = device_topology->dims(1);
     const auto mesh_shape = MeshShape(mesh_ns_size, mesh_ew_size);
 
     for (const auto& src_mesh_coord : MeshCoordinateRange(mesh_shape)) {
@@ -898,33 +1087,68 @@ void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) 
 }
 
 void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId mesh_id) {
-    auto & instance = instances_.at(mesh_id);
-    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-    for (const auto& express_connection : mesh_desc->express_connections()) {
-        const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.src());
-        const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.dst());
+    auto& instance = instances_.at(mesh_id);
 
-        ConnectionData data{
-            .nodes = {src_device_id, dst_device_id},
-            .count = mesh_desc->channels().count(),
-            .policy = mesh_desc->channels().policy(),
-            .parent_instance_id = mesh_id,
-            .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
-        };
+    const proto::Channels* channels = nullptr;
 
-        add_connection_to_fast_lookups(data, instance.type);
-        connections_.emplace(data.connection_id, std::move(data));
+    if (instance.kind == NodeKind::Mesh) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        channels = &mesh_desc->channels();
+        for (const auto& express_connection : mesh_desc->express_connections()) {
+            const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.src());
+            const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.dst());
 
-        ConnectionData data_reverse{
-            .nodes = {dst_device_id, src_device_id},
-            .count = mesh_desc->channels().count(),
-            .policy = mesh_desc->channels().policy(),
-            .parent_instance_id = mesh_id,
-            .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
-        };
+            ConnectionData data{
+                .nodes = {src_device_id, dst_device_id},
+                .count = static_cast<uint32_t>(channels->count()),
+                .policy = channels->policy(),
+                .parent_instance_id = mesh_id,
+                .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
+            };
 
-        add_connection_to_fast_lookups(data_reverse, instance.type);
-        connections_.emplace(data_reverse.connection_id, std::move(data_reverse));
+            add_connection_to_fast_lookups(data, instance.type);
+            connections_.emplace(data.connection_id, std::move(data));
+
+            ConnectionData data_reverse{
+                .nodes = {dst_device_id, src_device_id},
+                .count = static_cast<uint32_t>(channels->count()),
+                .policy = channels->policy(),
+                .parent_instance_id = mesh_id,
+                .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
+            };
+
+            add_connection_to_fast_lookups(data_reverse, instance.type);
+            connections_.emplace(data_reverse.connection_id, std::move(data_reverse));
+        }
+    } else if (instance.kind == NodeKind::Switch) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        channels = &switch_desc->channels();
+        for (const auto& express_connection : switch_desc->express_connections()) {
+            const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.src());
+            const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.dst());
+
+            ConnectionData data{
+                .nodes = {src_device_id, dst_device_id},
+                .count = static_cast<uint32_t>(channels->count()),
+                .policy = channels->policy(),
+                .parent_instance_id = mesh_id,
+                .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
+            };
+
+            add_connection_to_fast_lookups(data, instance.type);
+            connections_.emplace(data.connection_id, std::move(data));
+
+            ConnectionData data_reverse{
+                .nodes = {dst_device_id, src_device_id},
+                .count = static_cast<uint32_t>(channels->count()),
+                .policy = channels->policy(),
+                .parent_instance_id = mesh_id,
+                .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
+            };
+
+            add_connection_to_fast_lookups(data_reverse, instance.type);
+            connections_.emplace(data_reverse.connection_id, std::move(data_reverse));
+        }
     }
 }
 
@@ -956,6 +1180,40 @@ GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
 
         return global_instance_id;
 
+    } else if (node_ref.has_switch_()) {
+        // Check the instance id exists References are indexed by local id
+        const auto local_instance_id = node_ref.switch_().switch_id();
+        const auto it2 = parent_instance.sub_instances_local_id_to_global_id.find(local_instance_id);
+        TT_FATAL(
+            it2 != parent_instance.sub_instances_local_id_to_global_id.end(),
+            "Switch instance id {} not found in parent instance",
+            local_instance_id);
+
+        const auto global_instance_id = it2->second;
+        auto& referenced_instance = instances_.at(global_instance_id);
+
+        // Check if the switch descriptor already exists
+        const auto descriptor_name = node_ref.switch_().switch_descriptor();
+        TT_FATAL(
+            descriptor_name == referenced_instance.name,
+            "Switch descriptor {} does not match referenced instance {}",
+            descriptor_name,
+            referenced_instance.name);
+
+        // Check sub instance exists
+        if (node_ref.switch_().has_device_id()) {
+            const auto device_id = node_ref.switch_().device_id();
+            auto& switch_instance = instances_.at(global_instance_id);
+            const auto it = switch_instance.sub_instances_local_id_to_global_id.find(device_id);
+            TT_FATAL(
+                it != switch_instance.sub_instances_local_id_to_global_id.end(),
+                "Device id {} not found in switch instance",
+                device_id);
+            return it->second;
+        }
+
+        return global_instance_id;
+
     } else if (node_ref.has_graph()) {
         const auto instance_id = node_ref.graph().graph_id();
         const auto it = parent_instance.sub_instances_local_id_to_global_id.find(instance_id);
@@ -972,15 +1230,14 @@ GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
         }
 
         return global_instance_id;
-
     }
-    TT_THROW("Invalid NodeRef: neither mesh nor graph set");
+    TT_THROW("Invalid NodeRef: neither mesh, switch, nor graph set");
     return -1;
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id) {
-    auto& graph_instance = get_instance(graph_id);
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(graph_instance.desc);
+    const auto& graph_instance = get_instance(graph_id);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(graph_instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -994,7 +1251,7 @@ void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id)
 void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId graph_id) {
     auto & instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1009,11 +1266,20 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
             GlobalNodeId ref_instance_id = find_instance_by_ref(graph_id, node);
             auto & ref_instance = instances_.at(ref_instance_id);
 
-            // Check that the referenced instances have the same type
+            // Check that the referenced instances have compatible types
+            // Allow: MESH-MESH, SWITCH-SWITCH, and MESH-SWITCH connections
             if (type.empty()) {
                 type = ref_instance.type;
             } else {
-                TT_FATAL(type == ref_instance.type, "Graph descriptor {} connections must reference instances within same type", instance.name);
+                // Allow connections between meshes and switches (via FABRIC connections)
+                bool is_compatible =
+                    (type == ref_instance.type) || ((type == "MESH" || type == "SWITCH") &&
+                                                    (ref_instance.type == "MESH" || ref_instance.type == "SWITCH"));
+                TT_FATAL(
+                    is_compatible,
+                    "Graph descriptor {} connections must reference instances within same type or compatible types "
+                    "(MESH/SWITCH)",
+                    instance.name);
             }
 
             nodes.push_back(ref_instance_id);
@@ -1027,17 +1293,12 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
             std::vector<GlobalNodeId> nodes_copy = nodes;
             std::swap(nodes_copy[0], nodes_copy[i]);
 
-            proto::RoutingDirection routing_direction = proto::RoutingDirection::NONE;
-            if (connection.routing_direction_size() != 0) {
-                routing_direction = connection.routing_direction(i);
-            }
-
             ConnectionData data{
                 .nodes = nodes_copy,
-                .count = connection.channels().count(),
+                .count = static_cast<uint32_t>(connection.channels().count()),
                 .policy = connection.channels().policy(),
                 .parent_instance_id = graph_id,
-                .routing_direction = routing_direction,
+                .routing_direction = proto::RoutingDirection::NONE,
             };
 
             add_connection_to_fast_lookups(data, instance.type);
@@ -1052,11 +1313,11 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
 void MeshGraphDescriptor::populate_inter_mesh_topology_connections(GlobalNodeId graph_id) {
     auto& instance = instances_.at(graph_id);
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
-    auto& graph_topology = graph_desc->graph_topology();
+    const auto& graph_topology = graph_desc->graph_topology();
 
     switch (graph_topology.layout_type()) {
         case proto::GraphTopology::ALL_TO_ALL: populate_inter_mesh_topology_connections_all_to_all(graph_id); break;
@@ -1074,7 +1335,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
     // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1087,7 +1348,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
             // Create a connection between the two instances
             ConnectionData data{
                 .nodes = {sub_instance_a, sub_instance_b},
-                .count = graph_desc->graph_topology().channels().count(),
+                .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
                 .policy = graph_desc->graph_topology().channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
@@ -1104,7 +1365,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
     // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1117,7 +1378,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
 
         ConnectionData data{
             .nodes = {src_instance, dst_instance},
-            .count = graph_desc->graph_topology().channels().count(),
+            .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
@@ -1129,7 +1390,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
 
         ConnectionData data_reverse{
             .nodes = {dst_instance, src_instance},
-            .count = graph_desc->graph_topology().channels().count(),
+            .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
@@ -1161,13 +1422,17 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
         const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(inst.desc);
         ss << indent << "Device Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->device_topology().dims_size(); ++i) {
-            if (i > 0) ss << ", ";
+            if (i > 0) {
+                ss << ", ";
+            }
             ss << mesh_desc->device_topology().dims(i);
         }
         ss << "]" << std::endl;
         ss << indent << "Host Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->host_topology().dims_size(); ++i) {
-            if (i > 0) ss << ", ";
+            if (i > 0) {
+                ss << ", ";
+            }
             ss << mesh_desc->host_topology().dims(i);
         }
         ss << "]" << std::endl;

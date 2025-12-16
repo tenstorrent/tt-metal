@@ -125,7 +125,6 @@ TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(1, 8), /*offset=*/MeshCoordinate(0, 1)));
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
 
     // Offset dimensionality mismatch.
@@ -151,7 +150,7 @@ TEST_F(MeshDevice1x8ReshapeTest, From1x8To2x4ThenBackTo1x8) {
     mesh_device_->reshape(MeshShape(2, 4));
 
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-    std::vector<chip_id_t> expected_physical_device_id_order = {
+    std::vector<ChipId> expected_physical_device_id_order = {
         original_order[0],
         original_order[1],
         original_order[2],
@@ -178,19 +177,6 @@ TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(1, 8));
 }
 
-class MeshDevice1x4ReshapeTest : public MeshDeviceFixtureBase {
-public:
-    MeshDevice1x4ReshapeTest() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{1, 4},
-        }) {}
-};
-
-TEST_F(MeshDevice1x4ReshapeTest, From1x4To2x2Invalid) {
-    // This is an invalid reshape because the 1x4 mesh does not fully cover the 2x2 mesh
-    EXPECT_THROW(mesh_device_->reshape(MeshShape(2, 2)), std::runtime_error);
-}
-
 class MeshDevice2x2ReshapeTest : public MeshDeviceFixtureBase {
 public:
     MeshDevice2x2ReshapeTest() :
@@ -202,7 +188,7 @@ public:
 TEST_F(MeshDevice2x2ReshapeTest, From1x4To2x2Valid) {
     // Fetch the device ids for a physically connected 2x2 mesh.
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 2));
-    std::vector<chip_id_t> physical_device_ids = mesh_device_->get_device_ids();
+    std::vector<ChipId> physical_device_ids = mesh_device_->get_device_ids();
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.

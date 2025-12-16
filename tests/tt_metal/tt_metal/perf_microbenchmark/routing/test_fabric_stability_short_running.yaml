@@ -24,7 +24,24 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 15
+        iterations: 10
+
+  - name: "FlowControlLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
 
   - name: "MeshLowLatencyLooped"
     fabric_setup:
@@ -43,24 +60,21 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 15
+        iterations: 10
 
-  - name: "MeshDynamicLooped"
+  - name: "FlowControlMeshLowLatency"
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
-
-    top_level_iterations: 10
 
     parametrization_params:
       ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
 
     defaults:
-      size: 32
-      num_packets: 30000
+      num_packets: 100000
 
     patterns:
       - type: all_to_all
-        iterations: 15

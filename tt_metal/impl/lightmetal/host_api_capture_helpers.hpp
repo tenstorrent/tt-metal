@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -105,7 +104,6 @@ void CaptureEnqueueReadBuffer(
 
 void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
 void CaptureProgramConstructor(Program& program);
-void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 void CaptureCreateKernel(
     KernelHandle kernel_id,

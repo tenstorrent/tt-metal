@@ -12,16 +12,10 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    is_wormhole_b0,
-    torch2tt_tensor,
-)
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor
 from models.demos.vit.common import load_torch_model
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tt import ttnn_optimized_interleaved_vit
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 
 
 def get_expected_times(functional_vit):
@@ -55,8 +49,6 @@ def test_accuracy(
     functional_vit,
     model_location_generator,
 ):
-    disable_persistent_kernel_cache()
-
     model = load_torch_model(model_location_generator)
     config = model.config
 
@@ -164,8 +156,6 @@ def test_accuracy(
             if imagenet_label_dict[labels[i]] == predictions[-1]:
                 correct += 1
         del tt_output, tt_inputs, inputs, labels, predictions
-
-        enable_persistent_kernel_cache()
 
     accuracy = correct / (batch_size * iterations)
     logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")

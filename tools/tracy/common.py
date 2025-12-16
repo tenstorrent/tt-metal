@@ -10,16 +10,12 @@ from pathlib import Path
 from loguru import logger
 
 ENVS = dict(os.environ)
-TT_METAL_HOME = ""
-if "TT_METAL_HOME" in ENVS.keys():
-    TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
-else:
-    logger.error("TT_METAL_HOME environment variable is not set up properly.")
-    sys.exit(1)
+TT_METAL_HOME = Path(ENVS.get("TT_METAL_HOME", Path.cwd()))
 
 PROFILER_DEVICE_SIDE_LOG = "profile_log_device.csv"
 PROFILER_HOST_SIDE_LOG = "profile_log_host.csv"
 PROFILER_HOST_DEVICE_SYNC_INFO = "sync_device_info.csv"
+PROFILER_CPP_DEVICE_PERF_REPORT = "cpp_device_perf_report.csv"
 
 PROFILER_SCRIPTS_ROOT = TT_METAL_HOME / "tools/tracy"
 PROFILER_ARTIFACTS_DIR = TT_METAL_HOME / "generated/profiler"
@@ -28,6 +24,8 @@ if "TT_METAL_PROFILER_DIR" in ENVS.keys():
 
 
 PROFILER_BIN_DIR = TT_METAL_HOME / "build/tools/profiler/bin"
+
+PROFILER_DEFAULT_OP_SUPPORT_COUNT = 1000
 
 TRACY_OPS_TIMES_FILE_NAME = "tracy_ops_times.csv"
 TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"

@@ -31,12 +31,15 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "fabric.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 #include <array>
 #include <bit>
@@ -63,13 +66,13 @@ struct WorkerTimingStats {
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             devices_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(ids);
         } else {
@@ -93,12 +96,12 @@ public:
         devices_.clear();
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct TestConfig {
@@ -213,10 +216,10 @@ TestConfig parse_cli_config(int argc, char** argv) {
 
 struct DeviceTestResources {
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = nullptr;
-    CoreRangeSet worker_cores = {};
+    CoreRangeSet worker_cores;
     std::vector<CoreCoord> worker_cores_vec;
-    CoreCoord eth_core = {};
-    tt_metal::Program program = {};
+    CoreCoord eth_core;
+    tt_metal::Program program;
     uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();
@@ -276,7 +279,7 @@ void build(
         config.fabric_mcast_factor  // FABRIC_MCAST_FACTOR
     };
 
-    auto erisc_kernel_name =
+    const auto* erisc_kernel_name =
         "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels_erisc_forward_worker_traffic.cpp";
     log_info(tt::LogAlways, "Erisc kernel name: {}", erisc_kernel_name);
     local_erisc_kernel = tt_metal::CreateKernel(
@@ -541,7 +544,7 @@ void run_test(
     if (config.n_workers > 0) {
         log_info(tt::LogAlways, "Worker Timing Stats:");
 
-        for (auto& [resources, label] :
+        for (const auto& [resources, label] :
              {std::make_pair(&test_resources.local_device, "Local Device"),
               std::make_pair(&test_resources.remote_device, "Remote Device")}) {
             for (size_t i = 0; i < config.n_workers; i++) {
@@ -591,7 +594,8 @@ TestResources create_test_resources(
     resources.local_device.eth_core = eth_sender_core;
     resources.remote_device.eth_core = eth_receiver_core;
 
-    for (auto& device_resource_reference : {std::ref(resources.local_device), std::ref(resources.remote_device)}) {
+    for (const auto& device_resource_reference :
+         {std::ref(resources.local_device), std::ref(resources.remote_device)}) {
         auto& device_resource = device_resource_reference.get();
         auto& worker_cores = device_resource.worker_cores;
         auto& worker_cores_vec = device_resource.worker_cores_vec;

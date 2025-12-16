@@ -5,6 +5,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "moe_expert_token_remap_device_operation.hpp"
 
@@ -64,7 +65,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     Program program{};
 
     // todo maybe, subdevice
-    auto mesh_device = topk_tensor.device();
+    auto* mesh_device = topk_tensor.device();
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // CoreCoord grid = {1,1};
 
@@ -243,9 +244,9 @@ void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
             range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
-        auto& utilized_cores = shared_variables.utilized_cores;
+        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
+        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
+        const auto& utilized_cores = shared_variables.utilized_cores;
 
         for (const auto& c : utilized_cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, c);

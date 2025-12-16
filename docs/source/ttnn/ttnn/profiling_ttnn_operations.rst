@@ -1,13 +1,13 @@
 Profiling TT-NN Operations
 ==========================
 
-The following set of commands will generate perf reports for ``resnet`` as an example.
+The following set of commands will generate perf reports for ``bert_tiny`` as an example.
 
 ..  code-block:: sh
 
     cd $TT_METAL_HOME
-    build_metal.sh --enable-profiler
-    ./tools/tracy/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"
+    build_metal.sh
+    ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/bert_tiny/demo/demo.py::test_demo[models/demos/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-128-8-device_params0]"
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
 
@@ -20,7 +20,7 @@ The ``profile_this.py`` script and its CLI options are explained under `profile_
 
 The headers for the CSV are explained under `Perf Report Headers`_.
 
-Instructions on using the performance report with `TT-NN Visualizer <https://github.com/tenstorrent/ttnn-visualizer>`_ are under `Using the Performance Report with TT-NN Visualizer`_.
+Instructions on using the performance report with `TT-NN Visualizer <https://github.com/tenstorrent/ttnn-visualizer>`_ can be found in their documentation under `Loading Data <https://docs.tenstorrent.com/ttnn-visualizer/src/installing.html#loading-data>`_.
 
 **IMPORTANT NOTES**:
 
@@ -32,7 +32,7 @@ Instructions on using the performance report with `TT-NN Visualizer <https://git
 
 - The first 1000 ops for each device is automatically collected by pytest fixtures at the end of your test.
   If your test has more than 1000 ops, ``ttl.device.ReadDeviceProfiler(device)`` should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
-  For example for resnet with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.ReadDeviceProfiler(device)`` should be called at least every eighth layer run.
+  For example for a model with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.ReadDeviceProfiler(device)`` should be called at least every eighth layer run.
   If profiling data is dropped, you will receive warning messages in the execution log mentioning which RISC of what core of what device dropped profiling data. Note that dispatch
   cores fill up their profiling buffers faster and if only those cores are giving warnings your OP analysis is not affected.
 

@@ -40,7 +40,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = input.device();
+    auto* device = input.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -173,10 +173,11 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file = use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/"
-                                                          "kernels/dataflow/reader_moreh_group_norm_large.cpp"
-                                                        : "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/"
-                                                          "kernels/dataflow/reader_moreh_group_norm_small.cpp";
+    const auto* const reader_kernel_file = use_large_algorithm
+                                               ? "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/"
+                                                 "kernels/dataflow/reader_moreh_group_norm_large.cpp"
+                                               : "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/"
+                                                 "kernels/dataflow/reader_moreh_group_norm_small.cpp";
 
     const std::string writer_kernel_file(
         "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/kernels/dataflow/writer_moreh_group_norm.cpp");
@@ -203,7 +204,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         use_large_algorithm
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
@@ -310,13 +311,13 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto input_buffer = tensor_args.input.buffer();
-    auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
-    auto beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta.value().buffer() : nullptr;
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
+    auto* beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta.value().buffer() : nullptr;
 
-    auto ouput_buffer = tensor_return_value[0]->buffer();
-    auto mean_buffer = tensor_return_value[1]->buffer();
-    auto rstd_buffer = tensor_return_value[2]->buffer();
+    auto* ouput_buffer = tensor_return_value[0]->buffer();
+    auto* mean_buffer = tensor_return_value[1]->buffer();
+    auto* rstd_buffer = tensor_return_value[2]->buffer();
 
     auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
     auto writer_kernels_id = cached_program.shared_variables.writer_kernels_id;

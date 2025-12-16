@@ -4,12 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
-
 #include <array>
 #include <cstdint>
 
 constexpr uint32_t ONE_PAGE = 1;
+
+// supported reduction methods for scatter to be applied for source values coming from recurring indices
+enum class ScatterReductionType : uint8_t { INVALID, ADD, MULTIPLY, AMIN, AMAX };
 
 // choose the right C++ POD type at compile-time
 template <DataFormat df>
@@ -73,6 +74,7 @@ struct ScatterCTAs {
     const uint32_t source_stick_size_bytes;
     const uint32_t output_stick_size_bytes;
     const uint32_t input_rank;
+    const ScatterReductionType scatter_reduction_type;
     const InputAccessorArgs input_args;
     const IndexAccessorArgs index_args;
     const SourceAccessorArgs source_args;
@@ -102,6 +104,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
+        static_cast<ScatterReductionType>(get_compile_time_arg_val(17)),
         input_args,
         index_args,
         source_args,

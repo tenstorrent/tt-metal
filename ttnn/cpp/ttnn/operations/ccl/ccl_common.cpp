@@ -11,13 +11,27 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
+
+bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
+}
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
+        return tt::tt_fabric::Topology::Linear;
+    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
+        return tt::tt_fabric::Topology::Ring;
+    }
+    return topology;
+}
 
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
@@ -30,6 +44,9 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     // ring is possible if device coordinates along our cluster axis are the same as the last coordinate in the mesh
     // shape first_index = 0 last index = mesh_shape[cluster_axis] - 1
     if (cluster_axis.has_value()) {
+        if (mesh_shape[cluster_axis.value()] == 2) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
         bool first_index_is_0 = device_coords.at(0)[cluster_axis.value()] == 0;
         bool last_index_is_mesh_shape_minus_1 =
             device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
@@ -39,6 +56,9 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
     } else {
+        if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
         TT_FATAL(!device_coords.empty(), "device_coords is empty");
         for (int i = 0; i < device_coords.front().dims(); i++) {
             if (device_coords.front()[i] != 0) {
@@ -55,19 +75,21 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
 }
 
 tt::tt_fabric::Topology get_usable_topology(
-    const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis) {
-    if (whole_device_topology == tt::tt_fabric::Topology::Ring ||
-        whole_device_topology == tt::tt_fabric::Topology::Torus) {
-        auto boundary_mode = get_boundary_mode(tensor, whole_device_topology, cluster_axis);
+    const Tensor& tensor,
+    const std::optional<tt::tt_fabric::Topology>& topology,
+    const std::optional<uint32_t>& cluster_axis) {
+    tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
+    if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
+        auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
         if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
-            return whole_device_topology;
-        } else if (whole_device_topology == tt::tt_fabric::Topology::Torus) {
+            return topology_;
+        } else if (topology_ == tt::tt_fabric::Topology::Torus) {
             return tt::tt_fabric::Topology::Mesh;
         } else {
             return tt::tt_fabric::Topology::Linear;
         }
     }
-    return whole_device_topology;
+    return topology_;
 }
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
@@ -267,12 +289,12 @@ SenderReceiverConfig get_device_sender_receiver_config(
 
             config.receiver_device_id = is_last_chip_in_clockwise_direction
                                             ? std::nullopt
-                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+                                            : std::optional<tt::ChipId>(devices.at((i + 1) % num_devices)->id());
 
             config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
-                    : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+                    : std::optional<tt::ChipId>(devices.at((i + num_devices - 1) % num_devices)->id());
         }
     }
 
@@ -291,7 +313,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
-    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<tt::ChipId> {
         auto new_row = mesh_coord[0];
         auto new_col = mesh_coord[1];
         if (cluster_axis == 0) {
@@ -314,7 +336,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.device();
+    auto* mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {
@@ -340,13 +362,17 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto available_cores = device->worker_cores(
+    auto available_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(sub_core_grid.value());
+    }
     if (available_cores.num_cores() < num_workers_preferred) {
         log_warning(
             tt::LogOp,
@@ -1721,13 +1747,6 @@ void validate_fabric_2d_dynamic_config(Topology topology) {
     TT_FATAL(
         physical_mesh_shape.dims() == 2,
         "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
-    TT_FATAL(
-        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1 ||
-            (physical_mesh_shape[0] == 2 && physical_mesh_shape[1] == 2),
-        "Fabric 2D dynamic CCLs are only supported for 1D physical meshes OR 1 2X2 ring that is equivalent to 1D but "
-        "physical shape reported is {} X {}",
-        physical_mesh_shape[0],
-        physical_mesh_shape[1]);
 }
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
@@ -1770,7 +1789,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
         validate_fabric_2d_dynamic_config(topology);
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
@@ -1832,7 +1851,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     // May be uplifted to an op parameter if needed
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
         validate_fabric_2d_dynamic_config(topology);
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
@@ -1846,7 +1865,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
                 auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
-                args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets - 1;
+                args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets;
             }
         };
         set_mcast_args(forward_args, forward_device_coord, num_targets_forward, mesh_device);
@@ -1866,5 +1885,4 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

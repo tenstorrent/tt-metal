@@ -25,11 +25,11 @@ chmod +x install.sh
 ```
 
 > [!WARNING]
-> TT-Installer automatically installs all latest versions. Galaxy Wormhole 4U and Blackhole systems require the following versions:
+> TT-Installer automatically installs all latest versions. Wormhole Galaxy (6U) and Blackhole systems require the following versions:
 > | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 > |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-> | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.7.0.fwbundle (v18.7.0)          | v3.0.20 or above      | N/A                            |
+> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
 
 - If required, add the following flags for specifying dependencies versions:
 
@@ -38,9 +38,9 @@ chmod +x install.sh
 
 ```
 ./install.sh \
-  --smi-version=v3.0.17 \
-  --fw-version=18.3.0 \
-  --kmd-version=1.34 \
+  --smi-version=v3.0.38 \
+  --fw-version=19.2.0 \
+  --kmd-version=2.5.0 \
   --no-install-podman \
   --no-install-metalium-container
 ```
@@ -186,8 +186,7 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 - First, set the following environment variables:
 
   ```
-  export TT_METAL_HOME=</path/to/your/tt-metal>
-  export PYTHONPATH="${TT_METAL_HOME}" # Same path
+  export PYTHONPATH=</path/to/your/tt-metal>
   ```
 
 - Then, try running a programming example:

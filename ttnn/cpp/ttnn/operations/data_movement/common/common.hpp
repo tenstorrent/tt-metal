@@ -10,16 +10,13 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
-
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
+ttnn::Tensor squeeze_from_ND_to_4D(
+    const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
@@ -66,6 +63,10 @@ ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
 
 uint32_t wrap_index(int index, int size);
+
+uint16_t float_to_uint16(float f);
+
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {
@@ -194,9 +195,16 @@ private:
 };
 
 ttnn::Shape compute_padded_shape(
-    const ttnn::Shape& logical_shape,
+    ttnn::Shape logical_shape,
     uint32_t tile_height = tt::constants::TILE_HEIGHT,
     uint32_t tile_width = tt::constants::TILE_WIDTH);
+
+/**
+ * Pads a shape to align with tile dimensions
+ * @param unpadded_shape Original shape to be padded
+ * @return Padded shape aligned to tile dimensions
+ */
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
 enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 
@@ -220,6 +228,4 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 
 uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

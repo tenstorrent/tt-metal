@@ -6,11 +6,16 @@
 
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b {
 
-// Hard-coded for Falcon7B
-void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+NlpCreateHeadsFalcon7BDeviceOperation::program_factory_t NlpCreateHeadsFalcon7BDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return NlpCreateQkvHeadsFalcon7BProgramFactory{};
+}
+
+void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -20,35 +25,58 @@ void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& 
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE but got {}", input_tensor.layout());
 
-    TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
+    TT_FATAL(
+        input_shape[2] % tt::constants::TILE_HEIGHT == 0,
+        "Input shape[2] ({}) must be divisible by TILE_HEIGHT ({})",
+        input_shape[2],
+        tt::constants::TILE_HEIGHT);
     TT_FATAL((input_shape == ttnn::Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
-    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(
+        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Output memory config layout must be INTERLEAVED but got {}",
+        operation_attributes.output_mem_config.memory_layout());
 }
 
-std::vector<ttnn::TensorSpec> NlpCreateHeadsFalcon7BDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    if (this->output_mem_config.is_sharded()) {
-        TT_ASSERT(false);
-        return {};
+void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+NlpCreateHeadsFalcon7BDeviceOperation::spec_return_value_t NlpCreateHeadsFalcon7BDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (operation_attributes.output_mem_config.is_sharded()) {
+        TT_FATAL(false, "Sharded output memory config is not supported for nlp_create_qkv_heads_falcon7b");
     }
 
-    const auto& input_tensor = input_tensors.at(0);
+    const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
-    tt::tt_metal::TensorLayout layout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_mem_config);
+    tt::tt_metal::TensorLayout layout(
+        input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config);
     return {
-        TensorSpec(Shape({input_shape[0], 71, input_shape[2], 64}), layout),
-        TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout),
-        TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout)};
+        .q = TensorSpec(Shape({input_shape[0], 71, input_shape[2], 64}), layout),
+        .k = TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout),
+        .v = TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout)};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks NlpCreateHeadsFalcon7BDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+NlpCreateHeadsFalcon7BDeviceOperation::tensor_return_value_t
+NlpCreateHeadsFalcon7BDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    auto* device = tensor_args.input.device();
 
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-
-    return multi_core_nlp_create_qkv_heads_falcon7b(input_tensor, output_tensors, compute_with_storage_grid_size);
+    return {
+        .q = create_device_tensor(output_specs.q, device),
+        .k = create_device_tensor(output_specs.k, device),
+        .v = create_device_tensor(output_specs.v, device)};
 }
-}  // namespace ttnn::operations::experimental::transformer
+
+std::tuple<operation_attributes_t, tensor_args_t> NlpCreateHeadsFalcon7BDeviceOperation::invoke(
+    const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    const tt::tt_metal::MemoryConfig output_mem_config = memory_config.value_or(input.memory_config());
+    return {operation_attributes_t{output_mem_config}, tensor_args_t{input}};
+}
+
+}  // namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b

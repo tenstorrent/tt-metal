@@ -8,6 +8,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+#include <optional>
+
 namespace ttnn::operations::data_movement::scatter {
 
 struct operation_attributes_t {
@@ -15,7 +17,8 @@ struct operation_attributes_t {
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_memory_config;
     // reduction applied to source values coming from repeating indices
-    const std::optional<ScatterReductionType> opt_reduction;
+    const ScatterReductionType opt_reduction;
+    const std::optional<CoreRangeSet> sub_core_grid;
 };
 
 struct tensor_args_t {

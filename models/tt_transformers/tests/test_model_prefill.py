@@ -12,7 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
+from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 @torch.no_grad()
@@ -68,7 +68,7 @@ from models.tt_transformers.tt.model_config import CheckpointType, DecodersPreci
     (1, None),
     ids=["1layer", "all_layers"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True, "trace_region_size": 17000000}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,
@@ -92,6 +92,10 @@ def test_model_inference(
             pytest.skip("CI test only runs up to 8192 seq_len to avoid out of ram issues for ref model")
         if num_layers != 1 and seq_len != 4096:
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
+
+        hf_model_env = os.getenv("HF_MODEL", "")
+        if ("Llama" in hf_model_env) and ("Vision" in hf_model_env) and (num_layers is None):
+            pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
@@ -196,7 +200,12 @@ def test_model_inference(
                 or any(
                     [
                         f"{state_dict_prefix}{name}" in k
-                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                        for name in [
+                            "tok_embeddings.weight",
+                            "learnable_embedding.weight",
+                            "norm.weight",
+                            "output.weight",
+                        ]
                     ]
                 )
             )
@@ -205,7 +214,17 @@ def test_model_inference(
         reference_model.load_state_dict(reference_state_dict)
         # Embedding on host
         embd = model_args.reference_embedding()
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+        if model_args.is_llama_vision():
+            weight = torch.cat(
+                [
+                    state_dict[f"{state_dict_prefix}tok_embeddings.weight"],
+                    state_dict[f"{state_dict_prefix}learnable_embedding.weight"],
+                ],
+                dim=0,
+            )
+        else:
+            weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
+        embd.load_state_dict({"emb.weight": weight})
         logger.info("Finished loading reference model.")
 
     # Select the first token from the prompt for initial decoding
@@ -245,26 +264,10 @@ def test_model_inference(
         # Compare KV caches
         if cache_pcc:
             for i in range(model_args.n_layers):
-                if model_args.checkpoint_type == CheckpointType.Meta:
-                    pytorch_layer_present = [
-                        reference_model.layers[i]
-                        .attention.cache_k.clone()
-                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                        reference_model.layers[i]
-                        .attention.cache_v.clone()
-                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                    ]
-                elif model_args.checkpoint_type == CheckpointType.HuggingFace:
-                    pytorch_layer_present = [
-                        reference_model.cache_k[i]
-                        .clone()
-                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                        reference_model.cache_v[i]
-                        .clone()
-                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                    ]
-                else:
-                    raise ValueError(f"Unknown checkpoint type: {model_args.checkpoint_type}")
+                pytorch_layer_present = [
+                    reference_model.cache_k[i].clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    reference_model.cache_v[i].clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                ]
 
                 tt_layer_present = []
                 if paged_attention:

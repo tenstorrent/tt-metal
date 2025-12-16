@@ -51,7 +51,7 @@ void kernel_main() {
         }
         cb_wait_front(tt::CBIndex::c_0, 1);
         uint32_t l1_read_addr = get_read_ptr(tt::CBIndex::c_0);
-        uint64_t dst_noc_addr = get_noc_addr(dest_linear_idx, s0);
+        uint64_t dst_noc_addr = s0.get_noc_addr(dest_linear_idx);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();
         cb_pop_front(tt::CBIndex::c_0, 1);

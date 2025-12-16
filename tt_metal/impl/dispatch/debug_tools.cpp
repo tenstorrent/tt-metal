@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -22,12 +23,11 @@
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace internal {
 
@@ -54,7 +54,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     std::string type;
 
     while (std::getline(host_dispatch_dump_file, line)) {
-        if (line.find("*") != std::string::npos) {
+        if (line.find('*') != std::string::npos) {
             continue;
         } else if (
             line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
@@ -62,7 +62,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
             type = line;
         } else {
             std::vector<std::string> host_data = {line};
-            while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == std::string::npos)) {
+            while (std::getline(host_dispatch_dump_file, line) and (line.find('*') == std::string::npos)) {
                 host_data.push_back(line);
             }
             host_map.push_back(make_pair(type, std::move(host_data)));
@@ -295,9 +295,7 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
 }
 
 void print_progress_bar(float progress, bool init = false) {
-    if (progress > 1.0) {
-        progress = 1.0;
-    }
+    progress = std::min(progress, 1.0f);
     static int prev_bar_position = -1;
     if (init) {
         prev_bar_position = -1;
@@ -314,7 +312,7 @@ void print_progress_bar(float progress, bool init = false) {
 
 void dump_completion_queue_entries(
     std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         sysmem_manager.get_device_id());
@@ -413,7 +411,7 @@ void dump_completion_queue_entries(
 
 void dump_issue_queue_entries(
     std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         sysmem_manager.get_device_id());
@@ -557,7 +555,7 @@ void dump_command_queue_raw_data(
     SystemMemoryManager& sysmem_manager,
     SystemMemoryCQInterface& cq_interface,
     cq_queue_t queue_type) {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         sysmem_manager.get_device_id());

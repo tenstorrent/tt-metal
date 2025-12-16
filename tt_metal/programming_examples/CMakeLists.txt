@@ -1,6 +1,10 @@
 # All programming example targets should link tt_stl
 link_libraries(TT::STL)
 
+# Suppress narrowing warnings for programming_examples (being cleaned up in tt_metal first)
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
+
 add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
@@ -50,6 +54,7 @@ install(
         sfpu_eltwise_chain
         custom_sfpi_add
         custom_sfpi_smoothstep
+        tests
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
     # /usr/share/doc on a default Docker image. Speculation: some dependency for

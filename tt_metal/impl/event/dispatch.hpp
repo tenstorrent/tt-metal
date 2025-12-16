@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <command_queue_interface.hpp>
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -12,20 +11,18 @@
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
 // Used so host knows data in completion queue is just an event ID
 struct ReadEventDescriptor {
     uint32_t event_id;
-    uint32_t global_offset;
+    uint32_t global_offset{0};
 
-    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
+    explicit ReadEventDescriptor(uint32_t event) : event_id(event) {}
 
     void set_global_offset(uint32_t offset) { global_offset = offset; }
     uint32_t get_global_event_id() { return global_offset + event_id; }
@@ -35,7 +32,7 @@ namespace event_dispatch {
 
 void issue_record_event_commands(
     IDevice* device,
-    chip_id_t device_id,
+    ChipId device_id,
     uint32_t event_id,
     uint8_t cq_id,
     uint32_t num_command_queues,
@@ -50,8 +47,8 @@ void issue_wait_for_event_commands(
 
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
-    chip_id_t mmio_device_id,
-    chip_id_t device_id,
+    ChipId mmio_device_id,
+    ChipId device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager);

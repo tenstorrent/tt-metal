@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
@@ -35,7 +35,7 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         const auto local_coord_range = control_plane.get_coord_range(mesh_id, tt::tt_fabric::MeshScope::LOCAL);
 
         // Validate that the physical chip ids are unique.
-        std::unordered_set<chip_id_t> unique_chip_ids;
+        std::unordered_set<ChipId> unique_chip_ids;
 
         std::vector<PhysicalMeshCoordinate> physical_coordinates;
         physical_coordinates.reserve(local_mesh_shape.mesh_size());

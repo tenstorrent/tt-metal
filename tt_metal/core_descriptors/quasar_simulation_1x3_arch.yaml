@@ -12,8 +12,6 @@ unharvested:
         start: [0, 1]
         end: [0, 1]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       dispatch_cores:
         []
@@ -26,8 +24,6 @@ unharvested:
         start: [0, 1]
         end: [0, 1]
 
-      storage_cores: # Relative to grid of tensix cores
-        []
 
       dispatch_cores:
         []

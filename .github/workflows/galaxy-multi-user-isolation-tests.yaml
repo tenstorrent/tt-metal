@@ -1,4 +1,4 @@
-name: Galaxy Multi-user Isolation Tests
+name: (Galaxy) Multi-user Isolation Tests
 on:
   workflow_dispatch:
     inputs:
@@ -26,11 +26,9 @@ jobs:
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     runs-on:
-      - in-service
       - topology-6u
       - arch-wormhole_b0
-      - bare-metal
-      - ${{ inputs.extra-tag }}
+      - ${{ inputs.extra-tag || 'in-service' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -42,7 +40,7 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10

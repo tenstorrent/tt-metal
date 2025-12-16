@@ -7,7 +7,6 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
-#include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
@@ -22,8 +21,6 @@
 
 // used for moreh softmax
 #include <cmath>
-
-#include "core/compute_kernel_config.hpp"
 
 class SoftmaxTest : public ::testing::Test {
 protected:
@@ -62,20 +59,13 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
         seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    input.print();
 
     auto result = ttml::metal::softmax(input, dim);
-    std::cout << "Sofrmax_test:\nResult:\n";
-    result.print();
 
     auto ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
     auto expected_result = xt_softmax(input_tensor, dim);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    expected_result_print.print();
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -99,17 +89,10 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
         seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    input.print();
 
     auto result = ttml::metal::softmax(input, dim);
-    std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
 
     auto expected_result = xt_softmax(input_tensor, dim);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    expected_result_print.print();
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -119,7 +102,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
 
 TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == BoardType::P100 || board == BoardType::P150) {
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
     }
     using namespace ttml;
@@ -137,17 +120,10 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
         seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    input.print();
 
     auto result = ttml::metal::softmax(input, dim);
-    std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result.print();
 
     auto expected_result = xt_softmax(input_tensor, dim);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    expected_result_print.print();
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -202,20 +178,13 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
            -9.98244e+08, -9.98244e+08, -9.98244e+08, -9.98244e+08}}}};
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    input.print();
 
     auto result = ttml::metal::softmax(input, dim);
-    std::cout << "Sofrmax_test:\nResult:\n";
-    result.print();
 
     auto ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
     auto expected_result = xt_softmax(input_tensor, dim);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    expected_result_print.print();
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);

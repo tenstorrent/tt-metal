@@ -27,6 +27,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/debug/inspector/inspector.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -73,8 +77,7 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), num_hw_cqs(num_hw_cqs), bypass_enable(false), bypass_buffer_write_offset(0) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -83,8 +86,7 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
     // Split hugepage into however many pieces as there are CQs
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
     char* hugepage_start =
         (char*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
@@ -177,8 +179,24 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     cq_to_event_locks[cq_id].lock();
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
+
     cq_to_event_locks[cq_id].unlock();
     return next_event;
+}
+
+// Get last issued event to Command Queue
+uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
+    return this->cq_to_event[cq_id];
+}
+
+void SystemMemoryManager::set_current_and_last_completed_event(
+    const uint8_t cq_id, const uint32_t current_event_id, const uint32_t last_completed_event_id) {
+    cq_to_event_locks[cq_id].lock();
+
+    this->cq_to_event[cq_id] = current_event_id;
+    this->cq_to_last_completed_event[cq_id] = last_completed_event_id;
+    cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
@@ -197,12 +215,21 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
     TT_ASSERT(
         wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
-        "completed event is {}",
+        "completed event is {}, manager {}",
         event_id,
-        this->cq_to_last_completed_event[cq_id]);
+        this->cq_to_last_completed_event[cq_id],
+        fmt::ptr(this));
     cq_to_event_locks[cq_id].lock();
+
     this->cq_to_last_completed_event[cq_id] = event_id;
     cq_to_event_locks[cq_id].unlock();
+}
+
+uint32_t SystemMemoryManager::get_current_event(const uint8_t cq_id) {
+    cq_to_event_locks[cq_id].lock();
+    uint32_t current_event = this->cq_to_event[cq_id];
+    cq_to_event_locks[cq_id].unlock();
+    return current_event;
 }
 
 uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
@@ -272,11 +299,12 @@ uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_
 
 uint32_t SystemMemoryManager::get_cq_size() const { return this->cq_size; }
 
-chip_id_t SystemMemoryManager::get_device_id() const { return this->device_id; }
+ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+    TT_ASSERT(cmd_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         uint32_t curr_size = this->bypass_buffer.size();
         uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
@@ -331,6 +359,7 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
 // TODO: RENAME issue_queue_stride ?
 void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+    TT_ASSERT(push_size_B > 0, "Push size must be greater than 0");
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
@@ -354,7 +383,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
@@ -370,11 +399,10 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
@@ -418,6 +446,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
+            on_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -448,7 +477,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Body of the operation to be timed out
     auto wait_operation_body =
-        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
@@ -467,8 +496,11 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     };
 
     // Handler for the timeout
-    auto on_timeout = [&exit_condition]() {
+    auto on_timeout = [&exit_condition, this]() {
         exit_condition.store(true);
+
+        this->on_timeout_detected();
+
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
@@ -520,6 +552,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         max_command_size_B);
     TT_ASSERT(
         (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "FetchQ command too large to represent");
+    TT_ASSERT(command_size_B > 0, "Command size must be greater than 0");
     if (this->bypass_enable) {
         return;
     }
@@ -536,6 +569,29 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     }
     this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
+}
+
+void SystemMemoryManager::on_timeout_detected() const {
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    // Serialize Inspector RPC data if enabled
+    if (rtoptions.get_serialize_inspector_on_dispatch_timeout()) {
+        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+        Inspector::serialize_rpc();
+    }
+
+    // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
+    std::string command = rtoptions.get_dispatch_timeout_command_to_execute();
+    if (!command.empty()) {
+        log_info(LogAlways, "Timeout detected - executing command: {}", command);
+
+        int result = std::system(command.c_str());
+
+        if (result != 0) {
+            log_warning(
+                LogAlways, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

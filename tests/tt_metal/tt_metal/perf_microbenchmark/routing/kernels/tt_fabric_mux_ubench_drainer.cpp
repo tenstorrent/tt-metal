@@ -26,7 +26,8 @@ constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 namespace tt::tt_fabric {
 using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
-using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
+using DrainerChannelWorkerInterface =
+    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
 using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 
@@ -91,7 +92,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     status_ptr[0] = tt::tt_fabric::DrainerStatus::READY_FOR_TRAFFIC;
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         invalidate_l1_cache();
         bool has_unsent_payload = get_ptr_val(slots_free_stream_id) != NUM_BUFFERS;
         if (has_unsent_payload) {
@@ -100,7 +101,7 @@ void kernel_main() {
             worker_interface.notify_worker_of_read_counter_update();
             increment_local_update_ptr_val(slots_free_stream_id, 1);
         }
-        tt::tt_fabric::check_worker_connections<my_eth_channel_id>(
+        tt::tt_fabric::check_worker_connections<my_eth_channel_id, true>(
             worker_interface, connection_established, slots_free_stream_id);
     }
 

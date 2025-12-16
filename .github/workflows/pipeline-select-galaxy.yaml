@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       trigger_type:
-        description: "⚠️ CHECKBOX options below are used only when 'manual' is selected; otherwise, predefined settings apply. ⚠️"
+        description: "'manual' = custom selection below; other options = predefined configs. ⚠️ Resource intensive!"
         required: true
         type: choice
         options:
           - manual
-          - model-pr
+          - models-mandatory
+          - models-extended
           - op-pr
           - nightly
           - hw-self-test
@@ -32,27 +33,78 @@ on:
         required: false
         type: boolean
         default: false
-      galaxy-demo:
-        required: false
-        type: boolean
-        default: false
       galaxy-unit:
+        description: 'Unit tests: Select all, specific model, or disabled'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - unit
+          - fabric
+          - llama3-70b
+          - prefetcher
+          - distributed-ops
+          - gpt-oss
+        default: 'disabled'
+      galaxy-demo:
+        description: 'Demo tests: Select all, specific model, or disabled'
+        required: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - llama3
+          - llama3_long_context
+          - llama3_evals
+          - llama3_8b_dp
+          - llama3_70b_dp
+          - falcon7b
+          - sentence_bert
+          - whisper
+          - sd35
+          - flux1
+          - gpt-oss
+          - motif
+          - wan22
+          - mochi
+          - qwen3_32b
+          - qwen3_32b_long_context
+        default: 'disabled'
       galaxy-frequent:
+        description: 'Frequent tests: Select all, specific model, or disabled'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - llama3
+          - resnet50
+          - unit
+          - sd35
+          - wan22
+          - mochi
+          - flux1
+          - motif
+        default: 'disabled'
       galaxy-model-perf:
-        description: "galaxy-model-perf (Requires tracy build)"
+        description: 'Model perf tests: Select all, specific model, or disabled'
         required: false
-        type: boolean
-        default: false
-      galaxy-stress:
-        required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - disabled
+          - all
+        #  - llama70b
+        #  - llama_unit_tests
+        #  - llama70b_prefill
+          - cnn
+          - sd35
+          - flux1-dev
+          - motif
+          - sentence_bert
+          - wan2-2
+          - mochi
+        default: 'disabled'
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -64,7 +116,6 @@ jobs:
       run-frequent: ${{ steps.logic.outputs.run-frequent }}
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
-      run-stress: ${{ steps.logic.outputs.run-stress }}
     steps:
       - name: Determine test execution
         id: logic
@@ -73,19 +124,24 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.galaxy-unit }}" >> $GITHUB_OUTPUT
-              echo "run-frequent=${{ inputs.galaxy-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.galaxy-demo }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.galaxy-model-perf }}" >> $GITHUB_OUTPUT
-              echo "run-stress=${{ inputs.galaxy-stress }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.galaxy-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.galaxy-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
               ;;
-            "model-pr")
+            "models-mandatory")
               echo "run-quick=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              ;;
+            "models-extended")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
-              echo "run-stress=true" >> $GITHUB_OUTPUT
               ;;
             "op-pr")
               echo "run-quick=false" >> $GITHUB_OUTPUT
@@ -93,7 +149,6 @@ jobs:
               echo "run-frequent=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-stress=false" >> $GITHUB_OUTPUT
               ;;
             "nightly")
               echo "run-quick=false" >> $GITHUB_OUTPUT
@@ -101,7 +156,6 @@ jobs:
               echo "run-frequent=true" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
-              echo "run-stress=true" >> $GITHUB_OUTPUT
               ;;
             "hw-self-test")
               echo "run-quick=false" >> $GITHUB_OUTPUT
@@ -109,7 +163,6 @@ jobs:
               echo "run-frequent=true" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
-              echo "run-stress=true" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "run-quick=true" >> $GITHUB_OUTPUT
@@ -117,7 +170,6 @@ jobs:
               echo "run-frequent=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-stress=false" >> $GITHUB_OUTPUT
               ;;
           esac
   build-artifact:
@@ -130,6 +182,7 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
+      build-umd-tests: true
       version: 22.04
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
@@ -141,7 +194,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-6u: true
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -152,6 +204,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
       topology: 'topology-6u'
   galaxy-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
@@ -163,6 +216,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-frequent || 'all' }}
       topology: 'topology-6u'
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
@@ -174,6 +228,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-demo || 'all' }}
       topology: 'topology-6u'
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
@@ -185,15 +240,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-model-perf || 'all' }}
       topology: 'topology-6u'
-  galaxy-stress-test:
-    if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/galaxy-stress-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-6u: true

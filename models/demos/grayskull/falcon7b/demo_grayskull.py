@@ -26,8 +26,6 @@ def test_demo(
     greedy_sampling,  # Option to use greedy decoding instead of top-k/p
     expected_greedy_output_path,  # Path for expected outputs for greedy decoding
     user_input,
-    model_location_generator,
-    get_tt_cache_path,
     device,
 ):
     return run_falcon_demo_kv(
@@ -35,8 +33,6 @@ def test_demo(
         batch_size=32,
         max_seq_len=1024,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
-        model_location_generator=model_location_generator,
-        get_tt_cache_path=get_tt_cache_path,
         mesh_device=device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

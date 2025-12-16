@@ -65,6 +65,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         num_dst_rows,
         width / stride_w,
         pixels_per_dst_row * aligned_pixel_size,
+        input.element_size(),
         true,
     };
     // Setup kernel
@@ -75,7 +76,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         all_cores,
         WriterDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 
-    compile_time_args[12] = false;  // is_reader = false for writer
+    compile_time_args[13] = false;  // is_reader = false for writer
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
@@ -102,10 +103,10 @@ void Fold::MultiCore::override_runtime_arguments(
     auto& cb_dst0 = cached_program.shared_variables.cb_dst0;
 
     auto& program = cached_program.program;
-    auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_dst0, *dst_buffer);

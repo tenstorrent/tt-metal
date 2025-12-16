@@ -4,12 +4,12 @@
 
 import pytest
 import torchvision.transforms as transforms
-from diffusers import StableDiffusionPipeline
 
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.demo.demo import load_inputs
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference as demo
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference_diffusiondb as demo_db
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -29,10 +29,30 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_size",
     ((512, 512),),
 )
-def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
+def test_demo_sd_db(
+    device,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
     if device.core_grid.y != 8:
         pytest.skip("Needs 8x8 Grid")
-    demo_db(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
+    demo_db(
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
+        reset_seeds,
+        input_path,
+        num_prompts,
+        num_inference_steps,
+        image_size,
+    )
 
 
 @pytest.mark.timeout(600)
@@ -44,15 +64,14 @@ def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
     ids=["default_input"],
 )
-def test_demo_sd(device, reset_seeds, input_path):
+def test_demo_sd(device, reset_seeds, input_path, is_ci_env, is_ci_v2_env, model_location_generator):
     num_prompts = 1
     num_inference_steps = 50
     image_size = (512, 512)
 
     inputs = load_inputs(input_path)
     input_prompts = inputs[:1]
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4")
-    pipe = pipe.to("cpu")
+    pipe = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator)
 
     import torch
 
@@ -69,6 +88,9 @@ def test_demo_sd(device, reset_seeds, input_path):
 
     ttnn_image = demo(
         device,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
         reset_seeds,
         input_path,
         num_prompts,

@@ -11,14 +11,14 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace system_health_tests {
+namespace tt::tt_fabric::system_health_tests {
 
 enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
 
@@ -37,8 +37,10 @@ std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
     return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
 }
 
-ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
+ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
     auto arch = cluster.arch();
     auto board_type = cluster.get_board_type(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -46,7 +48,7 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
             if (cluster.is_external_cable(chip_id, eth_core)) {
                 return ConnectorType::QSFP;
             }
-            auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+            auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
             if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
                 return ConnectorType::LK1;
             } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
@@ -63,7 +65,7 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
                     return ConnectorType::WARP;
                 } else if (chan == 0 || chan == 1 || chan == 6 || chan == 7) {
                     return ConnectorType::QSFP;
-                } else if ((chan == 8 || chan == 9) && board_type == tt::umd::BoardType::N300) {
+                } else if ((chan == 8 || chan == 9) && board_type == BoardType::N300) {
                     return ConnectorType::TRACE;
                 }
                 return ConnectorType::UNUSED;
@@ -77,13 +79,13 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
             }
         }
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        if (board_type == tt::umd::BoardType::P150) {
+        if (board_type == BoardType::P150) {
             if (4 <= chan && chan <= 11) {
                 return ConnectorType::QSFP;
             } else {
                 return ConnectorType::UNUSED;
             }
-        } else if (board_type == tt::umd::BoardType::P300) {
+        } else if (board_type == BoardType::P300) {
             auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
             if (asic_loc == 1) {
                 // Left Chip
@@ -109,7 +111,7 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
     return ConnectorType::UNKNOWN;
 }
 
-bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
+bool is_chip_on_edge_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
@@ -127,7 +129,7 @@ bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterTy
     }
 }
 
-bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
+bool is_chip_on_corner_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
@@ -145,12 +147,25 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::Cluster
     }
 }
 
-std::string get_ubb_id_str(chip_id_t chip_id) {
-    auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+std::string get_ubb_id_str(ChipId chip_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
+    auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
 
-std::string get_physical_slot_str(chip_id_t chip_id) {
+std::string get_pcie_device_id_str(ChipId chip_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& chips_with_mmio = cluster.get_chips_with_mmio();
+    auto it = chips_with_mmio.find(chip_id);
+    if (it != chips_with_mmio.end()) {
+        return "PCIe: " + std::to_string(it->second);
+    }
+    return "";
+}
+
+std::string get_physical_slot_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto physical_slot = cluster.get_physical_slot(chip_id);
     auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
@@ -160,7 +175,7 @@ std::string get_physical_slot_str(chip_id_t chip_id) {
     return "";
 }
 
-std::string get_physical_loc_str(chip_id_t chip_id, ClusterType cluster_type) {
+std::string get_physical_loc_str(ChipId chip_id, ClusterType cluster_type) {
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         return get_ubb_id_str(chip_id);
@@ -169,7 +184,7 @@ std::string get_physical_loc_str(chip_id_t chip_id, ClusterType cluster_type) {
     }
 }
 
-std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t channel, ClusterType cluster_type) {
+std::string get_connector_str(ChipId chip_id, CoreCoord eth_core, uint32_t channel, ClusterType cluster_type) {
     auto connector = get_connector_type(chip_id, eth_core, channel, cluster_type);
     std::stringstream str;
     str << "(";
@@ -266,7 +281,12 @@ TEST(Cluster, ReportSystemHealth) {
     for (const auto& [chip_id, unique_chip_id] : unique_chip_ids) {
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
         std::stringstream chip_id_ss;
-        chip_id_ss << std::dec << "Chip: " << chip_id << " Unique ID: " << std::hex << unique_chip_id;
+        chip_id_ss << std::dec << "Chip: " << chip_id;
+        auto pcie_id = get_pcie_device_id_str(chip_id);
+        if (not pcie_id.empty()) {
+            chip_id_ss << " " << pcie_id;
+        }
+        chip_id_ss << " Unique ID: " << std::hex << unique_chip_id;
         auto physical_loc = get_physical_loc_str(chip_id, cluster_type);
         if (not physical_loc.empty()) {
             chip_id_ss << " " << physical_loc;
@@ -295,8 +315,10 @@ TEST(Cluster, ReportSystemHealth) {
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 eth_ss << " link UP " << connection_type;
                 CoreCoord connected_eth_core = CoreCoord{0, 0};
-                if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
-                    chip_id_t connected_chip_id = 0;
+                auto eth_conn_it = eth_connections.find(chip_id);
+                if (eth_conn_it != eth_connections.end() &&
+                    eth_conn_it->second.find(chan) != eth_conn_it->second.end()) {
+                    ChipId connected_chip_id = 0;
                     std::tie(connected_chip_id, connected_eth_core) =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
                     eth_ss << ", connected to Chip " << connected_chip_id;
@@ -368,7 +390,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     // T3K cluster type is inferred based on number of chips and number of connections for MMIO and Remote chips
     // If it is missing all connections between chips, it will be set to N300
     // Allow forcing cluster type to enforce error checking if system is expected to be T3K
-    std::string cluster_type_str = "";
+    std::string cluster_type_str;
     std::tie(cluster_type_str, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--cluster-type", "");
     tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
@@ -400,6 +422,10 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 8;
         num_connections_per_side = 2;
+    } else if (cluster_type == tt::tt_metal::ClusterType::P300_X2) {
+        num_expected_chips = 4;
+        num_expected_mmio_chips = 4;
+        num_connections_per_side = 2;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);
     }
@@ -425,12 +451,11 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 
     std::optional<FabricType> target_system_topology = std::nullopt;
-    std::string target_system_topology_str = "";
+    std::string target_system_topology_str;
     std::tie(target_system_topology_str, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--system-topology", "");
     if (not target_system_topology_str.empty()) {
-        target_system_topology =
-            enchantum::cast<FabricType>(target_system_topology_str, ttsl::ascii_caseless_comp);
+        target_system_topology = enchantum::cast<FabricType>(target_system_topology_str, ttsl::ascii_caseless_comp);
         // TORUS_XY is the only topology that is supported for all cluster types
         if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_XY) {
             bool supported_topology = false;
@@ -461,9 +486,9 @@ TEST(Cluster, TestMeshFullConnectivity) {
             chip_ss << " " << physical_loc;
         }
         const auto& soc_desc = cluster.get_soc_desc(chip);
-        std::map<chip_id_t, int> num_connections_to_chip;
-        std::map<chip_id_t, uint32_t> num_internal_connections_to_chip;
-        std::map<chip_id_t, uint32_t> num_external_connections_to_chip;
+        std::map<ChipId, int> num_connections_to_chip;
+        std::map<ChipId, uint32_t> num_internal_connections_to_chip;
+        std::map<ChipId, uint32_t> num_external_connections_to_chip;
         for (const auto& [channel, remote_chip_and_channel] : connections) {
             tt::umd::CoreCoord logical_active_eth_umd_coord =
                 soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
@@ -530,5 +555,4 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 }
 
-}  // namespace system_health_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::system_health_tests

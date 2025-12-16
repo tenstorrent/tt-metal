@@ -9,14 +9,14 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
-    config_(config), expanded_tests_(), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
+    config_(config), mesh_device_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestContext created with {} tests", config_.tests.size());
 }
 
@@ -109,7 +109,7 @@ void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     // ethernet coordinate chip mapping, which should be migrated away from
-    std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+    std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
         if (mesh_id == *local_mesh_id_) {
             for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
@@ -153,12 +153,9 @@ void MeshSocketTestContext::setup_fabric_configuration() {
     tt::tt_fabric::FabricConfig fabric_config;
     // TODO: Add support for other Fabric Configs as well
     switch (config_.fabric_config.topology) {
-        case tt::tt_fabric::Topology::Mesh:
-            switch (config_.fabric_config.routing_type) {
-                case RoutingType::Dynamic: fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC; break;
-                default: TT_THROW("Unsupported fabric routing type, must be Dynamic");
-            }
-            break;
+        case tt::tt_fabric::Topology::Mesh: {
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
+        } break;
         default: TT_THROW("Unsupported fabric topology, must be Mesh");
     }
 

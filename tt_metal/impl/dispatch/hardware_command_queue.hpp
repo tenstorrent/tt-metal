@@ -17,7 +17,6 @@
 #include "buffer.hpp"
 #include "cq_shared_state.hpp"
 #include "command_queue.hpp"
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"
@@ -35,14 +34,12 @@
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "ringbuffer_cache.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Program;
 class SystemMemoryManager;
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -80,8 +77,6 @@ public:
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
-
-    void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         void* dst,
@@ -122,7 +117,7 @@ public:
 
 private:
     uint32_t id_;
-    uint32_t size_B_;
+    uint32_t size_B_{0};
     uint32_t completion_queue_reader_core_ = 0;
     std::optional<uint32_t> tid_;
     std::shared_ptr<TraceDescriptor> trace_ctx_;
@@ -165,7 +160,6 @@ private:
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
     CoreCoord completion_queue_writer_core_;
-    NOC noc_index_;
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;

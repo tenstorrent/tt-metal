@@ -14,8 +14,8 @@
 #include <pybind11/cast.h>
 #include <pybind11/pytypes.h>
 
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -216,7 +216,7 @@ void py_module(py::module& module) {
         .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
-                auto device = self.get_device(coord);
+                auto* device = self.get_device(coord);
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })
@@ -420,7 +420,55 @@ void py_module(py::module& module) {
         .def(
             "sfpu_inf",
             [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
-            R"doc(Returns Infinity value for current architecture.)doc");
+            R"doc(Returns Infinity value for current architecture.)doc")
+        .def(
+            "worker_core_from_logical_core",
+            &MeshDevice::worker_core_from_logical_core,
+            py::arg("logical_core"),
+            R"doc(
+                Convert a logical coordinate to a virtual coordinate for a worker core.
+
+                Args:
+                    logical_core (CoreCoord): The logical coordinate to convert.
+
+                Returns:
+                    CoreCoord: The virtual coordinate of the worker core.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> logical_core = ttnn.CoreCoord(0, 0)
+                    >>> worker_core = device.worker_core_from_logical_core(logical_core)
+                    >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc")
+        .def(
+            "get_worker_noc_hop_distance",
+            [](MeshDevice& self, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
+                return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                    &self, logical_src, logical_dst, noc);
+            },
+            py::arg("logical_src"),
+            py::arg("logical_dst"),
+            py::arg("noc"),
+            R"doc(
+                Returns the hop distance between two logical worker coordinates on a given NOC.
+
+                This API is experimental and may evolve into a stable Device API in the future.
+
+                Args:
+                    logical_src (CoreCoord): The source logical coordinate.
+                    logical_dst (CoreCoord): The destination logical coordinate.
+                    noc (NOC): The NOC to use (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
+
+                Returns:
+                    int: The hop distance between the two coordinates on the given NOC.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> src = ttnn.CoreCoord(0, 0)
+                    >>> dst = ttnn.CoreCoord(2, 3)
+                    >>> noc0_distance = device.get_worker_noc_hop_distance(src, dst, ttnn.NOC.NOC_0)
+                    >>> noc1_distance = device.get_worker_noc_hop_distance(src, dst, ttnn.NOC.NOC_1)
+            )doc");
 
     auto py_mesh_device_view = static_cast<py::class_<MeshDeviceView>>(module.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, py::return_value_policy::reference_internal)
@@ -581,9 +629,25 @@ void py_module(py::module& module) {
 
     auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
     py_tensor_topology
+        .def(
+            py::init<
+                tt::tt_metal::distributed::MeshShape,
+                ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+                std::vector<tt::tt_metal::distributed::MeshCoordinate>>(),
+            py::arg("distribution_shape"),
+            py::arg("placements"),
+            py::arg("mesh_coords"),
+            "Constructor for TensorTopology")
         .def("distribution_shape", &TensorTopology::distribution_shape, py::return_value_policy::reference_internal)
         .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal)
+        .def("__eq__", [](const TensorTopology& self, const TensorTopology& other) { return self == other; })
+        .def("__ne__", [](const TensorTopology& self, const TensorTopology& other) { return self != other; })
+        .def("__repr__", [](const TensorTopology& self) {
+            std::ostringstream oss;
+            oss << self;
+            return oss.str();
+        });
 
     module.def(
         "get_device_tensors",

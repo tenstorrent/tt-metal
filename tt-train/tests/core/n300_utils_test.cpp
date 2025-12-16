@@ -19,7 +19,7 @@
 using namespace ttml;
 
 auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
 }
 
 class N300UtilsTest : public ::testing::Test {

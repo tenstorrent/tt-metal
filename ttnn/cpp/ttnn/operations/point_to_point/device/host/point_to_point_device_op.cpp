@@ -7,7 +7,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "point_to_point_device_op.hpp"
@@ -105,7 +105,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
 
     TT_FATAL(
         operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
@@ -173,9 +173,11 @@ PointToPointOp::tensor_return_value_t PointToPointOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
 
-    const auto intermediate_output_tensor = create_device_tensor(output_specs.at(0), mesh_device);
+    const auto intermediate_output_tensor =
+        tensor_args.optional_intermediate_tensor.value_or(create_device_tensor(output_specs.at(0), mesh_device));
+
     const auto final_output_tensor =
         tensor_args.optional_output_tensor.value_or(create_device_tensor(output_specs.at(1), mesh_device));
 
@@ -192,7 +194,7 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
 
     std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);

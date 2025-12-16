@@ -10,7 +10,7 @@
 
 namespace tt::tt_metal::distributed {
 
-using chip_id_t = int;
+using ChipId = int;
 
 // Specifies the configuration of a MeshDevice.
 class MeshDeviceConfig {
@@ -24,17 +24,17 @@ public:
     MeshDeviceConfig(
         const std::optional<MeshShape>& mesh_shape,
         const std::optional<MeshCoordinate>& offset = std::nullopt,
-        const std::vector<chip_id_t>& physical_device_ids = {}) :
+        const std::vector<ChipId>& physical_device_ids = {}) :
         mesh_shape_(mesh_shape), offset_(offset), physical_device_ids_(physical_device_ids) {}
 
     const std::optional<MeshShape>& mesh_shape() const { return mesh_shape_; }
     const std::optional<MeshCoordinate>& offset() const { return offset_; }
-    const std::vector<chip_id_t>& physical_device_ids() const { return physical_device_ids_; }
+    const std::vector<ChipId>& physical_device_ids() const { return physical_device_ids_; }
 
 private:
     std::optional<MeshShape> mesh_shape_;
     std::optional<MeshCoordinate> offset_;
-    std::vector<chip_id_t> physical_device_ids_;
+    std::vector<ChipId> physical_device_ids_;
 };
 
 }  // namespace tt::tt_metal::distributed

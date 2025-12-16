@@ -17,20 +17,29 @@ inputs:
     description: 'Enable watcher'
     default: false
     type: boolean
-  fetch-depth:
-    description: 'Fetch depth for git'
-    default: 1
-    type: integer
+  enable-lightweight-kernel-asserts:
+    description: 'Enable lightweight kernel asserts'
+    default: false
+    type: boolean
+  enable-llk-asserts:
+    description: 'Enable LLK asserts'
+    default: false
+    type: boolean
+  use-evaluation-image:
+    description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
+    default: false
+    type: boolean
+  auto-triage:
+    description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
+    default: false
+    type: boolean
+  slow-dispatch-timeout:
+    description: 'Timeout in seconds to consider a dispatch as slow for auto-triage'
+    default: 5.0
+    type: float
 runs:
   using: "composite"
   steps:
-    - name: 🧬 Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: ${{ inputs.fetch-depth }}
-        submodules: recursive
-        path: ${{ inputs.path }}
-
     - name: 🧪 Check Required Tools
       run: |
         echo "🔍 Verifying tools..."
@@ -39,27 +48,27 @@ runs:
       shell: bash
 
     - name: 📦 Download Build Artifact
-      if: ${{ inputs.build-artifact-name != '' }}
+      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.build-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 📂 Extract Build Files
-      if: ${{ inputs.build-artifact-name != '' }}
+      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       working-directory: ${{ inputs.path }}
-      run: tar -xf ttm_any.tar
+      run: tar --zstd -xf ttm_any.tar.zst
       shell: bash
 
     - name: 🧪 Download Python Wheel
-      if: ${{ inputs.wheel-artifact-name != '' }}
+      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 💿 Install Wheel
-      if: ${{ inputs.wheel-artifact-name != '' }}
+      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"
@@ -78,4 +87,29 @@ runs:
         echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for lightweight kernel asserts
+      if: ${{ inputs.enable-lightweight-kernel-asserts == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal Lightweight Kernel Asserts"
+        echo "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for LLK asserts
+      if: ${{ inputs.enable-llk-asserts == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal LLK Asserts"
+        echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for auto-triage
+      if: ${{ inputs.auto-triage == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
+        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py 1>&2" >> $GITHUB_ENV
+        echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.slow-dispatch-timeout }}" >> $GITHUB_ENV
       shell: bash

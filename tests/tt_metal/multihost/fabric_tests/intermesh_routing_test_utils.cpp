@@ -8,10 +8,9 @@
 #include <random>
 #include <stdint.h>
 
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -20,10 +19,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
@@ -534,10 +530,10 @@ void InterMeshLineMcast(
     }
 }
 
-std::map<FabricNodeId, chip_id_t> get_physical_chip_mapping_from_eth_coords_mapping(
-    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords, uint32_t local_mesh_id) {
+std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
+    const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords, uint32_t local_mesh_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    std::map<FabricNodeId, chip_id_t> physical_chip_ids_mapping;
+    std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
         if (mesh_id == local_mesh_id) {
             for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
@@ -550,7 +546,4 @@ std::map<FabricNodeId, chip_id_t> get_physical_chip_mapping_from_eth_coords_mapp
     return physical_chip_ids_mapping;
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost_utils

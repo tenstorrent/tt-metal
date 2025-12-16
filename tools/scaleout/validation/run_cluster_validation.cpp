@@ -4,17 +4,37 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <optional>
+#include <chrono>
+#include <sstream>
+#include <unordered_map>
 
+#include <cxxopts.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tests/tt_metal/test_utils/test_common.hpp"
 #include <cabling_generator/cabling_generator.hpp>
+#include <tt-metalium/hal.hpp>
+#include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include <yaml-cpp/yaml.h>
+#include "protobuf/factory_system_descriptor.pb.h"
+#include <llrt/tt_cluster.hpp>
 
-// Captures current list of supported inputargs
+namespace tt::scaleout_tools {
+
+using tt::tt_metal::AsicTopology;
+using tt::tt_metal::PhysicalSystemDescriptor;
+
+enum class CommandMode {
+    VALIDATE,
+    LINK_RETRAIN,
+};
+
+// Captures current list of supported input args
 struct InputArgs {
+    CommandMode mode = CommandMode::VALIDATE;
     std::optional<std::string> cabling_descriptor_path = std::nullopt;
     std::optional<std::string> deployment_descriptor_path = std::nullopt;
     std::optional<std::string> fsd_path = std::nullopt;
@@ -24,30 +44,20 @@ struct InputArgs {
     bool log_ethernet_metrics = false;
     bool print_connectivity = false;
     bool help = false;
-};
+    bool send_traffic = false;
+    uint32_t data_size = 0;
+    uint32_t packet_size_bytes = 64;
+    uint32_t num_iterations = 50;
+    bool sweep_traffic_configs = false;
+    bool validate_connectivity = true;
+    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 
-// Struct to store connection information
-// Used to organize and print connection information
-struct ConnectionInfo {
-    tt::tt_metal::AsicID asic_id;
-    uint8_t channel;
-    std::string host;
-    tt::tt_metal::TrayID tray_id;
-    tt::tt_metal::ASICLocation asic_location;
-    tt::scaleout_tools::PortType port_type;
-    tt::tt_metal::AsicID connected_asic_id;
-    uint8_t connected_channel;
-    std::string connected_host;
-    tt::tt_metal::TrayID connected_tray_id;
-    tt::tt_metal::ASICLocation connected_asic_location;
-    tt::tt_metal::EthernetMetrics metrics;
+    // link_reset subcommand args
+    std::optional<std::string> reset_host = std::nullopt;
+    std::optional<uint32_t> reset_tray_id = std::nullopt;
+    std::optional<uint32_t> reset_asic_location = std::nullopt;
+    std::optional<uint32_t> reset_channel = std::nullopt;
 };
-
-void log_output_rank0(const std::string& message) {
-    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
-        log_info(tt::LogDistributed, "{}", message);
-    }
-}
 
 std::filesystem::path generate_output_dir() {
     auto now = std::chrono::system_clock::now();
@@ -62,62 +72,196 @@ std::filesystem::path generate_output_dir() {
     return output_dir_path;
 }
 
-InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
-    InputArgs input_args;
+cxxopts::Options create_validation_options() {
+    cxxopts::Options options(
+        "run_cluster_validation",
+        "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster.\n"
+        "Compares live system state against the requested Cabling and Deployment Specifications.\n\n"
+        "Usage:\n"
+        "  run_cluster_validation [OPTIONS]                # Run validation (default)\n"
+        "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link\n\n"
+        "To run on a multi-node cluster, use mpirun with a --hostfile option.");
 
-    if (test_args::has_command_option(args_vec, "--cabling-descriptor-path")) {
-        TT_FATAL(
-            test_args::has_command_option(args_vec, "--deployment-descriptor-path"),
-            "Deployment Descriptor Path is required when Cabling Descriptor Path is provided.");
-        input_args.cabling_descriptor_path = test_args::get_command_option(args_vec, "--cabling-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--deployment-descriptor-path")) {
-        TT_FATAL(
-            input_args.cabling_descriptor_path.has_value(),
-            "Cabling Descriptor Path is required when Deployment Descriptor Path is provided.");
-        input_args.deployment_descriptor_path = test_args::get_command_option(args_vec, "--deployment-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--factory-descriptor-path")) {
-        TT_FATAL(
-            !(input_args.cabling_descriptor_path.has_value() || input_args.deployment_descriptor_path.has_value()),
-            "Pass in either Cabling Spec + Deployment Spec or just Factory System Descriptor.");
-        input_args.fsd_path = test_args::get_command_option(args_vec, "--factory-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--global-descriptor-path")) {
-        input_args.gsd_path = test_args::get_command_option(args_vec, "--global-descriptor-path");
-    }
-    if (test_args::has_command_option(args_vec, "--output-path")) {
-        input_args.output_path = std::filesystem::path(test_args::get_command_option(args_vec, "--output-path"));
-    } else {
-        input_args.output_path = generate_output_dir();
-    }
-    log_output_rank0("Generating System Validation Logs in " + input_args.output_path.string());
+    options.add_options()("cabling-descriptor-path", "Path to cabling descriptor", cxxopts::value<std::string>())(
+        "deployment-descriptor-path", "Path to deployment descriptor", cxxopts::value<std::string>())(
+        "factory-descriptor-path", "Path to factory descriptor", cxxopts::value<std::string>())(
+        "global-descriptor-path", "Path to global descriptor", cxxopts::value<std::string>())(
+        "output-path", "Path to output directory", cxxopts::value<std::string>())(
+        "hard-fail", "Fail on warning", cxxopts::value<bool>()->default_value("false"))(
+        "log-ethernet-metrics", "Log live ethernet statistics", cxxopts::value<bool>()->default_value("false"))(
+        "print-connectivity",
+        "Print Ethernet Connectivity between ASICs",
+        cxxopts::value<bool>()->default_value("false"))(
+        "send-traffic", "Send traffic across detected links", cxxopts::value<bool>()->default_value("false"))(
+        "num-iterations", "Number of iterations to send traffic", cxxopts::value<uint32_t>()->default_value("50"))(
+        "data-size", "Data size (bytes) sent across each link per iteration", cxxopts::value<uint32_t>())(
+        "packet-size-bytes",
+        "Packet size (bytes) sent across each link",
+        cxxopts::value<uint32_t>()->default_value("64"))(
+        "sweep-traffic-configs",
+        "Sweep pre-generated traffic configurations across detected links (stress testing)",
+        cxxopts::value<bool>()->default_value("false"))(
+        "min-connections",
+        "Minimum connections per ASIC pair required for relaxed validation mode",
+        cxxopts::value<uint32_t>())("h,help", "Print usage information");
 
-    input_args.fail_on_warning = test_args::has_command_option(args_vec, "--hard-fail");
-    input_args.log_ethernet_metrics = test_args::has_command_option(args_vec, "--log-ethernet-metrics");
-    input_args.print_connectivity = test_args::has_command_option(args_vec, "--print-connectivity");
-    input_args.help = test_args::has_command_option(args_vec, "--help");
-
-    TT_FATAL(
-        input_args.help || input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value(),
-        "Cluster Validation requires either Cabling Spec + Deployment Spec or a Factory System Descriptor.");
-
-    return input_args;
+    return options;
 }
 
-std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
-    std::string fsd_path;
-    if (input_args.cabling_descriptor_path.has_value()) {
-        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
-        fsd_path = input_args.output_path / "generated_factory_system_descriptor.textproto";
-        cabling_generator.emit_factory_system_descriptor(fsd_path);
+cxxopts::Options create_link_reset_options() {
+    cxxopts::Options options(
+        "run_cluster_validation link_reset",
+        "Restart a specific cable/link on the cluster.");
 
-    } else {
-        fsd_path = input_args.fsd_path.value();
+    options.add_options()("host", "Host name of the source ASIC", cxxopts::value<std::string>())(
+        "tray-id", "Tray ID of the source ASIC", cxxopts::value<uint32_t>())(
+        "asic-location", "ASIC location of the source ASIC", cxxopts::value<uint32_t>())(
+        "channel", "Channel ID to reset", cxxopts::value<uint32_t>())("h,help", "Print usage information");
+
+    return options;
+}
+
+void parse_link_reset_args(int argc, char* argv[], InputArgs& input_args) {
+    input_args.mode = CommandMode::LINK_RETRAIN;
+    auto options = create_link_reset_options();
+
+    try {
+        // Skip the first two args (program name and "link_reset" subcommand)
+        auto result = options.parse(argc - 1, argv + 1);
+
+        if (result.count("help")) {
+            input_args.help = true;
+            return;
+        }
+
+        // Validate that all required parameters are provided
+        if (result.count("host") && result.count("tray-id") && result.count("asic-location") &&
+            result.count("channel")) {
+            input_args.reset_host = result["host"].as<std::string>();
+            input_args.reset_tray_id = result["tray-id"].as<uint32_t>();
+            input_args.reset_asic_location = result["asic-location"].as<uint32_t>();
+            input_args.reset_channel = result["channel"].as<uint32_t>();
+        } else {
+            TT_FATAL(
+                false, "All link_reset parameters must be specified: --host, --tray-id, --asic-location, --channel");
+        }
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing link_reset arguments: " << e.what() << std::endl;
+        std::cerr << options.help() << std::endl;
+        exit(1);
     }
-    return fsd_path;
+}
+
+void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
+    input_args.mode = CommandMode::VALIDATE;
+    auto options = create_validation_options();
+
+    try {
+        auto result = options.parse(argc, argv);
+
+        if (result.count("help")) {
+            input_args.help = true;
+            return;
+        }
+
+        // Parse cabling descriptor path
+        if (result.count("cabling-descriptor-path")) {
+            input_args.cabling_descriptor_path = result["cabling-descriptor-path"].as<std::string>();
+        }
+
+        // Parse deployment descriptor path
+        if (result.count("deployment-descriptor-path")) {
+            TT_FATAL(
+                input_args.cabling_descriptor_path.has_value(),
+                "Cabling Descriptor Path is required when Deployment Descriptor Path is provided.");
+            input_args.deployment_descriptor_path = result["deployment-descriptor-path"].as<std::string>();
+        }
+
+        // Parse factory descriptor path
+        if (result.count("factory-descriptor-path")) {
+            TT_FATAL(
+                !(input_args.cabling_descriptor_path.has_value() || input_args.deployment_descriptor_path.has_value()),
+                "Pass in either Cabling Spec + Deployment Spec or just Factory System Descriptor.");
+            input_args.fsd_path = result["factory-descriptor-path"].as<std::string>();
+        }
+
+        // Parse global descriptor path
+        if (result.count("global-descriptor-path")) {
+            input_args.gsd_path = result["global-descriptor-path"].as<std::string>();
+        }
+
+        // Parse output path
+        if (result.count("output-path")) {
+            input_args.output_path = std::filesystem::path(result["output-path"].as<std::string>());
+        } else {
+            input_args.output_path = generate_output_dir();
+        }
+
+        // Parse num iterations
+        input_args.num_iterations = result["num-iterations"].as<uint32_t>();
+
+        // Parse data size
+        if (result.count("data-size")) {
+            input_args.data_size = result["data-size"].as<uint32_t>();
+            TT_FATAL(
+                input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
+                "Data size must be less than or equal to the L1 unreserved size: {} bytes",
+                tt::tt_metal::hal::get_erisc_l1_unreserved_size());
+        } else {
+            input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+        }
+
+        // Parse packet size
+        input_args.packet_size_bytes = result["packet-size-bytes"].as<uint32_t>();
+        TT_FATAL(
+            input_args.data_size % input_args.packet_size_bytes == 0, "Data size must be divisible by packet size");
+        TT_FATAL(input_args.packet_size_bytes % 16 == 0, "Packet size must be divisible by 16");
+
+        log_output_rank0("Generating System Validation Logs in " + input_args.output_path.string());
+
+        // Parse boolean flags
+        input_args.fail_on_warning = result["hard-fail"].as<bool>();
+        input_args.log_ethernet_metrics = result["log-ethernet-metrics"].as<bool>();
+        input_args.print_connectivity = result["print-connectivity"].as<bool>();
+        input_args.send_traffic = result["send-traffic"].as<bool>();
+        input_args.sweep_traffic_configs = result["sweep-traffic-configs"].as<bool>();
+        input_args.validate_connectivity =
+            input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+
+        // Parse min-connections
+        if (result.count("min-connections")) {
+            uint32_t min_conn_value = result["min-connections"].as<uint32_t>();
+            TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
+            input_args.min_connections = min_conn_value;
+            log_output_rank0(
+                "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
+                std::to_string(input_args.min_connections.value()));
+        }
+
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
+        std::cerr << options.help() << std::endl;
+        exit(1);
+    }
+}
+
+InputArgs parse_input_args(int argc, char* argv[]) {
+    InputArgs input_args;
+
+    // Check for top-level help first
+    if (argc >= 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+        input_args.help = true;
+        return input_args;
+    }
+
+    // Check for subcommand and dispatch to appropriate parser
+    if (argc > 1 && std::string(argv[1]) == "link_reset") {
+        parse_link_reset_args(argc, argv, input_args);
+    } else {
+        parse_validation_args(argc, argv, input_args);
+    }
+
+    return input_args;
 }
 
 PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& input_args) {
@@ -142,200 +286,69 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
             driver,
             context.get_distributed_context_ptr(),
             &context.hal(),
-            context.rtoptions().get_mock_enabled(),
-            run_discovery);
+            context.rtoptions(),
+            run_discovery
+        );
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
     }
 }
 
-std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, tt::scaleout_tools::PortType>>
-generate_port_types(const PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, tt::scaleout_tools::PortType>>
-        port_types;
-    const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
-
-    for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
-        auto board_type = asic_descriptor.board_type;
-        auto board = tt::scaleout_tools::create_board(board_type);
-        // PhysicalSystemDescriptor internally validates that hostnames across asic descriptors are part of the graph
-        // This can't throw
-        const auto& asic_edges = asic_connectivity_graph.at(asic_descriptor.host_name).at(asic_id);
-        for (const auto& [dst_asic_id, eth_connections] : asic_edges) {
-            for (const auto& eth_connection : eth_connections) {
-                auto port = board.get_port_for_asic_channel(tt::scaleout_tools::AsicChannel{
-                    *(asic_descriptor.asic_location), tt::scaleout_tools::ChanId{eth_connection.src_chan}});
-                port_types[asic_id][eth_connection.src_chan] = port.port_type;
-            }
-        }
+AsicTopology run_connectivity_validation(
+    const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
+    if (!input_args.validate_connectivity) {
+        return {};
     }
-    return port_types;
+    YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
+    auto fsd_proto = get_factory_system_descriptor(
+        input_args.cabling_descriptor_path,
+        input_args.deployment_descriptor_path,
+        input_args.fsd_path,
+        physical_system_descriptor.get_all_hostnames());
+    auto missing_topology = validate_connectivity(
+        fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
+
+    return missing_topology;
 }
 
-std::string log_ethernet_metrics_and_print_connectivity(
-    const InputArgs& input_args, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::stringstream unexpected_status_log;
-
-    if (input_args.log_ethernet_metrics || input_args.print_connectivity) {
-        log_output_rank0("Generating Ethernet Logs");
-    }
-
-    auto port_types = generate_port_types(physical_system_descriptor);
-
-    // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
-    // Using map with bool key: true = cross-host, false = local
-    std::map<bool, std::map<std::string, std::map<std::string_view, std::vector<ConnectionInfo>>>>
-        organized_connections;
-
-    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-        for (const auto& [asic_id, channel_metrics] : physical_system_descriptor.get_ethernet_metrics()) {
-            if (physical_system_descriptor.get_host_name_for_asic(asic_id) == host) {
-                auto tray_id = physical_system_descriptor.get_asic_descriptors().at(asic_id).tray_id;
-                auto asic_location = physical_system_descriptor.get_asic_descriptors().at(asic_id).asic_location;
-
-                for (const auto& [channel, metrics] : channel_metrics) {
-                    auto [connected_asic_id, connected_channel] =
-                        physical_system_descriptor.get_connected_asic_and_channel(asic_id, channel);
-                    auto connected_tray_id =
-                        physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).tray_id;
-                    auto connected_asic_location =
-                        physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).asic_location;
-                    const auto& connected_host = physical_system_descriptor.get_host_name_for_asic(connected_asic_id);
-                    auto port_type_str = enchantum::to_string(port_types.at(asic_id).at(channel));
-
-                    ConnectionInfo conn_info{
-                        .asic_id = asic_id,
-                        .channel = channel,
-                        .host = host,
-                        .tray_id = tray_id,
-                        .asic_location = asic_location,
-                        .port_type = port_types.at(asic_id).at(channel),
-                        .connected_asic_id = connected_asic_id,
-                        .connected_channel = connected_channel,
-                        .connected_host = connected_host,
-                        .connected_tray_id = connected_tray_id,
-                        .connected_asic_location = connected_asic_location,
-                        .metrics = metrics};
-
-                    // Organize: connection_type -> hostname -> port_type -> connections
-                    bool is_cross_host = (host != connected_host);
-                    organized_connections[is_cross_host][host][port_type_str].push_back(conn_info);
-
-                    if (metrics.retrain_count > 0) {
-                        unexpected_status_log << " Host: " << host << " Unique ID: " << std::hex << *asic_id
-                                              << " Tray: " << *tray_id << " ASIC: " << *asic_location
-                                              << " Channel: " << +channel << " Retrain Count: " << metrics.retrain_count
-                                              << std::endl;
-                    }
-                }
-            }
-        }
-    }
-
-    // Print organized connections: connection_type -> hostname -> port_type -> connections
-    if (input_args.print_connectivity || input_args.log_ethernet_metrics) {
-        // Iterate through connection types (true=cross-host, false=local)
-        for (const auto& [is_cross_host, hosts_map] : organized_connections) {
-            if (hosts_map.empty()) {
-                continue;
-            }
-
-            // Print connection type header
-            std::cout << std::endl;
-            if (is_cross_host) {
-                std::cout << " ============================== CROSS-HOST CONNECTIONS =============================== "
-                          << std::endl;
-            } else {
-                std::cout << " ============================== HOST-LOCAL CONNECTIONS =============================== "
-                          << std::endl;
-            }
-
-            // Iterate through hostnames
-            for (const auto& [hostname, port_types_map] : hosts_map) {
-                if (port_types_map.empty()) {
-                    continue;
-                }
-
-                // Print hostname header
-                std::cout << std::endl
-                          << "  =============================== Hostname: " << hostname
-                          << " =============================== " << std::endl;
-
-                // Iterate through port types
-                for (const auto& [port_type, connections] : port_types_map) {
-                    if (connections.empty()) {
-                        continue;
-                    }
-
-                    // Print port type header
-                    std::cout << std::endl
-                              << "             ---------------------- Port Type: " << port_type
-                              << " ---------------------- " << std::endl
-                              << std::endl;
-
-                    // Print all connections for this port type
-                    for (const auto& conn : connections) {
-                        std::cout << " [" << conn.host << "] Unique ID: " << std::hex << *conn.asic_id
-                                  << " Tray: " << std::dec << *conn.tray_id << ", ASIC Location: " << std::dec
-                                  << *conn.asic_location << ", Ethernet Channel: " << std::dec << +conn.channel
-                                  << std::endl;
-
-                        if (input_args.print_connectivity) {
-                            std::cout << "\tConnected to [" << conn.connected_host << "] Unique ID: " << std::hex
-                                      << *conn.connected_asic_id << " Tray: " << std::dec << *conn.connected_tray_id
-                                      << ", ASIC Location: " << std::dec << *conn.connected_asic_location
-                                      << ", Ethernet Channel: " << std::dec << +conn.connected_channel << std::endl;
-                        }
-                        if (input_args.log_ethernet_metrics) {
-                            std::cout << "\t Retrain Count: " << std::dec << conn.metrics.retrain_count << " ";
-                            std::cout << "CRC Errors: 0x" << std::hex << conn.metrics.crc_error_count << " ";
-                            std::cout << "Corrected Codewords: 0x" << std::hex << conn.metrics.corrected_codeword_count
-                                      << " ";
-                            std::cout << "Uncorrected Codewords: 0x" << std::hex
-                                      << conn.metrics.uncorrected_codeword_count << " ";
-                        }
-                        std::cout << std::endl;
-                    }
-                }
-            }
-        }
-    }
-
-    return unexpected_status_log.str();
-}
-
-void log_unexpected_statuses(const std::string& unexpected_status_log) {
-    if (!unexpected_status_log.empty()) {
-        std::cout << std::endl;
-        std::cout << " =============================== Logging Unexpected Ethernet Link Statuses "
-                     "=============================== "
-                  << std::endl;
-        std::cout << unexpected_status_log << std::endl;
+void print_usage_info(CommandMode mode = CommandMode::VALIDATE) {
+    if (mode == CommandMode::LINK_RETRAIN) {
+        auto options = create_link_reset_options();
+        std::cout << options.help() << std::endl;
+    } else {
+        auto options = create_validation_options();
+        std::cout << options.help() << std::endl;
+        std::cout << "link_reset Subcommand:" << std::endl;
+        std::cout << "  Use 'run_cluster_validation link_reset --help' for link_reset options." << std::endl;
     }
 }
 
-void print_usage_info() {
-    std::cout << "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster" << std::endl;
-    std::cout << "Compares live system state against the requested Cabling and Deployment Specifications" << std::endl
-              << std::endl;
-    std::cout << "Arguments:" << std::endl;
-    std::cout << "  --cabling-descriptor-path: Path to cabling descriptor" << std::endl;
-    std::cout << "  --deployment-descriptor-path: Path to deployment descriptor" << std::endl;
-    std::cout << "  --factory-descriptor-path: Path to factory descriptor" << std::endl;
-    std::cout << "  --global-descriptor-path: Path to global descriptor" << std::endl;
-    std::cout << "  --output-path: Path to output directory" << std::endl;
-    std::cout << "  --hard-fail: Fail on warning" << std::endl;
-    std::cout << "  --log-ethernet-metrics: Log ethernet live ethernet statistics" << std::endl;
-    std::cout << "  --print-connectivity: Print Ethernet Connectivity between ASICs" << std::endl;
-    std::cout << "  --help: Print usage information" << std::endl << std::endl;
-    std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
+void set_config_vars() {
+    // This tool must be run with slow dispatch mode, since
+    // it writes custom kernels to ethernet cores, which shouldn't
+    // be running fabric routers
+    setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
+
+    // Only set these if they are not already set
+    if (getenv("TT_MESH_HOST_RANK") == nullptr) {
+        setenv("TT_MESH_HOST_RANK", "0", 1);
+    }
+    if (getenv("TT_MESH_ID") == nullptr) {
+        setenv("TT_MESH_ID", "0", 1);
+    }
 }
+
+}  // namespace tt::scaleout_tools
 
 int main(int argc, char* argv[]) {
-    auto input_args = parse_input_args(std::vector<std::string>(argv, argv + argc));
+    using namespace tt::scaleout_tools;
+
+    set_config_vars();
+
+    auto input_args = parse_input_args(argc, argv);
     if (input_args.help) {
-        print_usage_info();
+        print_usage_info(input_args.mode);
         return 0;
     }
 
@@ -344,21 +357,62 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
-    // Set output path for the YAML file
-    std::string gsd_yaml_path = input_args.output_path / "global_system_descriptor.yaml";
-    // Dump the discovered system to YAML
-    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
 
-    if (*distributed_context.rank() == 0) {
-        log_output_rank0(
-            "Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
-        tt::scaleout_tools::validate_fsd_against_gsd(
-            get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning);
-        log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
+    // Handle link_reset subcommand
+    if (input_args.mode == CommandMode::LINK_RETRAIN) {
+        perform_link_reset(
+            input_args.reset_host.value(),
+            input_args.reset_tray_id.value(),
+            input_args.reset_asic_location.value(),
+            input_args.reset_channel.value(),
+            physical_system_descriptor);
+        return 0;
+    }
 
-        std::string unexpected_status_log =
-            log_ethernet_metrics_and_print_connectivity(input_args, physical_system_descriptor);
-        log_unexpected_statuses(unexpected_status_log);
+    AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
+
+    bool links_reset = false;
+    // Ethernet Link Retraining through SW is currently only supported for Wormhole
+    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
+        5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
+    uint32_t num_retrains = 0;
+    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+        links_reset = true;
+        num_retrains++;
+        physical_system_descriptor.run_discovery(true, true);
+        missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
+    }
+
+    if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
+        TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
+        return -1;
+    }
+    if (links_reset) {
+        log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
+        return 0;
+    }
+
+    ConnectivityValidationConfig validation_config{
+        .output_path = input_args.output_path,
+        .cabling_descriptor_path = input_args.cabling_descriptor_path,
+        .deployment_descriptor_path = input_args.deployment_descriptor_path,
+        .fsd_path = input_args.fsd_path,
+        .fail_on_warning = input_args.fail_on_warning};
+
+    eth_connections_healthy = generate_link_metrics(
+        physical_system_descriptor,
+        input_args.num_iterations,
+        input_args.log_ethernet_metrics,
+        input_args.send_traffic,
+        input_args.sweep_traffic_configs,
+        input_args.packet_size_bytes,
+        input_args.data_size,
+        validation_config);
+
+    if (*distributed_context.rank() == 0 && input_args.print_connectivity) {
+        print_ethernet_connectivity(input_args.print_connectivity, physical_system_descriptor);
     }
     distributed_context.barrier();
     if (input_args.fail_on_warning && !eth_connections_healthy) {

@@ -227,7 +227,9 @@ class WanTransformerBlock:
         )
 
         # Residual
-        spatial_1BND = spatial_1BND + spatial_attn_1BND * gate_msa_1B1D
+        # spatial_1BND = spatial_1BND + spatial_attn_1BND * gate_msa_1B1D
+        # NOTE: higher precision compute config in addcmul may be needed for correctness
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_attn_1BND, gate_msa_1B1D)
 
         # Cross attention on prompt
         spatial_normed_1BND = self.norm2(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
@@ -248,12 +250,12 @@ class WanTransformerBlock:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
-        # NOTE: Cannot set core_grid for FF or you get L1 OOM. Needs to be fixed.
-        spatial_ff_1BND = self.ff(
-            spatial_normed_1BND, core_grid=None, compute_kernel_config=self.ff_compute_kernel_config
-        )
 
-        spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+
+        # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+        # NOTE: higher precision compute config in addcmul may be needed for correctness
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
 
         return spatial_1BND
 
@@ -277,12 +279,20 @@ class WanTransformer3DModel:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=True,
+        model_type="t2v",
     ):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        self.model_type = model_type
+
+        assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
+        if model_type == "i2v":
+            in_channels = 36
+        else:
+            assert in_channels == 16, "in_channels must be 16 for t2v"
 
         self.patch_size = patch_size
         self.dim = dim
@@ -541,11 +551,16 @@ class WanTransformer3DModel:
         logger.info(f"Spatial output after permuting: {spatial_BCFHW.shape}")
         return spatial_BCFHW
 
-    def __call__(self, spatial, prompt, timestep):
+    def __call__(self, spatial, prompt, timestep, y=None):
         """
         Inputs are all torch tensors
+            y is an optional argument for image-to-video generation.
+            We assume that preprocessing has already been done for y and y has the same shape as spatial.
         Output is torch tensor
         """
+
+        if self.model_type == "i2v":
+            assert y is not None, "y must be provided for image-to-video generation"
 
         B, C, F, H, W = spatial.shape
         pF, pH, pW = self.patch_size
@@ -555,6 +570,11 @@ class WanTransformer3DModel:
         rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare_rope_features(spatial)
 
         temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(timestep, prompt)
+
+        # Concatenate spatial and y along the channel dimension
+        if self.model_type == "i2v":
+            print(spatial.shape, y.shape)
+            spatial = torch.cat([spatial, y], dim=1)
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)
 
@@ -583,9 +603,7 @@ class WanTransformer3DModel:
 
         spatial_norm_1BND = spatial_norm_1BND * (1 + scale_11BD) + shift_11BD
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
-        )
+        proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
 
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
 

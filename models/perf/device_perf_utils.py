@@ -16,6 +16,7 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.perf_utils import process_perf_results
 
 
@@ -28,7 +29,7 @@ def run_device_perf(
     op_name="",
     has_signposts=False,
     device_analysis_types=["device_kernel_duration"],
-):
+) -> dict:
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
@@ -147,9 +148,7 @@ def run_device_perf_detailed(
         post_processed_results[col]["STD"] = results[f"STD {d_col}"]
 
     logger.info(
-        f"\nTest: {command}"
-        f"\nPerformance statistics for op: {op_name}"
-        f"\n{json.dumps(post_processed_results, indent=4)}"
+        f"\nTest: {command}\nPerformance statistics for op: {op_name}\n{json.dumps(post_processed_results, indent=4)}"
     )
     return post_processed_results
 
@@ -183,27 +182,34 @@ def prep_device_perf_report(
     post_processed_results: dict,
     expected_results: dict,
     comments: str,
-):
-    today = time.strftime("%Y_%m_%d")
+) -> None:
+    """
+    Generates a device performance report in CSV format for a given model and batch size.
+    If run in a CI environment, also saves the report as a pickled PartialBenchmarkRun object
+    to be uploaded to the benchmarking database.
 
-    def write_dict_to_file(csv_path, dict_res):
-        columns = ", ".join([str(d) for d in dict_res.keys()])
-        values = ", ".join([d for d in dict_res.values()])
+    Args:
+        model_name (str): The name of the model being evaluated.
+        batch_size (int): The batch size used during evaluation.
+        post_processed_results (dict): Dictionary containing the performance metrics after post-processing.
+        expected_results (dict): Dictionary containing expected lower and upper threshold values for each metric.
+        comments (str): Settings description to include in the report.
 
-        with open(csv_path, "w") as csvfile:
-            csvfile.write(columns)
-            csvfile.write("\n")
-            csvfile.write(values)
+    Creates:
+        - A CSV file named as "device_perf_{model_name}_{comments}_{YYYY_MM_DD}.csv" containing
+        the model name, settings, batch size, device performance metrics and their corresponding threshold values.
+        - If run in a CI environment, a PKL file containing the same data.
+    """
 
     formatted_results = {}
-    for key, value in post_processed_results.items():
-        formatted_results[key] = "{:.4f}".format(value)
-        lower = expected_results.get(f"Lower Threshold {key}", None)
-        if lower is not None:
-            formatted_results[f"Lower Threshold {key}"] = "{:.4f}".format(lower)
-        upper = expected_results.get(f"Upper Threshold {key}", None)
-        if upper is not None:
-            formatted_results[f"Upper Threshold {key}"] = "{:.4f}".format(upper)
+    for metric_name, value in post_processed_results.items():
+        formatted_results[metric_name] = format(value, ".0f" if value.is_integer() else ".4f")
+
+        if (lower := expected_results.get(f"Lower Threshold {metric_name}")) is not None:
+            formatted_results[f"Lower Threshold {metric_name}"] = format(lower, ".4f")
+        if (upper := expected_results.get(f"Upper Threshold {metric_name}")) is not None:
+            formatted_results[f"Upper Threshold {metric_name}"] = format(upper, ".4f")
+
     dict_res = {
         "Model": model_name,
         "Setting": comments,
@@ -211,8 +217,34 @@ def prep_device_perf_report(
         **formatted_results,
     }
 
+    today = time.strftime("%Y_%m_%d")
     csv_file = f"device_perf_{model_name}_{comments}_{today}.csv"
-    write_dict_to_file(csv_file, dict_res)
+    columns = ", ".join(str(d) for d in dict_res.keys())
+    values = ", ".join(dict_res.values())
+
+    with open(csv_file, "w") as csvfile:
+        csvfile.write(columns)
+        csvfile.write("\n")
+        csvfile.write(values)
+
+    # Dummy profiler to satisfy BenchmarkData's requirements
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    profiler.end("run")
+    step_name = "device_perf"
+    profiler.start(step_name)
+    profiler.end(step_name)
+
+    benchmark_data = BenchmarkData()
+    for metric_name, value in formatted_results.items():
+        benchmark_data.add_measurement(profiler, 0, step_name, metric_name, float(value))
+
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="device_perf",
+        ml_model_name=model_name,
+        batch_size=batch_size,
+    )
 
 
 def check_device_perf_results(fname, expected_cols, check_cols):
@@ -256,3 +288,52 @@ def check_device_perf_results(fname, expected_cols, check_cols):
         assert (
             len(fast_measured[col]) == 0
         ), f"Some model(s) {col} are faster than expected, see above for details on fast models: {slow_measured[col]}"
+
+
+def run_model_device_perf_test(
+    command: str,
+    expected_device_perf_ns_per_iteration: float,
+    subdir: str,
+    model_name: str,
+    num_iterations: int = 1,
+    batch_size: int = 1,
+    margin: float = 0.015,
+    comments: str = "",
+):
+    """
+    Run device performance test for a model and validate results against expected performance.
+
+    This function executes a model performance test, collects device-level metrics,
+    and validates the results against expected performance thresholds. It also
+    generates a performance report for tracking and analysis.
+
+    Args:
+        command (str): The command to execute for running the model.
+        expected_device_perf_ns_per_iteration (float): Expected device kernel duration in nanoseconds.
+        subdir (str): Subdirectory where performance logs will be stored.
+        model_name (str): Name of the model being tested.
+        num_iterations (int, optional): Number of iterations to run. Defaults to 1.
+        batch_size (int, optional): Batch size for the model. Defaults to 1.
+        margin (float, optional): Acceptable performance margin as a percentage (e.g., 0.015 = 1.5%). Defaults to 0.015.
+        comments (str, optional): Additional comments or settings description for the report. Defaults to "".
+
+    Raises:
+        AssertionError: If the measured performance is outside the acceptable margin from expected performance.
+    """
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
+    post_processed_results = run_device_perf(
+        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+    )
+    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
+    expected_results = check_device_perf(
+        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+    )
+    prep_device_perf_report(
+        model_name=model_name,
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments=comments,
+    )

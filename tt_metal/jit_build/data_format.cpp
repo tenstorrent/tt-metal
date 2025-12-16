@@ -51,12 +51,6 @@ ExpPrecision get_exp_precision(DataFormat data_format) {
     return (is_exp_b_format(data_format) ? ExpPrecision::B : ExpPrecision::A);
 }
 
-void dump_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        std::cout << "Operand idx " << i << ": " << data_format[i] << "," << std::endl;
-    }
-}
-
 DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
@@ -241,6 +235,8 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt16;
         } else if (data_format == DataFormat::UInt8) {
             pack_src_format = DataFormat::UInt8;
+        } else if (data_format == DataFormat::Int8) {
+            pack_src_format = DataFormat::Int8;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
         }

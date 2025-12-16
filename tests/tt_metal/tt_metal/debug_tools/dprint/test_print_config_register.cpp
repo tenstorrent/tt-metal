@@ -24,11 +24,9 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking dprint
@@ -292,7 +290,7 @@ const std::vector<uint32_t> field_values_pack_config_wormhole = {
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {
-    CoreCoord core = {};
+    CoreCoord core;
     std::string write_kernel;
     std::string print_kernel;
     int num_of_registers;

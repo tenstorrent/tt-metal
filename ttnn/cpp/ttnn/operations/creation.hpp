@@ -8,7 +8,6 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/command_queue.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -21,8 +20,8 @@
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace creation {
+
+namespace operations::creation {
 
 namespace detail {
 
@@ -362,8 +361,7 @@ struct Arange {
     }
 };
 
-}  // namespace creation
-}  // namespace operations
+}  // namespace operations::creation
 
 constexpr auto full = ttnn::decorators::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
 constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();

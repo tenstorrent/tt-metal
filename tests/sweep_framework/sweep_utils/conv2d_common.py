@@ -179,6 +179,7 @@ def run_conv2d_full_sweep(
 def run_conv2d_short_sweep(
     input_specs,
     device,
+    config_tensors_in_dram=False,
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -258,9 +259,11 @@ def run_conv2d_short_sweep(
 
     tt_bias_tensor = None
     conv_config = ttnn.Conv2dConfig()
+    # Set config_tensors_in_dram if requested (helps avoid L1 OOM for memory-intensive configs)
+    if config_tensors_in_dram:
+        conv_config.config_tensors_in_dram = True
     conv_output_dtype = ttnn.bfloat16
-    if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 14 and pad_h == 0 and pad_w == 0:
-        conv_config.enable_kernel_stride_folding = True
+
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)

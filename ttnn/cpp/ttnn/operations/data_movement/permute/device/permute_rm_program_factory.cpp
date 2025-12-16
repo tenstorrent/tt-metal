@@ -45,8 +45,8 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
@@ -148,8 +148,8 @@ void PermuteDeviceOperation::MultiCoreRowInvariant::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
@@ -172,8 +172,8 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
@@ -362,8 +362,8 @@ void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);

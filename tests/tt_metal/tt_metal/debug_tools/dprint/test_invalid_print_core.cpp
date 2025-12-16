@@ -12,11 +12,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can detect an invalid core.
@@ -26,8 +24,8 @@ using namespace tt::tt_metal;
 TEST_F(DPrintMeshFixture, TensixTestPrintInvalidCore) {
     // Set DPRINT enabled on a mix of invalid and valid cores. Previously this would hang during
     // device setup, but not the print server should simply ignore the invalid cores.
-    std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
-    dprint_cores[CoreType::WORKER] = {{0, 0}, {1, 1}, {100, 100}};
+    std::map<tt::CoreType, std::vector<CoreCoord>> dprint_cores;
+    dprint_cores[tt::CoreType::WORKER] = {{0, 0}, {1, 1}, {100, 100}};
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
         tt::llrt::RunTimeDebugFeatureDprint, dprint_cores);
 

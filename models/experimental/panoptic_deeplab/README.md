@@ -1,7 +1,7 @@
 # Panoptic DeepLab
 
 ## Platforms:
-    Made for BOS chips, mostly tested on Blackhole with a core grid of 20 cores.
+    Made for BOS chips, tested on Blackhole with both 20-core (5x4 grid) and P150 all-core (13x10 grid - 130 cores) configurations.
 
 ## Introduction
 Panoptic DeepLab is a unified model for panoptic segmentation that combines semantic segmentation and instance segmentation into a single framework. The model uses a shared ResNet backbone with separate heads for semantic segmentation and instance embedding prediction, enabling comprehensive scene understanding by simultaneously identifying both "stuff" (background regions like road, sky) and "things" (countable objects like cars, people).
@@ -21,39 +21,56 @@ Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panop
 
 ## How to Run
 
+The model supports both optimized 20-core (5x4 grid) and all-core (13x10 grid) configurations:
+- **20 cores (optimized)**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`
+- **130 cores**: Omit/Unset `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE` for P150 device to use all cores (13x10 grid)
+
+
 ### Run the Full Model Test
 ```bash
-# From tt-metal root directory
+# 20-core optimized configuration
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
+
+# 130-core grid configuration (13x10 on Blackhole P150)
 pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 ```
+**Note**: All following tests can be run with or without TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
 
 ### Run Component Tests
 ```bash
-# Test ASPP component
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_aspp.py
+# Test ASPP component (works on any core configuration)
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_aspp.py
 
 # Test ResNet backbone
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_resnet.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_resnet.py
 
 # Test semantic segmentation head
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_semseg.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_semseg.py
 
 # Test instance embedding head
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_insemb.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_insemb.py
+```
+
+### Run Device Performance Tests
+```bash
+# Test full model performance on 20 cores
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores
+# Test full model performance on all cores
+pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_all_cores
 ```
 
 ### Run the Demo
 ```bash
 # Single image with custom output directory
-python models/experimental/panoptic_deeplab/tt/demo.py <image_path> <weights_path> <output_dir>
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/panoptic_deeplab/tt/demo.py <image_path> <weights_path> <output_dir>
 
 # Batch processing of directory
-python models/experimental/panoptic_deeplab/tt/demo.py <input_dir> <weights_path> <output_dir> --batch
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/panoptic_deeplab/tt/demo.py <input_dir> <weights_path> <output_dir> --batch
 ```
 
 For help with demo options:
 ```bash
-python models/experimental/panoptic_deeplab/tt/demo.py --help
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/panoptic_deeplab/tt/demo.py --help
 ```
 
 ### Demo Output Files

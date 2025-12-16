@@ -53,14 +53,17 @@ def run_resnet50_pipeline(
     if not skip_compile_run:
         pipeline.compile(tt_inputs_host)
 
+    ttnn.ReadDeviceProfiler(device)
     if use_signpost:
         signpost(header="start")
     outputs = pipeline.enqueue([tt_inputs_host]).pop_all()
     if use_signpost:
         signpost(header="stop")
 
+    ttnn.ReadDeviceProfiler(device)
     for output in outputs:
         test_infra.validate(output)
+    ttnn.ReadDeviceProfiler(device)
 
     pipeline.cleanup()
 

@@ -21,14 +21,12 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -62,12 +60,12 @@ void ReadShard(
     bool blocking = true) {
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
     // Tracking removal of free function APIs in this file in this issue.
-    auto mesh_device = mesh_cq.device();
+    auto* mesh_device = mesh_cq.device();
     if (!mesh_device->is_local(coord)) {
         return;
     }
 
-    auto shard = mesh_buffer->get_device_buffer(coord);
+    auto* shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
         .shard_coord = coord,
@@ -110,12 +108,6 @@ void EventSynchronize(const MeshEvent& event);
 bool EventQuery(const MeshEvent& event);
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
-
-void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id);
-
-void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
-
-void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id);
 
 void Synchronize(
     MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});

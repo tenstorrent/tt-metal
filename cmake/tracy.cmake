@@ -7,8 +7,11 @@ if(ENABLE_TRACY)
     set(TRACY_ENABLE ON)
 else()
     set(TRACY_ENABLE OFF)
-    set(TRACY_TIMER_FALLBACK ON)
 endif()
+
+# Tracy will always be built with fallback timing enabled
+# avoiding hard failures on systems without invariant TSC and using OS clocks when needed.
+set(TRACY_TIMER_FALLBACK ON)
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME tracy)
@@ -47,6 +50,11 @@ endif()
 
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this
+include(ProcessorCount)
+processorcount(numProcs)
+if(numProcs EQUAL 0)
+    set(numProcs 1)
+endif()
 include(ExternalProject)
 ExternalProject_Add(
     tracy_csv_tools
@@ -63,7 +71,7 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/csvexport/build/unix/csvexport-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -f
+        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j ${numProcs} -f
         ${TRACY_HOME}/csvexport/build/unix/Makefile
 )
 ExternalProject_Add(
@@ -81,7 +89,8 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/capture/build/unix/capture-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -f ${TRACY_HOME}/capture/build/unix/Makefile
+        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j ${numProcs} -f
+        ${TRACY_HOME}/capture/build/unix/Makefile
 )
 add_custom_target(
     tracy_tools

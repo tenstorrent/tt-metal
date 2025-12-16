@@ -21,13 +21,15 @@
 #include <umd/device/cluster.hpp>
 
 #include <telemetry/metric.hpp>
-#include <telemetry/ethernet/chip_identifier.hpp>
+#include <tt_metal/fabric/physical_system_descriptor.hpp>
+
+class TopologyHelper;
 
 class ARCUintMetric : public UIntMetric {
 public:
     // Constructor using FirmwareInfoProvider
     ARCUintMetric(
-        ChipIdentifier chip_id,
+        tt::tt_metal::ASICDescriptor asic_descriptor,
         tt::umd::FirmwareInfoProvider* firmware_provider,
         const std::string& metric_name,
         std::function<std::optional<uint32_t>()> getter_func,
@@ -39,7 +41,7 @@ public:
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
-    ChipIdentifier chip_id_;
+    tt::tt_metal::ASICDescriptor asic_descriptor_;
     tt::umd::FirmwareInfoProvider* firmware_provider_;
     std::string metric_name_;
     std::function<std::optional<uint32_t>()> getter_func_;
@@ -49,7 +51,7 @@ class ARCDoubleMetric : public DoubleMetric {
 public:
     // Constructor using FirmwareInfoProvider
     ARCDoubleMetric(
-        ChipIdentifier chip_id,
+        tt::tt_metal::ASICDescriptor asic_descriptor,
         tt::umd::FirmwareInfoProvider* firmware_provider,
         const std::string& metric_name,
         std::function<std::optional<double>()> getter_func,
@@ -61,15 +63,39 @@ public:
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
-    ChipIdentifier chip_id_;
+    tt::tt_metal::ASICDescriptor asic_descriptor_;
     tt::umd::FirmwareInfoProvider* firmware_provider_;
     std::string metric_name_;
     std::function<std::optional<double>()> getter_func_;
+};
+
+class ARCStringMetric : public StringMetric {
+public:
+    // Constructor using FirmwareInfoProvider
+    ARCStringMetric(
+        tt::tt_metal::ASICDescriptor asic_descriptor,
+        tt::umd::FirmwareInfoProvider* firmware_provider,
+        const std::string& metric_name,
+        std::function<std::optional<std::string>()> getter_func,
+        MetricUnit units = MetricUnit::UNITLESS);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::ASICDescriptor asic_descriptor_;
+    tt::umd::FirmwareInfoProvider* firmware_provider_;
+    std::string metric_name_;
+    std::function<std::optional<std::string>()> getter_func_;
 };
 
 void create_arc_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    std::vector<std::unique_ptr<StringMetric>>& string_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal);

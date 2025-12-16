@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# ====== Configuration ======
+# ====== Configuration (defaults; can be overridden via flags) ======
 USER="ttuser"
 SESSION_NAME="docker"
 CONTAINER_NAME="$USER-host-mapped"
@@ -8,6 +8,7 @@ IMAGE="ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest"
 BUILD_DIR="/home/$USER/git/tt-metal"
 DEST_DIR="/home/$USER/git/"
 
+HOST_FILE=""
 MACHINES=(
     metal-wh-03
     metal-wh-04
@@ -40,10 +41,32 @@ while [[ "$#" -gt 0 ]]; do
         --restart) RESTART_HARD=true ;;
         --restart-soft) RESTART_SOFT=true ;;
         --sync) SYNC_MODE=true ;;
+        --hostfile)
+            shift
+            HOST_FILE="$1"
+            ;;
+        --user)
+            shift
+            USER="$1"
+            # update dependent paths when user overrides
+            BUILD_DIR="/home/$USER/git/tt-metal"
+            DEST_DIR="/home/$USER/git/"
+            CONTAINER_NAME="$USER-host-mapped"
+            ;;
         *) echo "❌ Unknown option: $1"; exit 1 ;;
     esac
     shift
 done
+
+# If a hostfile is provided, load MACHINES from it (ignore empty lines and comments)
+if [[ -n "$HOST_FILE" ]]; then
+    if [[ -f "$HOST_FILE" ]]; then
+        mapfile -t MACHINES < <(grep -vE '^\s*(#|$)' "$HOST_FILE" | awk '{print $1}')
+    else
+        echo "❌ Hostfile not found: $HOST_FILE"
+        exit 1
+    fi
+fi
 
 # ====== Check if HOST is Local ======
 is_local_host() {

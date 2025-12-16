@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <numeric>
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -17,13 +16,16 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
+
+bool is_fabric_2d();
 
 uint32_t get_topological_dimension(
     const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
-tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, const std::optional<tt::tt_fabric::Topology>& topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor,
@@ -62,8 +64,8 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
 // Configuration structure for a device, containing its receiver and sender device ids.
 struct SenderReceiverConfig {
     uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
+    std::optional<tt::ChipId> sender_device_id;
+    std::optional<tt::ChipId> receiver_device_id;
 };
 
 // Returns `SenderReceiverConfig` for a given device, given topology.
@@ -87,7 +89,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt
+    );
 
 class EriscDatamoverBuilder;
 
@@ -191,7 +195,6 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-       uint32_t page_size{};
        tt::tt_metal::ShardSpec const shard_spec;
 };
 
@@ -396,8 +399,8 @@ struct InterleavedTensorWorkerSlice {
 
 template <class DERIVED_SLICER_T>
 class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
-    public:
-    ~RingReduceScatterBaseTensorSlicer() override = default;
+private:
+    friend DERIVED_SLICER_T;
     RingReduceScatterBaseTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -407,6 +410,9 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         uint32_t total_num_workers,
         uint32_t max_slice_size_in_bytes,
         uint32_t half_cb_n_pages);
+
+public:
+    ~RingReduceScatterBaseTensorSlicer() override = default;
 
     ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index, bool wrapped) {
         TT_ASSERT(global_worker_index < this->worker_slice_shapes.size(), "Invalid worker index {} in `worker_slice_shapes` of size {}", global_worker_index, worker_slice_shapes.size());
@@ -521,8 +527,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
     ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
-         const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
-        LegacyCclTensorSlicer() {
+        const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) {
         this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
         this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
@@ -745,6 +750,4 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
     Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, uint32_t num_targets_forward, uint32_t num_targets_backward, distributed::MeshDevice* mesh_device);
 
-
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

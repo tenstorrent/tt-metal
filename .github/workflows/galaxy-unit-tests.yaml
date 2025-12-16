@@ -1,9 +1,24 @@
-name: "Galaxy unit tests"
+name: "(Galaxy) unit tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - fabric
+          - multiprocess
+          - llama3-70b
+          - prefetcher
+          - distributed-ops
+          - gpt-oss
   schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+    - cron: "0 8 * * *"  # Every day at 8:00 UTC
 
 jobs:
   build-artifact:
@@ -13,6 +28,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      build-umd-tests: true
       version: 22.04
   galaxy-unit-tests:
     needs: build-artifact
@@ -22,4 +38,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
       topology: topology-6u

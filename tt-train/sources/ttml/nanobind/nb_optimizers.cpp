@@ -19,6 +19,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
 namespace ttml::nanobind::optimizers {
@@ -29,19 +30,22 @@ void py_module_types(nb::module_& m) {
     nb::class_<SGDConfig>(m, "SGDConfig");
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
-    nb::class_<MorehAdamW, OptimizerBase>(m, "AdamW");
+    nb::class_<AdamW, OptimizerBase>(m, "AdamW");
+    nb::class_<MorehAdamW, OptimizerBase>(m, "MorehAdamW");
+    nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
 
 void py_module(nb::module_& m) {
     {
         auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
-        py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad);
-        py_optimizer_base.def("step", &OptimizerBase::step);
-        py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict);
-        py_optimizer_base.def("set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"));
-        py_optimizer_base.def("get_lr", &OptimizerBase::get_lr);
-        py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"));
-        py_optimizer_base.def("print_stats", &OptimizerBase::print_stats);
+        py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad, "Zero out gradient");
+        py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
+        py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
+        py_optimizer_base.def(
+            "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
+        py_optimizer_base.def("get_lr", &OptimizerBase::get_lr, "Get learning rate");
+        py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"), "Set learning rate");
+        py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");
     }
 
     {
@@ -61,7 +65,8 @@ void py_module(nb::module_& m) {
             nb::arg("momentum"),
             nb::arg("dampening"),
             nb::arg("weight_decay"),
-            nb::arg("nesterov"));
+            nb::arg("nesterov"),
+            "Create a SGDConfig object");
     }
 
     {
@@ -83,13 +88,29 @@ void py_module(nb::module_& m) {
             nb::arg("beta1"),
             nb::arg("beta2"),
             nb::arg("epsilon"),
-            nb::arg("weight_decay"));
+            nb::arg("weight_decay"),
+            "Make an AdamWConfig object");
     }
 
     {
-        auto py_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("AdamW"));
+        auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
         py_adamw.def(
             nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+    }
+
+    {
+        auto py_moreh_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("MorehAdamW"));
+        py_moreh_adamw.def(
+            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+    }
+
+    {
+        auto py_remote_optimizer = static_cast<nb::class_<RemoteOptimizer, OptimizerBase>>(m.attr("RemoteOptimizer"));
+        py_remote_optimizer.def(
+            nb::init<serialization::NamedParameters, int>(), nb::arg("parameters"), nb::arg("aggregator_rank"));
+        py_remote_optimizer.def("send_gradients", &RemoteOptimizer::send_gradients);
+        py_remote_optimizer.def("receive_weights", &RemoteOptimizer::receive_weights);
+        py_remote_optimizer.def("get_sorted_parameters", &RemoteOptimizer::get_sorted_parameters);
     }
 }
 

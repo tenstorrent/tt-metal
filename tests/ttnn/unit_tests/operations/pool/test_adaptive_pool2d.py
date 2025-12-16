@@ -50,7 +50,7 @@ failing_parameters = [
     "pool_type",
     ["max", "avg"],
 )
-def test_adaptive_avg_pool2d(
+def test_adaptive_pool2d(
     device,
     tensor_map,
     input_shape,

@@ -12,7 +12,7 @@ static constexpr uint8_t worker_handshake_noc = 0;
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric {
@@ -21,8 +21,8 @@ template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
 using FabricMuxChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
-using FabricMuxChannelWorkerInterface =
-    EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
+using FabricMuxStaticSizedChannelWorkerInterface =
+    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
 
 using FabricMuxChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 

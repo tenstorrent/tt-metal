@@ -14,8 +14,7 @@
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 namespace v2 {
 struct TensorSlice {
     using ords_t = Shape4D<uint32_t>;
@@ -58,7 +57,6 @@ struct CclCommandWaitValue {
 };
 struct CclCommandAtomicInc {
     uint32_t value = 1;
-    uint32_t wrap_value = std::numeric_limits<uint32_t>::max();
 };
 
 struct noc_transfer_info {
@@ -223,6 +221,11 @@ struct CclCommandArg {};
 using args_elem_t = uint32_t;
 template <typename T, CclCommandArgCode CODE>
 struct CclCommandArgBase {
+private:
+    CclCommandArgBase() = default;
+    friend T;
+
+public:
     // Let the user override
     using field_type = typename command_arg_field<CODE>::type;  // Ensure T::type is accessible
     static constexpr std::size_t size_in_words() { return (sizeof(T) + sizeof(uint32_t) - 1) / sizeof(uint32_t); }
@@ -429,17 +432,14 @@ struct CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE>
           CclCommandArgCode::SET_ATOMIC_INC_VALUE> {
     static void pack_to(args_elem_t* args, CclCommandAtomicInc const& atomic_inc_args) {
         args[0] = atomic_inc_args.value;
-        args[1] = atomic_inc_args.wrap_value;
     }
     void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
 
     static void unpack(volatile args_elem_t const* args, CclCommandAtomicInc& out) {
         out.value = args[0];
-        out.wrap_value = args[1];
     }
     void unpack(volatile args_elem_t const* args) {
         this->value.value = args[0];
-        this->value.wrap_value = args[1];
     }
 };
 
@@ -671,5 +671,4 @@ struct CclCommandHeader {
 static_assert(sizeof(CclCommandHeader) == sizeof(uint32_t));
 
 }  // namespace cmd
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

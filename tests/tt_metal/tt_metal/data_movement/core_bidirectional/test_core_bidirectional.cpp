@@ -21,8 +21,8 @@ namespace unit_tests::dm::core_to_and_from_core {
 // Test config, i.e. test parameters
 struct CoreBidirectionalConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord subordinate_core_coord;
     uint32_t num_of_transactions = 0;
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
