@@ -107,7 +107,7 @@ jobs:
           enable-watcher: false
 
       - name: Force kernel compilation to trigger JIT and test debug logging
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           echo "=== Testing kernel compilation to trigger JIT and verify debug logging ==="
           cd /work
