@@ -70,6 +70,26 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by
     return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
 }
 
+// Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
+// This is a performance optimization to ensure that MGD mapping does not bisect a device.
+//
+// * o o o < Top left corner pinned with *
+// o o o o
+// o o o o
+// o o o o
+// o o o o
+// o o o o
+// o o o o
+// o o o * < Bottom right corner pinned with *
+std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_position_pinnings(size_t board_size) {
+    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+    // Top left corner: index 0
+    fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
+    // Bottom right corner: last device index
+    fixed_asic_position_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(MeshId{0}, board_size - 1)});
+    return fixed_asic_position_pinnings;
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -474,15 +494,6 @@ void ControlPlane::init_control_plane(
         // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
         // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
         // bisect a device.
-
-        // * o o o < Top left corner pinned with *
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o * < Bottom right corner pinned with *
         const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
                            this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
         const size_t board_size = cluster.get_unique_chip_ids().size();
@@ -492,10 +503,7 @@ void ControlPlane::init_control_plane(
         // multi-host machines should be limited via rank bindings so should be ok
         if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
             distributed_size == 1) {  // Using full board size for UBB Galaxy
-            // Top left corner: index 0
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
-            // Bottom right corner: last device index
-            fixed_asic_position_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(MeshId{0}, board_size - 1)});
+            fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
         }
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->mesh_graph_,
@@ -543,8 +551,27 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
+    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+
+    // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
+    // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
+    // bisect a device.
+    const bool is_1d =
+        this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
+    const size_t board_size = cluster.get_unique_chip_ids().size();
+    const size_t distributed_size = *distributed_context->size();
+
+    // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
+    // multi-host machines should be limited via rank bindings so should be ok
+    if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
+        distributed_size == 1) {  // Using full board size for UBB Galaxy
+        fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
+    }
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-        *this->mesh_graph_, *this->physical_system_descriptor_, this->local_mesh_binding_);
+        *this->mesh_graph_,
+        *this->physical_system_descriptor_,
+        this->local_mesh_binding_,
+        fixed_asic_position_pinnings);
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 
     // Initialize routing table generator after topology_mapper is created
