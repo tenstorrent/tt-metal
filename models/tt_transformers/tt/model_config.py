@@ -1887,13 +1887,10 @@ class ModelArgs:
 
     def initialize_mixture_of_experts_configs(self):
         # Porting mixtral to llama
-        # FIXED: Use correct grid size for Blackhole (13x10) vs Wormhole (8x8)
         decode_grid = (13, 10) if is_blackhole() else (8, 8)
         decode_grid_x = decode_grid[0]
-
-        # Calculate per_core_N based on actual grid (P150: 172/13=13, N150: 172/8=21)
-        ff13_per_core_N = 13 if is_blackhole() else 21  # Hidden_per_device tiles / grid_x
-        ff2_per_core_N = 4 if is_blackhole() else 8  # Dim_per_device tiles / grid_x
+        ff13_per_core_N = 13 if is_blackhole() else 21
+        ff2_per_core_N = 4 if is_blackhole() else 8
 
         self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=decode_grid,

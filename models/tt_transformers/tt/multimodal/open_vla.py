@@ -270,11 +270,8 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 class OpenVLALanguageModel(GenerationMixin):
     def __init__(self, device, local_state_dict=None, aggressive_perf=False):
-        self.device = device  # Store device reference for profiler flushing
-
-        # Use aggressive performance mode to maximize FPS (may affect accuracy slightly)
-        # This uses LOFI for decode operations where most time is spent
-        optimization_mode = "performance"  # Default performance mode
+        self.device = device
+        optimization_mode = "performance"
 
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
@@ -305,22 +302,17 @@ class OpenVLALanguageModel(GenerationMixin):
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
         self.num_actions = 1
 
-        # Apply aggressive performance overrides if requested
-        # This uses LOFI for decode operations to maximize throughput
         if self.aggressive_perf:
             from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
 
             model_config = self.model_args[0].get_model_config()
             opt = model_config["DECODERS_OPTIMIZATIONS"]
-            # Override decode ops to use LOFI (most aggressive) for all decoder layers
             for decoder_id in opt.decoder_optimizations:
                 decoder_opt = opt.decoder_optimizations[decoder_id]
-                # Override decode ops to use LOFI
                 decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
                 decoder_opt._opt_settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.LOFI
                 decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
                 decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
-                # Also use HIFI2 for prefill SDPA (currently HIFI4)
                 decoder_opt._opt_settings["OpFidelity"][OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI2
             print("[AGGRESSIVE PERF] Using LOFI for decode ops, HIFI2 for prefill SDPA")
 
@@ -1570,12 +1562,7 @@ def test_language_model(mesh_device, prompt):
 )
 @pytest.mark.parametrize(
     "iterations",
-    [5],  # Run 5 iterations for steady-state FPS measurement
-    # [1],  # Use 1 iteration for Tracy profiling (avoid buffer overflow)
-    # Performance baseline (7-DoF, full model):
-    #   - Steady-state: ~257ms per iteration (5 iter)
-    #   - Sustained: ~318ms per iteration (100 iter)
-    #   - Device FPS: 3.27 (305ms device kernel time)
+    [1],
 )
 def test_openvla_model(mesh_device, iterations):
     ##  Download model checkpoints HuggingFace
@@ -1619,8 +1606,6 @@ def test_openvla_model(mesh_device, iterations):
     }
     config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-    # Enable aggressive performance mode via environment variable for maximum FPS
-    # Set OPENVLA_AGGRESSIVE_PERF=1 to enable LOFI for decode operations
     aggressive_perf = os.environ.get("OPENVLA_AGGRESSIVE_PERF", "0") == "1"
     vla = TTOpenVLAForActionPrediction(
         vla_config,
@@ -1631,9 +1616,7 @@ def test_openvla_model(mesh_device, iterations):
     if aggressive_perf:
         print("[INFO] Aggressive performance mode ENABLED - using LOFI for decode ops")
 
-    # Full model: 32 layers, 7 actions (no reduction)
     print(f"Running FULL MODEL: 32 layers, 7 action tokens")
-    # Predict Action (7-DoF; un-normalize for BridgeData V2)
     inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
     results: List[Dict[str, float]] = []
     for i in range(iterations):
