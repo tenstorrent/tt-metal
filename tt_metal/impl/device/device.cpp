@@ -451,38 +451,71 @@ bool Device::initialize(
     const char* shm_enabled = std::getenv("TT_METAL_SHM_STATS_ENABLED");
     if (shm_enabled && std::string(shm_enabled) == "1") {
         // Compute composite asic_id for globally unique chip identification
-        // asic_id = (board_id << 8) | asic_location
+        // asic_id = (board_id << 8) | asic_location_composite
+        // NOTE: For Galaxy (UBB) systems with multiple trays, we need to encode BOTH tray_id
+        //       and asic_location to create a unique identifier. The PCI bus ID encodes this info.
         uint64_t asic_id = 0;
 
         try {
-            // Get TTDevice from driver
-            const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+            // Get cluster descriptor and TTDevice to access board info
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            auto* cluster_desc = cluster.get_cluster_desc();
+            const auto& driver = cluster.get_driver();
             auto* tt_device = driver->get_tt_device(this->id_);
 
-            if (tt_device) {
-                // Get board_id from TTDevice
+            if (tt_device && cluster_desc) {
+                // Get board_id and board_type from UMD
                 uint64_t board_id = tt_device->get_board_id();
+                BoardType board_type = cluster_desc->get_board_type(this->id_);
+                uint32_t asic_location_composite = 0;
 
-                // Determine asic_location based on whether this is MMIO or remote
-                // For N300: MMIO chip = asic_location 0, remote chip = asic_location 1
-                uint32_t asic_location = this->is_mmio_capable() ? 0 : 1;
+                // For Galaxy (UBB) boards, encode tray_id into asic_location
+                // Galaxy has 4 trays with 8 chips each, and PCI bus ID encodes this:
+                //   - Upper nibble (bus_id & 0xF0) identifies tray
+                //   - Lower nibble (bus_id & 0x0F) identifies chip within tray
+                if (board_type == BoardType::UBB && tt_device->get_pci_device()) {
+                    uint16_t pci_bus = tt_device->get_pci_device()->get_device_info().pci_bus;
+
+                    // Map PCI bus upper nibble to tray (Wormhole Galaxy convention)
+                    // tray_bus_ids = {0xC0, 0x80, 0x00, 0x40} maps to trays 1-4
+                    static const std::vector<uint16_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
+                    uint16_t bus_upper = pci_bus & 0xF0;
+                    auto tray_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_upper);
+
+                    if (tray_it != tray_bus_ids.end()) {
+                        uint32_t tray_id = static_cast<uint32_t>(tray_it - tray_bus_ids.begin()) + 1;  // 1-4
+                        uint32_t ubb_asic_id = pci_bus & 0x0F;                                         // 0-15
+
+                        // Encode: bits 4-7 = tray_id (0-15), bits 0-3 = ubb_asic_id (0-15)
+                        asic_location_composite = (tray_id << 4) | ubb_asic_id;
+                    } else {
+                        // Fallback: use asic_location from chip_info
+                        asic_location_composite = tt_device->get_chip_info().asic_location;
+                    }
+                } else {
+                    // Non-Galaxy systems: use asic_location from chip_info (0 for MMIO, 1 for remote, etc.)
+                    asic_location_composite = tt_device->get_chip_info().asic_location;
+                }
 
                 // Compute composite asic_id
-                asic_id = (board_id << 8) | asic_location;
+                asic_id = (board_id << 8) | asic_location_composite;
 
                 log_debug(
                     tt::LogMetal,
-                    "Device {}: board_id=0x{:x}, asic_location={} ({}) -> asic_id=0x{:x} for SHM tracking",
+                    "Device {}: board_id=0x{:x}, asic_location_composite=0x{:x} (board_type={}) -> asic_id=0x{:x} for "
+                    "SHM tracking",
                     this->id_,
                     board_id,
-                    asic_location,
-                    asic_location == 0 ? "MMIO" : "Remote",
+                    asic_location_composite,
+                    static_cast<int>(board_type),
                     asic_id);
             } else {
                 // Fallback: use device_id
                 asic_id = this->id_;
                 log_warning(
-                    tt::LogMetal, "Could not get TTDevice for device {}, using device_id as asic_id", this->id_);
+                    tt::LogMetal,
+                    "Could not get TTDevice or ClusterDescriptor for device {}, using device_id as asic_id",
+                    this->id_);
             }
         } catch (const std::exception& e) {
             // If any error, use device_id as fallback

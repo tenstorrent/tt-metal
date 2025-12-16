@@ -14,17 +14,31 @@ Each physical chip is uniquely identified by a **composite asic_id**:
 asic_id = (board_id << 8) | asic_location
 ```
 
-**Examples:**
-- Board 1834, chip 0 (MMIO): `asic_id = 469504`
-- Board 1834, chip 1 (Remote): `asic_id = 469505`
-- Board 1919, chip 0 (MMIO): `asic_id = 491264`
-- Board 1919, chip 1 (Remote): `asic_id = 491265`
+**Examples (N300 boards):**
+- Board 1834, chip 0 (MMIO): `asic_id = 469504` (0x1834 << 8 | 0)
+- Board 1834, chip 1 (Remote): `asic_id = 469505` (0x1834 << 8 | 1)
+- Board 1919, chip 0 (MMIO): `asic_id = 491264` (0x1919 << 8 | 0)
+- Board 1919, chip 1 (Remote): `asic_id = 491265` (0x1919 << 8 | 1)
+
+**Examples (Galaxy/UBB systems with 4 trays, 8 chips each):**
+
+For Galaxy systems, `asic_location` is encoded as: `(tray_id << 4) | chip_in_tray`
+- Tray 1, Chip 5: `asic_id = (board_id << 8) | 0x15` → board_id shifted, tray=1, chip=5
+- Tray 4, Chip 8: `asic_id = (board_id << 8) | 0x48` → board_id shifted, tray=4, chip=8
+
+The tray_id and chip_in_tray are extracted from PCI bus ID:
+```cpp
+// Wormhole Galaxy: tray_bus_ids = {0xC0, 0x80, 0x00, 0x40} maps to trays 1-4
+uint16_t bus_upper = pci_bus & 0xF0;  // Identifies tray
+uint32_t chip_in_tray = pci_bus & 0x0F;  // Identifies chip within tray (0-15)
+```
 
 **Why this works:**
-- Globally unique across all boards and chips
+- Globally unique across all boards, trays, and chips
 - Stable - same physical chip always has the same ID
 - Independent of Metal's logical device enumeration
 - Works across any `TT_VISIBLE_DEVICES` configuration
+- Scales to large Galaxy systems (32+ chips)
 
 ### SHM File Naming
 
@@ -33,11 +47,15 @@ Each chip's SHM file is named:
 /dev/shm/tt_device_<asic_id>_memory
 ```
 
-Examples:
+**Examples (N300):**
 - `/dev/shm/tt_device_469504_memory` - Board 1834, chip 0
 - `/dev/shm/tt_device_469505_memory` - Board 1834, chip 1
 - `/dev/shm/tt_device_491264_memory` - Board 1919, chip 0
 - `/dev/shm/tt_device_491265_memory` - Board 1919, chip 1
+
+**Examples (Galaxy with board_id=0xABCD):**
+- `/dev/shm/tt_device_11259149_memory` - Tray 1, Chip 5 (0xABCD00 | 0x15)
+- `/dev/shm/tt_device_11259208_memory` - Tray 4, Chip 8 (0xABCD00 | 0x48)
 
 ## Components
 
@@ -133,11 +151,22 @@ device->get_shm_stats_provider()->record_deallocation(
    ```
 
 4. **Display per-chip memory usage:**
+
+   **N300 Format:**
    ```
    ID          DRAM Usage          L1 Usage
    -----------------------------------------------
    1834:0      2.8 GB / 12.0 GB    11.0 KB / 1.5 GB
    1834:1R     2.8 GB / 12.0 GB    11.0 KB / 1.5 GB
+   ```
+
+   **Galaxy Format:**
+   ```
+   ID          DRAM Usage          L1 Usage
+   -----------------------------------------------
+   T1:N0       2.8 GB / 12.0 GB    11.0 KB / 1.5 GB
+   T1:N5       1.2 GB / 12.0 GB    5.0 KB / 1.5 GB
+   T4:N8       0 B / 12.0 GB       0 B / 1.5 GB
    ```
 
 ## SHM Data Structure
@@ -252,20 +281,57 @@ TT_VISIBLE_DEVICES=1834,1919 python workload.py
 #          /dev/shm/tt_device_491264_memory (1919:0)  ← Same file!
 ```
 
-### 2. Remote Device Support
+### 2. Galaxy (UBB) System Support
 
-Both MMIO and remote chips are tracked:
+Galaxy systems have unique architecture:
+- **4 trays** per board
+- **8 chips per tray** (32 chips total)
+- All chips on same `board_id`
+- Each chip gets unique SHM file via encoded `asic_id`
+
+**PCI Bus Encoding:**
+```cpp
+// Tray identification from PCI bus upper nibble
+tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};  // Maps to trays 1-4
+tray_id = position in array + 1;
+chip_in_tray = pci_bus & 0x0F;  // 0-15
+```
+
+**SHM File Creation:**
+```cpp
+// device.cpp computes asic_id for each chip
+if (board_type == BoardType::UBB) {
+    uint32_t asic_location_composite = (tray_id << 4) | chip_in_tray;
+    asic_id = (board_id << 8) | asic_location_composite;
+}
+// Creates: /dev/shm/tt_device_<asic_id>_memory
+```
+
+**tt_smi Display Format:**
+```
+ID          Arch          Temp      Power     AICLK       DRAM Usage          L1 Usage
+------------------------------------------------------------------------------------------
+T1:N0       Wormhole_B0   36°C     21W       500 MHz     2.8 GB / 12.0 GB    11 KB / 1.5 GB
+T1:N1       Wormhole_B0   35°C     22W       500 MHz     2.8 GB / 12.0 GB    11 KB / 1.5 GB
+T2:N0       Wormhole_B0   36°C     21W       500 MHz     0 B / 12.0 GB       0 B / 1.5 GB
+...
+T4:N7       Wormhole_B0   35°C     21W       500 MHz     0 B / 12.0 GB       0 B / 1.5 GB
+```
+
+### 3. Remote Device Support (N300)
+
+For N300 boards with MMIO and remote chips:
 - MMIO chips (asic_location=0) have their own SHM
 - Remote chips (asic_location=1) have their own SHM
 - Each creates a separate Device object in Metal
 
-### 3. Multi-Process Safe
+### 4. Multi-Process Safe
 
 - Atomic operations for all counters
 - Reference counting for lifecycle management
 - Process cleanup on exit (when refcount → 0)
 
-### 4. Persistent Monitoring
+### 5. Persistent Monitoring
 
 SHM files persist between runs, allowing:
 - Monitoring idle state (0 allocations is meaningful)

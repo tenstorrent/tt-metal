@@ -23,6 +23,7 @@
 #include <utility>
 #include <unistd.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -125,7 +126,10 @@ struct DeviceInfo {
     uint64_t chip_id_composite = 0;  // Composite ID from topology discovery (for chip_map lookup)
     uint64_t board_serial = 0;       // Physical board serial number from UMD (for correlation)
     uint64_t asic_id = 0;            // ASIC ID for display (unique per chip)
-    uint8_t asic_location = 0;       // ASIC location on board (0, 1, etc.)
+    uint8_t asic_location = 0;       // ASIC location on board (0, 1, etc.) - may be composite for Galaxy
+    uint32_t tray_id = 0;            // Tray ID for Galaxy systems (0 for non-Galaxy)
+    uint32_t chip_in_tray = 0;       // Chip within tray for Galaxy (0 for non-Galaxy)
+    tt::BoardType board_type = tt::BoardType::UNKNOWN;  // Board type from UMD
     std::string arch_name;
 
     // Telemetry (cached, with age tracking)
@@ -234,8 +238,10 @@ bool connect_to_shm(DeviceInfo& dev) {
     }
 
     // Composite asic_id naming: /tt_device_<asic_id>_memory
-    // asic_id = (board_id << 8) | asic_location
-    uint64_t asic_id = (dev.board_serial << 8) | dev.asic_location;
+    // Use dev.asic_id directly (already computed with proper encoding for Galaxy systems)
+    // For Galaxy: asic_id = (board_id << 8) | ((tray_id << 4) | chip_in_tray)
+    // For N300:   asic_id = (board_id << 8) | asic_location
+    uint64_t asic_id = dev.asic_id;  // Use pre-computed asic_id
     std::string shm_name = "/tt_device_" + std::to_string(asic_id) + "_memory";
 
     dev.shm_fd = shm_open(shm_name.c_str(), O_RDONLY, 0666);
@@ -252,6 +258,16 @@ bool connect_to_shm(DeviceInfo& dev) {
 
     dev.has_shm = true;
     return true;
+}
+
+// Check if a process is still alive
+bool is_process_alive(pid_t pid) {
+    if (pid <= 0) {
+        return false;
+    }
+    // Use kill(pid, 0) to check if process exists
+    // Returns 0 if process exists, -1 if not (errno == ESRCH)
+    return (kill(pid, 0) == 0);
 }
 
 // Read memory stats from SHM
@@ -292,14 +308,15 @@ bool read_memory_from_shm(DeviceInfo& dev, uint32_t target_chip_id = 0xFFFFFFFF)
         dev.used_kernel = region->total_kernel_allocated.load(std::memory_order_relaxed);
     }
 
-    // Read per-process data
+    // Read per-process data (filter out dead processes)
     dev.processes.clear();
     uint32_t num_processes = region->num_active_processes;
     for (uint32_t i = 0; i < num_processes && i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
         auto& proc_entry = region->processes[i];
         pid_t pid = proc_entry.pid;
 
-        if (pid > 0) {
+        // Only show processes that are still alive
+        if (pid > 0 && is_process_alive(pid)) {
             ProcessMemoryInfo proc;
             proc.pid = pid;
             proc.name = std::string(proc_entry.process_name);
@@ -328,6 +345,60 @@ void cleanup_shm(DeviceInfo& dev) {
         dev.shm_fd = -1;
     }
     dev.has_shm = false;
+}
+
+// Clean up dead processes from SHM (requires write access)
+// Returns number of dead processes cleaned up
+int cleanup_dead_processes_in_shm(DeviceInfo& dev) {
+    if (!dev.has_shm || !dev.shm_region) {
+        return 0;
+    }
+
+    // Re-open SHM with write access
+    uint64_t asic_id = dev.asic_id;
+    std::string shm_name = "/tt_device_" + std::to_string(asic_id) + "_memory";
+
+    int fd_write = shm_open(shm_name.c_str(), O_RDWR, 0666);
+    if (fd_write < 0) {
+        return 0;  // Can't open for write
+    }
+
+    auto* region_write = static_cast<SHMDeviceMemoryRegion*>(
+        mmap(nullptr, sizeof(SHMDeviceMemoryRegion), PROT_READ | PROT_WRITE, MAP_SHARED, fd_write, 0));
+
+    if (region_write == MAP_FAILED) {
+        close(fd_write);
+        return 0;
+    }
+
+    int cleaned_count = 0;
+
+    // Check each process entry
+    for (uint32_t i = 0; i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
+        pid_t pid = region_write->processes[i].pid;
+
+        if (pid > 0 && !is_process_alive(pid)) {
+            // Process is dead - zero out its entry
+            memset(&region_write->processes[i], 0, sizeof(SHMDeviceMemoryRegion::ProcessStats));
+            cleaned_count++;
+        }
+    }
+
+    // If we cleaned any processes, recompute num_active_processes
+    if (cleaned_count > 0) {
+        uint32_t active_count = 0;
+        for (uint32_t i = 0; i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
+            if (region_write->processes[i].pid > 0) {
+                active_count++;
+            }
+        }
+        region_write->num_active_processes = active_count;
+    }
+
+    munmap(region_write, sizeof(SHMDeviceMemoryRegion));
+    close(fd_write);
+
+    return cleaned_count;
 }
 
 // Scan /dev/shm/ for tt_device_*_memory files and parse asic_id from filenames
@@ -581,17 +652,24 @@ void print_devices(const std::vector<DeviceInfo>& devices) {
     auto now = std::chrono::steady_clock::now();
 
     for (const auto& dev : devices) {
-        // Display ASIC location (unique per board) with board indicator
-        // Format: <board_hex>:<asic_location>[R]
-        // Example: "1834:0" for local chip 0 on board 0x...1834045
-        //          "1919:1R" for remote chip 1 on board 0x...191901e
+        // Display chip identifier based on board type
+        // For Galaxy (UBB): "T<tray>:N<chip>" (e.g., "T1:N5", "T4:N8")
+        // For N300/others: "<board_hex>:<asic_location>[R]" (e.g., "1834:0", "1919:1R")
         char id_str[16];
-        uint32_t board_short = (dev.board_serial >> 12) & 0xFFFF;  // Use middle 16 bits for readability
-        if (dev.is_remote) {
-            snprintf(id_str, sizeof(id_str), "%04x:%dR", board_short, dev.asic_location);
+
+        if (dev.board_type == tt::BoardType::UBB && dev.tray_id > 0) {
+            // Galaxy system: display as T<tray>:N<chip>
+            snprintf(id_str, sizeof(id_str), "T%u:N%u", dev.tray_id, dev.chip_in_tray);
         } else {
-            snprintf(id_str, sizeof(id_str), "%04x:%d", board_short, dev.asic_location);
+            // N300 or other boards: display as <board_hex>:<asic_location>[R]
+            uint32_t board_short = (dev.board_serial >> 12) & 0xFFFF;
+            if (dev.is_remote) {
+                snprintf(id_str, sizeof(id_str), "%04x:%dR", board_short, dev.asic_location);
+            } else {
+                snprintf(id_str, sizeof(id_str), "%04x:%d", board_short, dev.asic_location);
+            }
         }
+
         std::cout << std::left << std::setw(12) << id_str;
         std::cout << std::setw(14) << dev.arch_name;
 
@@ -804,6 +882,7 @@ int main(int argc, char* argv[]) {
     int refresh_ms = 1000;
     bool show_details = false;
     bool shm_only = false;  // NEW: Skip device access, only read SHM
+    bool auto_cleanup = false;  // NEW: Automatically clean up dead processes
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -818,14 +897,23 @@ int main(int argc, char* argv[]) {
             show_details = true;
         } else if (arg == "--shm-only" || arg == "--memory-only") {
             shm_only = true;
+        } else if (arg == "-c" || arg == "--cleanup") {
+            auto_cleanup = true;
         } else if (arg == "-h" || arg == "--help") {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
             std::cout << "  -w, --watch          Watch mode (continuous updates)\n";
             std::cout << "  -r, --refresh MS     Refresh interval in milliseconds (default: 1000)\n";
             std::cout << "  -d, --details        Show detailed memory breakdown\n";
+            std::cout << "  -c, --cleanup        Automatically cleanup dead processes from SHM\n";
             std::cout << "  --shm-only           Only read SHM (no device access - works during reset)\n";
             std::cout << "  -h, --help           Show this help\n";
+            std::cout << "\n";
+            std::cout << "Examples:\n";
+            std::cout << "  " << argv[0] << "                    # One-time snapshot\n";
+            std::cout << "  " << argv[0] << " -w                 # Watch mode\n";
+            std::cout << "  " << argv[0] << " -w -c              # Watch mode with auto-cleanup\n";
+            std::cout << "  " << argv[0] << " --cleanup          # Clean dead processes once and exit\n";
             std::cout << "\n";
             std::cout << "Note: --shm-only mode is non-invasive and won't prevent device reset\n";
             return 0;
@@ -912,18 +1000,42 @@ int main(int argc, char* argv[]) {
                                 dev.board_serial = tt_device->get_board_id();
                             }
 
-                            // Get asic_location
+                            // Get asic_location and board_type
                             const auto& chip_info = chip->get_chip_info();
                             dev.asic_location = chip_info.asic_location;
+                            dev.board_type = chip_info.board_type;
 
-                            // Construct ASIC ID for display
-                            dev.asic_id = (dev.board_serial << 8) | dev.asic_location;
+                            // For Galaxy (UBB) systems, decode tray and chip from asic_location_composite
+                            // Format: bits 4-7 = tray_id, bits 0-3 = chip_in_tray
+                            if (dev.board_type == tt::BoardType::UBB && tt_device && tt_device->get_pci_device()) {
+                                uint16_t pci_bus = tt_device->get_pci_device()->get_device_info().pci_bus;
+
+                                // Map PCI bus upper nibble to tray (Wormhole Galaxy convention)
+                                static const std::vector<uint16_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
+                                uint16_t bus_upper = pci_bus & 0xF0;
+                                auto tray_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_upper);
+
+                                if (tray_it != tray_bus_ids.end()) {
+                                    dev.tray_id = static_cast<uint32_t>(tray_it - tray_bus_ids.begin()) + 1;
+                                    dev.chip_in_tray = pci_bus & 0x0F;
+
+                                    // Encode for asic_id computation
+                                    uint32_t asic_location_composite = (dev.tray_id << 4) | dev.chip_in_tray;
+                                    dev.asic_id = (dev.board_serial << 8) | asic_location_composite;
+                                } else {
+                                    // Fallback if PCI bus pattern doesn't match
+                                    dev.asic_id = (dev.board_serial << 8) | dev.asic_location;
+                                }
+                            } else {
+                                // Non-Galaxy systems: use asic_location directly
+                                dev.asic_id = (dev.board_serial << 8) | dev.asic_location;
+                            }
                         } catch (...) {
                         }
 
                         // Direct asic_id lookup - globally unique identifier!
-                        // Compute composite asic_id: (board_id << 8) | asic_location
-                        uint64_t asic_id = (dev.board_serial << 8) | dev.asic_location;
+                        // Uses the computed asic_id which includes tray encoding for Galaxy
+                        uint64_t asic_id = dev.asic_id;
 
                         if (chip_shm_map.count(asic_id)) {
                             // Found SHM for this chip!
@@ -982,6 +1094,21 @@ int main(int argc, char* argv[]) {
             if (devices.empty()) {
                 std::cout << Color::RED << "No Tenstorrent devices found!\n" << Color::RESET;
                 return 1;
+            }
+
+            // Clean up dead processes if requested
+            if (auto_cleanup) {
+                int total_cleaned = 0;
+                for (auto& dev : devices) {
+                    if (dev.has_shm) {
+                        int cleaned = cleanup_dead_processes_in_shm(dev);
+                        total_cleaned += cleaned;
+                    }
+                }
+                if (total_cleaned > 0 && !watch_mode) {
+                    std::cout << Color::GREEN << "Cleaned up " << total_cleaned << " dead process(es) from SHM\n"
+                              << Color::RESET;
+                }
             }
 
             // Print device table
