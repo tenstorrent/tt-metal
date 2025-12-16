@@ -133,6 +133,8 @@ class RunTimeOptions {
     bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
 
+    std::string logs_dir_ = (std::filesystem::current_path() / "").string();
+
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
     std::string system_kernel_dir;
@@ -300,6 +302,10 @@ public:
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
+
+    // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
+    // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory
+    const std::string& get_logs_dir() const;
 
     bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;

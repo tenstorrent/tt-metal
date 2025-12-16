@@ -44,6 +44,7 @@ enum class EnvVarID {
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
+    TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -311,6 +312,8 @@ const std::string& RunTimeOptions::get_cache_dir() const {
     return this->cache_dir_;
 }
 
+const std::string& RunTimeOptions::get_logs_dir() const { return logs_dir_; }
+
 const std::string& RunTimeOptions::get_kernel_dir() const {
     if (!this->is_kernel_dir_specified()) {
         TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH");
@@ -362,6 +365,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->is_kernel_dir_env_var_set = true;
             this->kernel_dir = normalize_path(value) + "/";
             break;
+
+        // TT_METAL_LOGS_PATH
+        // Directory for generated logs and debug output (dprint, watcher, profiler, etc.)
+        // Default: Current working directory if not set
+        // Usage: export TT_METAL_LOGS_PATH=/path/to/logs
+        case EnvVarID::TT_METAL_LOGS_PATH: this->logs_dir_ = normalize_path(value) + "/"; break;
 
         // TT_METAL_SIMULATOR
         // Path to simulator executable. When set, overrides mock cluster mode if both are set.
