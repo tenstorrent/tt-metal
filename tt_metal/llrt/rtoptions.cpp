@@ -146,7 +146,6 @@ enum class EnvVarID {
     // INSPECTOR
     // ========================================
     TT_METAL_INSPECTOR,                                // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
     TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
     TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
     TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
@@ -339,7 +338,7 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 // Uses switch statement for efficient dispatch
 //
 // IMPORTANT: Most cases assume 'value' is non-null (enforced by InitializeFromEnvVars loop guard).
-// Only TT_METAL_INSPECTOR_LOG_PATH and TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
+// Only TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
 // for default value initialization.
 
 void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
@@ -1024,18 +1023,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
-        // TT_METAL_INSPECTOR_LOG_PATH
-        // Sets the log path for inspector output.
-        // Default: Defaults to {TT_METAL_RUNTIME_ROOT}/generated/inspector
-        // Usage: export TT_METAL_INSPECTOR_LOG_PATH=/path/to/inspector/logs
-        case EnvVarID::TT_METAL_INSPECTOR_LOG_PATH:
-            if (value) {
-                this->inspector_settings.log_path = std::filesystem::path(value);
-            } else {
-                this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
-            }
-            break;
-
         // TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT
         // Controls whether initialization is considered important for inspector. Set to '0' to disable.
         // Default: false (not important)
@@ -1247,10 +1234,8 @@ void RunTimeOptions::InitializeFromEnvVars() {
         }
     }
 
-    // TT_METAL_INSPECTOR_LOG_PATH: Set default path if not specified
-    if (std::getenv("TT_METAL_INSPECTOR_LOG_PATH") == nullptr) {
-        HandleEnvVar(EnvVarID::TT_METAL_INSPECTOR_LOG_PATH, nullptr);
-    }
+    // Set inspector log path
+    this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
 
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
