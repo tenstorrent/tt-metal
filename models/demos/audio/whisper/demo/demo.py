@@ -25,8 +25,6 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_BATCH_SIZE,
     WHISPER_L1_SMALL_SIZE,
@@ -38,6 +36,8 @@ from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
     preprocess_encoder_inputs,
 )
 from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.utils.llm_demo_utils import verify_perf
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
