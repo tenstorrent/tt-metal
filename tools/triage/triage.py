@@ -339,9 +339,10 @@ console: Console
 def init_console(args: ScriptArguments) -> None:
     global console
 
-    # When redirecting to file, use a larger width to avoid wrapping
-    # When in a terminal, let Rich auto-detect the terminal width
-    width = None if sys.stdout.isatty() else 500
+    # When redirecting to file, use a larger width to avoid wrapping.
+    # When in a terminal, let Rich auto-detect the terminal width.
+    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
+    width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
 
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
 
