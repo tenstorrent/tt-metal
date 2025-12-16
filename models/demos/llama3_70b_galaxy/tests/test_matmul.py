@@ -96,6 +96,7 @@ def test_ring_matmul(mesh_device):
         5120 // 4,  # K = 1280
         3840,  # Use padded N
         RING_SIZE,
+        prefetch=False,
     )
 
     compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -106,23 +107,9 @@ def test_ring_matmul(mesh_device):
         dst_full_sync_en=True,
     )
 
-    breakpoint()
+    out_memory_config = model_args.model_config["SHARDED_FF12_OUT_RING_MEMCFG"]
 
-    out_memory_config = ttnn.create_sharded_memory_config(
-        shape=(32, 3840 // RING_SIZE),
-        core_grid=pf_mm_out_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    in_memory_config = ttnn.create_sharded_memory_config(
-        shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
-        core_grid=pf_mm_out_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+    in_memory_config = model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
 
     weight_memory_config = model_args.create_dram_sharded_mem_config(
         k=1280,
@@ -155,19 +142,17 @@ def test_ring_matmul(mesh_device):
         program_config=pc_1_3,
         memory_config=out_memory_config,
         core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
-        # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-        # sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
     )
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=[8, 4])
     out = ttnn.to_torch(out_ring_mm, mesh_composer=mesh_composer).sum(0)
     out = torch.permute(out, (1, 0, 2))
     passing, pcc_message = comp_pcc(ref_after_w1, out)
-    print(f"Non-Prefetch Matmul PCC with reference: {pcc_message}")
+    print(f"Non-Prefetch Ring Matmul PCC with torch reference: {pcc_message}")
     print(comp_allclose(ref_after_w1, out))
 
     passing, pcc_message = comp_pcc(comp_out, out)
-    print(f"Non-Prefetch Matmul PCC with ring matmul output: {pcc_message}")
+    print(f"Non-Prefetch Ring Matmul PCC with Prefetcher Ring Matmul output: {pcc_message}")
     print(comp_allclose(comp_out, out))
 
 
@@ -225,21 +210,9 @@ def test_prefetcher_ring_matmul(mesh_device):
         dst_full_sync_en=True,
     )
 
-    out_memory_config = ttnn.create_sharded_memory_config(
-        shape=(32, 3840 // RING_SIZE),  # Use padded N
-        core_grid=pf_mm_out_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+    out_memory_config = model_args.model_config["SHARDED_FF12_OUT_RING_MEMCFG"]
 
-    in_memory_config = ttnn.create_sharded_memory_config(
-        shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
-        core_grid=pf_mm_out_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+    in_memory_config = model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
 
     weight_memory_config = model_args.create_dram_sharded_mem_config(
         k=1280,
@@ -263,7 +236,7 @@ def test_prefetcher_ring_matmul(mesh_device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=in_memory_config,
     )
-
+    prefetcher_setup.insert_tensor(w_in)
     prefetcher_setup.create_global_cb()
 
     ttnn.dram_prefetcher(
@@ -289,9 +262,9 @@ def test_prefetcher_ring_matmul(mesh_device):
     out = ttnn.to_torch(out_ring_mm, mesh_composer=mesh_composer).sum(0)
     out = torch.permute(out, (1, 0, 2))
     passing, pcc_message = comp_pcc(ref_after_w1, out)
-    print(f"Non-Prefetch Matmul PCC with reference: {pcc_message}")
+    print(f"Prefetcher Ring Matmul PCC with reference: {pcc_message}")
     print(comp_allclose(ref_after_w1, out))
 
     passing, pcc_message = comp_pcc(comp_out, out)
-    print(f"Non-Prefetch Matmul PCC with ring matmul output: {pcc_message}")
+    print(f"Prefetcher Ring Matmul PCC with Prefetcher Ring Matmul output from model: {pcc_message}")
     print(comp_allclose(comp_out, out))
