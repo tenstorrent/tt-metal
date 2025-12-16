@@ -136,17 +136,17 @@ def test_distributed_norm_allclose(
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("seq_len", [32768])
-@pytest.mark.parametrize("hidden_dim", [1280])
+@pytest.mark.parametrize("seq_len", [1024])
+@pytest.mark.parametrize("hidden_dim", [4096])
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(
     "norm_type, use_welford",
     [
-        # ("layer_norm", False),  # LayerNorm with Welford
+        ("layer_norm", True),  # LayerNorm with Welford
         ("rms_norm", False),  # RMSNorm without Welford
     ],
     ids=[
-        # "layer_norm_welford",
+        "layer_norm_welford",
         "rms_norm_no_welford"
     ],
 )

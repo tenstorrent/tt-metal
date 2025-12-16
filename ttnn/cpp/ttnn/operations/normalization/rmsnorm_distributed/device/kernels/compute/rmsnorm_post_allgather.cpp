@@ -73,9 +73,7 @@ void MAIN {
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    DPRINT << "NCHt: " << NCHt << ENDL();
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        DPRINT << "NCHt: " << ncht << ENDL();
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
