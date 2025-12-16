@@ -89,7 +89,7 @@ class WhisperGenerator:
         weights_mesh_mapper,
         kv_cache=None,
         cross_attn_cache=None,
-        max_batch_size=1,
+        max_batch_size=2,
     ):
         """
         Initialize the WhisperGenerator.
@@ -133,7 +133,7 @@ class WhisperGenerator:
         # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
         encoder_seq_len = 1500
         self.encoder_hidden_states = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([max_batch_size, encoder_seq_len, config.d_model]),
+            ttnn.Shape([max_batch_size, 1, encoder_seq_len, config.d_model]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             mesh_device,
@@ -303,8 +303,8 @@ class WhisperGenerator:
         del all_input_features
         unpadded_batch_size = input_features.shape[0]
         assert (
-            unpadded_batch_size == 1 * self.mesh_device.get_num_devices()
-        ), "Only batch size (per device) 1 is supported for inference"
+            unpadded_batch_size <= 2 * self.mesh_device.get_num_devices()
+        ), "Only batch size (per device) 1 or 2 is supported for inference"
 
         # Calculate audio durations for timestamp capping
         audio_durations = self._calculate_audio_duration(current_batch) if return_timestamps else None
@@ -312,7 +312,7 @@ class WhisperGenerator:
         # Compute encoder embeddings
         input_embeds = ttnn_optimized_functional_whisper.preprocess_encoder_inputs(
             config=self.config,
-            input_features=input_features,
+            input_features=input_features.unsqueeze(1),
             parameters=self.parameters.encoder,
             device=self.mesh_device,
             weights_mesh_mapper=self.weights_mesh_mapper,
@@ -344,7 +344,7 @@ class WhisperGenerator:
             return self._generate_with_temperature(
                 temperature=temperature,
                 start_encode=start_encode,
-                input_features=input_features,
+                input_features=input_features.unsqueeze(1),
                 unpadded_batch_size=unpadded_batch_size,
                 return_perf_metrics=return_perf_metrics,
                 return_timestamps=return_timestamps,
@@ -367,7 +367,7 @@ class WhisperGenerator:
                 output = self._generate_with_temperature(
                     temperature=temperature,
                     start_encode=start_encode,
-                    input_features=input_features,
+                    input_features=input_features.unsqueeze(1),
                     unpadded_batch_size=unpadded_batch_size,
                     return_perf_metrics=return_perf_metrics,
                     return_timestamps=return_timestamps,
@@ -623,6 +623,8 @@ class WhisperGenerator:
 
                 # On last prefill iteration, sample the first transcription token
                 if prefill_pos == prefix_len - 1:
+                    # Squeeze extra dimension from 4D [batch, 1, seq, hidden] to 3D [batch, seq, hidden]
+                    decoder_output = ttnn.squeeze(decoder_output, 1)
                     decoder_output = decoder_output @ self.ttnn_linear_weight
                     logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
                     next_token_logits = logits_to_torch[:, 0, :]
@@ -750,6 +752,8 @@ class WhisperGenerator:
             else:
                 output_idx = 0
 
+            # Squeeze extra dimension from 4D [batch, 1, seq, hidden] to 3D [batch, seq, hidden]
+            decoder_output = ttnn.squeeze(decoder_output, 1)
             decoder_output = decoder_output @ self.ttnn_linear_weight
             logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
             next_token_logits = logits_to_torch[:, output_idx, :]
