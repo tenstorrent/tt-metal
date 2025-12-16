@@ -24,4 +24,20 @@ def tracy_frame():
     ttnn._ttnn.profiler.tracy_frame()
 
 
+def GetLatestProgramsPerfData():
+    return ttnn._ttnn.profiler.GetLatestProgramsPerfData()
+
+
+def GetAllProgramsPerfData():
+    return ttnn._ttnn.profiler.GetAllProgramsPerfData()
+
+
 __all__ = []
+# __all__ = [
+#     "start_tracy_zone",
+#     "stop_tracy_zone",
+#     "tracy_message",
+#     "tracy_frame",
+#     "GetLatestProgramsPerfData",
+#     "GetAllProgramsPerfData",
+# ]
