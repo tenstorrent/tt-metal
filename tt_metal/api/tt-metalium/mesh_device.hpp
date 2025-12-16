@@ -59,7 +59,7 @@ namespace tt::tt_metal::experimental::MeshDevice {
 void SetUserData(distributed::MeshDevice& mesh_device, uintptr_t key, std::shared_ptr<void> value);
 std::shared_ptr<void> GetUserData(distributed::MeshDevice& mesh_device, uintptr_t key);
 void RemoveUserData(distributed::MeshDevice& mesh_device, uintptr_t key);
-}
+}  // namespace tt::tt_metal::experimental::MeshDevice
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
