@@ -53,6 +53,8 @@ on:
         default: true
         description: "Make resulting debian packages available in the workflow"
       skip-tt-train:
+        # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
+        #        Fow now enabling an opt-out. But this should get removed.
         required: false
         type: boolean
         default: true
