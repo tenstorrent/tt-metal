@@ -183,11 +183,11 @@ UntilizeWithUnpaddingDeviceOperation::invoke(
     const Tensor& input_tensor,
     const ttnn::Shape& output_tensor_end,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
-    const bool use_multicore,
-    const bool use_pack_untilize,
-    const bool fp32_dest_acc_en,
-    const bool enough_space_width,
-    const bool enough_space_height,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    bool enough_space_width,
+    bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     operation_attributes_t operation_attributes{
         .output_tensor_end = output_tensor_end,
