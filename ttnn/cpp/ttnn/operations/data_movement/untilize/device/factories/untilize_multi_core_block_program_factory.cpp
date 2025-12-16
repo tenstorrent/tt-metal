@@ -176,7 +176,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
     // compute
     bool use_pack_kernel = true;
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row >= MAX_PACK_UNTILIZE_WIDTH)) {
         use_pack_kernel = false;
     }
     if (!core_range.empty()) {
