@@ -104,7 +104,7 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  */
 // clang-format on
 ALWI void frac_tile(uint32_t idst) { 
-    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, , 8, idst, (int)VectorMode::RC)); 
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, , 8, idst, (int)VectorMode::RC));
 }
 
 }  // namespace ckernel
