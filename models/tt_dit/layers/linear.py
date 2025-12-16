@@ -181,7 +181,7 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None
+        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -198,31 +198,67 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
-        if self.chunks is not None:
-            outputs = ttnn.experimental.minimal_matmul_split(
-                x,
-                weight,
-                chunks=self.chunks,
-                dim=-1,
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            outputs = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
                 bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
                 fused_activation=self.fused_activation_fn,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
-                config=matmul_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=6,
+                num_buffers_per_channel=48,
+                chunks=self.chunks if self.chunks is not None else 1,
             )
-            return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
-        output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=weight,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            config=matmul_config,
-            fused_activation=self.fused_activation_fn,
-            compute_kernel_config=compute_kernel_config or self.compute_config,
-        )
+            if self.chunks is not None and (self.chunks > 1):
+                return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+            else:
+                output = outputs[0]
+        else:
+            M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+
+            if self.chunks is not None:
+                outputs = ttnn.experimental.minimal_matmul_split(
+                    x,
+                    weight,
+                    chunks=self.chunks,
+                    dim=-1,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    config=matmul_config,
+                )
+                return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
 
