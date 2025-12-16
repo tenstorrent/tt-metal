@@ -99,6 +99,23 @@ inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_block_sharded_mes
 }
 
 /**
+ * @brief Create mesh mapper for height-sharded distribution (replicate on width)
+ * Shards tensor on height dimension across mesh rows, replicates across mesh columns
+ * Useful for reduction outputs where width is reduced to a single tile
+ */
+inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_height_sharded_mesh_mapper(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    int height_dim = static_cast<int>(tensor_rank) - 2;
+
+    tt::tt_metal::distributed::MeshMapperConfig config;
+    config.placements = {
+        tt::tt_metal::distributed::MeshMapperConfig::Shard{height_dim},
+        tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+
+    return ttnn::distributed::create_mesh_mapper(*mesh_device, config);
+}
+
+/**
  * @brief Create mesh composer for aggregating block-sharded tensors
  * Concatenates shards from 2D mesh back to full tensor
  */
@@ -109,6 +126,20 @@ inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_block_sharded_mes
 
     tt::tt_metal::distributed::MeshComposerConfig config;
     config.dims = {height_dim, width_dim};
+
+    return ttnn::distributed::create_mesh_composer(*mesh_device, config);
+}
+
+/**
+ * @brief Create mesh composer for aggregating height-sharded tensors
+ * Concatenates shards from mesh rows, takes first replica from columns
+ */
+inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_height_sharded_mesh_composer(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    int height_dim = static_cast<int>(tensor_rank) - 2;
+
+    tt::tt_metal::distributed::MeshComposerConfig config;
+    config.dims = {height_dim};
 
     return ttnn::distributed::create_mesh_composer(*mesh_device, config);
 }
@@ -304,6 +335,9 @@ inline void log_gcores_info(
 
 /**
  * @brief Create MeshTensorBuilder from a distributed tensor
+ *
+ * Extracts distribution info from the tensor's topology.
+ * MeshBuilder automatically extracts the grid shape from the mesh buffer's shard spec.
  */
 inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(const ttnn::Tensor& tensor) {
     // Extract MeshBuffer from the distributed tensor

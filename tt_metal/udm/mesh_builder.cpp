@@ -16,8 +16,12 @@ public:
     Impl(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const tt::tt_metal::distributed::MeshShape& mesh_shape,
-        const std::vector<tt::tt_metal::distributed::MeshCoordinate>& mesh_coords) :
-        mesh_device_(mesh_device), mesh_shape_(mesh_shape), mesh_coords_(mesh_coords) {
+        const std::vector<tt::tt_metal::distributed::MeshCoordinate>& mesh_coords,
+        std::optional<std::pair<uint32_t, uint32_t>> grid_shape_override = std::nullopt) :
+        mesh_device_(mesh_device),
+        mesh_shape_(mesh_shape),
+        mesh_coords_(mesh_coords),
+        grid_shape_override_(grid_shape_override) {
         log_debug(
             tt::LogOp,
             "MeshBuilder::Impl constructor - mesh_shape: {}, num_coords: {}",
@@ -408,9 +412,20 @@ private:
     }
 
     void create_grids() {
-        // Get compute grid size from mesh device
-        auto compute_grid_size = mesh_device_->compute_with_storage_grid_size();
-        std::vector<uint32_t> grid_dims = {compute_grid_size.y, compute_grid_size.x};
+        // Get grid size - use override if provided, otherwise use full compute grid
+        std::vector<uint32_t> grid_dims;
+        if (grid_shape_override_.has_value()) {
+            // Use the provided grid shape override {height, width}
+            grid_dims = {grid_shape_override_->first, grid_shape_override_->second};
+            log_debug(
+                tt::LogOp, "MeshBuilder::create_grids - using override grid shape: {}x{}", grid_dims[0], grid_dims[1]);
+        } else {
+            // Use full compute grid from mesh device
+            auto compute_grid_size = mesh_device_->compute_with_storage_grid_size();
+            grid_dims = {compute_grid_size.y, compute_grid_size.x};
+            log_debug(
+                tt::LogOp, "MeshBuilder::create_grids - using full compute grid: {}x{}", grid_dims[0], grid_dims[1]);
+        }
 
         grids_.reserve(mesh_coords_.size());
 
@@ -549,6 +564,8 @@ private:
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     tt::tt_metal::distributed::MeshShape mesh_shape_;
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords_;
+    std::optional<std::pair<uint32_t, uint32_t>>
+        grid_shape_override_;  // Optional override for grid shape {height, width}
 
     // Constructed objects
     Mesh mesh_;
@@ -588,8 +605,20 @@ MeshBuilder::MeshBuilder(const tt::tt_metal::distributed::MeshBuffer& mesh_buffe
         mesh_coords.push_back(coord);
     }
 
-    // Create the impl
-    impl_ = std::make_unique<Impl>(mesh_device, mesh_shape, mesh_coords);
+    // Extract grid shape from mesh buffer's shard spec if present
+    std::optional<std::pair<uint32_t, uint32_t>> grid_shape = std::nullopt;
+    const auto& device_local_config = mesh_buffer.device_local_config();
+    const auto& shard_spec_opt = device_local_config.sharding_args.shard_spec();
+    if (shard_spec_opt.has_value()) {
+        auto bbox = shard_spec_opt->grid().bounding_box();
+        uint32_t grid_height = bbox.end_coord.y - bbox.start_coord.y + 1;
+        uint32_t grid_width = bbox.end_coord.x - bbox.start_coord.x + 1;
+        grid_shape = std::make_pair(grid_height, grid_width);
+        log_debug(tt::LogOp, "MeshBuilder: extracted grid shape from shard spec: {}x{}", grid_height, grid_width);
+    }
+
+    // Create the impl with extracted grid shape
+    impl_ = std::make_unique<Impl>(mesh_device, mesh_shape, mesh_coords, grid_shape);
 }
 
 MeshBuilder::~MeshBuilder() = default;

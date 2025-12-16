@@ -2,10 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ * Width Reduction Test using LayerNorm-Style Distributed Pattern
+ *
+ * This test implements a multi-device width reduction using the pattern from
+ * layernorm_op_multi_core_sharded.cpp, adapted for UDM APIs.
+ *
+ * Key changes from original simple reduction:
+ * 1. Uses layernorm-style CB layout (CB 0, 2, 8, 9, 10, 15, 16)
+ * 2. Sender/receiver kernel split (like layernorm mcast sender/receiver)
+ * 3. Distributed reduction: partial → gather → global reduce → distribute
+ * 4. Uses flattened mesh dimensions (mesh_shape[1] for width)
+ * 5. Gets global shape from mesh_tensor_builder, not local tensor
+ *
+ * Pattern (simplified from layernorm):
+ * - Phase 1: All cores do local partial reduction (reduce across width)
+ * - Phase 2: Sender coordinates and gathers all partials via UDM async_read
+ * - Phase 3: Sender performs global reduction across all core partials
+ * - Phase 4: Sender distributes results to all cores (unicast, TODO: mcast)
+ *
+ * TODO items:
+ * - Replace unicast with mcast when UDM API supports it
+ * - Create actual sender/receiver/compute kernel implementations
+ */
+
 #include <gtest/gtest.h>
+#include <random>
+#include <cmath>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/udm/test_udm_utils.hpp"
+#include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
 
 #include "tt_metal/udm/mesh_kernel.hpp"
 #include "tt_metal/udm/mesh_utils.hpp"
@@ -16,196 +43,259 @@
 namespace tt::tt_metal::experimental::udm_tests {
 
 /**
- * @brief Create UDM program for width reduction using MeshGcoreAccessor
+ * @brief Create UDM program for width reduction using LayerNorm-style pattern
+ * Pattern: Distributed reduction with sender/receiver coordination
  */
 tt::tt_metal::experimental::udm::MeshProgram create_program(
-    const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor) {
-    auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
-    auto output_mesh_tensor_builder = create_tensor_builder(output_tensor);
-
+    tt::tt_metal::experimental::udm::MeshTensorBuilder& input_mesh_tensor_builder,
+    tt::tt_metal::Buffer& input_buffer,
+    tt::tt_metal::Buffer& output_buffer) {
     auto& mesh_builder = input_mesh_tensor_builder.mesh_builder();
-
-    // Create MeshProgram
     auto program = tt::tt_metal::experimental::udm::CreateMeshProgram(mesh_builder);
 
-    log_tensor_shape_info(input_mesh_tensor_builder, input_tensor);
+    // ===== GRID SETUP - Use flattened mesh =====
+    const auto& mesh_shape = mesh_builder.get_flattened_mesh();  // Mesh with dims
+    const auto& gcores = mesh_builder.get_all_gcores_in_mesh();  // Array of Gcores
 
-    // Map buffer to gcores - partition on width dimension (last dim)
-    // Each gcore gets a portion of the width
-    int partition_dim = -1;  // Last dimension (width)
-    auto gcores_info =
-        tt::tt_metal::experimental::udm::map_tensor_to_gcores(input_mesh_tensor_builder, mesh_builder, partition_dim);
+    // For row-wise reduction: cores in the same row reduce together
+    uint32_t num_cores_y = mesh_shape[-2];  // Number of rows in mesh (independent reduction groups)
+    uint32_t num_cores_x = mesh_shape[-1];  // Number of cores per row (reduction dimension)
 
-    // Also get output tensor gcore info for output strides
-    auto output_gcores_info =
-        tt::tt_metal::experimental::udm::map_tensor_to_gcores(output_mesh_tensor_builder, mesh_builder, partition_dim);
+    TT_ASSERT(num_cores_x > 1, "Need multiple cores per row for reduction");
 
-    log_gcores_info(gcores_info, mesh_builder);
+    // ===== GET SHAPE FROM MESH TENSOR BUILDER =====
+    auto shape_in_pages = input_mesh_tensor_builder.get_mesh_tensor_shape_in_pages();
 
-    // Get compile-time args for tensor accessors
-    auto input_compile_time_args = input_mesh_tensor_builder.get_compile_time_args();
-    auto output_compile_time_args = output_mesh_tensor_builder.get_compile_time_args();
+    // For tiled layout, pages are tiles
+    // Shape in pages already gives us tile dimensions
+    uint32_t num_height_tiles = shape_in_pages[-2];
+    uint32_t num_width_tiles = shape_in_pages[-1];
 
-    // Combine compile-time args
-    std::vector<uint32_t> compile_time_args = input_compile_time_args;
-    compile_time_args.insert(compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
+    // ===== WORK DISTRIBUTION =====
+    // Height is distributed across Y dimension (rows)
+    // Width is distributed across X dimension (columns)
+    uint32_t block_ht = num_height_tiles / num_cores_y;  // Height per row
+    uint32_t block_wt = num_width_tiles / num_cores_x;   // Width per column
+    uint32_t in0_block_tiles = block_wt * block_ht;
 
-    // Get MeshGcoreAccessor defines
-    auto gcore_defines = mesh_builder.get_compile_time_defines();
+    // For distributed global reduction: each core in a row reduces a subset of rows
+    // Ensure each core has at least 1 row to work with
+    TT_FATAL(
+        block_ht >= num_cores_x,
+        "Insufficient rows for distributed reduction: block_ht={} must be >= num_cores_x={}. "
+        "Either increase tensor height or reduce num_cores_x.",
+        block_ht,
+        num_cores_x);
 
-    // Create separate mesh circular buffers for each purpose
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t tile_size = tt::tile_size(data_format);
+    // For distributing final reduced results among all-to-all workers in a row
+    // (This is for the sender to distribute work when gathering/distributing results)
+    uint32_t num_rows_per_worker = tt::div_up(block_ht, num_cores_x);
+    uint32_t remainder = block_ht % num_rows_per_worker;
+    uint32_t num_rows_per_worker_last = (remainder == 0) ? num_rows_per_worker : remainder;
 
-    // CB 0: Input tiles (dataflow -> compute)
-    constexpr uint32_t cb_id_in = 0;
-    tt::tt_metal::CircularBufferConfig cb_config_in =
-        tt::tt_metal::CircularBufferConfig(tile_size, {{cb_id_in, data_format}}).set_page_size(cb_id_in, tile_size);
-    auto mesh_cb_in = tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_config_in);
+    // ===== CIRCULAR BUFFERS (consecutive indices) =====
+    tt::DataFormat data_format = tt::DataFormat::Float16_b;  // bfloat16
+    uint32_t single_tile_size = tt::tile_size(data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    // CB 1: Scaler for reduction (compute)
-    constexpr uint32_t cb_id_scaler = 1;
-    tt::tt_metal::CircularBufferConfig cb_config_scaler =
-        tt::tt_metal::CircularBufferConfig(tile_size, {{cb_id_scaler, data_format}})
-            .set_page_size(cb_id_scaler, tile_size);
-    auto mesh_cb_scaler =
-        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_config_scaler);
+    // CB 0: Input (globally allocated to sharded buffer)
+    uint32_t in0_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig in0_cb_config =
+        tt::tt_metal::CircularBufferConfig(in0_block_tiles * single_tile_size, {{in0_cb_index, data_format}})
+            .set_page_size(in0_cb_index, single_tile_size)
+            .set_globally_allocated_address(input_buffer);
+    auto cb_in0 = tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, in0_cb_config);
 
-    // CB 2: Reduced output tiles (compute -> dataflow)
-    constexpr uint32_t cb_id_reduced = 2;
-    tt::tt_metal::CircularBufferConfig cb_config_reduced =
-        tt::tt_metal::CircularBufferConfig(tile_size, {{cb_id_reduced, data_format}})
-            .set_page_size(cb_id_reduced, tile_size);
-    auto mesh_cb_reduced =
-        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_config_reduced);
+    // CB 1: Scaler
+    uint32_t scaler_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig scaler_cb_config =
+        tt::tt_metal::CircularBufferConfig(bfloat16_tile_size, {{scaler_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(scaler_cb_index, bfloat16_tile_size);
+    auto cb_scaler = tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, scaler_cb_config);
 
-    // CB 3: All reduced tiles from all gcores (dataflow)
-    // Space for total_gcores * num_output_rows tiles (including first gcore)
-    // Calculate num_output_rows for CB sizing
-    uint32_t rank = gcores_info.dim_pages[0].size();
-    uint32_t num_output_rows = 1;
-    for (uint32_t d = 0; d < rank - 1; ++d) {
-        num_output_rows *= gcores_info.dim_pages[0][d];
+    // CB 2: Partial reduction per core
+    uint32_t cb_partial_index = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig cb_partial_config =
+        tt::tt_metal::CircularBufferConfig(block_ht * single_tile_size, {{cb_partial_index, data_format}})
+            .set_page_size(cb_partial_index, single_tile_size);
+    auto cb_partial =
+        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_partial_config);
+
+    // CB 3: Global reduced result
+    uint32_t cb_reduced_index = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig cb_reduced_config =
+        tt::tt_metal::CircularBufferConfig(num_rows_per_worker * single_tile_size, {{cb_reduced_index, data_format}})
+            .set_page_size(cb_reduced_index, single_tile_size);
+    auto cb_reduced =
+        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_reduced_config);
+
+    // CB 4: External (for gathering remote partials)
+    uint32_t cb_external_index = tt::CBIndex::c_4;
+    tt::tt_metal::CircularBufferConfig cb_external_config =
+        tt::tt_metal::CircularBufferConfig(num_cores_x * single_tile_size, {{cb_external_index, data_format}})
+            .set_page_size(cb_external_index, single_tile_size);
+    auto cb_external =
+        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_external_config);
+
+    // CB 5: Output (globally allocated, dataflow gathers directly here)
+    uint32_t output_cb_index = tt::CBIndex::c_5;
+    uint32_t output_tiles = block_ht;
+    tt::tt_metal::CircularBufferConfig output_cb_config =
+        tt::tt_metal::CircularBufferConfig(output_tiles * single_tile_size, {{output_cb_index, data_format}})
+            .set_page_size(output_cb_index, single_tile_size)
+            .set_globally_allocated_address(output_buffer);
+    auto cb_output = tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, output_cb_config);
+
+    // ===== SEMAPHORES =====
+    auto reduce_sender_semaphore_id =
+        tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, INVALID);
+    auto reduce_receiver_semaphore_id =
+        tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, INVALID);
+
+    // ===== CORE SETS =====
+    // Each row has independent reduction: first core in row is sender, rest are receivers
+    // No reduction between rows - each row operates independently
+
+    std::vector<tt::tt_metal::experimental::udm::Gcore> sender_gcores;
+    std::vector<tt::tt_metal::experimental::udm::Gcore> receiver_gcores;
+    std::vector<tt::tt_metal::experimental::udm::Gcore> all_gcores;
+
+    for (uint32_t y = 0; y < num_cores_y; ++y) {
+        // First core in this row is sender
+        const auto& sender_gcore = gcores[y * num_cores_x + 0];
+        sender_gcores.push_back(sender_gcore);
+        all_gcores.push_back(sender_gcore);
+
+        // Rest of cores in this row are receivers
+        for (uint32_t x = 1; x < num_cores_x; ++x) {
+            const auto& receiver_gcore = gcores[y * num_cores_x + x];
+            receiver_gcores.push_back(receiver_gcore);
+            all_gcores.push_back(receiver_gcore);
+        }
     }
 
-    constexpr uint32_t cb_id_received = 3;
-    uint32_t num_all_gcore_tiles = total_gcores * num_output_rows;
-    tt::tt_metal::CircularBufferConfig cb_config_received =
-        tt::tt_metal::CircularBufferConfig(num_all_gcore_tiles * tile_size, {{cb_id_received, data_format}})
-            .set_page_size(cb_id_received, tile_size);
-    auto mesh_cb_received =
-        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_config_received);
+    // ===== COMPILE-TIME ARGS =====
+    bfloat16 bfloat_winv = bfloat16(1.0f / block_wt);
+    uint32_t packed_winv = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv});
 
-    // CB 4: Inter-gcore addition result (compute -> dataflow)
-    constexpr uint32_t cb_id_add_result = 4;
-    tt::tt_metal::CircularBufferConfig cb_config_add_result =
-        tt::tt_metal::CircularBufferConfig(tile_size, {{cb_id_add_result, data_format}})
-            .set_page_size(cb_id_add_result, tile_size);
-    auto mesh_cb_add_result =
-        tt::tt_metal::experimental::udm::CreateMeshCircularBuffer(mesh_builder, program, cb_config_add_result);
+    // Get coordinate dimensions from any gcore
+    uint32_t coord_dims = gcores[0].global_coord.dims();
 
-    // Create global semaphore for synchronization across all gcores in the mesh
-    // All gcores (including first) will increment this semaphore when they send tiles
-    constexpr uint32_t semaphore_id = 0;
-    tt::tt_metal::experimental::udm::CreateMeshSemaphore(mesh_builder, program, 0);
+    // Sender kernel args: sem_recv, sem_send, num_blocks, block_ht, rows_per_worker, rows_per_worker_last, winv,
+    // coord_dims
+    std::vector<uint32_t> reader_sender_compile_time_args = {
+        reduce_receiver_semaphore_id.at(0),  // Get semaphore for grid 0
+        reduce_sender_semaphore_id.at(0),
+        (uint32_t)num_cores_x,
+        (uint32_t)block_ht,
+        (uint32_t)num_rows_per_worker,
+        (uint32_t)num_rows_per_worker_last,
+        packed_winv,
+        (uint32_t)coord_dims};
 
-    // Packed scaler value for reduction (1.0 = no scaling, just sum)
-    bfloat16 bfloat_scaler_value = bfloat16(1.0f);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    // Receiver kernel args: sem_recv, sem_send, num_blocks, block_ht, rows_per_worker, rows_per_worker_last, winv,
+    // coord_dims
+    std::vector<uint32_t> reader_receiver_compile_time_args = {
+        reduce_receiver_semaphore_id.at(0),  // Get semaphore for grid 0
+        reduce_sender_semaphore_id.at(0),
+        (uint32_t)num_cores_x,
+        (uint32_t)block_ht,
+        (uint32_t)num_rows_per_worker,
+        (uint32_t)num_rows_per_worker_last,
+        packed_winv,
+        (uint32_t)coord_dims};
 
-    // Dataflow kernel compile-time args: packed scaler + CB IDs + semaphore ID + tensor accessors
-    std::vector<uint32_t> dataflow_compile_time_args = {
-        packed_scaler_value, cb_id_in, cb_id_scaler, cb_id_reduced, cb_id_received, cb_id_add_result, semaphore_id};
-    dataflow_compile_time_args.insert(
-        dataflow_compile_time_args.end(), compile_time_args.begin(), compile_time_args.end());
+    // ===== CREATE READER KERNELS =====
+    auto reader_sender_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
+        mesh_builder,
+        program,
+        "tests/tt_metal/udm/kernels/reader_sender_unary_sharded_reduce.cpp",
+        sender_gcores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_sender_compile_time_args});
 
-    // Compute kernel compile-time args: total_gcores + CB IDs
-    std::vector<uint32_t> compute_compile_time_args = {
-        total_gcores, cb_id_in, cb_id_scaler, cb_id_reduced, cb_id_received, cb_id_add_result};
+    auto reader_receiver_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
+        mesh_builder,
+        program,
+        "tests/tt_metal/udm/kernels/reader_receiver_unary_sharded_reduce.cpp",
+        receiver_gcores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_receiver_compile_time_args});
 
-    // Create dataflow kernel (reader + writer) on all mapped gcores
-    tt::tt_metal::experimental::udm::MeshKernelHandle dataflow_kernel_id =
-        tt::tt_metal::experimental::udm::CreateMeshKernel(
-            mesh_builder,
-            program,
-            "tests/tt_metal/udm/kernels/width_reduction_dataflow.cpp",
-            gcores_info.gcores,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = dataflow_compile_time_args,
-                .defines = gcore_defines,
-            });
+    // ===== COMPUTE COMPILE-TIME ARGS =====
+    // Compute kernel args: num_blocks, block_ht, block_wt
+    std::vector<uint32_t> compute_all_to_all_args = {(uint32_t)num_cores_x, (uint32_t)block_ht, (uint32_t)block_wt};
 
-    // Create compute kernel on all mapped gcores
-    // Merge gcore_defines with compute-specific defines
-    std::map<std::string, std::string> compute_defines = gcore_defines;
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    // ===== CREATE COMPUTE KERNEL =====
+    auto compute_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
+        mesh_builder,
+        program,
+        "tests/tt_metal/udm/kernels/compute_sharded_reduce.cpp",
+        all_gcores,
+        tt::tt_metal::ComputeConfig{.compile_args = compute_all_to_all_args});
 
-    tt::tt_metal::experimental::udm::MeshKernelHandle compute_kernel_id =
-        tt::tt_metal::experimental::udm::CreateMeshKernel(
-            mesh_builder,
-            program,
-            "tests/tt_metal/udm/kernels/width_reduction_compute.cpp",
-            gcores_info.gcores,
-            tt::tt_metal::ComputeConfig{
-                .compile_args = compute_compile_time_args,
-                .defines = compute_defines,
-            });
+    // ===== SET RUNTIME ARGS =====
+    // Set runtime args for each row independently
+    for (uint32_t y = 0; y < num_cores_y; ++y) {
+        // Sender core for this row
+        const auto& sender_gcore = gcores[y * num_cores_x + 0];
 
-    // Set runtime args for each gcore
-    uint32_t total_gcores = gcores_info.gcores.size();
-
-    for (uint32_t gcore_idx = 0; gcore_idx < total_gcores; ++gcore_idx) {
-        const auto& gcore = gcores_info.gcores[gcore_idx];
-        uint32_t rank = gcores_info.dim_pages[gcore_idx].size();
-
-        std::vector<uint32_t> runtime_args;
-
-        // Input tensor work distribution
-        runtime_args.push_back(rank);
-        for (uint32_t d = 0; d < rank; ++d) {
-            runtime_args.push_back(gcores_info.dim_pages[gcore_idx][d]);
-            runtime_args.push_back(gcores_info.dim_offsets[gcore_idx][d]);
-            runtime_args.push_back(gcores_info.dim_strides[gcore_idx][d]);
+        // Collect all cores' gcores in this row (sender + receivers)
+        std::vector<const tt::tt_metal::experimental::udm::Gcore*> row_gcores;
+        for (uint32_t x = 0; x < num_cores_x; ++x) {
+            row_gcores.push_back(&gcores[y * num_cores_x + x]);
         }
 
-        // Output tensor strides (pages/offsets same as input for first rank-1 dims, different strides)
-        for (uint32_t d = 0; d < rank; ++d) {
-            runtime_args.push_back(output_gcores_info.dim_strides[gcore_idx][d]);
-        }
+        // Helper lambda to add all coordinates to runtime args
+        auto add_all_coords = [&](std::vector<uint32_t>& args) {
+            for (const auto* gcore : row_gcores) {
+                const auto& coord = gcore->global_coord;
+                for (size_t d = 0; d < coord_dims; ++d) {
+                    args.push_back(coord[d]);
+                }
+            }
+        };
 
-        // Gcore sequence information
-        runtime_args.push_back(gcore_idx);     // gcore_sequence_id
-        runtime_args.push_back(total_gcores);  // total_gcores
-
-        // First gcore coordinate (for ALL gcores to send to, including first gcore writing to itself)
-        const auto& first_gcore = gcores_info.gcores[0];
-        const auto& first_coord = first_gcore.global_coord;
-
-        runtime_args.push_back(first_coord.dims());  // first_gcore_coord_rank
-        for (size_t d = 0; d < first_coord.dims(); ++d) {
-            runtime_args.push_back(first_coord[d]);
-        }
+        // Sender runtime args: coordinates of ALL cores in this row
+        // Format: [coord0_d0, coord0_d1, ..., coord1_d0, coord1_d1, ..., ...]
+        std::vector<uint32_t> sender_runtime_args;
+        add_all_coords(sender_runtime_args);
 
         tt::tt_metal::experimental::udm::SetMeshKernelRuntimeArgs(
-            mesh_builder, program, dataflow_kernel_id, gcore, runtime_args);
+            mesh_builder, program, reader_sender_kernel_id, sender_gcore, sender_runtime_args);
 
-        // Compute kernel runtime args (similar to dataflow: rank, dim_pages, dim_offsets, dim_strides)
-        std::vector<uint32_t> compute_runtime_args;
-        compute_runtime_args.push_back(gcore_idx == 0 ? 1 : 0);  // is_first_gcore
-
-        // Input tensor work distribution
-        compute_runtime_args.push_back(rank);
-        for (uint32_t d = 0; d < rank; ++d) {
-            compute_runtime_args.push_back(gcores_info.dim_pages[gcore_idx][d]);
-            compute_runtime_args.push_back(gcores_info.dim_offsets[gcore_idx][d]);
-            compute_runtime_args.push_back(gcores_info.dim_strides[gcore_idx][d]);
-        }
-
+        // Sender compute runtime args
+        std::vector<uint32_t> compute_sender_rt_args = {(uint32_t)block_wt, (uint32_t)num_rows_per_worker};
         tt::tt_metal::experimental::udm::SetMeshKernelRuntimeArgs(
-            mesh_builder, program, compute_kernel_id, gcore, compute_runtime_args);
+            mesh_builder, program, compute_kernel_id, sender_gcore, compute_sender_rt_args);
+
+        // Receiver runtime args: core index, then coordinates of ALL cores
+        // Format: [core_idx, coord0_d0, coord0_d1, ..., coord1_d0, coord1_d1, ..., ...]
+        for (uint32_t receiver_idx = 0; receiver_idx < num_cores_x - 1; ++receiver_idx) {
+            const auto* receiver_gcore = row_gcores[receiver_idx + 1];
+            std::vector<uint32_t> receiver_runtime_args;
+
+            // Core index (1-based for receivers, 0 is sender)
+            receiver_runtime_args.push_back(receiver_idx + 1);
+
+            // All coordinates
+            add_all_coords(receiver_runtime_args);
+
+            tt::tt_metal::experimental::udm::SetMeshKernelRuntimeArgs(
+                mesh_builder, program, reader_receiver_kernel_id, *receiver_gcore, receiver_runtime_args);
+
+            // Receiver compute runtime args
+            // Last receiver gets num_rows_per_worker_last
+            uint32_t receiver_num_rows =
+                (receiver_idx == num_cores_x - 2) ? num_rows_per_worker_last : num_rows_per_worker;
+            std::vector<uint32_t> compute_receiver_rt_args = {(uint32_t)block_wt, receiver_num_rows};
+            tt::tt_metal::experimental::udm::SetMeshKernelRuntimeArgs(
+                mesh_builder, program, compute_kernel_id, *receiver_gcore, compute_receiver_rt_args);
+        }
     }
 
     return program;
@@ -225,11 +315,12 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
     auto* mesh_device = input_tensor.device();
 
     // Aggregate tensors from distributed format
-    auto input_composer = create_width_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank());
-    auto input_data = ttnn::distributed::aggregate_tensor(input_tensor, *input_composer).to_vector<uint16_t>();
+    // Input is block-sharded, output is height-sharded (replicated on width)
+    auto input_composer = create_block_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank());
+    auto input_data = ttnn::distributed::aggregate_tensor(input_tensor, *input_composer).to_vector<bfloat16>();
 
-    auto output_composer = create_width_sharded_mesh_composer(mesh_device, output_tensor.padded_shape().rank());
-    auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *output_composer).to_vector<uint16_t>();
+    auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_tensor.padded_shape().rank());
+    auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *output_composer).to_vector<bfloat16>();
 
     // Get input shape
     const auto& input_shape = input_tensor.padded_shape();
@@ -277,37 +368,146 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
 
     log_info(tt::LogTest, "Validating {} rows, reducing {} elements per row", num_rows, input_last_dim);
 
-    // Validate each "row" (combination of indices in all dims except last)
-    uint32_t mismatches = 0;
-    const uint32_t max_print_mismatches = 10;
+    // Build expected and actual vectors for PCC comparison
+    std::vector<bfloat16> expected_values;
+    std::vector<bfloat16> actual_values;
+    expected_values.reserve(num_rows);
+    actual_values.reserve(num_rows);
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         // Compute expected sum for this row (sum across last dimension)
-        uint64_t expected_sum = 0;
+        float expected_sum = 0.0f;
         for (uint32_t last_idx = 0; last_idx < input_last_dim; ++last_idx) {
             uint32_t input_idx = row * input_last_dim + last_idx;
-            expected_sum += input_data[input_idx];
+            expected_sum += float(input_data[input_idx]);
         }
+        expected_values.push_back(bfloat16(expected_sum));
 
         // Get actual value from output (first element along last dimension)
         uint32_t output_idx = row * output_last_dim;
-        uint64_t actual_sum = output_data[output_idx];
-
-        // Compare
-        if (expected_sum != actual_sum) {
-            if (mismatches < max_print_mismatches) {
-                log_error(tt::LogTest, "Mismatch at row {}: expected={}, actual={}", row, expected_sum, actual_sum);
-            }
-            mismatches++;
-        }
+        actual_values.push_back(output_data[output_idx]);
     }
 
-    if (mismatches > 0) {
-        log_error(tt::LogTest, "Total mismatches: {} / {}", mismatches, num_rows);
-        TT_THROW("Width reduction validation failed: output does not match expected reduced values");
+    // Check PCC between expected and actual values
+    float pcc = check_bfloat16_vector_pcc(expected_values, actual_values);
+    const float pcc_threshold = 0.99f;
+
+    log_info(tt::LogTest, "PCC: {:.6f} (threshold: {:.2f})", pcc, pcc_threshold);
+
+    if (pcc < pcc_threshold) {
+        TT_THROW("Width reduction validation failed: PCC {:.6f} below threshold {:.2f}", pcc, pcc_threshold);
     }
 
-    log_info(tt::LogTest, "Width reduction validation passed: all {} rows match!", num_rows);
+    log_info(tt::LogTest, "Width reduction validation passed: PCC={:.6f} for {} rows", pcc, num_rows);
+}
+
+/**
+ * @brief Create a block-sharded bfloat16 tensor for reduction
+ * TODO: Move this to test_udm_utils.hpp once stabilized
+ */
+inline ttnn::Tensor create_block_sharded_bfloat16_tensor(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    const tt::tt_metal::Shape& local_shape) {
+    // Get device grid for sharding
+    auto compute_grid = mesh_device->compute_with_storage_grid_size();
+
+    // Calculate how many cores to use in each dimension
+    // Ensure at least 1 tile (32 elements) per core in width
+    constexpr uint32_t TILE_WIDTH = 32;
+    uint32_t num_cores_x = std::min((uint32_t)compute_grid.x, local_shape[-1] / TILE_WIDTH);
+    uint32_t num_cores_y = compute_grid.y;
+
+    // Calculate shard shape (height and width per shard in elements)
+    uint32_t shard_height = local_shape[-2] / num_cores_y;
+    uint32_t shard_width = local_shape[-1] / num_cores_x;
+
+    // Create shard spec for block sharding
+    // When num_cores_x = 1, this effectively becomes height sharding
+    auto shard_spec = ShardSpec(
+        CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
+        std::array<uint32_t, 2>{shard_height, shard_width},
+        ShardOrientation::ROW_MAJOR);
+
+    // Use BLOCK_SHARDED memory layout with bfloat16 and shard spec
+    tt::tt_metal::MemoryConfig mem_config(
+        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        global_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+
+    // Create host tensor with random bfloat16 values
+    uint32_t volume = 1;
+    for (size_t i = 0; i < global_shape.rank(); ++i) {
+        volume *= global_shape[i];
+    }
+
+    std::vector<bfloat16> src_data(volume);
+
+    // Generate random data in bfloat16 range
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(0.0f, 10.0f);
+    for (uint32_t i = 0; i < volume; ++i) {
+        src_data[i] = bfloat16(dis(gen));
+    }
+
+    auto host_tensor = ttnn::Tensor::from_vector(src_data, tensor_spec);
+
+    // Use block-sharded mapper
+    auto mapper = create_block_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+}
+
+/**
+ * @brief Create a height-sharded bfloat16 tensor (replicated across width dimension)
+ * Used for reduction outputs where width is reduced to a single tile
+ */
+inline ttnn::Tensor create_height_sharded_bfloat16_tensor(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    const tt::tt_metal::Shape& local_shape) {
+    // Get device grid for sharding
+    auto compute_grid = mesh_device->compute_with_storage_grid_size();
+
+    // For height-sharded: use only 1 core in X, full grid in Y
+    uint32_t num_cores_x = 1;
+    uint32_t num_cores_y = compute_grid.y;
+
+    // Calculate shard shape
+    uint32_t shard_height = local_shape[-2] / num_cores_y;
+    uint32_t shard_width = local_shape[-1];  // Full width per core
+
+    // Create shard spec - single column of cores
+    auto shard_spec = ShardSpec(
+        CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
+        std::array<uint32_t, 2>{shard_height, shard_width},
+        ShardOrientation::ROW_MAJOR);
+
+    // Use BLOCK_SHARDED memory layout (effectively height sharding with 1 core in X)
+    tt::tt_metal::MemoryConfig mem_config(
+        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        global_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+
+    // Create host tensor with zeros (output will be written by kernel)
+    uint32_t volume = 1;
+    for (size_t i = 0; i < global_shape.rank(); ++i) {
+        volume *= global_shape[i];
+    }
+
+    std::vector<bfloat16> src_data(volume, bfloat16(0.0f));
+
+    auto host_tensor = ttnn::Tensor::from_vector(src_data, tensor_spec);
+
+    // Use height-sharded mapper (shard on height, replicate on width)
+    auto mapper = create_height_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 
 /**
@@ -317,20 +517,24 @@ void run_width_reduction_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
     const tt::tt_metal::Shape& local_shape) {
-    // Create input tensor with known values for easy validation
-    auto input_tensor = create_width_sharded_tensor(mesh_device, global_shape, local_shape);
+    // Create input tensor - block-sharded bfloat16
+    auto input_tensor = create_block_sharded_bfloat16_tensor(mesh_device, global_shape, local_shape);
 
     // Create output tensor for reduced result
     // Output shape is same as input except last dimension is reduced to 32 (one tile)
+    // Output is height-sharded only (replicated across mesh width dimension)
     tt::tt_metal::Shape output_global_shape = global_shape;
     tt::tt_metal::Shape output_local_shape = local_shape;
     output_global_shape[-1] = 32;  // Reduce last dimension to single tile
     output_local_shape[-1] = 32;
 
-    auto output_tensor = create_width_sharded_tensor(mesh_device, output_global_shape, output_local_shape);
+    auto output_tensor = create_height_sharded_bfloat16_tensor(mesh_device, output_global_shape, output_local_shape);
+
+    // Build tensor builder from input tensor
+    auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
 
     // Create reduction program
-    auto program = create_program(input_tensor, output_tensor);
+    auto program = create_program(input_mesh_tensor_builder, *input_tensor.buffer(), *output_tensor.buffer());
 
     // Run program
     auto* tensor_mesh_device = input_tensor.device();
@@ -342,26 +546,34 @@ void run_width_reduction_test(
 }
 
 /**
- * @brief Test width reduction with MeshGcoreAccessor
+ * @brief Test width reduction with LayerNorm-style distributed pattern
  *
  * Setup:
- * - Mesh: 1×4 (4 devices in a row)
- * - Input tensor: width-sharded across devices
- * - Each gcore reads its portion, reduces locally
- * - Sends partial result to next gcore via MeshGcoreAccessor
- * - Last gcore writes final sum to output
+ * - Mesh: MxN (e.g., 1×4 for 4 devices in a row)
+ * - Input tensor: block-sharded, bfloat16
+ * - Constraint: block_ht (height per mesh row) >= num_cores_x (mesh width)
+ *   to ensure each core has at least one row for global reduction
  *
- * Operation:
- * - Gcore 0: local_sum[0] → send to Gcore 1
- * - Gcore 1: local_sum[1] + received → send to Gcore 2
- * - Gcore 2: local_sum[2] + received → send to Gcore 3
- * - Gcore 3: local_sum[3] + received → write to output
+ * Pattern (LayerNorm-style distributed reduction):
+ * Phase 1: All cores - Local partial reduction
+ *   - Each core reduces its block (block_ht × block_wt) across width → block_ht partial tiles
+ *
+ * Phase 2: All cores - Distributed global reduction
+ *   - Work is distributed: each core reduces different rows
+ *   - Core i reduces rows [i*k, (i+1)*k) across all cores' partials
+ *   - Each core reads assigned rows' partials from ALL cores and reduces them
+ *
+ * Phase 3: Sender - Gather and distribute
+ *   - Sender gathers reduced results from all cores
+ *   - Sender distributes complete result to all cores (TODO: use mcast when available)
  */
 using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFixture;
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Small) {
     // Small 2D tensor: (4, 16) tiles = (128, 512) elements
-    // Width-sharded: each device gets (4, 4) tiles = (128, 128) elements
+    // Mesh: 1×4, so block_ht = 4/1 = 4 tiles, num_cores_x = 4
+    // Constraint satisfied: block_ht (4) >= num_cores_x (4) ✓
+    // Each device gets (4, 4) tiles = (128, 128) elements locally
     tt::tt_metal::Shape global_shape({128, 512});
     tt::tt_metal::Shape local_shape({128, 128});
 
@@ -369,7 +581,10 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Small) {
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Medium) {
-    // Medium 2D tensor: (8, 32) tiles
+    // Medium 2D tensor: (8, 32) tiles = (256, 1024) elements
+    // Mesh: 1×4, so block_ht = 8/1 = 8 tiles, num_cores_x = 4
+    // Constraint satisfied: block_ht (8) >= num_cores_x (4) ✓
+    // Each device gets (8, 8) tiles = (256, 256) elements locally
     tt::tt_metal::Shape global_shape({256, 1024});
     tt::tt_metal::Shape local_shape({256, 256});
 

@@ -4,7 +4,10 @@
 
 find_package(Python3 REQUIRED COMPONENTS Development)
 
-set(UDM_TEST_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_copy.cpp)
+set(UDM_TEST_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_copy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_reduction.cpp
+)
 
 add_executable(udm_tests ${UDM_TEST_SRCS})
 
