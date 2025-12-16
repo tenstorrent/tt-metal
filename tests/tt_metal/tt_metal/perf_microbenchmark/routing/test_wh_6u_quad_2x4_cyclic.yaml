@@ -20,19 +20,19 @@ Tests:
       ntype: unicast_write
       num_packets: 50000
     senders:
-      - device: [0, 5]
-        patterns:
-          - destination:
-              device: [2, 4]
-      - device: [2, 5]
-        patterns:
-          - destination:
-              device: [0, 4]
-      - device: [3, 6]
-        patterns:
-          - destination:
-              device: [1, 7]
-      - device: [1, 6]
+      - device: [0, 7]
         patterns:
           - destination:
               device: [3, 7]
+      - device: [3, 4]
+        patterns:
+          - destination:
+              device: [2, 4]
+      - device: [2, 7]
+        patterns:
+          - destination:
+              device: [1, 7]
+      - device: [1, 4]
+        patterns:
+          - destination:
+              device: [0, 4]
