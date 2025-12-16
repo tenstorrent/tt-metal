@@ -573,7 +573,7 @@ class MasterConfigLoader:
         failed_configs = 0
         seen_input_signatures = set() if deduplicate_inputs else None
 
-        for config_idx, (config, source) in enumerate(configs):
+        for config_idx, (config, source, machine_info) in enumerate(configs):
             try:
                 # Extract first tensor from each config
                 # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
@@ -1210,7 +1210,7 @@ class MasterConfigLoader:
         paired_configs = []
         failed_configs = 0
 
-        for config_idx, (config, source) in enumerate(configs):
+        for config_idx, (config, source, machine_info) in enumerate(configs):
             try:
                 # Extract BOTH tensors from each config
                 tensor_configs = []
@@ -1268,6 +1268,7 @@ class MasterConfigLoader:
                                 "memory_config_b": parsed_mem_config_b,
                                 "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
                                 "traced_source": source,
+                                "traced_machine_info": machine_info,
                             }
                         )
                     else:
@@ -1354,6 +1355,7 @@ class MasterConfigLoader:
                 input_b_memory_configs = []
                 output_memory_configs = []
                 traced_source_list = []
+                traced_machine_info_list = []
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
@@ -1366,6 +1368,7 @@ class MasterConfigLoader:
                     input_b_memory_configs.append(cfg["memory_config_b"])
                     output_memory_configs.append(cfg["output_memory_config"])
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
+                    traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
 
                 # Convert to exact configurations format (prevents Cartesian product)
@@ -1380,6 +1383,7 @@ class MasterConfigLoader:
                     "input_b_memory_config",
                     "output_memory_config",
                     "traced_source",
+                    "traced_machine_info",
                     # NOTE: traced_config_name is metadata only, not passed to run()
                     # "traced_config_name",
                 ]
@@ -1393,6 +1397,7 @@ class MasterConfigLoader:
                     input_b_memory_configs,
                     output_memory_configs,
                     traced_source_list,
+                    traced_machine_info_list,
                     # traced_config_names,
                 ]
 
@@ -1432,7 +1437,7 @@ class MasterConfigLoader:
         paired_configs = []
         failed_configs = 0
 
-        for config_idx, (config, source) in enumerate(configs):
+        for config_idx, (config, source, machine_info) in enumerate(configs):
             try:
                 # Extract ALL tensors from each config
                 tensor_configs = []
@@ -1448,7 +1453,7 @@ class MasterConfigLoader:
                     continue
 
                 # Parse all tensor configs
-                parsed_config = {"traced_source": source}
+                parsed_config = {"traced_source": source, "traced_machine_info": machine_info}
                 for i, tc in enumerate(tensor_configs):
                     suffix = chr(97 + i)  # a, b, c, d, ...
                     try:
@@ -1461,8 +1466,8 @@ class MasterConfigLoader:
                         break
 
                 if (
-                    len(parsed_config) == tensor_count * 4 + 1
-                ):  # shape, dtype, layout, mem_config for each tensor + traced_source
+                    len(parsed_config) == tensor_count * 4 + 2
+                ):  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info
                     paired_configs.append(parsed_config)
 
             except Exception as e:
@@ -1523,6 +1528,7 @@ class MasterConfigLoader:
                 layouts = [[] for _ in range(tensor_count)]
                 memory_configs = [[] for _ in range(tensor_count)]
                 traced_source_list = []
+                traced_machine_info_list = []
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
@@ -1538,6 +1544,7 @@ class MasterConfigLoader:
                         memory_configs[i].append(cfg[f"memory_config_{suffix}"])
 
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
+                    traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
 
                 # Convert to exact configurations format (prevents Cartesian product)
@@ -1553,9 +1560,11 @@ class MasterConfigLoader:
                     )
                     param_lists.extend([dtypes[i], layouts[i], memory_configs[i]])
 
-                # Add traced_source for traceability
+                # Add traced_source and traced_machine_info for traceability
                 param_names.append("traced_source")
                 param_lists.append(traced_source_list)
+                param_names.append("traced_machine_info")
+                param_lists.append(traced_machine_info_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
@@ -2129,7 +2138,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source) in enumerate(configs):
+            for config_idx, (config, source, machine_info) in enumerate(configs):
                 try:
                     # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
                     # Extract vector of tensors from arg0 (may be UnparsedElement)
@@ -2227,6 +2236,7 @@ class MasterConfigLoader:
                             "dim": dim,
                             "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
                             "traced_source": source,
+                            "traced_machine_info": machine_info,
                         }
 
                         # Add dtype, layout, memory_config for each input (at least 2)
@@ -2295,7 +2305,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source) in enumerate(configs):
+            for config_idx, (config, source, machine_info) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -2354,6 +2364,7 @@ class MasterConfigLoader:
                             "num_q_heads": num_q_heads,
                             "num_kv_heads": num_kv_heads,
                             "traced_source": source,
+                            "traced_machine_info": machine_info,
                         }
                         paired_configs.append(config_dict)
 
@@ -2408,7 +2419,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source) in enumerate(configs):
+            for config_idx, (config, source, machine_info) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -2467,6 +2478,7 @@ class MasterConfigLoader:
                             "num_heads": num_heads,
                             "num_kv_heads": num_kv_heads,
                             "traced_source": source,
+                            "traced_machine_info": machine_info,
                         }
                         paired_configs.append(config_dict)
 
