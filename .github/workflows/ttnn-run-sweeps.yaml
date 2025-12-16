@@ -603,10 +603,10 @@ on:
         default: "INFO"
 
   schedule:
-    - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
+    - cron: "30 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
-    - cron: "30 4 * * *" # This cron schedule runs the workflow at 4:30 AM UTC daily (model traced runs)
+    - cron: "0 4 * * *" # This cron schedule runs the workflow at 4:00 AM UTC daily (model traced runs)
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
@@ -735,12 +735,12 @@ jobs:
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: |
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
-           (github.event_name == 'schedule' && github.event.schedule == '30 4 * * *')) &&
+           (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *')) &&
           matrix.generate_mode == 'all'
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
-          ((github.event_name == 'schedule' && github.event.schedule != '30 4 * * *') ||
+          ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
@@ -834,7 +834,7 @@ jobs:
           ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
 
           is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
-          is_model_traced = schedule_expr == "30 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
+          is_model_traced = schedule_expr == "0 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
           # For model_traced runs, use "model_traced" suite only
           # For nightly runs, use "nightly" suite
           # For comprehensive runs, don't override suite_name
@@ -1184,7 +1184,7 @@ jobs:
           RUN_TYPE="nightly"
           if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
-          elif [[ "${{ github.event.schedule }}" == "30 4 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+          elif [[ "${{ github.event.schedule }}" == "0 4 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
             RUN_TYPE="model_traced"
           fi
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"

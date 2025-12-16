@@ -56,6 +56,58 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 
 
+def get_machine_info():
+    """
+    Get machine info (board type, device series, and card count) using tt-smi command.
+    Returns a dict with 'board_type', 'device_series', and 'card_count' or None on failure.
+    Gracefully handles command not found or other errors.
+    """
+    try:
+        # Run the bash command to extract machine info with card count
+        cmd = """
+        tt-smi -ls \\
+        | sed 's/│/|/g' \\
+        | awk -F'|' '
+        /Boards that can be reset:/ {in_table=1; next}
+        in_table && $0 ~ /^\\|/ {
+            gsub(/^[ \\t]+|[ \\t]+$/, "", $3)
+            gsub(/^[ \\t]+|[ \\t]+$/, "", $4)
+            sub(/[[:space:]]+L$/, "", $4)
+            if ($3 != "") machines[$3" "$4]++
+        }
+        END {
+            for (m in machines) print m, machines[m], (machines[m] > 1 ? "cards" : "card")
+        }'
+        """
+
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)  # 10 second timeout
+
+        if result.returncode == 0 and result.stdout.strip():
+            # Parse the output: "Wormhole n300 1 card" or "Blackhole tt-galaxy-bh 32 cards"
+            lines = result.stdout.strip().split("\n")
+            if lines:
+                # Take the first line (should be the primary board)
+                parts = lines[0].strip().split()
+                if len(parts) >= 3:
+                    board_type = parts[0]  # e.g., "Wormhole" or "Blackhole"
+                    device_series = parts[1]  # e.g., "n300", "n150", "tt-galaxy-bh"
+                    card_count = int(parts[2])  # e.g., 1, 2, 32
+                    return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+
+        # If we get here, command didn't produce expected output
+        return None
+
+    except subprocess.TimeoutExpired:
+        # Command took too long
+        return None
+    except FileNotFoundError:
+        # tt-smi command not found
+        return None
+    except Exception:
+        # Any other error - silently fail
+        return None
+
+
 def create_tracing_plugin(output_dir):
     """
     Create a pytest plugin that captures operations during test execution.
@@ -307,6 +359,55 @@ class OperationsTracingPlugin:
         signature = hashlib.md5(args_str.encode()).hexdigest()
         return signature
 
+    def _merge_machine_info(self, existing_config, new_machine_info):
+        """
+        Merge machine info into an existing configuration.
+
+        Handles smart merging:
+        - If same board_type, merge device_series into a list
+        - If different board_type, create list of machine_info dicts
+        """
+        if 'machine_info' not in existing_config:
+            # No existing machine info, just add as list
+            existing_config['machine_info'] = [new_machine_info]
+            return
+
+        existing_machine_info = existing_config['machine_info']
+
+        # Handle legacy single-dict format - convert to list
+        if isinstance(existing_machine_info, dict):
+            existing_machine_info = [existing_machine_info]
+            existing_config['machine_info'] = existing_machine_info
+
+        # Now existing_machine_info is a list
+        new_board_type = new_machine_info.get('board_type')
+        new_device_series = new_machine_info.get('device_series')
+
+        # Find if we have an entry with matching board_type
+        matching_board_entry = None
+        for entry in existing_machine_info:
+            if entry.get('board_type') == new_board_type:
+                matching_board_entry = entry
+                break
+
+        if matching_board_entry:
+            # Same board type - merge device_series
+            existing_series = matching_board_entry.get('device_series')
+
+            # Convert to list if needed
+            if not isinstance(existing_series, list):
+                existing_series = [existing_series]
+                matching_board_entry['device_series'] = existing_series
+
+            # Add new device_series if not already present
+            if new_device_series not in existing_series:
+                existing_series.append(new_device_series)
+                # Keep sorted for consistency
+                existing_series.sort()
+        else:
+            # Different board type - add as new entry
+            existing_machine_info.append(new_machine_info)
+
     def update_master_file(self, master_file_path, new_operations, test_name):
         """Update master file with unique operation configurations grouped by operation name"""
 
@@ -408,8 +509,12 @@ class OperationsTracingPlugin:
 
                 # Check if this argument configuration already exists
                 arg_signature = self.get_arguments_signature(op_args)
-                existing_signatures = set()
 
+                # Try to get machine info for the new configuration
+                new_machine_info = get_machine_info()
+
+                # Find matching configuration to merge machine info
+                matching_config = None
                 for existing_config in master_data['operations'][op_name]["configurations"]:
                     # Handle both old format (list) and new format (dict with source)
                     if isinstance(existing_config, list):
@@ -420,17 +525,26 @@ class OperationsTracingPlugin:
                         existing_args = existing_config
 
                     existing_sig = self.get_arguments_signature(existing_args)
-                    existing_signatures.add(existing_sig)
+                    if existing_sig == arg_signature:
+                        matching_config = existing_config
+                        break
 
-                # Add configuration if it's unique (in new format with source tag)
-                if arg_signature not in existing_signatures:
-                    # Store in new format: dict with arguments and source
+                if matching_config is None:
+                    # New configuration - add it
                     config_entry = {
                         "arguments": op_args,
                         "source": test_name
                     }
+
+                    if new_machine_info:
+                        config_entry["machine_info"] = [new_machine_info]
+
                     master_data['operations'][op_name]["configurations"].append(config_entry)
                     new_configs_added += 1
+                else:
+                    # Configuration exists - merge machine info if needed
+                    if new_machine_info and isinstance(matching_config, dict):
+                        self._merge_machine_info(matching_config, new_machine_info)
 
         # Update metadata
         if test_name not in master_data['metadata']['models']:

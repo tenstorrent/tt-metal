@@ -107,6 +107,7 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 - Data types (e.g., `BFLOAT8_B`, `BFLOAT16`)
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
+- Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`
