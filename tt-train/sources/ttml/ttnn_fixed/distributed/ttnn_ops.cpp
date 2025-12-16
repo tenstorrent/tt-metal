@@ -20,7 +20,7 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, cluster_axis ? std::optional<size_t>(cluster_axis.value()) : std::nullopt);
+        *mesh_device, /* cluster_axis */ cluster_axis);
     
     if (cluster_axis.has_value()) {
         // Use cluster_axis overload for 2D mesh
@@ -72,7 +72,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optiona
     auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
 
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, cluster_axis ? std::optional<size_t>(cluster_axis.value()) : std::nullopt);
+        *mesh_device, /* cluster_axis */ cluster_axis);
     
     if (cluster_axis.has_value()) {
         // Use cluster_axis overload for 2D mesh
