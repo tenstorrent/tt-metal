@@ -34,26 +34,23 @@ struct LayerNormShardedMultiCoreProgramConfig {
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
 
-// Creates a program config appropriate for the input tensor's memory layout.
-// - If shard_spec is provided, creates a sharded config derived from it
+// Creates a program config from shard spec.
+// - If shard_spec has value, creates a sharded config derived from it
 // - Otherwise, returns a default interleaved config
-// Usage: create_program_config(tensor.shard_spec())
-inline LayerNormProgramConfig create_program_config(
-    const std::optional<tt::tt_metal::ShardSpec>& shard_spec = std::nullopt) {
-    if (shard_spec.has_value()) {
-        const auto& spec = shard_spec.value();
-        const auto bbox = spec.grid.bounding_box();
-        return LayerNormShardedMultiCoreProgramConfig{
-            .compute_with_storage_grid_size =
-                {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1},
-            .subblock_w = 1,
-            .block_h = spec.shape[0] / tt::constants::TILE_HEIGHT,
-            .block_w = spec.shape[1] / tt::constants::TILE_WIDTH,
-            .inplace = false,
-        };
+inline LayerNormProgramConfig create_program_config(const std::optional<tt::tt_metal::ShardSpec>& shard_spec) {
+    if (!shard_spec.has_value()) {
+        return LayerNormDefaultProgramConfig{};
     }
-
-    return LayerNormDefaultProgramConfig{};
+    const auto& spec = shard_spec.value();
+    const auto bbox = spec.grid.bounding_box();
+    return LayerNormShardedMultiCoreProgramConfig{
+        .compute_with_storage_grid_size =
+            {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1},
+        .subblock_w = 1,
+        .block_h = spec.shape[0] / tt::constants::TILE_HEIGHT,
+        .block_w = spec.shape[1] / tt::constants::TILE_WIDTH,
+        .inplace = false,
+    };
 }
 
 }  // namespace ttnn::operations::normalization
