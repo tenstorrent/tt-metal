@@ -16,10 +16,14 @@ void kernel_main() {
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_src_address);
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dst_dram;
 
+    DPRINT << "dram_dst_address: " << dram_dst_address << ENDL();
+
     experimental::Semaphore semaphore(semaphore_id);
     semaphore.wait(VALID);
 
     noc.async_write(
         l1_buffer, dst_dram, dram_buffer_size, {}, {.bank_id = dram_dst_bank_id, .addr = dram_dst_address});
     noc.async_write_barrier();
+
+    DPRINT << "l1_src_address: " << l1_src_address << ENDL();
 }

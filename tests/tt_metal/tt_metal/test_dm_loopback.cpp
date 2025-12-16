@@ -45,7 +45,7 @@ int main() {
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_read_address, value);
+    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_write_address, value);
     std::cout << "WriteToDeviceDRAMChannel passed" << std::endl;
     MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
     std::cout << "DRAM barrier passed" << std::endl;
@@ -79,7 +79,7 @@ int main() {
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::cout << "EnqueueMeshWorkload passed" << std::endl;
     std::vector<uint32_t> outputs{0};
-    tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_write_address, 4, outputs);
+    tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_read_address, 4, outputs);
     std::cout << "ReadFromDeviceDRAMChannel passed" << std::endl;
     mesh_device->close();
 
