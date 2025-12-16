@@ -143,11 +143,13 @@ def get_dte_intermediate(indices_tensor, scores_tensor, mapping_tensor, mesh_sha
     )
 
     dte_scores = torch.zeros_like(dte_intermediate, dtype=scores_tensor.dtype)
+    ed_table = torch.zeros(
+        devices, experts_per_device, devices, dtype=torch.int16
+    )  # [target_device, expert_id, source_device]
 
     # Iterate over each source device
     for source_device_idx in range(devices):
         source_axis_pos = get_axis_position(source_device_idx, mesh_shape, cluster_axis)
-        chunk_position = 0
 
         num_chunks = [tokens_per_device] * experts
         for t in range(tokens_per_device):
@@ -170,8 +172,9 @@ def get_dte_intermediate(indices_tensor, scores_tensor, mapping_tensor, mesh_sha
                     dte_intermediate[target_device, source_axis_pos, flat_idx] = num_chunks[expert_id]
                     dte_scores[target_device, source_axis_pos, flat_idx] = scores_reshaped[source_device_idx, t, k]
                     num_chunks[expert_id] += 1
+                    ed_table[target_device, local_expert_idx, source_device_idx] = 1
 
-    return dte_intermediate, dte_scores
+    return dte_intermediate, dte_scores, ed_table.reshape(devices, experts_per_device * devices)
 
 
 @pytest.mark.parametrize(
@@ -252,7 +255,7 @@ def test_all_to_all_dispatch_selective_tilize_no_trace_batch32(
     logger.info(f"Expert Indices: {expert_indices} with shape {expert_indices.shape}")
     logger.info(f"Expert Mapping: {expert_mapping} with shape {expert_mapping.shape}")
 
-    dte_intermediate, dte_scores = get_dte_intermediate(
+    dte_intermediate, dte_scores, ed_table = get_dte_intermediate(
         indices_tensor=expert_indices,
         mapping_tensor=expert_mapping,
         scores_tensor=expert_scores,
@@ -262,6 +265,7 @@ def test_all_to_all_dispatch_selective_tilize_no_trace_batch32(
 
     logger.info(f"DTE Intermediate: {dte_intermediate} with shape {dte_intermediate.shape}")
     logger.info(f"DTE Scores: {dte_scores} with shape {dte_scores.shape}")
+    logger.info(f"ED Table: {ed_table} with shape {ed_table.shape}")
 
     # mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, 2)
 
