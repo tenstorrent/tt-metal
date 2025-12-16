@@ -21,8 +21,10 @@ def compute_pcc(golden: np.ndarray, actual: np.ndarray) -> float:
     Returns:
         PCC value between -1 and 1 (1 = perfect correlation)
     """
-    golden_flat = golden.flatten()
-    actual_flat = actual.flatten()
+    # Convert to float32 to avoid precision issues with bfloat16/float16
+    # bfloat16 has only 7 bits of mantissa which causes incorrect PCC values
+    golden_flat = golden.flatten().astype(np.float32)
+    actual_flat = actual.flatten().astype(np.float32)
 
     if len(golden_flat) != len(actual_flat):
         return 0.0

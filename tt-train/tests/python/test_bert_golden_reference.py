@@ -270,13 +270,31 @@ def test_bert_qkv_loading_golden_reference(model_name, batch_size, seq_len):
     print(f"Pearson Correlation Coefficient: {pcc:.6f}\n")
 
     # Assertions
-    # TODO: Investigate why PCC is ~0.968 instead of >0.99
-    # The original test expected PCC > 0.99 and mean_error < 0.01, but actual results show:
-    # - PCC: ~0.968 (3% correlation loss)
-    # - Mean error: ~0.166 (16% of output scale)
-    # Threshold relaxed to 0.95 to match other BERT tests, but this masks an accuracy gap.
-    # Possible causes: bfloat16 precision, weight loading differences, or implementation bugs.
-    assert pcc > 0.95, f"PCC too low: {pcc:.6f} (expected >0.95)"
+    # WORKAROUND: Dynamic threshold pending investigation of batch-size accuracy drop.
+    #
+    # Observed behavior:
+    # - batch=1, seq=32: PCC ~0.998 (32 tokens)
+    # - batch=2, seq=64: PCC ~0.968 (128 tokens)
+    #
+    # Hypothesis: Individual layers are highly accurate (PCC ~0.9999 in isolation with
+    # batch=1), so errors compound through the network.
+    #
+    # UNVERIFIED: Cannot test isolated blocks with batch>1 due to a shape mismatch bug
+    # in get_block() - see TestIsolatedBlockBatchAccuracy in test_bert_accuracy_diagnostics.py
+    # Until that bug is fixed, we cannot determine if the batch-size accuracy drop is:
+    # A) Expected cumulative bfloat16 error (acceptable)
+    # B) A batching bug in BERT block implementation (needs fix)
+    #
+    # TODO: Once get_block() batch bug is fixed, verify isolated block accuracy with
+    # batch>1. If blocks maintain ~0.9999 PCC, this threshold logic is correct.
+    # If not, there's a real bug to fix.
+    total_tokens = batch_size * seq_len
+    if total_tokens <= 64:
+        threshold = 0.99  # Strict for small configurations
+    else:
+        threshold = 0.95  # Relaxed - workaround pending batch investigation
+
+    assert pcc > threshold, f"PCC too low: {pcc:.6f} (expected >{threshold})"
 
     print(f"{'='*80}")
     print("✅ Golden reference test PASSED!")
