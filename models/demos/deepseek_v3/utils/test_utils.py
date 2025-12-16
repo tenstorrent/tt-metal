@@ -497,4 +497,6 @@ def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
         return ttnn.MeshShape(8, 8)
     elif system_name == "QUAD":
         return ttnn.MeshShape(16, 8)
+    elif system_name == "T3K":
+        return ttnn.MeshShape(1, 8)
     raise ValueError(f"Unsupported system name: {system_name}. Supported values are DUAL, QUAD, and TG.")
