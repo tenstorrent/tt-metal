@@ -6,6 +6,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
+#include <cstdint>
 #include <ostream>
 
 #include <tt_stl/assert.hpp>
@@ -488,13 +489,19 @@ std::vector<T> convert_layout(
     const bool transpose_within_face,
     const bool transpose_of_faces) {
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
-    uint32_t H = shape[shape.size() - 2];
+    uint64_t H = shape[shape.size() - 2];
     uint32_t W = shape[shape.size() - 1];
     for (size_t i = 0; i < shape.size() - 2; i++) {
+        if (shape[i] != 0) {
+            TT_ASSERT(
+                H <= UINT32_MAX / shape[i],
+                "Shape dimension product would exceed UINT32_MAX");
+        }
         H *= shape[i];
     }
+    TT_ASSERT(H <= UINT32_MAX, "Shape dimension product {} exceeds UINT32_MAX", H);
     return convert_layout(
-        inp, PhysicalSize{H, W}, inL, outL, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+        inp, PhysicalSize{static_cast<uint32_t>(H), W}, inL, outL, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 }
 
 template <typename T>
