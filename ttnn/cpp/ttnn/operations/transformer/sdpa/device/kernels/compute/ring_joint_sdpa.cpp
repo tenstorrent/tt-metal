@@ -89,24 +89,7 @@ void MAIN {
         const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
         const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;
 
-        sdpa_inner_loop<
-            RING,
-            cb_qk_im,
-            cb_identity_scale_in,
-            0,
-            cb_scale_in,
-            Sq_chunk_t,
-            Sk_chunk_t,
-            DHt,
-            DHt,
-            false,
-            false,
-            false,
-            false,
-            use_joint_mask,
-            false,
-            scale_fp32,
-            0>(
+        sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, use_joint_mask, scale_fp32>(
             Skt,
             qk_in0_block_w,
             qk_subblock_w,
@@ -123,8 +106,6 @@ void MAIN {
             global_q_start,
             global_q_end,
             q_num_chunks,
-            0,
-            0,
             iter_k_chunk_start,
             iter_k_chunk_end,
             q_chunk_tiles,

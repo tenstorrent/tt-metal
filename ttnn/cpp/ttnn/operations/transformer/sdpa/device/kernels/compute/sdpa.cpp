@@ -99,12 +99,10 @@ void MAIN {
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                sdpa_inner_loop<
-                    STANDARD,
+                sdpa_standard<
                     cb_qk_im,
                     cb_identity_scale_in,
                     cb_attention_sink,
-                    0,
                     Sq_chunk_t,
                     Sk_chunk_t,
                     DHt,
@@ -113,7 +111,6 @@ void MAIN {
                     is_causal,
                     use_provided_mask,
                     use_padded_mask,
-                    false,
                     is_chunked,
                     scale_fp32,
                     sliding_window_size>(
@@ -130,25 +127,16 @@ void MAIN {
                     out_in0_num_subblocks,
                     out_in1_num_subblocks,
                     out_num_blocks,
-                    0,
-                    q_chunks_per_core,
+                    0,                  // iter_q_start
+                    q_chunks_per_core,  // iter_q_end
                     q_num_chunks,
                     local_q_start,
                     chunked_q_chunk_offset,
-                    0,
                     k_num_chunks,
                     q_chunk_tiles,
                     k_chunk_tiles,
                     qk_chunk_tiles,
                     out_chunk_tiles,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
                     cb_q_in,
                     cb_k_in,
                     cb_v_in,
@@ -161,9 +149,6 @@ void MAIN {
                     cb_sum_A,
                     cb_sum_B,
                     cb_exp_max_diff,
-                    0,
-                    0,
-                    0,
                     cb_out);
             }
         }

@@ -1053,9 +1053,11 @@ enum SDPAType {
 };
 
 /******************************************************************************
- *                           FLASH ATTENTION LOOP                             *
+ *                             SDPA INNER LOOP                                *
  ******************************************************************************/
 /**
+ * Use the specialized wrapper functions below instead of calling this directly.
+ *
  * Template Parameters:
  * @tparam sdpa_type - SDPA variant: STANDARD, JOINT, or RING
  * @tparam cb_qk_im - QK intermediate buffer
@@ -1505,4 +1507,484 @@ void sdpa_inner_loop(
     if constexpr (use_attention_sink) {
         cb_pop_front(cb_attention_sink, Sq_chunk_t);
     }
+}
+
+/******************************************************************************
+ *                          SDPA WRAPPER FUNCTIONS                            *
+ ******************************************************************************/
+
+/**
+ * Standard SDPA with optional causal masking, attention sink, and sliding window.
+ */
+template <
+    uint32_t cb_qk_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_attention_sink,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    bool use_attention_sink,
+    bool is_causal,
+    bool use_provided_mask,
+    bool use_padded_mask,
+    bool is_chunked,
+    uint32_t scale_fp32,
+    uint32_t sliding_window_size>
+void sdpa_standard(
+    const uint32_t Skt,
+    const uint32_t qk_in0_block_w,
+    const uint32_t qk_subblock_w,
+    const uint32_t qk_subblock_h,
+    const uint32_t qk_in0_num_subblocks,
+    const uint32_t qk_in1_num_subblocks,
+    const uint32_t qk_num_blocks,
+    const uint32_t out_in0_block_w,
+    const uint32_t out_subblock_w,
+    const uint32_t out_subblock_h,
+    const uint32_t out_in0_num_subblocks,
+    const uint32_t out_in1_num_subblocks,
+    const uint32_t out_num_blocks,
+    const uint32_t iter_q_start,
+    const uint32_t iter_q_end,
+    const uint32_t q_num_chunks,
+    const uint32_t local_q_start,
+    const uint32_t chunked_q_chunk_offset,
+    const uint32_t k_num_chunks,
+    const uint32_t q_chunk_tiles,
+    const uint32_t k_chunk_tiles,
+    const uint32_t qk_chunk_tiles,
+    const uint32_t out_chunk_tiles,
+    const uint32_t cb_q_in,
+    const uint32_t cb_k_in,
+    const uint32_t cb_v_in,
+    const uint32_t cb_mask_in,
+    const uint32_t cb_col_identity,
+    const uint32_t cb_out_im_A,
+    const uint32_t cb_out_im_B,
+    const uint32_t cb_max_A,
+    const uint32_t cb_max_B,
+    const uint32_t cb_sum_A,
+    const uint32_t cb_sum_B,
+    const uint32_t cb_exp_max_diff,
+    const uint32_t cb_out) {
+    sdpa_inner_loop<
+        STANDARD,
+        cb_qk_im,
+        cb_identity_scale_in,
+        cb_attention_sink,
+        0,  // cb_scale_in (not used)
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        vDHt,
+        use_attention_sink,
+        is_causal,
+        use_provided_mask,
+        use_padded_mask,
+        false,  // use_joint_mask (not used)
+        is_chunked,
+        scale_fp32,
+        sliding_window_size>(
+        Skt,
+        qk_in0_block_w,
+        qk_subblock_w,
+        qk_subblock_h,
+        qk_in0_num_subblocks,
+        qk_in1_num_subblocks,
+        qk_num_blocks,
+        out_in0_block_w,
+        out_subblock_w,
+        out_subblock_h,
+        out_in0_num_subblocks,
+        out_in1_num_subblocks,
+        out_num_blocks,
+        iter_q_start,
+        iter_q_end,
+        q_num_chunks,
+        local_q_start,
+        chunked_q_chunk_offset,
+        0,             // iter_k_chunk_start
+        k_num_chunks,  // iter_k_chunk_end
+        q_chunk_tiles,
+        k_chunk_tiles,
+        qk_chunk_tiles,
+        out_chunk_tiles,
+        0,  // mask_chunk_0 (not used)
+        0,  // mask_chunk_1 (not used)
+        0,  // ring_iter (not used)
+        0,  // ring_id (not used)
+        0,  // N_mask_ring_id (not used)
+        0,  // L_mask_ring_id (not used)
+        0,  // global_logical_NK_chunks (not used)
+        0,  // global_padded_NK_chunks (not used)
+        cb_q_in,
+        cb_k_in,
+        cb_v_in,
+        cb_mask_in,
+        cb_col_identity,
+        cb_out_im_A,
+        cb_out_im_B,
+        cb_max_A,
+        cb_max_B,
+        cb_sum_A,
+        cb_sum_B,
+        cb_exp_max_diff,
+        0,  // cb_lse_in (not used)
+        0,  // cb_lse_out (not used)
+        0,  // cb_prev_out (not used)
+        cb_out);
+}
+
+/**
+ * Joint SDPA for multi-modal attention.
+ */
+template <
+    uint32_t cb_qk_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    bool use_joint_mask,
+    uint32_t scale_fp32>
+void sdpa_joint(
+    const uint32_t Skt,
+    const uint32_t qk_in0_block_w,
+    const uint32_t qk_subblock_w,
+    const uint32_t qk_subblock_h,
+    const uint32_t qk_in0_num_subblocks,
+    const uint32_t qk_in1_num_subblocks,
+    const uint32_t qk_num_blocks,
+    const uint32_t out_in0_block_w,
+    const uint32_t out_subblock_w,
+    const uint32_t out_subblock_h,
+    const uint32_t out_in0_num_subblocks,
+    const uint32_t out_in1_num_subblocks,
+    const uint32_t out_num_blocks,
+    const uint32_t local_q_start,
+    const uint32_t local_q_end,
+    const uint32_t k_num_chunks,
+    const uint32_t q_chunk_tiles,
+    const uint32_t k_chunk_tiles,
+    const uint32_t qk_chunk_tiles,
+    const uint32_t out_chunk_tiles,
+    const uint32_t mask_chunk_0,
+    const uint32_t mask_chunk_1,
+    const uint32_t cb_q_in,
+    const uint32_t cb_k_in,
+    const uint32_t cb_v_in,
+    const uint32_t cb_mask_in,
+    const uint32_t cb_col_identity,
+    const uint32_t cb_out_im_A,
+    const uint32_t cb_out_im_B,
+    const uint32_t cb_max_A,
+    const uint32_t cb_max_B,
+    const uint32_t cb_sum_A,
+    const uint32_t cb_sum_B,
+    const uint32_t cb_exp_max_diff,
+    const uint32_t cb_out) {
+    sdpa_inner_loop<
+        JOINT,
+        cb_qk_im,
+        cb_identity_scale_in,
+        0,  // cb_attention_sink (not used)
+        0,  // cb_scale_in (not used)
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        DHt,    // vDHt = DHt
+        false,  // use_attention_sink (not used)
+        false,  // is_causal (not used)
+        false,  // use_provided_mask (not used)
+        false,  // use_padded_mask (not used)
+        use_joint_mask,
+        false,  // is_chunked (not used)
+        scale_fp32,
+        0>(  // sliding_window_size (not used)
+        Skt,
+        qk_in0_block_w,
+        qk_subblock_w,
+        qk_subblock_h,
+        qk_in0_num_subblocks,
+        qk_in1_num_subblocks,
+        qk_num_blocks,
+        out_in0_block_w,
+        out_subblock_w,
+        out_subblock_h,
+        out_in0_num_subblocks,
+        out_in1_num_subblocks,
+        out_num_blocks,
+        local_q_start,  // iter_q_start
+        local_q_end,    // iter_q_end
+        0,              // q_num_chunks (not used)
+        local_q_start,
+        0,             // chunked_q_chunk_offset (not used)
+        0,             // iter_k_chunk_start
+        k_num_chunks,  // iter_k_chunk_end
+        q_chunk_tiles,
+        k_chunk_tiles,
+        qk_chunk_tiles,
+        out_chunk_tiles,
+        mask_chunk_0,
+        mask_chunk_1,
+        0,  // ring_iter (not used)
+        0,  // ring_id (not used)
+        0,  // N_mask_ring_id (not used)
+        0,  // L_mask_ring_id (not used)
+        0,  // global_logical_NK_chunks (not used)
+        0,  // global_padded_NK_chunks (not used)
+        cb_q_in,
+        cb_k_in,
+        cb_v_in,
+        cb_mask_in,
+        cb_col_identity,
+        cb_out_im_A,
+        cb_out_im_B,
+        cb_max_A,
+        cb_max_B,
+        cb_sum_A,
+        cb_sum_B,
+        cb_exp_max_diff,
+        0,  // cb_lse_in (not used)
+        0,  // cb_lse_out (not used)
+        0,  // cb_prev_out (not used)
+        cb_out);
+}
+
+/**
+ * Ring SDPA for distributed multi-device attention.
+ */
+template <
+    uint32_t cb_qk_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_scale_in,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    bool use_joint_mask,
+    uint32_t scale_fp32>
+void sdpa_ring(
+    const uint32_t Skt,
+    const uint32_t qk_in0_block_w,
+    const uint32_t qk_subblock_w,
+    const uint32_t qk_subblock_h,
+    const uint32_t qk_in0_num_subblocks,
+    const uint32_t qk_in1_num_subblocks,
+    const uint32_t qk_num_blocks,
+    const uint32_t out_in0_block_w,
+    const uint32_t out_subblock_w,
+    const uint32_t out_subblock_h,
+    const uint32_t out_in0_num_subblocks,
+    const uint32_t out_in1_num_subblocks,
+    const uint32_t out_num_blocks,
+    const uint32_t global_q_start,
+    const uint32_t global_q_end,
+    const uint32_t q_num_chunks,
+    const uint32_t iter_k_chunk_start,
+    const uint32_t iter_k_chunk_end,
+    const uint32_t q_chunk_tiles,
+    const uint32_t k_chunk_tiles,
+    const uint32_t qk_chunk_tiles,
+    const uint32_t out_chunk_tiles,
+    const uint32_t mask_chunk_0,
+    const uint32_t mask_chunk_1,
+    const uint32_t ring_iter,
+    const uint32_t ring_id,
+    const uint32_t N_mask_ring_id,
+    const uint32_t L_mask_ring_id,
+    const uint32_t global_logical_NK_chunks,
+    const uint32_t global_padded_NK_chunks,
+    const uint32_t cb_q_in,
+    const uint32_t cb_k_in,
+    const uint32_t cb_v_in,
+    const uint32_t cb_mask_in,
+    const uint32_t cb_col_identity,
+    const uint32_t cb_out_im_A,
+    const uint32_t cb_out_im_B,
+    const uint32_t cb_max_A,
+    const uint32_t cb_max_B,
+    const uint32_t cb_sum_A,
+    const uint32_t cb_sum_B,
+    const uint32_t cb_exp_max_diff,
+    const uint32_t cb_lse_in,
+    const uint32_t cb_lse_out,
+    const uint32_t cb_prev_out,
+    const uint32_t cb_out) {
+    sdpa_inner_loop<
+        RING,
+        cb_qk_im,
+        cb_identity_scale_in,
+        0,  // cb_attention_sink (not used)
+        cb_scale_in,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        DHt,    // vDHt = DHt
+        false,  // use_attention_sink (not used)
+        false,  // is_causal (not used)
+        false,  // use_provided_mask (not used)
+        false,  // use_padded_mask (not used)
+        use_joint_mask,
+        false,  // is_chunked (not used)
+        scale_fp32,
+        0>(  // sliding_window_size (not used)
+        Skt,
+        qk_in0_block_w,
+        qk_subblock_w,
+        qk_subblock_h,
+        qk_in0_num_subblocks,
+        qk_in1_num_subblocks,
+        qk_num_blocks,
+        out_in0_block_w,
+        out_subblock_w,
+        out_subblock_h,
+        out_in0_num_subblocks,
+        out_in1_num_subblocks,
+        out_num_blocks,
+        global_q_start,  // iter_q_start
+        global_q_end,    // iter_q_end
+        q_num_chunks,
+        0,  // local_q_start (not used)
+        0,  // chunked_q_chunk_offset (not used)
+        iter_k_chunk_start,
+        iter_k_chunk_end,
+        q_chunk_tiles,
+        k_chunk_tiles,
+        qk_chunk_tiles,
+        out_chunk_tiles,
+        mask_chunk_0,
+        mask_chunk_1,
+        ring_iter,
+        ring_id,
+        N_mask_ring_id,
+        L_mask_ring_id,
+        global_logical_NK_chunks,
+        global_padded_NK_chunks,
+        cb_q_in,
+        cb_k_in,
+        cb_v_in,
+        cb_mask_in,
+        cb_col_identity,
+        cb_out_im_A,
+        cb_out_im_B,
+        cb_max_A,
+        cb_max_B,
+        cb_sum_A,
+        cb_sum_B,
+        cb_exp_max_diff,
+        cb_lse_in,
+        cb_lse_out,
+        cb_prev_out,
+        cb_out);
+}
+
+/**
+ * Windowed SDPA with user-provided mask.
+ */
+template <
+    uint32_t cb_qk_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t scale_fp32>
+void sdpa_windowed(
+    const uint32_t Skt,
+    const uint32_t qk_in0_block_w,
+    const uint32_t qk_subblock_w,
+    const uint32_t qk_subblock_h,
+    const uint32_t qk_in0_num_subblocks,
+    const uint32_t qk_in1_num_subblocks,
+    const uint32_t qk_num_blocks,
+    const uint32_t out_in0_block_w,
+    const uint32_t out_subblock_w,
+    const uint32_t out_subblock_h,
+    const uint32_t out_in0_num_subblocks,
+    const uint32_t out_in1_num_subblocks,
+    const uint32_t out_num_blocks,
+    const uint32_t local_q_start,
+    const uint32_t q_chunks_per_core,
+    const uint32_t q_chunk_tiles,
+    const uint32_t k_chunk_tiles,
+    const uint32_t qk_chunk_tiles,
+    const uint32_t out_chunk_tiles,
+    const uint32_t cb_q_in,
+    const uint32_t cb_k_in,
+    const uint32_t cb_v_in,
+    const uint32_t cb_mask_in,
+    const uint32_t cb_col_identity,
+    const uint32_t cb_out_im_A,
+    const uint32_t cb_out_im_B,
+    const uint32_t cb_max_A,
+    const uint32_t cb_max_B,
+    const uint32_t cb_sum_A,
+    const uint32_t cb_sum_B,
+    const uint32_t cb_exp_max_diff,
+    const uint32_t cb_out) {
+    sdpa_inner_loop<
+        STANDARD,
+        cb_qk_im,
+        cb_identity_scale_in,
+        0,  // cb_attention_sink (not used)
+        0,  // cb_scale_in (not used)
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        DHt,    // vDHt = DHt
+        false,  // use_attention_sink (not used)
+        false,  // is_causal (not used)
+        true,   // use_provided_mask (used)
+        false,  // use_padded_mask (not used)
+        false,  // use_joint_mask (not used)
+        false,  // is_chunked (not used)
+        scale_fp32,
+        0>(  // sliding_window_size (not used)
+        Skt,
+        qk_in0_block_w,
+        qk_subblock_w,
+        qk_subblock_h,
+        qk_in0_num_subblocks,
+        qk_in1_num_subblocks,
+        qk_num_blocks,
+        out_in0_block_w,
+        out_subblock_w,
+        out_subblock_h,
+        out_in0_num_subblocks,
+        out_in1_num_subblocks,
+        out_num_blocks,
+        0,                  // iter_q_start
+        q_chunks_per_core,  // iter_q_end
+        0,                  // q_num_chunks (not used)
+        local_q_start,
+        0,  // chunked_q_chunk_offset (not used)
+        0,  // iter_k_chunk_start
+        0,  // iter_k_chunk_end (not used -- uses Skt)
+        q_chunk_tiles,
+        k_chunk_tiles,
+        qk_chunk_tiles,
+        out_chunk_tiles,
+        0,  // mask_chunk_0 (not used)
+        0,  // mask_chunk_1 (not used)
+        0,  // ring_iter (not used)
+        0,  // ring_id (not used)
+        0,  // N_mask_ring_id (not used)
+        0,  // L_mask_ring_id (not used)
+        0,  // global_logical_NK_chunks (not used)
+        0,  // global_padded_NK_chunks (not used)
+        cb_q_in,
+        cb_k_in,
+        cb_v_in,
+        cb_mask_in,
+        cb_col_identity,
+        cb_out_im_A,
+        cb_out_im_B,
+        cb_max_A,
+        cb_max_B,
+        cb_sum_A,
+        cb_sum_B,
+        cb_exp_max_diff,
+        0,  // cb_lse_in (not used)
+        0,  // cb_lse_out (not used)
+        0,  // cb_prev_out (not used)
+        cb_out);
 }

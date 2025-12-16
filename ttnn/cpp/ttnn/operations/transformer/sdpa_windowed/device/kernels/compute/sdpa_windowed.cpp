@@ -64,24 +64,7 @@ void MAIN {
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            sdpa_inner_loop<
-                STANDARD,
-                cb_qk_im,
-                cb_identity_scale_in,
-                0,
-                0,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                DHt,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                scale_fp32,
-                0>(
+            sdpa_windowed<cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
@@ -95,25 +78,12 @@ void MAIN {
                 out_in0_num_subblocks,
                 out_in1_num_subblocks,
                 out_num_blocks,
-                0,
-                q_chunks_per_core,
-                0,
                 local_q_start,
-                0,
-                0,
-                0,
+                q_chunks_per_core,
                 q_chunk_tiles,
                 k_chunk_tiles,
                 qk_chunk_tiles,
                 out_chunk_tiles,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
                 cb_q_in,
                 cb_k_in,
                 cb_v_in,
@@ -126,9 +96,6 @@ void MAIN {
                 cb_sum_A,
                 cb_sum_B,
                 cb_exp_max_diff,
-                0,
-                0,
-                0,
                 cb_out);
         }
     }
