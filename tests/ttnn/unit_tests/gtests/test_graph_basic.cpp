@@ -506,7 +506,7 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
         }
     }
 
-    ASSERT_EQ(matmul_ops.size(), 3);
+    ASSERT_EQ(matmul_ops.size(), 6);
     ASSERT_TRUE(matmul_ops[0].contains("input_tensors"));
     ASSERT_TRUE(matmul_ops[1].contains("input_tensors"));
     ASSERT_TRUE(matmul_ops[2].contains("input_tensors"));
