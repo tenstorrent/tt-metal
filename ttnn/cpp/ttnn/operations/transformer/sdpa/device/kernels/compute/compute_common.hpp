@@ -1350,7 +1350,6 @@ void sdpa_inner_loop(
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
-
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
 
@@ -1360,6 +1359,7 @@ void sdpa_inner_loop(
                  * reduction, containing the sum of tiles in dim=-1 of QK.
                  */
                 mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+
                 /* cb_cur_sum += cb_prev_sum */
                 add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
