@@ -32,16 +32,8 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    shape,
-                    memory_config,
-                    pad_value,
-                    reshape_tile_mode,
-                    sub_core_grids,
-                    on_device_mappings);
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
             },
             nb::arg("input_tensor"),
             nb::arg("shape"),
@@ -49,8 +41,7 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("on_device_mappings") = true},
+            nb::arg("sub_core_grids") = nb::none()},
         ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -59,8 +50,7 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     logical_shape,
@@ -68,8 +58,7 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
                     memory_config,
                     pad_value,
                     reshape_tile_mode,
-                    sub_core_grids,
-                    on_device_mappings);
+                    sub_core_grids);
             },
             nb::arg("input_tensor"),
             nb::arg("logical_shape"),
@@ -78,8 +67,7 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("on_device_mappings") = true},
+            nb::arg("sub_core_grids") = nb::none()},
         ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -87,16 +75,8 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    shape,
-                    memory_config,
-                    pad_value,
-                    reshape_tile_mode,
-                    sub_core_grids,
-                    on_device_mappings);
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
             },
             nb::arg("input_tensor"),
             nb::arg("shape"),
@@ -104,8 +84,7 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("recreate_mapping_tensor") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("on_device_mappings") = true});
+            nb::arg("sub_core_grids") = nb::none()});
 }
 }  // namespace detail
 
@@ -129,7 +108,6 @@ void bind_reshape_view(nb::module_& mod) {
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
                 * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
                 * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
-                * :attr:`on_device_mappings` (bool, optional): Specifies whether to use the tile reshape version with on device mappings. Default is True.
 
 
             Returns:
