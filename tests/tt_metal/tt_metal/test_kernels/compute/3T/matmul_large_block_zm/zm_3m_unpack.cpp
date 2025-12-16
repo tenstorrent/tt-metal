@@ -160,7 +160,7 @@ void unpack_main() {
         matmul_out_intermediate_cb_id = 25;  // Given 24 is no longer available, we use 25 instead
     }
 
-    llk_unpack_hw_configure(0, 1);
+    llk_unpack_hw_configure<false>(0, 1);
 
     uint32_t reblock_cb_id = 26;
 
