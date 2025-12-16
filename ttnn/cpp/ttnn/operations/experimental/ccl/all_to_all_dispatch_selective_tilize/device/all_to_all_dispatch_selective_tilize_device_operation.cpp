@@ -107,12 +107,16 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
     }
 
     // final batch in the metadata tensor
-    uint32_t batch = (output_concat_dim == 1) ? input_shape[0] * dispatch_devices : input_shape[0];
+    uint32_t tokens_per_device = input_shape[0] * input_shape[1] * input_shape[2];
+    uint32_t global_tokens = tokens_per_device * dispatch_devices;
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t seq_len = (output_concat_dim == 2) ? indices_shape[-2] * dispatch_devices : indices_shape[-2];
+    uint32_t experts_per_device = mapping_shape[-2] / mesh_view.num_devices();
 
-    auto output_shape = ttnn::Shape({1, batch, seq_len, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, batch, seq_len, selected_experts_k});
+    auto output_shape = ttnn::Shape({1, global_tokens, hidden_size});
+    auto metadata_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * tt::round_up(selected_experts_k, 32)});
+    auto dte_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * experts_per_device});
+    auto dte_scores_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * experts_per_device});
+    auto ed_table_shape = ttnn::Shape({1, experts_per_device * dispatch_devices});
 
     log_debug(tt::LogOp, "output_shape: {}", output_shape);
     log_debug(tt::LogOp, "metadata_shape: {}", metadata_shape);
@@ -140,7 +144,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
         auto preallocated_metadata_spec = output_tensors[1].tensor_spec();
         return {preallocated_output_spec, preallocated_metadata_spec};
     }
-    return {output_tokens_spec, metadata_spec};
+    return {output_tokens_spec, metadata_spec, dte_spec, dte_scores_spec, ed_table_spec};
 }
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t AllToAllDispatchSelectiveTilizeDeviceOperation::create_output_tensors(
@@ -152,7 +156,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t AllToAllDi
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
     auto metadata_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
-    return {output_tensor, metadata_tensor};
+    auto dte_tensor = create_device_tensor(output_spec[2], tensor_args.input_tensor.device());
+    auto dte_scores_tensor = create_device_tensor(output_spec[3], tensor_args.input_tensor.device());
+    auto ed_table_tensor = create_device_tensor(output_spec[4], tensor_args.input_tensor.device());
+    return {output_tensor, metadata_tensor, dte_tensor, dte_scores_tensor, ed_table_tensor};
 }
 
 std::tuple<AllToAllDispatchSelectiveTilizeDeviceOperation::operation_attributes_t, AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_args_t>

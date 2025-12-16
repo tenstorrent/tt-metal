@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/cb_utils.hpp"
 #include <limits>
 
 namespace ttnn::operations::experimental::ccl {
@@ -35,52 +36,6 @@ uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto hidden_size = tensor.logical_shape()[-1];
     TT_FATAL(logical_volume % hidden_size == 0, "Logical volume must be divisible by hidden size");
     return logical_volume / hidden_size;
-}
-
-std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& mapping_tensor,
-    uint32_t num_links,
-    std::optional<uint32_t> axis) {
-    auto aligned_input_page_size = get_aligned_page_size(input_tensor);
-    auto aligned_indices_page_size = get_aligned_page_size(indices_tensor);
-    auto aligned_mapping_page_size = get_aligned_page_size(mapping_tensor);
-    uint32_t tokens_per_device = get_num_rows(input_tensor);
-    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
-
-    auto mapping_pages = get_num_pages(mapping_tensor);
-
-    auto mesh_view = input_tensor.device()->get_view();
-    uint32_t num_devices = mesh_view.num_devices();
-
-    uint32_t dispatch_devices =
-        axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
-
-    constexpr uint32_t buffering_factor = 2;
-    constexpr uint32_t num_packet_headers = 2;
-
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    std::array<uint32_t, 6> cb_sizes = {
-        buffering_factor * aligned_input_page_size,
-        tokens_per_core * aligned_indices_page_size,
-        mapping_pages * aligned_mapping_page_size,
-        num_devices * tokens_per_core * sizeof(uint8_t),
-        tokens_per_device * dispatch_devices * aligned_indices_page_size,
-        num_packet_headers * packet_header_size_bytes,
-    };
-
-    std::array<uint32_t, 6> cb_page_sizes = {
-        aligned_input_page_size,
-        aligned_indices_page_size,
-        aligned_mapping_page_size,
-        tokens_per_core * sizeof(uint8_t),
-        aligned_indices_page_size,
-        packet_header_size_bytes,
-    };
-
-    return {cb_sizes, cb_page_sizes};
 }
 
 }  // namespace detail
@@ -128,6 +83,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
+
+    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
@@ -201,8 +159,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t packet_header_cb_id = tt::CBIndex::c_3;
     // book-keeping buffer to avoid sending the same token multiple times
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
-    // intermediate buffer for holding metadata before writing out to the device (for FullPacket impl)
-    uint32_t metadata_buffer_id = tt::CBIndex::c_5;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
     log_debug(
@@ -249,56 +205,69 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         metadata_page_size,
         aligned_metadata_page_size);
 
-    auto [cb_sizes, cb_page_sizes] =
-        detail::get_cb_sizes(input_tensor, indices_tensor, mapping_tensor, num_links, operation_attributes.axis);
+    constexpr uint32_t buffering_factor = 2;
+    constexpr uint32_t num_packet_headers = 2;
 
-    tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[0], {{input_tensor_cb_id, input_data_format}})
-            .set_page_size(input_tensor_cb_id, cb_page_sizes[0]);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[1], {{indices_tensor_cb_id, indices_data_format}})
-            .set_page_size(indices_tensor_cb_id, cb_page_sizes[1]);
-
-    tt::tt_metal::CircularBufferConfig cb_mapping_tensor_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[2], {{mapping_tensor_cb_id, mapping_data_format}})
-            .set_page_size(mapping_tensor_cb_id, cb_page_sizes[2]);
-
-    tt::tt_metal::CircularBufferConfig cb_send_preparation_buffer_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[3], {{send_preparation_buffer_id, tt::DataFormat::UInt8}})
-            .set_page_size(send_preparation_buffer_id, cb_page_sizes[3]);
-
-    tt::tt_metal::CircularBufferConfig cb_metadata_buffer_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[4], {{metadata_buffer_id, mapping_data_format}})
-            .set_page_size(metadata_buffer_id, cb_page_sizes[4]);
-
-    tt::tt_metal::CircularBufferConfig packet_header_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_sizes[5], {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
-            .set_page_size(packet_header_cb_id, cb_page_sizes[5]);
-
-    auto worker_core_range_set = operation_attributes.worker_core_range_set;
-
+    CoreCoord start_core = {0, 0};
+    CoreCoord end_core = {0, 1};
+    CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(start_core, end_core));
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    TT_FATAL(
-        subdevice_cores.size() >= num_links,
-        "Not enough cores {} to send all links {}",
-        subdevice_cores.size(),
-        num_links);
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    uint32_t num_cores = worker_core_range_set.num_cores();
+    uint32_t sub_token_size_bytes = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
 
-    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
-    uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
-    auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
-    std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
+    // split indices sends across cores
+    auto
+        [num_indices_cores,
+         all_indices_cores,
+         indices_core_group_1,
+         indices_core_group_2,
+         num_indices_cores_per_core_group_1,
+         num_indices_cores_per_core_group_2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, indices_pages);
 
-    // create circular buffers
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
-    // Always create the metadata buffer - only FullPacket mode is supported
-    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
+    auto
+        [num_tokens_cores,
+         all_tokens_cores,
+         tokens_core_group_1,
+         tokens_core_group_2,
+         num_tokens_cores_per_core_group_1,
+         num_tokens_cores_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(worker_core_range_set, aligned_input_page_size / sub_token_size_bytes);
+
+    uint32_t indices_pages_per_packet = tt::div_up(fabric_max_packet_size, aligned_indices_page_size);
+
+    auto sender_core_grid = all_tokens_cores.merge(all_indices_cores);
+
+    auto sender_cores = corerange_to_cores(sender_core_grid);
+
+    // Create circular buffers
+    tt::tt_metal::create_cb(
+        input_tensor_cb_id, program, sender_core_grid, sub_token_size_bytes, buffering_factor, input_data_format);
+    tt::tt_metal::create_cb(
+        indices_tensor_cb_id,
+        program,
+        sender_core_grid,
+        aligned_indices_page_size,
+        2 * indices_pages_per_packet,
+        indices_data_format);
+    tt::tt_metal::create_cb(
+        mapping_tensor_cb_id, program, sender_core_grid, aligned_mapping_page_size, mapping_pages, mapping_data_format);
+    tt::tt_metal::create_cb(
+        send_preparation_buffer_id,
+        program,
+        sender_core_grid,
+        tokens_per_device * sizeof(uint8_t),
+        num_devices,
+        tt::DataFormat::UInt8);
+    tt::tt_metal::create_cb(
+        packet_header_cb_id,
+        program,
+        sender_core_grid,
+        packet_header_size_bytes,
+        num_packet_headers,
+        tt::DataFormat::RawUInt32);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -310,77 +279,70 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     log_debug(tt::LogOp, "dest_mesh_id: {}", ::ttnn::operations::ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ::ttnn::operations::ccl::common::stringify(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+        {"input_tensor_cb_id", input_tensor_cb_id},
+        {"indices_tensor_cb_id", indices_tensor_cb_id},
+        {"mapping_tensor_cb_id", mapping_tensor_cb_id},
+        {"packet_header_cb_id", packet_header_cb_id},
+        {"send_preparation_buffer_id", send_preparation_buffer_id},
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb_id,
-        indices_tensor_cb_id,
-        mapping_tensor_cb_id,
-        packet_header_cb_id,
-        send_preparation_buffer_id,
+        {"input_pages", input_pages},
+        {"indices_pages", indices_pages},
+        {"mapping_pages", mapping_pages},
+        {"output_pages", output_pages},
+        {"metadata_pages", metadata_pages},
 
-        input_pages,
-        indices_pages,
-        mapping_pages,
-        output_pages,
-        metadata_pages,
+        {"input_page_size", input_page_size},
+        {"indices_page_size", indices_page_size},
+        {"mapping_page_size", mapping_page_size},
+        {"output_page_size", output_page_size},
+        {"metadata_page_size", metadata_page_size},
 
-        input_page_size,
-        indices_page_size,
-        mapping_page_size,
-        output_page_size,
-        metadata_page_size,
+        {"num_devices", num_devices},
+        {"hidden_size", hidden_size},
+        {"batch_size", batch_size},
+        {"selected_experts_k", selected_experts_k},
+        {"experts", experts},
+        {"tokens_per_device", tokens_per_device},
 
-        num_devices,
-        hidden_size,
-        batch_size,
-        selected_experts_k,
-        experts,
-        tokens_per_device,
+        {"num_links", num_links},
+        {"topology", (uint32_t)topology},
 
-        num_links,
-        (uint32_t)topology,
+        {"src_mesh_id", src_mesh_id},
+        {"src_chip_id", (uint32_t)src_chip_id},
+        {"mesh_rows", mesh_view.num_rows()},
+        {"mesh_cols", mesh_view.num_cols()},
 
-        src_mesh_id,
-        (uint32_t)src_chip_id,
-        mesh_view.num_rows(),
-        mesh_view.num_cols(),
+        {"aligned_input_page_size", aligned_input_page_size},
+        {"aligned_indices_page_size", aligned_indices_page_size},
+        {"aligned_mapping_page_size", aligned_mapping_page_size},
+        {"aligned_output_page_size", aligned_output_page_size},
+        {"aligned_metadata_page_size", aligned_metadata_page_size},
 
-        aligned_input_page_size,
-        aligned_indices_page_size,
-        aligned_mapping_page_size,
-        aligned_output_page_size,
-        aligned_metadata_page_size,
+        {"fabric_max_packet_size", (uint32_t)fabric_max_packet_size},
 
-        (uint32_t)fabric_max_packet_size,
-
-        l1_alignment,
-        metadata_buffer_id,
-        0,  // Reserved - only FullPacket mode is supported (not PageByPage)
-        linearized_mesh_coord,
+        {"l1_alignment", l1_alignment},
+        {"linearized_mesh_coord", linearized_mesh_coord},
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
-    const auto& writer_compile_time_args = reader_compile_time_args;
+    std::vector<uint32_t> compile_time_args = {};
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
 
-    std::map<std::string, std::string> reader_defines = {
-        {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},
-    };
+    std::map<std::string, std::string> reader_defines = {};
+    if (operation_attributes.axis.has_value()) {
+        reader_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/reader_all_to_all_dispatch_selective_tilize.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
+        "reader_all_to_all_dispatch_selective_tilize.cpp",
         sender_core_grid,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, {}, named_compile_time_args, reader_defines));
 
     // Code-gen a mesh-position to fabric chip ID array for the writer kernel
     // Code-gen a mesh-position to mesh-id array for the writer kernel
@@ -397,13 +359,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/writer_all_to_all_dispatch_selective_tilize.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
+        "writer_all_to_all_dispatch_selective_tilize.cpp",
         sender_core_grid,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = writer_compile_time_args,
-            .defines = writer_defines});
+        tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args, writer_defines));
 
     std::vector<uint32_t> reader_runtime_args = {
         input_tensor.buffer()->address(),
@@ -431,7 +390,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             0,
         };
         reader_runtime_args[6] = tokens_per_core_start;
-        reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
+        reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_device, tokens_per_device);
         writer_runtime_args[7] = tokens_per_core_start;
         writer_runtime_args[8] = reader_runtime_args[7];
         tokens_per_core_start = reader_runtime_args[7];
