@@ -42,5 +42,6 @@ jobs:
       build-type: ${{ matrix.config.build-type }}
       nanobind: ${{ matrix.config.nanobind || false }}
       publish-artifact: false
+      publish-package: false
       skip-tt-train: true
       tracy: false
