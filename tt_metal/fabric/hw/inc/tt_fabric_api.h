@@ -260,6 +260,9 @@ bool fabric_set_unicast_route(
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
         }
+    } else if (ns_hops > 0) {
+        packet_header->routing_fields.branch_east_offset = turn_point;
+        packet_header->routing_fields.branch_west_offset = turn_point;
     } else if (ns_hops == 0 && ew_hops > 0) {
         // East/West only routing: branch offset is set at position 1 (start_hop + 1)
         if (ew_direction) {
