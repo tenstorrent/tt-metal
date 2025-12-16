@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
+import ttnn
+
+# BGE-large-en-v1.5 configurations for Wormhole
+# Hidden size: 1024 (vs 768 in sentence_bert)
+# Attention heads: 16 (vs 12 in sentence_bert)
+# Intermediate size: 4096 (vs 3072 in sentence_bert)
+# Layers: 24 (vs 12 in sentence_bert)
+
+core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+
+BGE_L1_SMALL_SIZE = 0
+# BGE_SEQ_LENGTH = 512
+BGE_SEQ_LENGTH = 384
+
+seqL = BGE_SEQ_LENGTH
+if seqL <= 384:
+    seqL_factor = 1
+else:
+    seqL_factor = 2
+
+TILE_HEIGHT = 32
+seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
+seqL_t = seqL_padded // TILE_HEIGHT  # 12
+dim_t = 1024 // TILE_HEIGHT  # 32
+dim_t__x = dim_t // core_grid_8x8.x  # 4
+head_num = 16
+head_seqL_t__x = (head_num * seqL_t) // core_grid_8x8.x  # 24
+head_size_t = dim_t // head_num  # 2
+
+layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    subblock_w=dim_t__x,  # Revert to 4
+    block_h=seqL_t,  # Keep same as sentence_bert for seq_len handling
+    block_w=dim_t__x,  # 1024 / 32 / 8 = 4
+    inplace=True,
+    legacy_reduction=True,
+    legacy_rsqrt=True,
+)
+
+ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x,  # Keep 4 (Kt=32, per_core=4, max is 4)
+    out_subblock_h=1,
+    out_subblock_w=dim_t__x * 2,  # Keep 8 (no FP32 accumulation, max for BF16 is 8)
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x * 4,
+    transpose_mcast=False,
+    fused_activation=(ttnn.UnaryOpType.GELU, True),
+    # fused_activation=None,
+)
+
+ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=(dim_t__x * 4) // seqL_factor,  # Increase from 8 to 16 for better reuse (4096 / 32 / 8 = 16)
+    out_subblock_h=1,  # Keep 1 (per_core_M=12, so 1 divides evenly)
+    out_subblock_w=dim_t__x // seqL_factor,  # Try 4 (max for FP32: 1*4=4, divides per_core_N=4)
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x,  # Calculated: ceil(1024 / (32 * 8)) = 4
+    transpose_mcast=False,
+    fused_activation=None,
+)
+
+query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x // seqL_factor,  # Revert to 4 (must divide K evenly: 1024/32=32, 32/8=4)
+    out_subblock_h=1,
+    out_subblock_w=dim_t__x // seqL_factor,  # Keep 4 for FP32 accumulation (1*4=4 <= 4, max for FP32)
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x * 3,
+    transpose_mcast=False,
+    fused_activation=None,
+)
+
+self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=dim_t__x,
+    out_subblock_h=1,  # Restore to 2 (no FP32 accumulation on self-output)
+    out_subblock_w=dim_t__x,  # Restore to 4
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x,
+    transpose_mcast=False,
+    fused_activation=None,
+)
+
+pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    in0_block_w=head_size_t,
+    out_subblock_h=1,
+    out_subblock_w=seqL_t // 2,  # Keep 6 (best balance between performance and PCC)
+    per_core_M=head_seqL_t__x,
+    per_core_N=seqL_t,
+)
+
+softmax_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    subblock_w=seqL_t,  # Revert to 6 (best for accuracy)
+    block_h=head_seqL_t__x,  # Keep same for seq_len handling
+    block_w=seqL_t,  # Keep same for seq_len handling (384 / 32 / 8 = 1.5, but using 12 for compatibility)
+)
+
+
+def custom_preprocessor(torch_model, name):
+    """
+    Custom preprocessor for BGE model to combine Q, K, V weights.
+    BGE-large has 16 attention heads, so we reshape with 8 (16//2).
+    """
+    parameters = {}
+    if hasattr(torch_model, "query") and hasattr(torch_model, "key") and hasattr(torch_model, "value"):
+        qw = torch_model.query.weight
+        kw = torch_model.key.weight
+        vw = torch_model.value.weight
+        qb = torch_model.query.bias
+        kb = torch_model.key.bias
+        vb = torch_model.value.bias
+
+        qw = torch.transpose(qw, -1, -2)
+        kw = torch.transpose(kw, -1, -2)
+        vw = torch.transpose(vw, -1, -2)
+
+        const_w_dims = qw.shape[:-1]
+        # BGE-large has 16 attention heads, so we use 8 (num_attention_heads // 2)
+        qw = qw.reshape([*const_w_dims, 8, -1])
+        kw = kw.reshape(qw.shape)
+        vw = vw.reshape(qw.shape)
+        qkv_weight_torch = torch.cat((qw, kw, vw), -1).reshape([*const_w_dims, -1])
+
+        const_b_dims = qb.shape[:-1]
+        qb = qb.reshape([*const_b_dims, 8, -1])
+        kb = kb.reshape(qb.shape)
+        vb = vb.reshape(qb.shape)
+        qkv_bias_torch = torch.cat((qb, kb, vb), -1).reshape([*const_b_dims, -1])
+
+        parameters = {"query_key_value": {}}
+        parameters["query_key_value"]["weight"] = ttnn.from_torch(
+            qkv_weight_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+        parameters["query_key_value"]["bias"] = ttnn.from_torch(
+            qkv_bias_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+
+    elif isinstance(torch_model, torch.nn.Linear):
+        parameters["weight"] = preprocess_linear_weight(torch_model.weight, dtype=ttnn.bfloat8_b)
+        if torch_model.bias is not None:
+            parameters["bias"] = preprocess_linear_bias(torch_model.bias, dtype=ttnn.bfloat8_b)
+        else:
+            parameters["bias"] = None
+
+    return parameters
+
+
+def preprocess_inputs(
+    input_ids=None,
+    token_type_ids=None,
+    position_ids=None,
+    extended_attention_mask=None,
+    attention_mask=None,
+    device=None,
+):
+    """Preprocess inputs for BGE model."""
+    if input_ids is not None:
+        input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    if token_type_ids is not None:
+        token_type_ids = ttnn.from_torch(
+            token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+    if position_ids is not None:
+        position_ids = ttnn.from_torch(
+            position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+    if extended_attention_mask is not None:
+        extended_attention_mask = ttnn.from_torch(
+            extended_attention_mask,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    if attention_mask is not None:
+        attention_mask = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    return input_ids, token_type_ids, position_ids, extended_attention_mask, attention_mask
+
+
+def ttnn_mean_pooling(ttnn_token_embeddings, ttnn_attention_mask, device=None):
+    """Mean pooling for BGE model - average token embeddings weighted by attention mask."""
+    ttnn_token_embeddings = ttnn.sharded_to_interleaved(ttnn_token_embeddings, ttnn.L1_MEMORY_CONFIG)
+    if ttnn_attention_mask.is_sharded():
+        ttnn_attention_mask_interleaved = ttnn.sharded_to_interleaved(ttnn_attention_mask, ttnn.L1_MEMORY_CONFIG)
+        ttnn_attention_mask_interleaved = ttnn.to_layout(ttnn_attention_mask_interleaved, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(ttnn_attention_mask)
+    else:
+        ttnn_attention_mask_interleaved = ttnn_attention_mask
+    ttnn_token_embeddings = ttnn.squeeze(ttnn_token_embeddings, dim=1)
+    tt_input_mask_expanded = ttnn.unsqueeze(ttnn_attention_mask_interleaved, dim=-1)
+    tt_input_mask_expanded = ttnn.repeat(tt_input_mask_expanded, [1, 1, ttnn_token_embeddings.shape[-1]])
+    sum1 = ttnn.multiply(ttnn_token_embeddings, tt_input_mask_expanded)
+    sum1 = ttnn.sum(sum1, 1)
+    sum2 = ttnn.sum(tt_input_mask_expanded, 1)
+    sum2 = ttnn.clamp(sum2, min=1e-9)
+    result = ttnn.div(sum1, sum2)
+    return result
