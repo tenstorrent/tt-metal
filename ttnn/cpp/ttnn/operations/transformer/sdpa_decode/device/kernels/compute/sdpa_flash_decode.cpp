@@ -280,7 +280,6 @@ void MAIN {
                 bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
-                bool add_causal_mask_fusion = false;
                 bool add_sliding_window_mask_fusion = false;
 #endif
 
@@ -311,17 +310,16 @@ void MAIN {
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
+                    bool apply_mask = false;
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
-                        if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
-                            add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                        }
-                    } else {
-                        if constexpr (use_attention_mask) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
-                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                        }
+                        apply_mask = (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk);
+                    } else if constexpr (use_attention_mask) {
+                        apply_mask = true;
+                    }
+                    if (apply_mask) {
+                        reconfig_data_format(cb_qk_im, cb_mask_in);
+                        add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
