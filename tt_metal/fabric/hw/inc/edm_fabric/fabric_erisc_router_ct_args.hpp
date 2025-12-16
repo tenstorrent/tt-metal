@@ -155,10 +155,11 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 11;
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 

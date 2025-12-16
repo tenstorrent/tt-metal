@@ -1393,6 +1393,7 @@ template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
     bool SKIP_CONNECTION_LIVENESS_CHECK,
+    bool enable_first_level_ack,
     typename SenderChannelT,
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
@@ -1421,7 +1422,7 @@ FORCE_INLINE
     constexpr bool use_bubble_flow_control =
         sender_channel_is_traffic_injection_channel[sender_channel_index] && enable_deadlock_avoidance;
     static_assert(
-        !use_bubble_flow_control || ENABLE_FIRST_LEVEL_ACK,
+        !use_bubble_flow_control || enable_first_level_ack,
         "Bubble flow control and first level ack must be set to the same values");
 
     bool receiver_has_space_for_packet;
@@ -1470,7 +1471,7 @@ FORCE_INLINE
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
         // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
-        if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+        if constexpr (!enable_first_level_ack) {
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
         }
@@ -1479,7 +1480,7 @@ FORCE_INLINE
     // Process ACKs from receiver
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
-    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+    if constexpr (enable_first_level_ack) {
         auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
@@ -1504,6 +1505,7 @@ FORCE_INLINE
 template <
     uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
+    bool enable_first_level_ack,
     typename EthSenderChannels,
     typename EdmChannelWorkerIFs,
     typename RemoteEthReceiverChannels,
@@ -1528,10 +1530,12 @@ FORCE_INLINE
         // the cache is invalidated here because the channel will read some
         // L1 locations to see if it can make progress
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+
         return run_sender_channel_step_impl<
             sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
-            sender_ch_live_check_skip[sender_channel_index]>(
+            sender_ch_live_check_skip[sender_channel_index],
+            enable_first_level_ack>(
             local_sender_channels.template get<sender_channel_index>(),
             local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
             outbound_to_receiver_channel_pointers,
@@ -1548,6 +1552,7 @@ FORCE_INLINE
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
+    bool enable_first_level_ack,
     typename WriteTridTracker,
     typename ReceiverChannelBufferT,
     typename ReceiverChannelPointersT,
@@ -1569,7 +1574,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
 
     bool unwritten_packets;
-    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+    if constexpr (enable_first_level_ack) {
         auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
         bool can_send_ack = pkts_received;
@@ -1619,7 +1624,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-        if constexpr (!skip_src_ch_id_update && !ENABLE_FIRST_LEVEL_ACK) {
+        if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
@@ -1682,7 +1687,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
-            if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+            if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             }
         }
@@ -1746,6 +1751,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
 template <
     uint8_t receiver_channel,
+    bool enable_first_level_ack,
     typename DownstreamSenderVC0T,
     typename LocalRelayInterfaceT,
     typename EthReceiverChannels,
@@ -1767,6 +1773,7 @@ FORCE_INLINE bool run_receiver_channel_step(
         return run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_packets_sent_streams[receiver_channel],
+            enable_first_level_ack,
             WriteTridTracker,
             decltype(local_receiver_channels.template get<receiver_channel>()),
             ReceiverChannelPointersT,
@@ -1895,7 +1902,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0>(
+            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointer_ch0,
@@ -1908,7 +1915,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
             // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
             // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
-            rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC1T, decltype(local_relay_interface)>(
+            rx_progress |= run_receiver_channel_step<
+                0,
+                ENABLE_FIRST_LEVEL_ACK_VC0,
+                DownstreamSenderVC1T,
+                decltype(local_relay_interface)>(
                 local_receiver_channels,
                 downstream_edm_noc_interfaces_vc1,
                 local_relay_interface,
@@ -1919,7 +1930,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 routing_table,
                 local_fabric_telemetry);
 #else
-            rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC0T, decltype(local_relay_interface)>(
+            rx_progress |= run_receiver_channel_step<
+                0,
+                ENABLE_FIRST_LEVEL_ACK_VC0,
+                DownstreamSenderVC0T,
+                decltype(local_relay_interface)>(
                 local_receiver_channels,
                 downstream_edm_noc_interfaces_vc0,
                 local_relay_interface,
@@ -1930,7 +1945,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 routing_table,
                 local_fabric_telemetry);
 #endif
-            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
+            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointer_ch0,
@@ -1941,7 +1956,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 inner_loop_perf_telemetry_collector,
                 local_fabric_telemetry);
             if constexpr (is_2d_fabric) {
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -1951,7 +1966,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3>(
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -1962,7 +1977,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
 #if defined(FABRIC_2D_VC1_SERVICED)
-                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 4>(
+                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -1972,7 +1987,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 5>(
+                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 5, ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -1982,7 +1997,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 6>(
+                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 6, ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -1992,7 +2007,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                rx_progress |= run_receiver_channel_step<1, DownstreamSenderVC1T, decltype(local_relay_interface)>(
+                rx_progress |= run_receiver_channel_step<
+                    1,
+                    ENABLE_FIRST_LEVEL_ACK_VC1,
+                    DownstreamSenderVC1T,
+                    decltype(local_relay_interface)>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc1,
                     local_relay_interface,

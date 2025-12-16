@@ -982,7 +982,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         static_cast<uint32_t>(this->handshake_address),
         static_cast<uint32_t>(this->channel_buffer_size),
         this->has_tensix_extension,
-        this->enable_first_level_ack,
+        this->enable_first_level_ack,  // VC0 first level ack (for Ring/Torus)
+        false,                         // VC1 first level ack (always false - VC1 doesn't use bubble flow control)
         enable_risc_cpu_data_cache};
 
     const std::vector<uint32_t> main_args_part2 = {
