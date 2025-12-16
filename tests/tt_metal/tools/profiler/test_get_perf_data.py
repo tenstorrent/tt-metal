@@ -6,33 +6,6 @@ import pytest
 import ttnn
 
 
-@pytest.mark.parametrize(
-    "fn_name",
-    [
-        "GetLatestProgramsPerfData",
-        "GetAllProgramsPerfData",
-    ],
-)
-def test_profiler_perf_data_bindings_exist_and_return_mapping(fn_name):
-    """
-    Sanity check that the Python bindings for program perf data are present and callable.
-    The underlying C++ implementation may return an empty mapping if profiling is disabled
-    (e.g., TRACY not enabled or mid-run dump not requested), but the call itself should
-    succeed and produce a Python mapping.
-    """
-    profiler_mod = getattr(ttnn, "_ttnn", None)
-    if profiler_mod is None or not hasattr(profiler_mod, "profiler"):
-        pytest.skip("Profiler bindings not available in this build")
-
-    # Binding exists on the profiler submodule; test through the public re-export on ttnn
-    fn = getattr(ttnn, fn_name, None)
-    if fn is None:
-        pytest.skip(f"{fn_name} binding not available")
-
-    result = fn()
-    assert isinstance(result, dict)
-
-
 def test_profiler_perf_data_with_workload(monkeypatch):
     """
     Run a trivial workload, force a profiler read, and verify the program perf
@@ -72,9 +45,9 @@ def test_profiler_perf_data_with_workload(monkeypatch):
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
 
-        latest_data = ttnn.GetLatestProgramsPerfData()
+        latest_data_1 = ttnn.GetLatestProgramsPerfData()
         all_data = ttnn.GetAllProgramsPerfData()
-        print("\nFirst call to Latest programs perf data:\n" + _format_perf_data(latest_data))
+        print("\nFirst call to Latest programs perf data:\n" + _format_perf_data(latest_data_1))
         print("\nFirst call to All programs perf data:\n" + _format_perf_data(all_data))
 
         # Run a heavier/different op (elementwise mul on a larger tensor) to create more profiler records.
@@ -100,9 +73,19 @@ def test_profiler_perf_data_with_workload(monkeypatch):
     initial_count = len(baseline_all_data.get(device_id, [])) if baseline_all_data else 0
 
     assert device_id in all_data
-    assert len(latest_data[device_id]) >= 1
-    assert len(all_data[device_id]) >= len(latest_data[device_id])
-    assert len(all_data[device_id]) > initial_count
+    assert (
+        len(latest_data[device_id]) == 1
+    )  # latest_data must only contain the entry from the last call to ReadDeviceProfiler
+    assert (
+        len(all_data[device_id]) == 2
+    )  # all_data must now contain all 2 entries from the 2 calls to ReadDeviceProfiler
+    assert (
+        all_data[device_id][0] == latest_data_1[device_id][0]
+    )  # the first entry in all_data must be the same as the entry in latest_data_1 (first call to GetLatestProgramsPerfData)
+    assert (
+        all_data[device_id][1] == latest_data[device_id][0]
+    )  # the second entry in all_data must be the same as the entry in latest_data (second call to GetLatestProgramsPerfData)
+    assert len(all_data[device_id]) > initial_count  # all_data must now contain more entries than the initial count
 
 
 def _format_perf_data(perf_data: dict) -> str:
@@ -124,10 +107,7 @@ def _format_perf_data(perf_data: dict) -> str:
         for program in programs:
             uid = program.program_execution_uid
             analyses_items = sorted(program.program_analyses_results.items())
-            lines.append(
-                f"  uid(runtime={uid.runtime_id}, trace={uid.trace_id}, ctr={uid.trace_id_counter}), "
-                f"analyses={list(k for k, _ in analyses_items)}"
-            )
+            lines.append(f"  uid(runtime={uid.runtime_id}, trace={uid.trace_id}, ctr={uid.trace_id_counter}), ")
             for name, res in analyses_items:
                 lines.append(
                     f"    {name}: start={res.start_timestamp}, end={res.end_timestamp}, duration={res.duration}"
