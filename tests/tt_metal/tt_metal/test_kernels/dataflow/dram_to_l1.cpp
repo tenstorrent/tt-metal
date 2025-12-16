@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "debug/dprint.h"
 #include "dataflow_api.h"
 
 void kernel_main() {
@@ -16,12 +17,16 @@ void kernel_main() {
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_dst_address);
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> src_dram;
 
+    DPRINT << "dram_src_address: " << dram_src_address << ENDL();
+
     experimental::Semaphore semaphore(semaphore_id);
     semaphore.set(INVALID);
 
     noc.async_read(
         src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_src_address}, {});
     noc.async_read_barrier();
+
+    DPRINT << "l1_dst_address: " << l1_dst_address << ENDL();
 
     semaphore.set(VALID);
 }
