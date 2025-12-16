@@ -50,6 +50,8 @@ endif()
 
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this
+include(ProcessorCount)
+ProcessorCount(numProcs)
 include(ExternalProject)
 ExternalProject_Add(
     tracy_csv_tools
@@ -66,7 +68,7 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/csvexport/build/unix/csvexport-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j -f
+        cd ${TRACY_HOME}/csvexport/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j ${numProcs} -f
         ${TRACY_HOME}/csvexport/build/unix/Makefile
 )
 ExternalProject_Add(
@@ -84,7 +86,7 @@ ExternalProject_Add(
     INSTALL_COMMAND
         cp ${TRACY_HOME}/capture/build/unix/capture-release .
     BUILD_COMMAND
-        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j -f
+        cd ${TRACY_HOME}/capture/build/unix && CXX=g++ TRACY_NO_LTO=1 make -j ${numProcs} -f
         ${TRACY_HOME}/capture/build/unix/Makefile
 )
 add_custom_target(
