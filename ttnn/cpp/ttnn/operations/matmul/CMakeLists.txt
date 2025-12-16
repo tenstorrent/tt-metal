@@ -17,7 +17,12 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES matmul.hpp device/matmul_device_operation.hpp device/matmul_device_operation_types.hpp
+        FILES
+            matmul.hpp
+            device/matmul_device_operation.hpp
+            device/matmul_device_operation_types.hpp
+            device/config/matmul_program_config.hpp
+            device/config/matmul_program_config_types.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
