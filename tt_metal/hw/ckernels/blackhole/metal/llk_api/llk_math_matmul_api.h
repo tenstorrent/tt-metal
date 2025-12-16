@@ -25,7 +25,7 @@ inline void llk_math_matmul_init(
     const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
-    const bool partial_face = (in0_tile_r_dim < FACE_R_DIM) || (in0_tile_c_dim < FACE_C_DIM);
+    const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
     _llk_math_matmul_init_<NUM_FIDELITY_PHASES, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
