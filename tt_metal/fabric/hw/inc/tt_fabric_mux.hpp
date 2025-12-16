@@ -7,7 +7,14 @@
 // this is needed for inclusion of fabric_erisc_datamover_channels.hpp, since we are not
 // including fabric_erisc_router_ct_args.hpp here, where the constant is originally defined
 namespace tt::tt_fabric {
+#ifdef ARCH_BLACKHOLE
+// On Blackhole, use noc_index so the MUX worker handshake NOC matches the BRISC's assigned NOC.
+// This avoids stale NOC hardware counter mismatches with the Blackhole spoofed inline write mechanism.
+// This mirrors what fabric_erisc_router_ct_args.hpp does for the erisc router.
+static constexpr uint8_t worker_handshake_noc = noc_index;
+#else
 static constexpr uint8_t worker_handshake_noc = 0;
+#endif
 }  // namespace tt::tt_fabric
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
