@@ -19,6 +19,8 @@
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <yaml-cpp/yaml.h>
+#include <fstream>
 
 namespace tt::tt_fabric::physical_discovery {
 
@@ -140,6 +142,31 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         log_info(tt::LogTest, "Dumping Physical System Descriptor to Text Proto");
         physical_system_desc.emit_to_text_proto();
     }
+}
+
+TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
+
+    // Generate a YAML File with the tray to pcie device mapping
+    YAML::Node tray_to_pcie_device_mapping;
+    YAML::Node device_mapping;  // Create a separate node for the device mapping
+    for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray) {
+        // Convert unordered_set to vector for YAML serialization
+        std::vector<uint32_t> pcie_devices_vec(pcie_devices.begin(), pcie_devices.end());
+        device_mapping[tray_id] = pcie_devices_vec;
+    }
+    tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
+    tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
+    std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
+    outfile << tray_to_pcie_device_mapping;
+    outfile.close();
 }
 
 }  // namespace tt::tt_fabric::physical_discovery
