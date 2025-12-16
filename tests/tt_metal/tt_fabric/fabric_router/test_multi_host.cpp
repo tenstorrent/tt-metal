@@ -865,6 +865,10 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
         if (direction == RoutingDirection::Z) {
             EXPECT_TRUE(!z_chans.empty())
                 << "Z direction channels should exist for intermesh connections with assign_z_direction";
+            for (const auto& chan : z_chans) {
+                bool is_valid_chan = (chan == 0 || chan == 1 || chan == 6 || chan == 7);
+                EXPECT_TRUE(is_valid_chan) << "Unexpected Z direction channel: " << chan;
+            }
         }
     }
 
@@ -886,6 +890,8 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
 
             // Verify that get_eth_chan_direction returns INVALID_DIRECTION for Z channels
             for (const auto& chan : z_direction_chans) {
+                bool is_valid_chan = (chan == 0 || chan == 1 || chan == 6 || chan == 7);
+                EXPECT_TRUE(is_valid_chan) << "Unexpected Z direction channel: " << chan;
                 EXPECT_EQ(
                     control_plane.get_eth_chan_direction(fabric_node_id, chan),
                     static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));

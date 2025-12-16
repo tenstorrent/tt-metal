@@ -2403,11 +2403,15 @@ void ControlPlane::generate_intermesh_connectivity() {
 std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const std::string& my_host,
     const std::string& neighbor_host,
-    MeshId my_mesh_id,
-    MeshId neighbor_mesh_id,
     bool strict_binding,
     const std::unordered_set<FabricNodeId>& requested_exit_nodes,
     std::unordered_set<port_id_t>& assigned_port_ids) {
+    const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
+    auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
+    const auto& neighbor_binding =
+        this->global_logical_bindings_.at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+    const auto neighbor_mesh_id = neighbor_binding.first;
+
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
@@ -2515,8 +2519,6 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
         port_descriptors[my_mesh_id][neighbor_mesh_id] = this->assign_logical_ports_to_exit_nodes(
             my_host,
             neighbor_host,
-            my_mesh_id,
-            neighbor_mesh_id,
             strict_binding,
             requested_exit_nodes,
             assigned_port_ids);

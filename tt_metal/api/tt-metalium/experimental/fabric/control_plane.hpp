@@ -345,8 +345,6 @@ private:
     std::vector<PortDescriptor> assign_logical_ports_to_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
-        MeshId my_mesh_id,
-        MeshId neighbor_mesh_id,
         bool strict_binding,
         const std::unordered_set<FabricNodeId>& requested_exit_nodes,
         std::unordered_set<port_id_t>& assigned_port_ids);
