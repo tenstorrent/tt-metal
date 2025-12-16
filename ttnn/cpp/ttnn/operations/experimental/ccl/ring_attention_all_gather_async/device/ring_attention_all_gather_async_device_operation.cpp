@@ -75,6 +75,48 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout {}.",
         memory_config.memory_layout());
+
+    // Validate output tensors if provided
+    const auto& output_tensors = tensor_args.persistent_output_buffer;
+    if (!output_tensors.empty()) {
+        TT_FATAL(
+            output_tensors.size() == input_tensors.size(),
+            "Number of output tensors ({}) must match number of input tensors ({})",
+            output_tensors.size(),
+            input_tensors.size());
+
+        for (size_t i = 0; i < output_tensors.size(); ++i) {
+            if (output_tensors[i].has_value()) {
+                const auto& output_tensor = output_tensors[i].value();
+
+                TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
+                TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
+
+                TT_FATAL(
+                    output_tensor.dtype() == dtype,
+                    "Output tensor {} dtype should match input tensors but has {}",
+                    i,
+                    output_tensor.dtype());
+
+                TT_FATAL(
+                    output_tensor.memory_config() == operation_attributes.output_mem_config,
+                    "Output tensor {} memory config should match output_mem_config",
+                    i);
+
+                // Check output tensor shape
+                auto output_shape = output_tensor.logical_shape();
+                auto expected_output_shape = input_shape;
+                expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
+
+                TT_FATAL(
+                    output_shape == expected_output_shape,
+                    "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
+                    i,
+                    operation_attributes.dim,
+                    operation_attributes.ring_size);
+            }
+        }
+    }
 }
 
 RingAttentionAllGatherAsyncDeviceOperation::spec_return_value_t
