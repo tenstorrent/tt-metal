@@ -670,12 +670,12 @@ struct CatAddrGenerator {
     uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
         if (d2 < first_shape.shape[2]) {
             uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
-            noc_async_write_tile(tile_id, first_reader, src_addr);
+            noc_async_write_page(tile_id, first_reader, src_addr);
             return 1;
         } else if (d2 >= first_seq_padded && (d2 - first_seq_padded) < second_shape.shape[2]) {
             uint32_t adjusted_seq = d2 - first_seq_padded;
             uint32_t tile_id = second_shape.id_of(d0, d1, adjusted_seq, d3);
-            noc_async_write_tile(tile_id, second_reader, src_addr);
+            noc_async_write_page(tile_id, second_reader, src_addr);
             return 1;
         }
         return 0;
@@ -767,23 +767,25 @@ void write_block(
     cb_pop_front(cb_id, num_tiles);
 }
 
+template <typename TensorAccessorType>
 void write_block(
-    const TensorAccessor& out_writer,
+    const TensorAccessorType& out_writer,
     const uint32_t cb_out,
     const uint32_t out_chunk_tiles,
     const uint32_t rows,
     const uint32_t cols,
-    const uint32_t cb_id,
+    const uint32_t cb_id_in,
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold) {
     uint32_t barrier_count = 0;
+    uint32_t cb_id = cb_id_in;
 
     cb_wait_front(cb_out, out_chunk_tiles);
 
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t row = 0; row < rows; ++row) {
         for (uint32_t col = 0; col < cols; ++col) {
-            noc_async_write_tile(cb_id, out_writer, l1_read_addr);
+            noc_async_write_page(cb_id, out_writer, l1_read_addr);
             ++cb_id;
             l1_read_addr += tile_bytes;
 
@@ -907,10 +909,10 @@ void generate_mask(
     }
 }
 
-template <typename WriterType>
+template <typename WriterType, typename TensorAccessorType>
 void read_prev_output_and_lse(
     const CatAddrGenerator<WriterType, WriterType>& cat_out_generator,
-    const TensorAccessor& lse_writer,
+    const TensorAccessorType& lse_writer,
     uint32_t nb,
     uint32_t nq,
     uint32_t NH,
@@ -949,9 +951,9 @@ void read_prev_output_and_lse(
     cb_push_back(cb_lse_in, Sq_chunk_t);
 }
 
-template <typename WriterType>
+template <typename TensorAccessorType>
 void write_lse_output(
-    const TensorAccessor& lse_writer,
+    const TensorAccessorType& lse_writer,
     uint32_t nb,
     uint32_t nq,
     uint32_t NH,
@@ -972,7 +974,7 @@ void write_lse_output(
 
     uint32_t lse_tile_id = base_lse_tile_id;
     for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
-        noc_async_write_tile(lse_tile_id, lse_writer, lse_addr_ptr);
+        noc_async_write_page(lse_tile_id, lse_writer, lse_addr_ptr);
         lse_tile_id++;
         lse_addr_ptr += lse_tile_bytes;
     }
