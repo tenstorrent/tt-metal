@@ -12,6 +12,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.activations import get_golden_function_for_activation
 
 
 # for setting up multi-device stress tests
@@ -2556,8 +2557,12 @@ def test_matmul_block_sharded_input_with_padding(device):
 
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
+    torch.manual_seed(0)
     torch_input_a = torch.randn(32, 1024, dtype=torch.bfloat16)
     torch_input_b = torch.randn(1024, 1024, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_a @ torch_input_b
+    activation = "silu"
+    torch_output_tensor = get_golden_function_for_activation(activation)(torch_output_tensor)
 
     # Convert to TTNN tensors with DRAM interleaved layout
     input_a = ttnn.from_torch(
@@ -2580,8 +2585,8 @@ def test_matmul_activation_with_sharded_input(device):
     # 2. matmul internally calls unary (silu) with the output tensor's memory config
     # 3. unary's compute_output_specs creates TensorLayout with the output tensor's full config
     try:
-        output = ttnn.matmul(
-            input_a, input_b, memory_config=output_mem_config, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-        )
+        output_tensor = ttnn.matmul(input_a, input_b, memory_config=output_mem_config, activation=activation)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:
         pytest.fail(f"Got unexpected exception {e}")
