@@ -79,10 +79,17 @@ int main(int argc, char** argv) {
             std::cout << "[" << time_str << "] Operation #" << (i + 1) << "/" << NUM_OPERATIONS << "... " << std::flush;
 
             try {
-                // Trigger minimal cluster operation
-                // This keeps cluster active without intensive I/O
-                auto view = mesh->get_view();
-                std::cout << "✓ (mesh active: " << view.num_devices() << " devices)\n";
+                // Generate actual fabric traffic with L1 barriers
+                // L1 barrier sends sync packets over fabric links to all chips
+                auto& metal_ctx = tt::tt_metal::MetalContext::instance();
+                auto& cluster = metal_ctx.get_cluster();
+
+                // Execute barrier across all devices - generates fabric sync traffic
+                for (size_t chip = 0; chip < num_devices; chip++) {
+                    cluster.l1_barrier(chip);
+                }
+
+                std::cout << "✓ (barriers sent to " << num_devices << " devices via fabric)\n";
 
                 // Small delay after operation
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
