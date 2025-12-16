@@ -138,10 +138,10 @@ TilizeDeviceOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const bool use_multicore,
-    const bool enough_space_width,
-    const bool enough_space_height,
-    const bool use_low_perf,
+    bool use_multicore,
+    bool enough_space_width,
+    bool enough_space_height,
+    bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return {
         TilizeDeviceOperation::operation_attributes_t{
