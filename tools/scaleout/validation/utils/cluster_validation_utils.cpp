@@ -104,16 +104,16 @@ void configure_local_kernels(
     ClusterContext& ctx,
     const std::vector<uint32_t>& inputs,
     std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
-    size_t packet_size_bytes,
-    size_t packet_size_words,
-    size_t data_size,
+    uint32_t packet_size_bytes,
+    uint32_t packet_size_words,
+    uint32_t data_size,
     bool fwd) {
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     std::unordered_map<ChipId, std::vector<CoreCoord>> kernel_coords;
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
@@ -213,15 +213,15 @@ void configure_cross_host_kernels(
     ClusterContext& ctx,
     const std::vector<uint32_t>& inputs,
     std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
-    size_t packet_size_bytes,
-    size_t packet_size_words,
-    size_t data_size,
+    uint32_t packet_size_bytes,
+    uint32_t packet_size_words,
+    uint32_t data_size,
     bool fwd) {
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     for (const auto& host_neighbor : ctx.physical_system_descriptor.get_host_neighbors(host_name)) {
@@ -521,9 +521,9 @@ void dump_link_stats(
     ClusterContext& ctx,
     std::vector<uint32_t>& inputs,
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
-    size_t data_size,
-    size_t packet_size_bytes) {
-    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    uint32_t data_size,
+    uint32_t packet_size_bytes) {
+    const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
@@ -1075,14 +1075,14 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
         int sync_msg = 1;
         distributed_context.ssend(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-            tt::tt_metal::distributed::multihost::Rank{reset_pair.dst_rank},
-            tt::tt_metal::distributed::multihost::Tag{tag});
+            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.dst_rank)},
+            tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
     } else {
         int sync_msg = 0;
         distributed_context.recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-            tt::tt_metal::distributed::multihost::Rank{reset_pair.src_rank},
-            tt::tt_metal::distributed::multihost::Tag{tag});
+            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.src_rank)},
+            tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
     }
 }
 
@@ -1135,23 +1135,23 @@ void forward_link_reset_metadata_from_controller(
             distributed_context.send(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
 
             distributed_context.send(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
         exit_nodes_to_reset = ordered_exit_nodes[*distributed_context.rank()];
