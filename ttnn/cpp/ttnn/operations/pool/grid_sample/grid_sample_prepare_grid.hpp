@@ -9,9 +9,7 @@
 #include <vector>
 #include <optional>
 
-namespace ttnn {
-namespace operations {
-namespace grid_sample {
+namespace ttnn::operations::grid_sample {
 
 /**
  * Precomputes grid sample data for optimized kernel execution.
@@ -47,6 +45,4 @@ ttnn::Tensor prepare_grid_sample_grid(
     bool align_corners = false,
     const std::optional<DataType>& output_dtype = std::nullopt);
 
-}  // namespace grid_sample
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::grid_sample

@@ -23,6 +23,14 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
 
 jobs:
   fd-tests:
@@ -62,12 +70,19 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

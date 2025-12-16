@@ -8,10 +8,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
-namespace ttnn {
-namespace experimental {
-namespace ccl {
+namespace ttnn::experimental::ccl {
 
 struct CoreSemPair {
     CoreCoord core = {0, 0};
@@ -249,6 +248,8 @@ struct MinimalMatmulFusedOpSignaler {
     uint32_t start_ring_index = 0;
     uint32_t input_tensor_Wt = 0;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Ring;
+    bool read_local_slice_from_input = false;
+    std::optional<tt::tt_metal::Tensor> ag_input;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
@@ -256,7 +257,12 @@ struct MinimalMatmulFusedOpSignaler {
     MinimalMatmulFusedOpSignaler() = default;
 
     void init_all_gather(
-        uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt, tt::tt_fabric::Topology topology);
+        uint32_t ring_size,
+        uint32_t start_ring_index,
+        uint32_t input_tensor_Wt,
+        tt::tt_fabric::Topology topology,
+        bool read_local_slice_from_input,
+        const std::optional<const tt::tt_metal::Tensor>& ag_input);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
@@ -268,6 +274,4 @@ struct MinimalMatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental::ccl

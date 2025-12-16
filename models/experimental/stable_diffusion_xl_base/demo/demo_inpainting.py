@@ -183,7 +183,6 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
-        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
@@ -204,6 +203,7 @@ def run_demo_inference(
             else negative_prompt_2
         )
 
+        profiler.start("end_to_end_generation")
         (
             all_prompt_embeds_torch,
             torch_add_text_embeds,
@@ -237,10 +237,14 @@ def run_demo_inference(
 
         imgs = tt_sdxl.generate_images()
 
+        profiler.end("end_to_end_generation")
+
         logger.info(
             f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
         )
-        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
+        logger.info(
+            f"Image gen for {batch_size} prompts completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
+        )
         logger.info(
             f"Denoising loop for {batch_size} prompts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
@@ -248,8 +252,6 @@ def run_demo_inference(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
-
-        profiler.end("end_to_end_generation")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:

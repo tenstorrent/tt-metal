@@ -17,17 +17,21 @@ inputs:
     description: 'Enable watcher'
     default: false
     type: boolean
+  enable-lightweight-kernel-asserts:
+    description: 'Enable lightweight kernel asserts'
+    default: false
+    type: boolean
+  enable-llk-asserts:
+    description: 'Enable LLK asserts'
+    default: false
+    type: boolean
   use-evaluation-image:
     description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
     type: boolean
-  fetch-depth:
-    description: 'Fetch depth for git'
-    default: 1
-    type: integer
   auto-triage:
     description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
-    default: true
+    default: false
     type: boolean
   slow-dispatch-timeout:
     description: 'Timeout in seconds to consider a dispatch as slow for auto-triage'
@@ -36,14 +40,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: 🧬 Checkout Repository
-      if: ${{ inputs.use-evaluation-image == 'false' }}
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: ${{ inputs.fetch-depth }}
-        submodules: recursive
-        path: ${{ inputs.path }}
-
     - name: 🧪 Check Required Tools
       run: |
         echo "🔍 Verifying tools..."
@@ -91,6 +87,22 @@ runs:
         echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for lightweight kernel asserts
+      if: ${{ inputs.enable-lightweight-kernel-asserts == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal Lightweight Kernel Asserts"
+        echo "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for LLK asserts
+      if: ${{ inputs.enable-llk-asserts == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal LLK Asserts"
+        echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
       shell: bash
 
     - name: Set up env vars for auto-triage

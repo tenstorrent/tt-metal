@@ -142,6 +142,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size);
 
+void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
+
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,

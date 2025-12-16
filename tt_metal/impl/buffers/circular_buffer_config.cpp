@@ -19,13 +19,13 @@ namespace tt::tt_metal {
 // Static circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {
     this->set_config(data_format_spec);
 }
 
 // User is expected to use the builder here.
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
-    total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {}
+    total_size_(total_size), globally_allocated_address_(std::nullopt) {}
 
 // Dynamic circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
@@ -55,10 +55,10 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 format_descriptor.page_size);
         }
         this->page_sizes_[format_descriptor.buffer_index] = format_descriptor.page_size;
-        // if (format_descriptor.tile) {
-        //     this->tiles_[format_descriptor.buffer_index] = Tile(
-        //         {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
-        // }
+        if (format_descriptor.tile) {
+            this->tiles_[format_descriptor.buffer_index] = Tile(
+                {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
+        }
     };
     this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
     this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());

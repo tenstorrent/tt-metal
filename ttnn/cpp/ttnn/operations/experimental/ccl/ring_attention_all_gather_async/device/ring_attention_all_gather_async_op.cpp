@@ -197,9 +197,7 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 namespace {
 
@@ -276,8 +274,6 @@ std::vector<Tensor> ring_attention_all_gather_async(
         sub_device_id);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

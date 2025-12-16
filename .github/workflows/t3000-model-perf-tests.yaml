@@ -5,9 +5,9 @@ on:
     inputs:
       model:
         description: 'Select model to test'
-        required: false
-        default: 'all'
+        required: true
         type: choice
+        default: all
         options:
           - all
           - falcon7b

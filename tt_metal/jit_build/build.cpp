@@ -26,6 +26,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
@@ -176,7 +177,14 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_trace_only()) {
             profiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
         }
+        if (rtoptions.get_profiler_sum()) {
+            profiler_options |= PROFILER_OPT_DO_SUM;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
+
+        const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
+        this->defines_ +=
+            "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" + std::to_string(profiler_dram_bank_size_per_risc_bytes) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -238,6 +246,14 @@ void JitBuildEnv::init(
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
+    }
+
+    if (rtoptions.get_lightweight_kernel_asserts()) {
+        this->defines_ += "-DLIGHTWEIGHT_KERNEL_ASSERTS ";
+    }
+
+    if (rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
     // Includes
@@ -336,6 +352,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto common_flags = jit_build_query.common_flags(params);
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
+        this->lflags_ += jit_build_query.linker_flags(params);
     }
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
@@ -349,9 +366,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
         // Lop off the right side from the last "."
-        string stub = src.substr(0, src.find_last_of("."));
+        string stub = src.substr(0, src.find_last_of('.'));
         // Lop off the leading path
-        stub = stub.substr(stub.find_last_of("/") + 1, stub.length());
+        stub = stub.substr(stub.find_last_of('/') + 1, stub.length());
         this->objs_.push_back(stub + ".o");
     }
 

@@ -113,7 +113,23 @@ runs:
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
 
         if [ -z "$BUILD_ARTIFACT" ]; then
-          echo "ERROR: Could not find build artifact matching pattern"
+          echo "ERROR: Could not find build artifact matching expected pattern"
+          echo "TRACY_ENABLED (requested): $TRACY_ENABLED"
+
+          # Check if only the opposite tracy variant exists to give a clear hint
+          PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any.*_profiler_" | head -1 || true)
+          NON_PROFILER_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
+
+          if [ "$TRACY_ENABLED" = "true" ] && [ -n "$NON_PROFILER_ARTIFACT" ]; then
+            echo "HINT: Found non-profiler build artifact: $NON_PROFILER_ARTIFACT"
+            echo "      But tracy=true was requested, so a profiler-enabled artifact was expected."
+            echo "      You may have triggered this workflow with tracy=true while reusing a run built without tracy."
+          elif [ "$TRACY_ENABLED" != "true" ] && [ -n "$PROFILER_ARTIFACT" ]; then
+            echo "HINT: Found profiler-enabled build artifact: $PROFILER_ARTIFACT"
+            echo "      But tracy=false was requested, so a non-profiler artifact was expected."
+            echo "      You may have triggered this workflow with tracy=false while reusing a run built with tracy enabled."
+          fi
+
           echo "Available artifacts:"
           echo "$ARTIFACTS"
           exit 1

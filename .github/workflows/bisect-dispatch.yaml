@@ -113,11 +113,15 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        timeout-minutes: 10
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
 
       - name: 🔧 Setup GitHub CLI and jq
         if: ${{ inputs.download-artifacts == true }}

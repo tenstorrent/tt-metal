@@ -36,32 +36,32 @@ jobs:
         run: |
           # Create full matrix with jq for readability
           FULL_MATRIX=$(jq -n '[
-            {
-              "name": "Galaxy Llama3 frequent tests",
-              "arch": "wormhole_b0",
-              "model": "llama3",
-              "timeout": 40,
-              "owner_id": "U053W15B6JF"
-            }, # Djordje Ivanovic
+            # {
+            #   "name": "Galaxy Llama3 frequent tests",
+            #   "arch": "wormhole_b0",
+            #   "model": "llama3",
+            #   "timeout": 70,
+            #   "owner_id": "U053W15B6JF"
+            # }, # Djordje Ivanovic
             {
               "name": "Galaxy resnet50 frequent tests",
               "arch": "wormhole_b0",
               "model": "resnet50",
-              "timeout": 15,
+              "timeout": 50,
               "owner_id": "U052J2QDDKQ"
             }, # Pavle Josipovic
             {
               "name": "Galaxy unit/distributed frequent tests",
               "arch": "wormhole_b0",
               "model": "unit",
-              "timeout": 30,
+              "timeout": 50,
               "owner_id": "UBHPP2NDP"
             }, # Joseph Chu
             {
               "name": "Galaxy SD3.5 frequent tests",
               "arch": "wormhole_b0",
               "model": "sd35",
-              "timeout": 15,
+              "timeout": 50,
               "owner_id": "U03FJB5TM5Y"
             }, # Colman Glagovich
             {
@@ -75,14 +75,14 @@ jobs:
               "name": "Galaxy mochi frequent tests",
               "arch": "wormhole_b0",
               "model": "mochi",
-              "timeout": 70,
+              "timeout": 80,
               "owner_id": "U09ELB03XRU"
             }, # Stephen Osborne
             {
               "name": "Galaxy Flux.1 frequent tests",
               "arch": "wormhole_b0",
               "model": "flux1",
-              "timeout": 25,
+              "timeout": 50,
               "owner_id": "U08TED0JM9D"
             }, # Samuel Adesoye
             {
@@ -132,8 +132,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

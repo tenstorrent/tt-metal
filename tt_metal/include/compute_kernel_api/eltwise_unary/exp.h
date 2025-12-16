@@ -57,10 +57,10 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
     MATH((llk_math_eltwise_unary_sfpu_exponential<
           approx,
           fast_and_approx,
+          DST_ACCUM_MODE,
           scale_en,
           skip_positive_check,
-          iterations,
-          DST_ACCUM_MODE>(idst, vector_mode, scale)));
+          iterations>(idst, vector_mode, scale)));
 }
 
 }  // namespace ckernel

@@ -57,6 +57,7 @@ def run_ring_attention_all_gather_impl(
     all_gather_topology,
     num_iters=1,
     enable_trace=True,
+    pcc_threshold=0.99,
 ):
     torch.manual_seed(0)
 
@@ -214,7 +215,7 @@ def run_ring_attention_all_gather_impl(
                 if ag_input_dtype == ttnn.bfloat16:
                     eq, output = comp_equal(tt_ag_tensor_check, torch_ag_tensor_check)
                 else:
-                    eq, output = comp_pcc(tt_ag_tensor_check, torch_ag_tensor_check)
+                    eq, output = comp_pcc(tt_ag_tensor_check, torch_ag_tensor_check, pcc_threshold)
                 assert eq, f"{i}{j} FAILED ag: {output}, iteration {i}, tensor {j}, ring {ring_idx}"
 
     mesh_device.reset_sub_device_stall_group()
@@ -223,7 +224,19 @@ def run_ring_attention_all_gather_impl(
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat4_b, 0.985),
+    ],
+    ids=[
+        "tile_bfloat16",
+        "tile_bfloat8_b",
+        "tile_bfloat4_b",
+    ],
+)
 @pytest.mark.parametrize(
     "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor, enable_trace, num_iters",
     [
@@ -263,6 +276,7 @@ def test_ring_attention_all_gather(
     num_links,
     layout,
     ag_input_dtype,
+    pcc_threshold,
     ag_output_shape,
     ag_num_inputs,
     rp_axis,
@@ -291,12 +305,25 @@ def test_ring_attention_all_gather(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
     )
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat4_b, 0.985),
+    ],
+    ids=[
+        "tile_bfloat16",
+        "tile_bfloat8_b",
+        "tile_bfloat4_b",
+    ],
+)
 @pytest.mark.parametrize(
     "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
     [
@@ -344,6 +371,7 @@ def test_ring_attention_all_gather_program_cache(
     num_links,
     ag_input_dtype,
     layout,
+    pcc_threshold,
     mem_config_input,
     mem_config_ag,
     enable_trace,
@@ -380,6 +408,7 @@ def test_ring_attention_all_gather_program_cache(
             all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
+            pcc_threshold=pcc_threshold,
         )
         ttnn.synchronize_device(submesh_device)
 

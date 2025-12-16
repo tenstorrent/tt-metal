@@ -258,7 +258,7 @@ jobs:
   check-existing-release:
     needs: [create-tag, create-release-notes, build-test-publish]
     runs-on: ubuntu-latest
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     concurrency: create_upload_draft_release
     outputs:
       should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}

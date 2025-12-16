@@ -17,7 +17,7 @@ namespace NAMESPACE {
 
 void math_main() {
     int __outer_loop_iter;
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0, 0, 0)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0)));
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
     llk_math_hw_configure_disaggregated(0, 0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);

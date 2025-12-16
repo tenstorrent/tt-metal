@@ -180,7 +180,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.cache_producer_noc_addr();
+    worker_interface.template cache_producer_noc_addr<true>();
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -254,26 +254,27 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
+        bool can_forward = tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
             packet_header, fabric_connection, downstream_mux_connections);
+        if (can_forward) {
+            worker_interface.local_write_counter.increment();
+            worker_interface.local_read_counter.increment();
 
-        worker_interface.local_write_counter.increment();
-        worker_interface.local_read_counter.increment();
+            // not handling/processing acks for now, re-evaluate if needed
+            increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
 
-        // not handling/processing acks for now, re-evaluate if needed
-        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
+            noc_async_writes_flushed();
 
-        noc_async_writes_flushed();
-
-        if (is_persistent_channel) {
-            worker_interface.notify_worker_of_read_counter_update();
-        } else if (channel_connection_established) {
-            worker_interface.notify_worker_of_read_counter_update();
+            if (is_persistent_channel) {
+                worker_interface.notify_worker_of_read_counter_update();
+            } else if (channel_connection_established) {
+                worker_interface.notify_worker_of_read_counter_update();
+            }
         }
     }
 
     if (!is_persistent_channel) {
-        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
             worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
     }
 }
@@ -298,12 +299,6 @@ void kernel_main() {
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     // ========== Create channel arrays grouped by type ==========
-    // Worker channels (WORKER_CHANNEL)
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS> worker_channels;
-    std::array<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS>
-        worker_channel_interfaces;
-    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_connection_established;
-
     // Relay-to-mux channels (RELAY_TO_MUX_CHANNEL)
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_RELAY_TO_MUX>, NUM_RELAY_TO_MUX_CHANNELS>
         relay_to_mux_channels;
@@ -350,8 +345,35 @@ void kernel_main() {
     constexpr size_t RELAY_TERMINATION_SIGNAL_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
     constexpr size_t relay_termination_signal_address = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX);
 
-    // Direction (last compile-time argument)
+    // Direction
     constexpr size_t direction = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 1);
+
+    // Whether this mux has a fabric router to connect to
+    // False for missing directions (inter-mux forwarding only, no actual router)
+    constexpr bool has_fabric_router = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 2) == 1;
+
+    // Channel storage address (L1 address for storing worker channel arrays only)
+    constexpr size_t channel_storage_base_address = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 3);
+
+    // ========== Set up L1-based storage pointers for worker channels only ==========
+    constexpr size_t worker_channels_storage_size =
+        NUM_WORKER_CHANNELS * sizeof(tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>);
+    constexpr size_t worker_interfaces_storage_size =
+        NUM_WORKER_CHANNELS * sizeof(tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>);
+    constexpr size_t total_worker_storage_size = worker_channels_storage_size + worker_interfaces_storage_size;
+
+    // Verify 4KB is enough for worker channel storage
+    static_assert(total_worker_storage_size <= 4096, "Worker channel storage exceeds 4KB L1 allocation");
+
+    size_t storage_offset = channel_storage_base_address;
+    auto worker_channels = reinterpret_cast<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>*>(storage_offset);
+    storage_offset += worker_channels_storage_size;
+    auto worker_channel_interfaces =
+        reinterpret_cast<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>*>(
+            storage_offset);
+
+    // Worker channel connection status (stack-allocated)
+    bool worker_channel_connection_established[NUM_WORKER_CHANNELS];
 
     // ========== Setup worker channels (WORKER_CHANNEL) ==========
     size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];
@@ -449,16 +471,19 @@ void kernel_main() {
     // In UDM mode, mux does NOT signal upstream routers - the relay will do that
     // (upstream routers connect to relay, not mux)
 
-    // wait for fabric router to be ready before setting up the connection
-    if constexpr (wait_for_fabric_endpoint) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_connection.edm_noc_x,
-            fabric_connection.edm_noc_y,
-            fabric_router_status_address,
-            local_fabric_router_status_address);
-    }
+    // Only wait for and open fabric router connection if we have a router
+    if constexpr (has_fabric_router) {
+        // wait for fabric router to be ready before setting up the connection
+        if constexpr (wait_for_fabric_endpoint) {
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                fabric_connection.edm_noc_x,
+                fabric_connection.edm_noc_y,
+                fabric_router_status_address,
+                local_fabric_router_status_address);
+        }
 
-    fabric_connection.open<false>();
+        fabric_connection.open<false>();
+    }
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
@@ -500,7 +525,7 @@ void kernel_main() {
         }
     }
 
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             // Process worker channels (WORKER_CHANNEL)
             for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
@@ -551,7 +576,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(relay_termination_signal_address);
     *relay_termination_signal_ptr = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
 
-    fabric_connection.close();
+    if constexpr (has_fabric_router) {
+        fabric_connection.close();
+    }
     noc_async_write_barrier();
     noc_async_posted_writes_flushed();
     noc_async_atomic_barrier();

@@ -7,7 +7,7 @@ from loguru import logger
 
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole
 import torch
 import ttnn
 
@@ -16,9 +16,13 @@ shapes = [
 ]
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="disabled due to watcher error, see issue #5863")
 @pytest.mark.parametrize("shape", shapes)
 def test_move_op(shape, device):
+    is_p100 = (
+        is_blackhole() and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
+    )
+    if is_p100:
+        pytest.skip(reason="see #34415")
     run_move_op(shape, device)
 
 

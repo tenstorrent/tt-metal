@@ -121,6 +121,7 @@ async function run() {
       }
     }
 
+
     // Convert cached grouped map to array of runs for merging
     for (const runs of cachedGrouped.values()) {
       previousRuns.push(...runs);
@@ -176,6 +177,8 @@ async function run() {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
+
+
     // Save grouped runs to artifact file
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
 

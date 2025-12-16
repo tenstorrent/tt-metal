@@ -19,6 +19,7 @@
 #include "tt_fabric_test_context.hpp"
 
 const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
+    {Topology::NeighborExchange, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
     {Topology::Linear, FabricConfig::FABRIC_1D},
     {Topology::Ring, FabricConfig::FABRIC_1D_RING},
     {Topology::Mesh, FabricConfig::FABRIC_2D},
@@ -196,6 +197,8 @@ int main(int argc, char** argv) {
             test_context.set_performance_test_mode(test_config.performance_test_mode);
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
             test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
+            // Set skip_packet_validation flag
+            test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();

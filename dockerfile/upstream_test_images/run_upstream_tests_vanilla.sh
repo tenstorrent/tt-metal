@@ -75,16 +75,6 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
-    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
-}
-
-test_suite_bh_single_pcie_llama_demo_tests() {
-    echo "[upstream-tests] Running BH upstream Llama demo model tests"
-
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
@@ -230,8 +220,8 @@ test_suite_bh_glx_metal_unit_tests() {
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-    # Disable 2 ERISC mode for deadlock stability tests - These validate 2D Torus (QSFP Link) stability
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC=1 RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1  build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
+    # Deadlock stability tests - These validate 2D Torus (QSFP Link) stability
+    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
@@ -256,7 +246,7 @@ UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 test_suite_bh_glx_python_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream python unit tests"
     # CCL / Ops
-    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_mesh.py
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_torus.py
 }
 
 test_suite_bh_glx_llama_demo_tests() {

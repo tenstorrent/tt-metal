@@ -9,14 +9,10 @@
 #include <stdint.h>
 #include <tuple>
 
-namespace tt {
-namespace tt_metal {
-namespace distributed {
+namespace tt::tt_metal::distributed {
 template <typename T>
 class MeshContainer;
-}  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::distributed {
 

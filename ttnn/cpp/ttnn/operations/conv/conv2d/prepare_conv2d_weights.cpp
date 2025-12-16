@@ -4,7 +4,8 @@
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "conv2d/conv2d_utils.hpp"
-#include "conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
@@ -25,8 +26,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-namespace ttnn {
-namespace operations::conv {
+
+namespace ttnn::operations::conv {
 using namespace tt;
 using sliding_window::ParallelConfig;
 
@@ -1644,5 +1645,4 @@ ttnn::Tensor prepare_conv_bias(
 }
 
 }  // namespace conv2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv

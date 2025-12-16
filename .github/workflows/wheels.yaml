@@ -1,0 +1,113 @@
+name: "Build Python Wheel"
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+        description: "Docker image to use for building the wheel (should be manylinux)"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+      tracy:
+        required: false
+        type: boolean
+        default: true
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
+    outputs:
+      artifact-name:
+        description: "Name to give download-artifact to get the Wheel"
+        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.artifact_name }}
+
+
+jobs:
+  build-wheel:
+    name: 🐍 Build wheel (Python ${{ inputs.python-version }})
+    timeout-minutes: 30
+    runs-on: tt-ubuntu-2204-large-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    outputs:
+      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Format Python version
+        id: format_python_version
+        run: |
+          PYTHON_VERSION_NODOT=$(echo "${{ inputs.python-version }}" | tr -d '.')
+          echo "python_version_nodot=${PYTHON_VERSION_NODOT}" >> $GITHUB_OUTPUT
+          echo "Selected Python ${{ inputs.python-version }} (${PYTHON_VERSION_NODOT})"
+
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 500
+          fetch-tags: true # Need tags for `git describe`
+
+      # Python for driving the build; not the version the wheel targets
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: 🐍 Build wheel
+        uses: pypa/cibuildwheel@v2.23.2
+        env:
+          CIBW_BUILD: "cp${{ steps.format_python_version.outputs.python_version_nodot }}-manylinux_x86_64*"
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_BUILD_FRONTEND: build
+          CIBW_ENVIRONMENT: >-
+            CCACHE_REMOTE_ONLY=true
+            CCACHE_TEMPDIR=/tmp/ccache
+            CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
+            CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
+            CIBW_BUILD_TYPE="${{ inputs.build-type }}"
+          CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
+          CIBW_BEFORE_TEST: ccache -s
+          CIBW_TEST_COMMAND: 'python -c "import ttnn"'
+          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+      - name: Set wheel artifact name
+        id: set_artifact_name
+        run: |
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          ARTIFACT_NAME="eager-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-any-${SANITIZED_REF}-${{ github.run_id }}"
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
+
+      - name: ☁️ Upload wheel
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+          path: wheelhouse
+          if-no-files-found: error
