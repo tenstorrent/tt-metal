@@ -24,6 +24,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include <tt-metalium/experimental/mesh_device.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -199,6 +200,50 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->get_device(coord)->id()),
             fabric_node_id);
     }
+}
+
+TEST_F(MeshDeviceTest, UserData) {
+    namespace experimental = tt::tt_metal::experimental::MeshDevice;
+
+    // Verify no user data exists initially.
+    constexpr uintptr_t key1 = 1;
+    constexpr uintptr_t key2 = 2;
+    EXPECT_EQ(experimental::GetUserData(*mesh_device_, key1), nullptr);
+    EXPECT_EQ(experimental::GetUserData(*mesh_device_, key2), nullptr);
+
+    // Set and retrieve user data.
+    auto data1 = std::make_shared<int>(42);
+    experimental::SetUserData(*mesh_device_, key1, data1);
+    auto retrieved1 = std::static_pointer_cast<int>(experimental::GetUserData(*mesh_device_, key1));
+    ASSERT_NE(retrieved1, nullptr);
+    EXPECT_EQ(*retrieved1, 42);
+    EXPECT_EQ(experimental::GetUserData(*mesh_device_, key2), nullptr);
+
+    // Overwrite existing key.
+    auto data1_new = std::make_shared<int>(100);
+    experimental::SetUserData(*mesh_device_, key1, data1_new);
+    retrieved1 = std::static_pointer_cast<int>(experimental::GetUserData(*mesh_device_, key1));
+    ASSERT_NE(retrieved1, nullptr);
+    EXPECT_EQ(*retrieved1, 100);
+
+    // Set data for a second key.
+    auto data2 = std::make_shared<std::string>("test_string");
+    experimental::SetUserData(*mesh_device_, key2, data2);
+    auto retrieved2 = std::static_pointer_cast<std::string>(experimental::GetUserData(*mesh_device_, key2));
+    ASSERT_NE(retrieved2, nullptr);
+    EXPECT_EQ(*retrieved2, "test_string");
+
+    // Remove user data.
+    experimental::RemoveUserData(*mesh_device_, key1);
+    EXPECT_EQ(experimental::GetUserData(*mesh_device_, key1), nullptr);
+    EXPECT_NE(experimental::GetUserData(*mesh_device_, key2), nullptr);
+
+    // Remove non-existent key (should be a no-op).
+    EXPECT_NO_THROW(experimental::RemoveUserData(*mesh_device_, key1));
+
+    // Clean up remaining data.
+    experimental::RemoveUserData(*mesh_device_, key2);
+    EXPECT_EQ(experimental::GetUserData(*mesh_device_, key2), nullptr);
 }
 
 }  // namespace
