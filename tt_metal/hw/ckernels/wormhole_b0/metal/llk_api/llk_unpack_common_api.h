@@ -20,12 +20,6 @@
  * LLK UNPACK COMMON
  *************************************************************************/
 
-// Overloaded function for single operand unpack
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
-    llk_unpack_hw_configure<is_fp32_dest_acc_en>(unpA_operand, unpA_operand);
-}
-
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     // In0 -> unpA
@@ -49,6 +43,11 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         unpB_face_r_dim,
         unpA_num_faces,
         unpB_num_faces);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
+    llk_unpack_hw_configure<is_fp32_dest_acc_en>(unpA_operand, unpA_operand);
 }
 
 inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {
