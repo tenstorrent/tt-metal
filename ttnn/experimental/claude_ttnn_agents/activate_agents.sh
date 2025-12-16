@@ -10,11 +10,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 echo "Activating Claude TTNN Agents..."
 echo "Repository root: $REPO_ROOT"
 
-# Create .claude/agents directory if it doesn't exist
+# Create .claude directories if they don't exist
 mkdir -p "$REPO_ROOT/.claude/agents"
-
-# Create .claude/scripts directory if it doesn't exist
 mkdir -p "$REPO_ROOT/.claude/scripts"
+mkdir -p "$REPO_ROOT/.claude/references"
+mkdir -p "$REPO_ROOT/.claude/logs"
 
 # Copy agent definitions
 echo "Installing agent definitions..."
@@ -22,12 +22,17 @@ cp "$SCRIPT_DIR/agents/ttnn-operation-analyzer.md" "$REPO_ROOT/.claude/agents/"
 cp "$SCRIPT_DIR/agents/ttnn-operation-planner.md" "$REPO_ROOT/.claude/agents/"
 cp "$SCRIPT_DIR/agents/ttnn-operation-scaffolder.md" "$REPO_ROOT/.claude/agents/"
 cp "$SCRIPT_DIR/agents/ttnn-factory-builder.md" "$REPO_ROOT/.claude/agents/"
+cp "$SCRIPT_DIR/agents/ttnn-riscv-debugger.md" "$REPO_ROOT/.claude/agents/"
 
 # Copy scaffolder scripts (used by ttnn-operation-scaffolder agent)
 echo "Installing scaffolder scripts..."
 cp -r "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" "$REPO_ROOT/.claude/scripts/"
 chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.py
 chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.sh
+
+# Copy reference documents (used by ttnn-riscv-debugger agent)
+echo "Installing reference documents..."
+cp "$SCRIPT_DIR/references/"*.md "$REPO_ROOT/.claude/references/"
 
 # Copy workflow documentation
 echo "Installing workflow documentation..."
@@ -149,7 +154,10 @@ echo "  - $REPO_ROOT/.claude/agents/ttnn-operation-analyzer.md"
 echo "  - $REPO_ROOT/.claude/agents/ttnn-operation-planner.md"
 echo "  - $REPO_ROOT/.claude/agents/ttnn-operation-scaffolder.md"
 echo "  - $REPO_ROOT/.claude/agents/ttnn-factory-builder.md"
+echo "  - $REPO_ROOT/.claude/agents/ttnn-riscv-debugger.md"
 echo "  - $REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/ (scripts + templates)"
+echo "  - $REPO_ROOT/.claude/references/ (debugger reference docs)"
+echo "  - $REPO_ROOT/.claude/logs/ (agent debug logs)"
 echo ""
 echo "DeepWiki MCP configured in:"
 echo "  - ~/.claude.json (MCP server + project context)"
@@ -163,5 +171,6 @@ echo "  1. ttnn-operation-analyzer  -> Analyze reference operation"
 echo "  2. ttnn-operation-planner   -> Design new operation (USER REVIEW)"
 echo "  3. ttnn-operation-scaffolder -> Build Stages 1-3 (uses scripts)"
 echo "  4. ttnn-factory-builder     -> Build Stages 4-6"
+echo "  5. ttnn-riscv-debugger      -> Debug kernel issues (hangs, wrong output)"
 echo ""
 echo "See .claude/subagent_breakdown.md for detailed workflow documentation."

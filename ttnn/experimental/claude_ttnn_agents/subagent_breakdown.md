@@ -33,8 +33,8 @@ The debugger agent is stateless and can be invoked repeatedly. It reads the curr
 Each phase has explicit pass/fail criteria. Don't proceed until the gate passes.
 
 ### 4. Model Selection by Task Type
-- **Opus**: Planning, design, complex reasoning (Phases 1-2, 4)
-- **Sonnet**: Implementation, debugging (Phases 3, 5-6)
+- **Opus**: Planning, design, complex reasoning, debugging (Phases 1-2, 4-5)
+- **Sonnet**: Implementation (Phases 3, 6)
 - **Haiku**: Mechanical scaffolding if faster/cheaper execution is preferred (Phase 3)
 
 ---
@@ -262,26 +262,41 @@ Note: May also READ auxiliary data (masks, indices) in addition to writing outpu
 
 ## Phase 5: Debug/Integration
 
-**Agent**: `ttnn-operation-debugger` (Sonnet)
+**Agent**: `ttnn-riscv-debugger` (Opus)
 
-**Status**: 🔲 To be implemented
+**Status**: ✅ Implemented
 
-**Purpose**: Fix issues at any phase with fresh context.
+**Purpose**: Systematic debugging of TTNN kernel hangs and CB synchronization issues using hypothesis-driven methodology.
 
 **Input**:
-- Current code state (reads from files)
-- Error messages / test failures
-- Operation spec for reference
+- Journal (JSON): Debug state and history (initialized by orchestrator)
+- Symptom: Problem description
+- Operation analysis: Path to `*_analysis.md` from ttnn-operation-analyzer
 
-**Output**: Fixes to any component
+**Output**:
+- Journal proposal with observations, hypotheses, experiments
+- Proposed fix (if hypothesis confidence >= 0.8)
+- Code changes shown in diffs (all changes reverted before returning)
 
-**Key Feature**: Stateless - can be invoked repeatedly with fresh context. This is the escape hatch for context exhaustion.
+**Key Features**:
+- Hypothesis → Falsifier → Experiment → Update methodology
+- Watcher log interpretation for hang diagnosis
+- CB deadlock debugging (producer-consumer synchronization)
+- Strategic DPRINT placement for counter/state monitoring
+- Always reverts code changes before returning
+- Stateless design with structured journal for anti-looping
 
 **When to Use**:
-- Build failures
-- Test failures
-- Runtime errors
-- Unexpected behavior
+- Kernel hangs (CB deadlocks, semaphore issues)
+- Device errors or assertions
+- Need systematic debugging with hypothesis tracking
+- Runtime errors in kernel execution
+
+**Current Limitations**:
+- Primarily focused on hang diagnosis via watcher
+- Kernel correctness debugging (wrong outputs) is planned but not yet robust
+
+**Location**: `.claude/agents/ttnn-riscv-debugger.md`
 
 ---
 
@@ -373,10 +388,11 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 │ Done!               │
 └─────────────────────┘
 
-     ┌─────────────────────┐
-     │ Phase 5: Debugger   │ ◄── Can be invoked at any
-     │ (Sonnet, stateless) │     phase when issues arise
-     └─────────────────────┘
+     ┌──────────────────────────┐
+     │ Phase 5: RISCV Debugger  │ ◄── Can be invoked at any
+     │ (Opus, hypothesis-       │     phase when kernel hangs
+     │  driven, reverts code)   │     or CB issues arise
+     └──────────────────────────┘
 ```
 
 ---
@@ -386,6 +402,6 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 1. **`ttnn-operation-planner`** ✅ - Produces the spec (WHAT to build)
 2. **`ttnn-operation-scaffolder`** ✅ - Stages 1-3, knows HOW (official TTNN patterns)
 3. **`ttnn-factory-builder`** ✅ - Stages 4-6, knows HOW (CB patterns, work split)
-4. **`ttnn-operation-debugger`** - The escape hatch for when things go wrong
-5. **`ttnn-kernel-dataflow`** - RISCV_1 and RISCV_0 kernels (may read AND write)
-6. **`ttnn-kernel-compute`** - Compute kernel implementation
+4. **`ttnn-riscv-debugger`** ✅ - Debug kernel hangs and CB synchronization issues
+5. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
+6. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation

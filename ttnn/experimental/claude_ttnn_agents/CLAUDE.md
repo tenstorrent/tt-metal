@@ -26,32 +26,7 @@ Refer to `METALIUM_GUIDE.md` for detailed architecture explanations.
 
 ### Standard Build
 ```bash
-./build_metal.sh
-```
-
-### Build with Tests
-```bash
-./build_metal.sh --build-tests
-```
-
-### Build Programming Examples
-```bash
-./build_metal.sh --build-programming-examples
-```
-
-### Build Types
-```bash
-# Debug build (includes debug symbols)
 ./build_metal.sh -b Debug
-./build_metal.sh --debug
-
-# Release build (default)
-./build_metal.sh -b Release
-./build_metal.sh --release
-
-# Development build (optimized with debug info)
-./build_metal.sh -b RelWithDebInfo
-./build_metal.sh --development
 ```
 
 ### Clean Build Artifacts
@@ -86,25 +61,15 @@ export ARCH_NAME=wormhole_b0         # or grayskull, blackhole
 
 ### Debugging and Development
 ```bash
-# Enable watcher (validates NoC transactions, on-device assertions)
-export TT_METAL_WATCHER=10  # Update every 10 seconds
-
-# Enable debug printing from kernels
-export TT_METAL_DPRINT_CORES=(0,0)-(4,4)  # Print from 5x5 grid
-
 # Enable operation logging
 export TT_LOGGER_TYPES=Op
 export TT_LOGGER_LEVEL=DEBUG
 
 # Make ops blocking with logging (useful for debugging)
 export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
-
-# Enable slow dispatch mode (debugging only, not for production)
-export TT_METAL_SLOW_DISPATCH_MODE=1
-
-# Enable RISC-V debug info in ELF files
-export TT_METAL_RISCV_DEBUG_INFO=1
 ```
+
+For kernel-level debugging (hangs, CB issues, device errors), use the `ttnn-riscv-debugger` agent.
 
 ## Development Workflow
 
@@ -135,16 +100,24 @@ gdb --args <generated_binary>
 gdb --args python <python_file>
 ```
 
-### Device-Side Debugging
-- **Always develop with Watcher enabled**: `export TT_METAL_WATCHER=10`
-- **Use Debug Print API**: Include `debug/dprint.h` in kernels, use `DPRINT << x << ENDL();`
-- **Watcher flags**: NoC transaction errors, illegal operations, assertions
+### Device-Side / Kernel Debugging
 
-### Common Debug Workflows
-1. Enable watcher to catch errors early
-2. Use DPRINT for kernel debugging
-3. Check watcher output if device hangs
-4. Use slow dispatch mode only when debugging dispatch issues
+For kernel issues (hangs, incorrect results, CB deadlocks), use the `ttnn-riscv-debugger` agent.
+
+**When to invoke**:
+- Test hangs or times out
+- Device errors or assertions
+- Incorrect kernel output
+- Suspected circular buffer issues
+
+**How to invoke**: Provide the symptom and let the agent handle watcher/DPRINT:
+```
+Symptom: "test_avgpool2d hangs"
+Test: "pytest tests/ttnn/.../test_avgpool2d.py::test_run_avg_pool2d"
+Hint (optional): "bug likely in compute kernel"
+```
+
+The agent autonomously enables watcher, interprets core states, analyzes kernel code with grep/sed verification, forms hypotheses, and proposes verified fixes.
 
 ## Code Organization
 
@@ -180,6 +153,8 @@ API calls:
 - cb_wait_front(cb_id, num_pages): Consumer blocks until num_pages available for reading
 - cb_pop_front(cb_id, num_pages): Consumer frees processed num_pages
 Typical pattern: cb_wait_front → process → cb_pop_front → cb_reserve_back → write → cb_push_back
+
+For CB synchronization bugs (deadlocks, hangs), use the `ttnn-riscv-debugger` agent.
 
 ### Reader and Writer Kernel Naming Convention
 
@@ -262,6 +237,20 @@ To create a new operation based on an existing reference, use the agents in `.cl
 ```
 
 See `.claude/subagent_breakdown.md` for detailed workflow and https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html for official docs.
+
+## Debugging TTNN Operations
+
+For kernel-level bugs in TTNN operations:
+
+```
+ttnn-riscv-debugger  → Debug kernel issues → Propose fix
+```
+
+Invoke with symptom only (e.g., "test hangs"). The agent autonomously:
+1. Enables watcher and captures core states
+2. Analyzes kernel code with grep/sed verification
+3. Forms and tests hypotheses (observe → hypothesize → experiment)
+4. Proposes verified fixes with diffs
 
 ## Performance Considerations
 

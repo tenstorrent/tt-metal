@@ -21,6 +21,7 @@ This package contains Claude Code agents for creating new TTNN operations.
 | ttnn-operation-planner | Design new operation spec |
 | ttnn-operation-scaffolder | Build Stages 1-3 (API, validation, registration) |
 | ttnn-factory-builder | Build Stages 4-6 (device op, factory, kernels) |
+| ttnn-riscv-debugger | Debug kernel issues (hangs, CB deadlocks, incorrect output) |
 
 ## Workflow
 
@@ -28,11 +29,13 @@ This is a **highly experimental** system for generating TTNN operations using AI
 
 ### Overview
 
-Creating a new TTNN operation from an existing reference involves four main stages:
+Creating a new TTNN operation from an existing reference involves five main stages:
 
 ```
 Reference Op → Analyze → Plan → Scaffold → Build Factory → Test & Debug
              (Stage 1)  (Stage 2) (Stage 3)  (Stage 4)      (Stage 5)
+                                                               ↓
+                                                        ttnn-riscv-debugger
 ```
 
 ### Stage 1: Analyze Reference Operation
@@ -113,7 +116,7 @@ The scaffolding from Stage 3 is already complete."
 
 The stub kernels will compile and pass data through but won't perform the actual operation yet.
 
-### Stage 5: Test-Driven Debugging (TODO)
+### Stage 5: Test-Driven Debugging
 
 At this stage, you have a compilable operation with stub kernels. The next phase involves:
 
@@ -125,7 +128,7 @@ At this stage, you have a compilable operation with stub kernels. The next phase
 
 2. **Incremental kernel implementation**: Implement actual logic in compute kernels
 
-3. **Debug and iterate**: Use watcher, DPRINT, and tests to fix issues
+3. **Debug and iterate**: Use the `ttnn-riscv-debugger` agent for kernel issues
 
 **Example workflow** (from `image_rotate` built from `grid_sample`):
 - Test 1: Single pixel, 5-degree rotation → Check output coordinates
@@ -137,14 +140,28 @@ This stage discovered only 2 bugs through TDD, which were quickly fixed.
 
 **See the complete implementation**: The `image_rotate` operation built using these agents can be found in branch [`dev/dnijemcevic/image_rotate`](https://github.com/tenstorrent/tt-metal/tree/dev/dnijemcevic/image_rotate).
 
-**Note**: Agent automation for Stage 5 is planned for future development, including:
+#### Using the Debug Agent
+
+When tests hang or produce incorrect output, invoke the `ttnn-riscv-debugger` agent:
+
+```
+"Please use the ttnn-riscv-debugger agent to debug this issue:
+Symptom: test_avgpool2d hangs after 30 seconds
+Test: pytest tests/ttnn/.../test_avgpool2d.py::test_run_avg_pool2d
+Operation analysis: ttnn/cpp/ttnn/operations/pool/generic/device/pool_analysis.md"
+```
+
+The debugger agent:
+- Uses a structured journal to track observations, hypotheses, and experiments
+- Enables watcher automatically and interprets core states
+- Forms ONE hypothesis per invocation and tests it with a falsifier experiment
+- Proposes verified fixes with diffs
+
+**Journal-based debugging**: The agent is stateless—all history is in a JSON journal. The orchestrator maintains the journal and invokes the coprocessor repeatedly until a fix is found or debugging budget is exhausted.
+
+**Note**: Future automation planned:
 - **Kernel writer agents**: Specialized agents for implementing reader, compute, and writer kernels
-- **Debug agent**: General-purpose debugging agent for TTNN operations
 - **Operation-specific debug agents**: Tailored debugging strategies for different operation types
-  - Image operation debugging (coordinate verification, interpolation checks, boundary handling)
-  - LLM operation debugging (attention patterns, token processing, numerical stability)
-  - Data movement debugging (sharding, memory layout, NoC traffic)
-  - Each with domain-specific best practices and common pitfall detection
 
 ### Tips
 
@@ -153,7 +170,7 @@ This stage discovered only 2 bugs through TDD, which were quickly fixed.
 - **Iterate on the spec**: Don't rush past Stage 2 - a good spec saves debugging time
 - **Start simple**: In Stage 5, test the simplest case first
 - **Use Debug builds**: Always build with `./build_metal.sh -b Debug`
-- **Enable watcher**: `export TT_METAL_WATCHER=10` catches errors early
+- **Use the debugger agent**: For kernel hangs or CB issues, invoke `ttnn-riscv-debugger` with the symptom and operation analysis
 
 See `subagent_breakdown.md` for additional technical details.
 
