@@ -52,11 +52,47 @@ def test_unet(
 
 
 @pytest.mark.parametrize(
+    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    [
+        ((1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
+def test_refiner_unet(
+    device,
+    input_shape,
+    timestep_shape,
+    encoder_shape,
+    temb_shape,
+    time_ids_shape,
+    iterations,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+):
+    run_refiner_unet_model(
+        device,
+        input_shape,
+        timestep_shape,
+        encoder_shape,
+        temb_shape,
+        time_ids_shape,
+        debug_mode=False,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
+        model_location_generator=model_location_generator,
+        iterations=iterations,
+    )
+
+
+@pytest.mark.parametrize(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet",
-            191_651_771 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            190_185_744 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_unet",
             "sdxl_unet",
             1,
@@ -66,7 +102,7 @@ def test_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
-            602_265_531 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            549_192_450 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_refiner_unet",
             "sdxl_refiner_unet",
             1,
@@ -76,7 +112,7 @@ def test_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'",
-            680_239_540,
+            649_249_508,
             "sdxl_vae",
             "sdxl_vae_decode",
             VAE_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -86,7 +122,7 @@ def test_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'",
-            343_068_075,
+            326_715_706,
             "sdxl_vae",
             "sdxl_vae_encode",
             VAE_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -137,40 +173,4 @@ def test_sdxl_perf_device(
         batch_size=batch_size,
         margin=margin,
         comments=comments,
-    )
-
-
-@pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
-    [
-        ((1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
-def test_refiner_unet(
-    device,
-    input_shape,
-    timestep_shape,
-    encoder_shape,
-    temb_shape,
-    time_ids_shape,
-    iterations,
-    is_ci_env,
-    is_ci_v2_env,
-    model_location_generator,
-    reset_seeds,
-):
-    run_refiner_unet_model(
-        device,
-        input_shape,
-        timestep_shape,
-        encoder_shape,
-        temb_shape,
-        time_ids_shape,
-        debug_mode=False,
-        is_ci_env=is_ci_env,
-        is_ci_v2_env=is_ci_v2_env,
-        model_location_generator=model_location_generator,
-        iterations=iterations,
     )
