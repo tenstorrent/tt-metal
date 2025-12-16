@@ -183,7 +183,6 @@ class Generator:
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
         )
-        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
@@ -198,7 +197,6 @@ class Generator:
             kv_cache=kv_cache,
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Capturing Prefill Trace")
         return trace_id, tt_out_trace, *device_inputs
 
