@@ -81,36 +81,22 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
 
-    ASSERT(indices_pages == input_pages);
+    for (uint32_t i = 0; i < indices_pages; i++) {
+        cb_reserve_back(indices_tensor_cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id) + i * aligned_indices_page_size;
+        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+        noc_async_read_barrier();
+        cb_push_back(indices_tensor_cb_id, 1);
+    }
+
     // read the input tokens and the selected experts for each token
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
-        cb_reserve_back(indices_tensor_cb_id, 1);
         cb_reserve_back(input_tensor_cb_id, 1);
 
-        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
-        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
-
-        l1_write_addr = get_write_ptr(input_tensor_cb_id);
+        uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read_page(i, input_addr_gen, l1_write_addr);
 
         noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
         cb_push_back(input_tensor_cb_id, 1);
     }
-
-    // wait for all other devices to finish dispatching their input tokens and metadata
-    // FullPacket mode: the writer is sending the metadata to the intermediate buffer,
-    // we need to write our metadata to the final buffer
-    noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
-    noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
-
-    for (uint32_t t = token_start_idx; t < token_end_idx; t++) {
-        for (uint32_t d = 0; d < dispatch_devices; d++) {
-            uint32_t page = d * tokens_per_device + t;
-            uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + page * aligned_indices_page_size;
-            uint64_t metadata_write_addr = get_noc_addr(page, metadata_addr_gen);
-            noc_async_write(l1_write_addr, metadata_write_addr, metadata_page_size);
-        }
-    }
-    noc_async_write_barrier();
 }

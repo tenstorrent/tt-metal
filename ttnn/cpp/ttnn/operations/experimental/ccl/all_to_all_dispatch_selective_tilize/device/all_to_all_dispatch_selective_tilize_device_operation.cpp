@@ -23,7 +23,6 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_m
     auto indices_tensor = tensor_args.expert_indices_tensor;
 
     TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
-    TT_FATAL(indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
 
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
@@ -186,4 +185,3 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
 }
 
 }  // namespace ttnn::operations::experimental::ccl
-

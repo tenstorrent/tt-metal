@@ -221,48 +221,6 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 
-    // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
-    // with a semaphore
-    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
-
-    // FullPacket mode: send pages to the intermediate buffer and then write to the output buffer
-    uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
-    uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
-
-    uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
-    uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
-                                             (token_start_idx * aligned_indices_page_size);
-
-    for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-        if (d == linearized_mesh_coord) {
-            // dispatch the metadata to the local device
-            detail::dispatch_input_local_device_flushed(
-                base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
-        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-            // Only Fabric 1D topology is supported
-            l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
-                linearized_mesh_coord,
-                topology,
-                mesh_rows,
-                mesh_cols,
-                fabric_max_packet_size>(
-                fabric_connections,
-                metadata_packet_header,
-                d,
-                base_indices_addr,
-                noc_core_offset_md_write_addr,
-                global_noc_semaphore_address,
-                (int)indices_size_per_core,
-                alignment,
-                1,
-                true);
-        }
-    }
-    // Need to wait for the local flushed metadata write.
-    noc_async_write_barrier();
-    noc_semaphore_inc(global_noc_semaphore_address, 1);
-    noc_async_atomic_barrier();
-
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     close_direction_connections(directions, fabric_connections);

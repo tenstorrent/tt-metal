@@ -143,7 +143,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-    uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
+    uint32_t linearized_mesh_coord = ::ttnn::operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(
         tt::LogOp,
@@ -156,7 +156,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         linearized_mesh_coord);
 
     const auto [neighbors, directions] =
-        common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        ::ttnn::operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     auto input_shape = input_tensor.tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.tensor_spec().logical_shape();
@@ -306,9 +306,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
-    log_debug(tt::LogOp, "dest_chip_id: {}", common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));
-    log_debug(tt::LogOp, "directions: {}", common::stringify(directions));
+    log_debug(tt::LogOp, "dest_chip_id: {}", ::ttnn::operations::ccl::common::stringify(dest_chip_id));
+    log_debug(tt::LogOp, "dest_mesh_id: {}", ::ttnn::operations::ccl::common::stringify(dest_mesh_id));
+    log_debug(tt::LogOp, "directions: {}", ::ttnn::operations::ccl::common::stringify(directions));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -387,9 +387,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Code-gen a direction array that is set to true when a direction has a valid connection (when a neighbor exists or
     // if it's along a valid cluster axis)
     std::map<std::string, std::string> writer_defines = {
-        {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
-        {"DEST_MESH_ID", common::stringify(dest_mesh_id)},
-        {"DIRECTIONS", common::stringify(directions)}};
+        {"DEST_CHIP_ID", ::ttnn::operations::ccl::common::stringify(dest_chip_id)},
+        {"DEST_MESH_ID", ::ttnn::operations::ccl::common::stringify(dest_mesh_id)},
+        {"DIRECTIONS", ::ttnn::operations::ccl::common::stringify(directions)}};
 
     if (operation_attributes.axis.has_value()) {
         writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
