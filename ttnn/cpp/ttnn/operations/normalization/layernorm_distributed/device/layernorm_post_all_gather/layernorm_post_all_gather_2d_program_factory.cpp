@@ -250,8 +250,7 @@ LayerNormPostAllGather2DProgramFactory::cached_program_t LayerNormPostAllGather2
     CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
     CoreRangeSet all_cores = CoreRangeSet(std::vector{all_cores_range});
 
-    uint32_t num_cores = cores_x * cores_y;
-    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "num_cores: {}", cores_x * cores_y);
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
