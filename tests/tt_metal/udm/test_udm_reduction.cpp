@@ -691,4 +691,45 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Large) {
     run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
 }
 
+// ============================================================================
+// 2x4 Mesh Tests - Height sharded across 2 devices, width across 4 devices
+// ============================================================================
+using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMFixture;
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReduction2D_Small) {
+    // Small 2D tensor: (16, 16) tiles = (512, 512) elements
+    // Mesh: 2×4, each device gets (8, 4) tiles = (256, 128) elements locally
+    // Grid: 2x1 - shard shape = (256, 64) = (8, 2) tiles per core
+    // Constraint: block_ht = 16/2 = 8, num_cores_x = 4*2 = 8, so 8 >= 8 ✓
+    tt::tt_metal::Shape global_shape({512, 512});
+    tt::tt_metal::Shape local_shape({256, 128});
+    std::pair<uint32_t, uint32_t> grid_size = {2, 1};
+
+    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
+}
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReduction2D_Medium) {
+    // Medium 2D tensor: (32, 32) tiles = (1024, 1024) elements
+    // Mesh: 2×4, each device gets (16, 8) tiles = (512, 256) elements locally
+    // Grid: 2x2 - shard shape = (256, 128) = (8, 4) tiles per core
+    // Constraint: block_ht = 32/4 = 8, num_cores_x = 4*2 = 8, so 8 >= 8 ✓
+    tt::tt_metal::Shape global_shape({1024, 1024});
+    tt::tt_metal::Shape local_shape({512, 256});
+    std::pair<uint32_t, uint32_t> grid_size = {2, 2};
+
+    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
+}
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReduction2D_Large) {
+    // Large 2D tensor: (128, 128) tiles = (4096, 4096) elements
+    // Mesh: 2×4, each device gets (64, 32) tiles = (2048, 1024) elements locally
+    // Grid: 4x4 - shard shape = (512, 256) = (16, 8) tiles per core
+    // Constraint: block_ht = 128/8 = 16, num_cores_x = 4*4 = 16, so 16 >= 16 ✓
+    tt::tt_metal::Shape global_shape({4096, 4096});
+    tt::tt_metal::Shape local_shape({2048, 1024});
+    std::pair<uint32_t, uint32_t> grid_size = {4, 4};
+
+    run_width_reduction_test(mesh_device_.get(), global_shape, local_shape, grid_size);
+}
+
 }  // namespace tt::tt_metal::experimental::udm_tests
