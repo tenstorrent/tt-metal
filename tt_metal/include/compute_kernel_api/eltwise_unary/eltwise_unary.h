@@ -15,7 +15,7 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false,
@@ -40,7 +40,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
  */
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
     UNPACK((llk_unpack_A_init<
             BroadcastType::NONE,
             false,

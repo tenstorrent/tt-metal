@@ -30,7 +30,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
     const bool enable_unpack_to_dest = data_copy_type == A2D;
 
     // Will configure A & B in similar way
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
     UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
         false, false /*transpose within 16x16 face*/, icb)));
 
@@ -69,7 +69,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 
     if (unpacker_src_format_change || unpacker_dst_format_change) {
         // Will configure A & B in similar way
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(new_icb, new_icb)));
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(new_icb)));
     }
 
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
