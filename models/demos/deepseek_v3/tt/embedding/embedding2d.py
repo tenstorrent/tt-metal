@@ -52,7 +52,6 @@ class Embedding2D(Embedding1D):
         x = super()._forward(x, cfg)
 
         ccl = cfg["ccl"]
-
         x = ttnn.experimental.reduce_scatter_minimal_async(
             x, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter"])
         )

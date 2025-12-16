@@ -4,6 +4,7 @@
 
 #include "reduce_scatter_minimal_async.hpp"
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -31,6 +32,15 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
 
     log_debug(tt::LogOp, "reduce_scatter_minimal_async: num_devices = {}", num_devices);
+
+    // When the per-device shard will break tiles on tiled tensors,
+    // the op will use the composite reduce-scatter path (which internally pads/tilizes as needed).
+    if (composite_common::use_composite_reduce_scatter(input_tensor, scatter_dim, cluster_axis)) {
+        tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+        log_warning(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter fallback");
+        return composite_common::composite_reduce_scatter(
+            input_tensor, scatter_dim, num_links, topology_, memory_config, sub_device_id, cluster_axis);
+    }
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 
