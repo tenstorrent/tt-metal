@@ -43,7 +43,7 @@ constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
  * @return uint32_t The calculated M dimension
  */
 uint32_t get_M_dim(
-    const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile, const bool fuse_batch);
+    const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile, bool fuse_batch);
 
 /**
  * @brief Calculate the K dimension for matmul operations
@@ -456,9 +456,9 @@ using ttnn::operations::matmul::Matmul;
 ttnn::operations::matmul::MatmulProgramConfig get_program_config(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
-    const bool transpose_a,
-    const bool transpose_b,
-    const uint32_t bias_single_tile_size,
+    bool transpose_a,
+    bool transpose_b,
+    uint32_t bias_single_tile_size,
     const ttnn::operations::matmul::Matmul* matmul);
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
