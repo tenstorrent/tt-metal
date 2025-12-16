@@ -92,6 +92,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
+    const auto& dte_tensor = tensor_return_value.at(2);
+    const auto& dte_scores_tensor = tensor_return_value.at(3);
+    const auto& ed_table_tensor = tensor_return_value.at(4);
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -131,7 +134,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t experts = mapping_shape[-2];
+    uint32_t experts = mapping_shape[-1];
 
     auto input_page_size = detail::get_page_size(input_tensor);
     auto indices_page_size = detail::get_page_size(indices_tensor);
@@ -210,41 +213,30 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {0, 1};
-    CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(start_core, end_core));
-    auto subdevice_cores = corerange_to_cores(worker_core_range_set);
+    CoreCoord worker_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));  // exclusive end
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t num_cores = worker_core_range_set.num_cores();
-    uint32_t sub_token_size_bytes = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
 
-    // split indices sends across cores
-    auto
-        [num_indices_cores,
-         all_indices_cores,
-         indices_core_group_1,
-         indices_core_group_2,
-         num_indices_cores_per_core_group_1,
-         num_indices_cores_per_core_group_2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, indices_pages);
-
+    // split tokens sends across cores, each core will process tokens_per_device tokens
     auto
         [num_tokens_cores,
          all_tokens_cores,
          tokens_core_group_1,
          tokens_core_group_2,
-         num_tokens_cores_per_core_group_1,
+         tokens_per_core_g1,
+         tokens_per_core_g2,
          num_tokens_cores_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(worker_core_range_set, aligned_input_page_size / sub_token_size_bytes);
+            tt::tt_metal::split_work_to_cores(worker_core_range_set, tokens_per_device);
 
     uint32_t indices_pages_per_packet = tt::div_up(fabric_max_packet_size, aligned_indices_page_size);
 
-    auto sender_core_grid = all_tokens_cores.merge(all_indices_cores);
+    auto sender_core_grid = all_tokens_cores;
 
     auto sender_cores = corerange_to_cores(sender_core_grid);
 
     // Create circular buffers
     tt::tt_metal::create_cb(
-        input_tensor_cb_id, program, sender_core_grid, sub_token_size_bytes, buffering_factor, input_data_format);
+        input_tensor_cb_id, program, sender_core_grid, aligned_input_page_size, buffering_factor, input_data_format);
     tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
@@ -322,6 +314,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"fabric_max_packet_size", (uint32_t)fabric_max_packet_size},
 
         {"l1_alignment", l1_alignment},
+        {"dram_alignment", dram_alignment},
         {"linearized_mesh_coord", linearized_mesh_coord},
     };
 
@@ -333,9 +326,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
 
     std::map<std::string, std::string> reader_defines = {};
-    if (operation_attributes.axis.has_value()) {
-        reader_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
-    }
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -353,10 +343,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"DEST_MESH_ID", ::ttnn::operations::ccl::common::stringify(dest_mesh_id)},
         {"DIRECTIONS", ::ttnn::operations::ccl::common::stringify(directions)}};
 
-    if (operation_attributes.axis.has_value()) {
-        writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
-    }
-
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
@@ -371,12 +357,17 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         output_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
         (uint32_t)cross_device_semaphore.address(),
-        0,
-        0,
+        (uint32_t)init_semaphore.address(),
+        dte_tensor.buffer()->address(),
+        dte_scores_tensor.buffer()->address(),
+        ed_table_tensor.buffer()->address(),
+        0,  // token start idx 9
+        0,  // token end idx 10
     };
 
     uint32_t link_id = 0;
-    uint32_t tokens_per_core_start = 0;
+    uint32_t token_start_idx = 0;
+    uint32_t token_end_idx = 0;
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = {
             input_tensor.buffer()->address(),
@@ -386,27 +377,30 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             metadata_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
-            0,
-            0,
+            dte_tensor.buffer()->address(),
+            dte_scores_tensor.buffer()->address(),
+            ed_table_tensor.buffer()->address(),
+            0,  // token start idx 9
+            0,  // token end idx 10
         };
-        reader_runtime_args[6] = tokens_per_core_start;
-        reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_device, tokens_per_device);
-        writer_runtime_args[7] = tokens_per_core_start;
-        writer_runtime_args[8] = reader_runtime_args[7];
-        tokens_per_core_start = reader_runtime_args[7];
+
+        if (tokens_core_group_1.contains(sender_cores.at(i))) {
+            reader_runtime_args[9] = token_start_idx;
+            reader_runtime_args[10] = std::min(token_start_idx + tokens_per_core_g1, tokens_per_device);
+            writer_runtime_args[9] = token_start_idx;
+            writer_runtime_args[10] = reader_runtime_args[10];
+            token_start_idx += tokens_per_core_g1;
+        } else if (tokens_core_group_2.contains(sender_cores.at(i))) {
+            reader_runtime_args[9] = token_start_idx;
+            reader_runtime_args[10] = std::min(token_start_idx + tokens_per_core_g2, tokens_per_device);
+            writer_runtime_args[9] = token_start_idx;
+            writer_runtime_args[10] = reader_runtime_args[10];
+            token_start_idx += tokens_per_core_g2;
+        } else {
+            continue;
+        }
+
         for (const auto& neighbor_coordinate : neighbors) {
-            log_debug(
-                tt::LogOp,
-                "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
-                "token indices from {} to {}",
-                mesh_coordinate[0],
-                mesh_coordinate[1],
-                neighbor_coordinate[0],
-                neighbor_coordinate[1],
-                sender_cores.at(i),
-                link_id,
-                reader_runtime_args[6],
-                reader_runtime_args[7]);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
@@ -443,6 +437,9 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
 
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
+        const auto& dte_tensor = tensor_return_value.at(2);
+        const auto& dte_scores_tensor = tensor_return_value.at(3);
+        const auto& ed_table_tensor = tensor_return_value.at(4);
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
@@ -453,6 +450,10 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             reader_runtime_args.at(3) = output_tensor.buffer()->address();
             reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
             reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            reader_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
+            reader_runtime_args.at(7) = dte_tensor.buffer()->address();
+            reader_runtime_args.at(8) = dte_scores_tensor.buffer()->address();
+            reader_runtime_args.at(9) = ed_table_tensor.buffer()->address();
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
@@ -461,6 +462,9 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(7) = dte_tensor.buffer()->address();
+            writer_runtime_args.at(8) = dte_scores_tensor.buffer()->address();
+            writer_runtime_args.at(9) = ed_table_tensor.buffer()->address();
         }
     }
 }

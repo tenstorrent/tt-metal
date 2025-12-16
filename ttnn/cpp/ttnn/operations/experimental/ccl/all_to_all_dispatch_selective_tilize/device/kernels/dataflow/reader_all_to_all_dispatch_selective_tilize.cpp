@@ -60,33 +60,4 @@ void kernel_main() {
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
-
-    // read the expert mapping table
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
-    uint32_t base_indices_addr = get_write_ptr(mapping_tensor_cb_id);
-    for (uint32_t i = 0; i < mapping_pages; i++) {
-        uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size;
-        noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
-    }
-    noc_async_read_barrier();
-    cb_push_back(mapping_tensor_cb_id, mapping_pages);
-
-    for (uint32_t i = 0; i < indices_pages; i++) {
-        cb_reserve_back(indices_tensor_cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id) + i * aligned_indices_page_size;
-        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
-    }
-
-    // read the input tokens and the selected experts for each token
-    for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
-        cb_reserve_back(input_tensor_cb_id, 1);
-
-        uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_id);
-        noc_async_read_page(i, input_addr_gen, l1_write_addr);
-
-        noc_async_read_barrier();
-        cb_push_back(input_tensor_cb_id, 1);
-    }
 }

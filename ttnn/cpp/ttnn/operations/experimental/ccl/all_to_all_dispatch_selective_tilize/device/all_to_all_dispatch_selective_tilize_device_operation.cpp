@@ -26,53 +26,8 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_m
 
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
-    TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-
-    if (tensor_args.optional_output_tensors.has_value()) {
-        auto output_tensors = tensor_args.optional_output_tensors.value();
-        const auto& sparse_token_tensor = output_tensors[0];
-        const auto& metadata_tensor = output_tensors[1];
-        TT_FATAL(
-            sparse_token_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "Output tensor must be in row major layout");
-        TT_FATAL(
-            metadata_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "Output metadata tensor must be in row major layout");
-
-        TT_FATAL(
-            output_specs[0] == sparse_token_tensor.tensor_spec(),
-            "Optional sparse output token tensor spec {} does not match computed output spec {}",
-            sparse_token_tensor.tensor_spec(),
-            output_specs[0]);
-        TT_FATAL(
-            output_specs[1] == metadata_tensor.tensor_spec(),
-            "Optional metadata tensor spec {} does not match computed output spec {}",
-            metadata_tensor.tensor_spec(),
-            output_specs[1]);
-    }
-    TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
-
-    auto input_shape = input_tensor.tensor_spec().logical_shape();
-    auto indices_shape = indices_tensor.tensor_spec().logical_shape();
-    TT_FATAL(
-        input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),
-        "Input and indices tensor must have the same number of dimensions");
-    for (uint32_t i = 0; i < indices_shape.rank() - 1; i++) {
-        TT_FATAL(
-            input_shape[i] == indices_shape[i],
-            "Input and indices tensor must have the same shape for all dimensions except the last. Mismatch at "
-            "dimension {} with shape {} and {}",
-            i,
-            input_shape[i],
-            indices_shape[i]);
-    }
-    TT_FATAL(
-        operation_attributes.output_concat_dim == 1 || operation_attributes.output_concat_dim == 2,
-        "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
-        "concat the output tokens along.",
-        operation_attributes.output_concat_dim);
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_hit(
@@ -110,7 +65,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
     uint32_t tokens_per_device = input_shape[0] * input_shape[1] * input_shape[2];
     uint32_t global_tokens = tokens_per_device * dispatch_devices;
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t experts_per_device = mapping_shape[-2] / mesh_view.num_devices();
+    uint32_t experts_per_device = mapping_shape[-1] / mesh_view.num_devices();
 
     auto output_shape = ttnn::Shape({1, global_tokens, hidden_size});
     auto metadata_shape = ttnn::Shape({1, dispatch_devices, tokens_per_device * tt::round_up(selected_experts_k, 32)});
@@ -138,6 +93,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
             tensor_args.expert_indices_tensor.dtype(),
             tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
             mem_config));
+    auto scores_spec = TensorSpec(
+        Shape(scores_shape),
+        tt::tt_metal::TensorLayout(
+            tensor_args.expert_indices_tensor.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
+            mem_config));
+
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
         auto preallocated_output_spec = output_tensors[0].tensor_spec();

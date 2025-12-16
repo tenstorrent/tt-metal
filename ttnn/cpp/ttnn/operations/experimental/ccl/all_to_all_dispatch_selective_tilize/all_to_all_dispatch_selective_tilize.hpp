@@ -15,14 +15,15 @@ struct ExecuteAllToAllDispatchSelectiveTilize {
     static std::array<ttnn::Tensor, 2> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
+        const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
-        std::optional<uint32_t> axis = std::nullopt,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors = std::nullopt,
-        std::optional<uint32_t> num_links = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<uint32_t>& output_concat_dim = std::nullopt);
+        std::optional<uint32_t> axis,
+        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+        std::optional<uint32_t> num_links,
+        std::optional<tt::tt_fabric::Topology> topology,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+        const std::optional<uint32_t>& output_concat_dim);
 };
 
 }  // namespace operations::experimental::ccl
@@ -33,4 +34,3 @@ constexpr auto all_to_all_dispatch_selective_tilize =
 }  // namespace experimental
 
 }  // namespace ttnn
-

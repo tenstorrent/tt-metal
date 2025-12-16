@@ -73,6 +73,7 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& expert_indices_tensor,
+               const ttnn::Tensor& expert_scores_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
                const std::optional<uint32_t> output_concat_dim,
                const std::optional<uint32_t> cluster_axis,
@@ -84,6 +85,7 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
+                    expert_scores_tensor,
                     expert_mapping_tensor,
                     cluster_axis,
                     output_tensors,
@@ -95,6 +97,7 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
+            py::arg("expert_scores_tensor").noconvert(),
             py::arg("expert_mapping_tensor").noconvert(),
             py::kw_only(),
             py::arg("output_concat_dim") = 1,
@@ -107,4 +110,3 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
 }
 
 }  // namespace ttnn::operations::experimental::ccl
-
