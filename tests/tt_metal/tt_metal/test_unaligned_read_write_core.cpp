@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 2048;
         uint32_t dram_buffer_size =
-            single_tile_size * num_tiles +
+            (single_tile_size * num_tiles) +
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
 
         tt_metal::InterleavedBufferConfig dram_interleaved_buffer_config{
