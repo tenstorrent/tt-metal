@@ -37,6 +37,9 @@ public:
     /**
      * @brief Construct a MeshBuilder from a MeshBuffer
      *
+     * Automatically extracts grid shape from the mesh buffer's shard spec if present.
+     * If the buffer is not sharded, uses mesh_device->compute_with_storage_grid_size().
+     *
      * @param mesh_buffer The mesh buffer containing device information
      */
     explicit MeshBuilder(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer);
