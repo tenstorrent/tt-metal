@@ -37,5 +37,6 @@ jobs:
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
       publish-artifact: false
+      publish-package: false
       skip-tt-train: true
       tracy: false
