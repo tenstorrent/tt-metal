@@ -20,11 +20,6 @@ on:
         required: false
         default: true
         type: boolean
-      run-perf-fabric-bw-latency:
-        description: 'Run T3K ubench - Fabric BW && latency performance test'
-        required: false
-        default: true
-        type: boolean
       run-perf-fabric-mux-bw:
         description: 'Run T3K ubench - Fabric Mux BW performance test'
         required: false
@@ -191,5 +186,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-perf-fabric-bw-latency: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-bw-latency != false || github.event_name == 'push' }}
       run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}
