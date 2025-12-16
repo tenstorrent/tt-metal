@@ -24,8 +24,9 @@ struct MemoryRegion {
     size_t start_address;
     size_t size;
 
-    MemoryRegion(size_t start, size_t size) : start_address(start), size(size) {
-    }
+    MemoryRegion() : start_address(0), size(0) {}
+
+    MemoryRegion(size_t start, size_t sz) : start_address(start), size(sz) {}
 
     size_t get_size() const { return size; }
     size_t get_start_address() const { return start_address; }
