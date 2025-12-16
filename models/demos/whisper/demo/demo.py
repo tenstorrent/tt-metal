@@ -677,8 +677,12 @@ def test_demo_for_audio_classification_dataset(
 
 
 @pytest.mark.parametrize(
-    "num_inputs,batch_size_per_device",
-    [(2, 1)],
+    "num_inputs",
+    [2],
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [1, 2],
 )
 @pytest.mark.parametrize(
     "model_repo",
