@@ -37,6 +37,9 @@
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
+constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
+constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
+
 struct DispatchTestConfig {
     bool use_coherent_data = false;
     uint32_t dispatch_buffer_page_size = 1u << tt::tt_metal::DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -616,7 +619,6 @@ inline void update_packed_write(
 // Host-side helpers used by tests to emit the same CQ commands
 // that dispatcher code emits. This namespace replicates the production code's command generation logic
 // for testing purposes.
-// This will be ported to common.h when test_prefetcher.cpp is refactored
 namespace CommandBuilder {
 
 // Emits a single linear write, optionally multicast, with inline data
@@ -740,7 +742,6 @@ inline HostMemDeviceCommand build_packed_write_command(
 
 }  // namespace CommandBuilder
 
-// This will be ported to common.h when test_prefetcher.cpp is refactored
 // DispatchPayloadGenerator is used to generate payloads for the tests
 class DispatchPayloadGenerator {
 public:
@@ -1013,9 +1014,10 @@ protected:
             const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
             const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
 
-            if (completion_q_write_ptr > completion_q_read_ptr and
-                completion_q_write_toggle == completion_q_read_toggle) {
-                avail = completion_q_write_ptr - completion_q_read_ptr;
+            if (completion_q_write_toggle == completion_q_read_toggle) {
+                avail = (completion_q_write_ptr > completion_q_read_ptr)
+                            ? completion_q_write_ptr - completion_q_read_ptr
+                            : 0u;
             } else {
                 avail = (limit - completion_q_read_ptr) + completion_q_write_ptr;
             }

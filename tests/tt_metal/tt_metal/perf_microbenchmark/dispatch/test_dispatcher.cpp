@@ -48,8 +48,6 @@ constexpr uint32_t DEFAULT_ITERATIONS_LINEAR_WRITE = 3;
 constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE_LARGE = 1;
-constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
-constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 
 // Params that control the data volume, iteration count, and multicast/unicast
 // for the linear write test
@@ -823,13 +821,13 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchLinearWriteTestFixture,
     ::testing::Values(
         // Testcase: 49152 bytes (Unicast)
-        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 196608 bytes (Unicast)
-        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 49152 bytes (Multicast)
-        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 196608 bytes (Multicast)
-        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, DRAM_DATA_SIZE_WORDS, true}),
+        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<LinearWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
@@ -841,21 +839,21 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPagedWriteTestFixture,
     ::testing::Values(
         // Testcase: 512 pages x 16 bytes (DRAM)
-        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 512 pages x 16 bytes (L1)
-        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 128 pages x 2048 bytes (DRAM)
-        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 128 pages x 2048 bytes (L1)
-        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 10 pages x 4128 bytes (not 4K-aligned) (DRAM)
-        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (DRAM)
-        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (L1)
-        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, false},
+        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 100 pages x 8192 bytes (high BW) (DRAM)
-        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, DRAM_DATA_SIZE_WORDS, true}),
+        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         std::stringstream ss;
         ss << "page_size" << info.param.page_size << "_np" << info.param.num_pages << "_iter"
@@ -868,9 +866,9 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPackedWriteTestFixture,
     ::testing::Values(
         // Testcase: 786432 bytes (Unicast)
-        PackedWriteParams{786432, DEFAULT_ITERATIONS_PACKED_WRITE, DRAM_DATA_SIZE_WORDS},
+        PackedWriteParams{786432, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS},
         // Testcase: 819200 bytes (Unicast)
-        PackedWriteParams{819200, DEFAULT_ITERATIONS_PACKED_WRITE, DRAM_DATA_SIZE_WORDS}),
+        PackedWriteParams{819200, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
@@ -881,9 +879,9 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPackedWriteLargeTestFixture,
     ::testing::Values(
         // Testcase: 40960 bytes
-        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, DRAM_DATA_SIZE_WORDS},
+        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
         // Testcase: 409600 bytes
-        PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, DRAM_DATA_SIZE_WORDS}),
+        PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";

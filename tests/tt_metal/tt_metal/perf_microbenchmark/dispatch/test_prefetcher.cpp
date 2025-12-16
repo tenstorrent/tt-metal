@@ -47,8 +47,6 @@ namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests {
 
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
-constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
-constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
@@ -119,6 +117,205 @@ void update_read(
     }
 }
 }  // namespace DeviceDataUpdater
+
+// Forward declare for CommandBuilder::build_prefetch_ringbuffer_relay
+class PrefetcherRingbufferReadTestFixture;
+
+// Host-side helpers used by tests to emit the same CQ commands
+// that prefetcher/dispatcher code emits. This namespace replicates the production code's command generation logic
+// for testing purposes.
+namespace CommandBuilder {
+
+HostMemDeviceCommand build_dispatch_terminate() {
+    bool dispatch_sub_enabled = MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled();
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_wait();
+    calc.add_dispatch_terminate();
+    if (dispatch_sub_enabled) {
+        calc.add_dispatch_terminate();
+    }
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    cmd.add_dispatch_terminate();
+    if (dispatch_sub_enabled) {
+        cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
+    }
+
+    return cmd;
+}
+
+HostMemDeviceCommand build_prefetch_terminate() {
+    DeviceCommandCalculator calc;
+    calc.add_prefetch_terminate();
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+
+    cmd.add_prefetch_terminate();
+
+    return cmd;
+}
+
+HostMemDeviceCommand build_dispatch_prefetch_stall() {
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_wait_with_prefetch_stall();
+    const uint32_t command_size_bytes = calc.write_offset_bytes();
+    HostMemDeviceCommand cmd(command_size_bytes);
+
+    cmd.add_dispatch_wait_with_prefetch_stall(
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
+
+    return cmd;
+}
+
+HostMemDeviceCommand build_dispatch_write_offset(tt::stl::Span<const uint32_t> write_offsets) {
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_set_write_offsets(write_offsets.size());
+    const uint32_t command_size_bytes = calc.write_offset_bytes();
+
+    HostMemDeviceCommand cmd(command_size_bytes);
+
+    cmd.add_dispatch_set_write_offsets(write_offsets);
+
+    return cmd;
+}
+
+template <bool inline_data>
+HostMemDeviceCommand build_prefetch_relay_linear_host(uint32_t noc_xy, uint32_t addr, uint32_t data_size_bytes) {
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_write_linear_host();
+    calc.add_prefetch_relay_linear();
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+    cmd.add_dispatch_write_host<inline_data>(
+        false,            // flush_prefetch
+        data_size_bytes,  // data_sizeB
+        false,            // is_event
+        0,                // pad1
+        nullptr           // data
+    );
+
+    // Relay data from L1 to dispatcher using NOC
+    cmd.add_prefetch_relay_linear(noc_xy, data_size_bytes, addr);
+
+    return cmd;
+}
+
+template <bool inline_data>
+HostMemDeviceCommand build_relay_inline_host(const std::vector<uint32_t>& payload, uint32_t data_size_bytes) {
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_write_linear_host_event(data_size_bytes);
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+    cmd.add_dispatch_write_host<inline_data>(
+        true,             // flush_prefetch
+        data_size_bytes,  // data_sizeB
+        false,            // is_event
+        0,                // pad1
+        payload.data()    // data
+    );
+
+    return cmd;
+}
+
+template <bool flush_prefetch, bool inline_data>
+HostMemDeviceCommand build_prefetch_relay_linear_read(
+    uint32_t noc_xy, uint32_t dst_addr, uint32_t src_addr, uint32_t transfer_size) {
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_write_linear<flush_prefetch, inline_data>(transfer_size);
+    calc.add_prefetch_relay_linear();
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
+        0,              // num_mcast_dests
+        noc_xy,         // NOC coordinates
+        dst_addr,       // destination address
+        transfer_size,  // data size
+        nullptr         // payload data
+    );
+
+    // Relay data from L1 to dispatcher using NOC
+    cmd.add_prefetch_relay_linear(noc_xy, transfer_size, src_addr);
+
+    return cmd;
+}
+
+template <bool flush_prefetch, bool inline_data>
+HostMemDeviceCommand build_prefetch_relay_paged(
+    uint32_t noc_xy,
+    uint32_t addr,
+    uint32_t start_page,
+    uint32_t base_addr,
+    uint32_t page_size_bytes,
+    uint32_t pages_in_chunk,
+    uint32_t length_adjust = 0) {
+    DeviceCommandCalculator calc;
+    uint32_t transfer_size = page_size_bytes * pages_in_chunk;
+    calc.add_dispatch_write_linear<flush_prefetch, inline_data>(transfer_size);
+    calc.add_prefetch_relay_paged();
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+
+    // Create the HostMemDeviceCommand with pre-calculated size
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+
+    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
+        0,              // num_mcast_dests
+        noc_xy,         // NOC coordinates
+        addr,           // destination address
+        transfer_size,  // data size
+        nullptr         // payload data
+    );
+
+    cmd.add_prefetch_relay_paged(
+        /*is_dram=*/true, start_page, base_addr, page_size_bytes, pages_in_chunk, length_adjust);
+
+    return cmd;
+}
+
+template <bool flush_prefetch, bool inline_data>
+HostMemDeviceCommand build_prefetch_relay_paged_packed(
+    const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+    uint32_t noc_xy,
+    uint32_t addr,
+    uint32_t total_length) {
+    const uint32_t n_sub_cmds = sub_cmds.size();
+    // Calculate the command size using DeviceCommandCalculator
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_write_linear<flush_prefetch, inline_data>(total_length);
+    calc.add_prefetch_relay_paged_packed(n_sub_cmds);
+    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
+
+    // Create the HostMemDeviceCommand with pre-calculated size
+    HostMemDeviceCommand cmd(total_cmd_bytes);
+
+    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
+        0,             // num_mcast_dests
+        noc_xy,        // NOC coordinates
+        addr,          // destination address
+        total_length,  // data size
+        nullptr        // payload data
+    );
+
+    // Add the prefetch relay paged packed
+    cmd.add_prefetch_relay_paged_packed(total_length, sub_cmds, n_sub_cmds);
+
+    return cmd;
+}
+
+template <bool flush_prefetch, bool inline_data>
+HostMemDeviceCommand build_prefetch_ringbuffer_relay(
+    const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds,
+    const std::vector<uint32_t>& lengths,
+    Common::DeviceData& device_data,
+    PrefetcherRingbufferReadTestFixture& fixture,
+    uint32_t noc_xy,
+    uint32_t addr,
+    uint32_t total_length,
+    uint32_t ringbuffer_read_page_size_log2);
+}  // namespace CommandBuilder
 
 class BasePrefetcherTestFixture : public Common::BaseTestFixture,
                                   public ::testing::WithParamInterface<PagedReadParams> {
@@ -289,9 +486,10 @@ private:
         mgr_->issue_queue_push_back(exec_cmd.write_offset_bytes(), fdcq_->id());
 
         // Write the commands to the device-side fetch queue with STALL FLAG
+        bool stall_prefetcher = true;  // true with exec buff execution
         const auto start = std::chrono::steady_clock::now();
         mgr_->fetch_queue_reserve_back(fdcq_->id());
-        mgr_->fetch_queue_write(cmd_size, fdcq_->id(), true);  // stall_prefetcher = true with exec buff execution
+        mgr_->fetch_queue_write(cmd_size, fdcq_->id(), stall_prefetcher);
 
         // Wait for completion of the issued commands
         if (wait_for_completion) {
@@ -315,9 +513,156 @@ private:
             report_performance(device_data, num_cores_to_log, elapsed, num_iterations);
         }
     }
+
+public:
+    std::vector<HostMemDeviceCommand> generate_paged_read_commands(
+        const CoreRange& worker_range, uint32_t page_size_bytes, uint32_t num_pages, Common::DeviceData& device_data) {
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        uint32_t absolute_start_page = 0;
+        const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        const auto first_worker = worker_range.start_coord;
+
+        // Compute NOC encoding once
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+
+        while (remaining_bytes > 0) {
+            // Calculate how many pages fit in this chunk
+            uint32_t max_bytes_in_chunk = num_pages * page_size_bytes;
+            uint32_t bytes_in_chunk = std::min(remaining_bytes, max_bytes_in_chunk);
+            uint32_t pages_in_chunk = bytes_in_chunk / page_size_bytes;
+
+            uint32_t start_page = absolute_start_page % num_banks_;
+            uint32_t base_addr = (absolute_start_page / num_banks_) * page_size_bytes + dram_base_;
+
+            // Capture address before updating device_data
+            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+
+            // Relay paged from prefetcher -> linear write from dispatcher to L1
+            HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
+                noc_xy, l1_addr, start_page, base_addr, page_size_bytes, pages_in_chunk);
+
+            // Shadow model updated per page
+            for (uint32_t page = 0; page < pages_in_chunk; ++page) {
+                const uint32_t page_id = absolute_start_page + page;
+                const uint32_t bank_id = page_id % num_banks_;
+                uint32_t bank_offset = page_size_words * (page_id / num_banks_);
+
+                // Get the logical core for this bank
+                const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+                const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+
+                // Update Common::DeviceData for paged read
+                DeviceDataUpdater::update_paged_dram_read(
+                    worker_range, device_data, bank_core, bank_id, bank_offset, page_size_words);
+            }
+
+            commands_per_iteration.push_back(std::move(cmd));
+
+            absolute_start_page += pages_in_chunk;
+            remaining_bytes -= bytes_in_chunk;
+        }
+
+        return commands_per_iteration;
+    }
+
+    // Helper function to generate paged writes wtih random payload and
+    // relay paged reads commands to dispatcher to write to L1
+    // for the End-To-End Paged/Interleaved Write+Read test
+    std::vector<HostMemDeviceCommand> generate_paged_end_to_end_commands(
+        const CoreRange& worker_range, uint32_t page_size_bytes, uint32_t num_pages, Common::DeviceData& device_data) {
+        const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+        const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
+        const auto first_worker = worker_range.start_coord;
+
+        // Compute NOC encoding once
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        uint32_t absolute_start_page = 0;
+
+        while (remaining_bytes > 0) {
+            // Calculate how many pages fit in this chunk
+            uint32_t max_bytes_in_chunk = num_pages * page_size_bytes;
+            uint32_t bytes_in_chunk = std::min(remaining_bytes, max_bytes_in_chunk);
+            uint32_t pages_in_chunk = bytes_in_chunk / page_size_bytes;
+
+            // Generate payload & update expectations for this chunk
+            std::vector<uint32_t> chunk_payload;
+            chunk_payload.reserve(pages_in_chunk * page_size_words);
+
+            for (uint32_t page = 0; page < pages_in_chunk; ++page) {
+                const uint32_t page_id = absolute_start_page + page;
+                const uint32_t bank_id = page_id % num_banks_;
+
+                // Get the logical core for this bank
+                const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+                const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+
+                // Generate payload with page id
+                std::vector<uint32_t> page_payload =
+                    payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
+
+                // Update Common::DeviceData for paged write
+                Common::DeviceDataUpdater::update_paged_write(
+                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
+
+                // Append page payload to chunk payload
+                chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
+            }
+
+            // Calculate base address for the command
+            const uint32_t bank_offset =
+                tt::align(page_size_bytes, page_size_alignment_bytes) * (absolute_start_page / num_banks_);
+            const uint32_t base_addr = device_data.get_base_result_addr(tt::CoreType::DRAM) + bank_offset;
+            // Calculate start page for the command
+            const uint16_t start_page_cmd = absolute_start_page % num_banks_;
+
+            //  Step 1: Paged Write of host data to DRAM banks by dispatcher cmd
+            HostMemDeviceCommand cmd_dispatch_dram = Common::CommandBuilder::build_paged_write_command<hugepage_write_>(
+                chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, true);
+            commands_per_iteration.push_back(std::move(cmd_dispatch_dram));
+
+            // Followed by stall to avoid RAW hazard
+            HostMemDeviceCommand cmd_stall = CommandBuilder::build_dispatch_prefetch_stall();
+            commands_per_iteration.push_back(std::move(cmd_stall));
+
+            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+
+            // Step 2: Paged Read of DRAM banks by prefetcher, relay data to dispatcher for linear write to L1
+            HostMemDeviceCommand cmd_prefetch =
+                CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
+                    noc_xy, l1_addr, start_page_cmd, base_addr, page_size_bytes, pages_in_chunk);
+            commands_per_iteration.push_back(std::move(cmd_prefetch));
+
+            for (uint32_t page = 0; page < pages_in_chunk; ++page) {
+                const uint32_t page_id = absolute_start_page + page;
+                const uint32_t bank_id = page_id % num_banks_;
+                // Add dram_data_size_words since we're reading after the pre-populated DRAM data
+                uint32_t bank_offset = dram_data_size_words_ + page_size_words * (page_id / num_banks_);
+
+                // Get the logical core for this bank
+                const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+                const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+
+                // Update Common::DeviceData for paged read
+                DeviceDataUpdater::update_paged_dram_read(
+                    worker_range, device_data, bank_core, bank_id, bank_offset, page_size_words);
+            }
+
+            // Update loop state
+            remaining_bytes -= bytes_in_chunk;
+            absolute_start_page += pages_in_chunk;
+        }
+
+        return commands_per_iteration;
+    }
 };
 
-class PrefecherHostTextFixture : virtual public BasePrefetcherTestFixture {
+class PrefetcherHostTextFixture : virtual public BasePrefetcherTestFixture {
 protected:
     void pad_host_data(Common::DeviceData& device_data) {
         Common::one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
@@ -327,7 +672,7 @@ protected:
         pad = pad % dispatch_buffer_page_size_;
 
         for (int i = 0; i < pad / sizeof(uint32_t); i++) {
-            device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN);  // Use 0xbaadf00d
+            device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN);
         }
     }
 
@@ -336,14 +681,50 @@ protected:
         uint32_t size_words = size_bytes / sizeof(uint32_t);
 
         for (uint32_t i = 0; i < size_words; i++) {
-            buffer[i] = HOST_DATA_DIRTY_PATTERN;  // 0xbaadf00d
+            buffer[i] = HOST_DATA_DIRTY_PATTERN;
         }
 
         tt_driver_atomics::sfence();
     }
+
+    std::vector<HostMemDeviceCommand> generate_host_write_commands(
+        const std::vector<uint32_t>& data,
+        const CoreCoord first_worker,
+        const uint32_t l1_base,
+        Common::DeviceData& device_data) {
+        const uint32_t max_data_size_words = data.size();
+        // Compute NOC encoding once
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        uint32_t max_limit = max_data_size_words / 100;
+
+        // Vary host write sizes up to 1% - 100% of max_data_size_words
+        for (uint32_t count = 1; count < 100; count++) {
+            uint32_t data_size_words = payload_generator_->get_rand<uint32_t>(0, max_limit - 1) * count + 1;
+            uint32_t data_size_bytes = data_size_words * sizeof(uint32_t);
+
+            HostMemDeviceCommand cmd =
+                CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(noc_xy, l1_base, data_size_bytes);
+
+            commands_per_iteration.push_back(std::move(cmd));
+
+            DeviceDataUpdater::update_host_data(device_data, data, data_size_bytes);
+
+            // The completion queue is page-aligned (4KB pages)
+            // Each write reserves full pages but only writes actual data,
+            // leaving the remainder untouched (still HOST_DATA_DIRTY_PATTERN)
+            // This ensures padding areas retain the sentinel value for validation
+            pad_host_data(device_data);
+        }
+
+        return commands_per_iteration;
+    }
 };
 
 class PrefetcherPackedReadTestFixture : virtual public BasePrefetcherTestFixture {
+    const bool relay_max_packed_paged_submcds = true;  // TODO: randomize?
 protected:
     std::vector<CQPrefetchRelayPagedPackedSubCmd> build_sub_cmds(
         const std::vector<uint32_t>& lengths,
@@ -365,7 +746,6 @@ protected:
 
             // Model the packed paged read in this function by updating worker data with interleaved/paged DRAM data,
             // for validation later.
-            // TODO: see if this whole thing can fit in update_read()
             uint32_t length_words = length / sizeof(uint32_t);
             uint32_t base_addr_words = (sub_cmd.base_addr - dram_base_) / sizeof(uint32_t);
             uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
@@ -389,6 +769,57 @@ protected:
 
         return sub_cmds;
     }
+
+    std::vector<HostMemDeviceCommand> generate_packed_read_commands(
+        const CoreCoord first_worker, const uint32_t dram_alignment, Common::DeviceData& device_data) {
+        // Compute NOC encoding once
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+
+        constexpr uint32_t max_size128b = (DEFAULT_SCRATCH_DB_SIZE / 2) >> 7;
+        while (remaining_bytes > 0) {
+            uint32_t packed_read_page_size =
+                payload_generator_->get_rand<uint32_t>(0, 2) + 9;  // log2 values. i.e., 512, 1024, 2048
+            uint32_t n_sub_cmds = relay_max_packed_paged_submcds ? CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS
+                                                                 : payload_generator_->get_rand<uint32_t>(0, 6) + 1;
+            uint32_t max_read_size = std::min((1 << packed_read_page_size) * num_banks_, remaining_bytes);
+
+            std::vector<uint32_t> lengths;
+            lengths.reserve(n_sub_cmds);
+            uint32_t total_length = 0;
+            for (uint32_t i = 0; i < n_sub_cmds; i++) {
+                // limit the length to min and max read size
+                uint32_t raw = (payload_generator_->get_rand<uint32_t>(0, max_size128b - 1)) << 7;
+                uint32_t clamped = std::min(max_read_size, std::max(MIN_READ_SIZE, raw));
+                uint32_t length = tt::align(clamped, dram_alignment);
+                total_length += length;
+                lengths.push_back(length);
+            }
+
+            // If we're about to exceed DEVICE_DATA_SIZE, then exit
+            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
+                break;
+            }
+
+            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+
+            // Create n_sub_cmds
+            std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds =
+                build_sub_cmds(lengths, device_data, packed_read_page_size, n_sub_cmds);
+
+            HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged_packed<flush_prefetch_, inline_data_>(
+                sub_cmds, noc_xy, l1_addr, total_length);
+
+            commands_per_iteration.push_back(std::move(cmd));
+            remaining_bytes -= total_length;
+        }
+
+        return commands_per_iteration;
+    }
 };
 
 class PrefetcherRingbufferReadTestFixture : virtual public BasePrefetcherTestFixture {
@@ -396,7 +827,7 @@ class PrefetcherRingbufferReadTestFixture : virtual public BasePrefetcherTestFix
 
 public:
     // Set ring buffer offset to arbitrary number
-    static constexpr uint32_t WRITE_OFFSET = 1234;
+    static constexpr uint32_t RING_BUFFER_TEST_OFFSET = 1234;
 
     void populate_ringbuffer_from_dram(
         HostMemDeviceCommand& cmd,
@@ -459,7 +890,8 @@ public:
         uint32_t current_offset = 0;
         for (auto length : lengths) {
             CQPrefetchRelayRingbufferSubCmd sub_cmd{};
-            sub_cmd.start = current_offset - WRITE_OFFSET;  // Since set_ringbuffer_offset is set to WRITE_OFFSET
+            sub_cmd.start = current_offset -
+                            RING_BUFFER_TEST_OFFSET;  // Since set_ringbuffer_offset is set to RING_BUFFER_TEST_OFFSET
             sub_cmd.length = length;
             current_offset += length;
             sub_cmds.push_back(sub_cmd);
@@ -467,236 +899,57 @@ public:
 
         return sub_cmds;
     }
-};
 
-// This fixture is useful for commands like CQ_PREFETCH_CMD_RELAY_LINEAR_H,
-// where we need multi-chip device environment and needs PREFETCH_H / PREFETCH_D split
-class PrefetchRelayLinearHTestFixture : public BasePrefetcherTestFixture {
-protected:
-    static constexpr uint32_t MIN_READ_SIZE = 32;
+    std::vector<HostMemDeviceCommand> generate_ringbuffer_relay_commands(
+        const CoreCoord first_worker, const uint32_t dram_alignment, Common::DeviceData& device_data) {
+        // Compute NOC encoding once
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-    tt_metal::distributed::MeshDevice::IDevice* mmio_device_ = nullptr;
-    tt_metal::distributed::MeshDevice::IDevice* remote_device_ = nullptr;
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
 
-    void SetUp() override {
-        BasePrefetcherTestFixture::SetUp();
+        while (remaining_bytes > 0) {
+            uint32_t ringbuffer_read_page_size_log2 =
+                payload_generator_->get_rand<uint32_t>(0, 2) + 9;  // log2 values. i.e., 512, 1024, 2048
+            uint32_t n_sub_cmds = payload_generator_->get_rand<uint32_t>(0, 6) + 1;
+            uint32_t max_read_size = std::min((1 << ringbuffer_read_page_size_log2) * num_banks_, remaining_bytes);
 
-        // Skip single-chips
-        // Check if we are running in a configuration where we have a distinct MMIO and Remote device
-        // This test targets PREFETCH_H (MMIO) -> PREFETCH_D (Remote) -> DISPATCHER (Remote)
-        // Skip on anything not wormhole
-        if (device_->arch() != tt::ARCH::WORMHOLE_B0 || mesh_device_->num_devices() == 1) {
-            GTEST_SKIP() << "Skipping RelayLinearHTest: Test only supported on WORMHOLE multi-chip";
+            std::vector<uint32_t> lengths;
+            lengths.reserve(n_sub_cmds);
+
+            uint32_t total_length = 0;
+            for (uint32_t i = 0; i < n_sub_cmds; i++) {
+                // limit the length to min and max read size
+                uint32_t raw = payload_generator_->get_rand<uint32_t>(0, DEFAULT_SCRATCH_DB_SIZE - 1);
+                uint32_t clamped = std::min(max_read_size, std::max(MIN_READ_SIZE, raw));
+                uint32_t length = tt::align(clamped, dram_alignment);
+                total_length += length;
+                lengths.push_back(length);
+            }
+
+            // If we're about to exceed DEVICE_DATA_SIZE, then exit
+            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
+                break;
+            }
+
+            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+
+            // We build the sub commands to relay them from the ringbuffer to the dispatcher
+            std::vector<CQPrefetchRelayRingbufferSubCmd> sub_cmds = build_sub_cmds(lengths, n_sub_cmds);
+
+            HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_ringbuffer_relay<flush_prefetch_, inline_data_>(
+                sub_cmds, lengths, device_data, *this, noc_xy, l1_addr, total_length, ringbuffer_read_page_size_log2);
+
+            commands_per_iteration.push_back(std::move(cmd));
+            remaining_bytes -= total_length;
         }
 
-        mmio_device_ = mesh_device_->get_devices()[0];
-        remote_device_ = mesh_device_->get_devices()[1];
-        // Override the base class device_ to use remote device
-        device_ = remote_device_;
-        // We need access to remote chips issue queue to execute commands like
-        // CQ_PREFETCH_CMD_RELAY_LINEAR_H in PREFETCH_H (channel 1 region)
-        mgr_ = &remote_device_->sysmem_manager();
-
-        // Execution through exec_buf is always disabled for standalone commands like
-        // CQ_PREFETCH_CMD_RELAY_LINEAR_H
-        use_exec_buf_ = false;
+        return commands_per_iteration;
     }
 };
 
-// Host-side helpers used by tests to emit the same CQ commands
-// that prefetcher/dispatcher code emits. This namespace replicates the production code's command generation logic
-// for testing purposes.
 namespace CommandBuilder {
-
-HostMemDeviceCommand build_dispatch_terminate() {
-    bool dispatch_sub_enabled = MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled();
-    // Calculate total command buffer size needed
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_wait();
-    calc.add_dispatch_terminate();
-    if (dispatch_sub_enabled) {
-        calc.add_dispatch_terminate();
-    }
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-    cmd.add_dispatch_terminate();
-    if (dispatch_sub_enabled) {
-        cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
-    }
-
-    return cmd;
-}
-
-HostMemDeviceCommand build_prefetch_terminate() {
-    // Calculate total command buffer size needed
-    DeviceCommandCalculator calc;
-    calc.add_prefetch_terminate();
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-    cmd.add_prefetch_terminate();
-
-    return cmd;
-}
-
-HostMemDeviceCommand build_dispatch_prefetch_stall() {
-    // Calculate the command size
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_wait_with_prefetch_stall();
-    const uint32_t command_size_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
-
-    cmd.add_dispatch_wait_with_prefetch_stall(
-        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
-
-    return cmd;
-}
-
-HostMemDeviceCommand build_dispatch_write_offset(tt::stl::Span<const uint32_t> write_offsets) {
-    // Calculate the command size
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_set_write_offsets(write_offsets.size());
-    const uint32_t command_size_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
-
-    cmd.add_dispatch_set_write_offsets(write_offsets);
-
-    return cmd;
-}
-
-template <bool inline_data>
-HostMemDeviceCommand build_prefetch_relay_linear_host(uint32_t noc_xy, uint32_t addr, uint32_t data_size_bytes) {
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_write_linear_host();
-    calc.add_prefetch_relay_linear();
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-    // Dispatcher command to write data from prefetcher into completion buffer
-    cmd.add_dispatch_write_host<inline_data>(
-        false,            // flush_prefetch
-        data_size_bytes,  // data_sizeB
-        false,            // is_event
-        0,                // pad1
-        nullptr           // data
-    );
-
-    // Relay data from L1 to dispatcher using NOC
-    cmd.add_prefetch_relay_linear(noc_xy, data_size_bytes, addr);
-
-    return cmd;
-}
-
-template <bool inline_data>
-HostMemDeviceCommand build_relay_inline_host(const std::vector<uint32_t>& payload, uint32_t data_size_bytes) {
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_write_linear_host_event(data_size_bytes);
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-    // Dispatcher command to write data from prefetcher into completion buffer
-    cmd.add_dispatch_write_host<inline_data>(
-        true,             // flush_prefetch
-        data_size_bytes,  // data_sizeB
-        false,            // is_event
-        0,                // pad1
-        payload.data()    // data
-    );
-
-    return cmd;
-}
-
-template <bool flush_prefetch, bool inline_data>
-HostMemDeviceCommand build_prefetch_relay_linear_read(
-    uint32_t noc_xy, uint32_t dst_addr, uint32_t src_addr, uint32_t transfer_size) {
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_write_linear<flush_prefetch, inline_data>(transfer_size);
-    calc.add_prefetch_relay_linear();
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
-        0,              // num_mcast_dests
-        noc_xy,         // NOC coordinates
-        dst_addr,       // destination address
-        transfer_size,  // data size
-        nullptr         // payload data
-    );
-
-    // Relay data from L1 to dispatcher using NOC
-    cmd.add_prefetch_relay_linear(noc_xy, transfer_size, src_addr);
-
-    return cmd;
-}
-
-template <bool flush_prefetch, bool inline_data>
-HostMemDeviceCommand build_prefetch_relay_paged(
-    uint32_t noc_xy,
-    uint32_t addr,
-    uint32_t start_page,
-    uint32_t base_addr,
-    uint32_t page_size_bytes,
-    uint32_t pages_in_chunk,
-    uint32_t length_adjust = 0) {
-    DeviceCommandCalculator calc;
-    uint32_t transfer_size = page_size_bytes * pages_in_chunk;
-    calc.add_dispatch_write_linear<flush_prefetch, inline_data>(transfer_size);
-    calc.add_prefetch_relay_paged();
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-
-    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
-        0,              // num_mcast_dests
-        noc_xy,         // NOC coordinates
-        addr,           // destination address
-        transfer_size,  // data size
-        nullptr         // payload data
-    );
-
-    cmd.add_prefetch_relay_paged(
-        /*is_dram=*/true, start_page, base_addr, page_size_bytes, pages_in_chunk, length_adjust);
-
-    return cmd;
-}
-
-template <bool flush_prefetch, bool inline_data>
-HostMemDeviceCommand build_prefetch_relay_paged_packed(
-    const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
-    uint32_t noc_xy,
-    uint32_t addr,
-    uint32_t total_length) {
-    const uint32_t n_sub_cmds = sub_cmds.size();
-    // Calculate the command size using DeviceCommandCalculator
-    DeviceCommandCalculator calc;
-    calc.add_dispatch_write_linear<flush_prefetch, inline_data>(total_length);
-    calc.add_prefetch_relay_paged_packed(n_sub_cmds);
-    const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
-
-    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
-        0,             // num_mcast_dests
-        noc_xy,        // NOC coordinates
-        addr,          // destination address
-        total_length,  // data size
-        nullptr        // payload data
-    );
-
-    // Add the prefetch relay paged packed
-    cmd.add_prefetch_relay_paged_packed(total_length, sub_cmds, n_sub_cmds);
-
-    return cmd;
-}
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_ringbuffer_relay(
@@ -726,7 +979,7 @@ HostMemDeviceCommand build_prefetch_ringbuffer_relay(
     fixture.populate_ringbuffer_from_dram(cmd, lengths, device_data, ringbuffer_read_page_size_log2, n_sub_cmds);
 
     // Second, we set the read offset in the ring buffer
-    cmd.add_prefetch_set_ringbuffer_offset(fixture.WRITE_OFFSET);
+    cmd.add_prefetch_set_ringbuffer_offset(fixture.RING_BUFFER_TEST_OFFSET);
 
     // Third, we write the dispatch command to the dispatcher
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
@@ -742,44 +995,179 @@ HostMemDeviceCommand build_prefetch_ringbuffer_relay(
 
     return cmd;
 }
-
 }  // namespace CommandBuilder
+
+// This fixture is useful for commands like CQ_PREFETCH_CMD_RELAY_LINEAR_H,
+// where we need multi-chip device environment and needs PREFETCH_H / PREFETCH_D split
+class PrefetchRelayLinearHTestFixture : public BasePrefetcherTestFixture {
+protected:
+    static constexpr uint32_t MIN_READ_SIZE = 32;
+
+    tt_metal::distributed::MeshDevice::IDevice* mmio_device_ = nullptr;
+    tt_metal::distributed::MeshDevice::IDevice* remote_device_ = nullptr;
+
+    void SetUp() override {
+        BasePrefetcherTestFixture::SetUp();
+
+        // Skip single-chips or on anything not wormhole
+        // Check if we are running in a configuration where we have a distinct MMIO and Remote device
+        // This test targets PREFETCH_H (MMIO) -> PREFETCH_D (Remote) -> DISPATCHER (Remote)
+        if (device_->arch() != tt::ARCH::WORMHOLE_B0 || mesh_device_->num_devices() == 1) {
+            GTEST_SKIP() << "Skipping RelayLinearHTest: Test only supported on WORMHOLE multi-chip";
+        }
+
+        mmio_device_ = mesh_device_->get_devices()[0];
+        remote_device_ = mesh_device_->get_devices()[1];
+        // Override the base class device_ to use remote device
+        device_ = remote_device_;
+        // We need access to remote chips issue queue to execute commands like
+        // CQ_PREFETCH_CMD_RELAY_LINEAR_H in PREFETCH_H (channel 1 region)
+        mgr_ = &remote_device_->sysmem_manager();
+
+        // Execution through exec_buf is always disabled for standalone commands like
+        // CQ_PREFETCH_CMD_RELAY_LINEAR_H
+        use_exec_buf_ = false;
+    }
+
+public:
+    std::vector<HostMemDeviceCommand> generate_prefetch_relay_h_commands(
+        const CoreCoord first_worker,
+        const uint32_t mmio_dram_base,
+        const uint32_t dram_alignment,
+        Common::DeviceData& device_data) {
+        const uint32_t max_read_size =
+            std::min(
+                DEFAULT_SCRATCH_DB_SIZE,
+                DEFAULT_PREFETCH_Q_ENTRIES * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type)) -
+            64;
+
+        // Compute NOC encoding: Destination (Worker on Remote Device) -> Use device_ (Chip 1)
+        const CoreCoord first_virt_worker =
+            remote_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = remote_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+
+        while (remaining_bytes > 0) {
+            uint32_t length = std::min(
+                tt::align(
+                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, max_read_size - 1)),
+                    dram_alignment),
+                remaining_bytes);
+
+            // Capture address before updating device_data
+            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+
+            DeviceCommandCalculator calc;
+            calc.add_dispatch_write_linear<false, false>(length);
+            const uint32_t dispatch_cmd_size = calc.write_offset_bytes();
+
+            // Create the HostMemDeviceCommand with pre-calculated size
+            HostMemDeviceCommand cmd1(dispatch_cmd_size);
+
+            cmd1.add_dispatch_write_linear<false, false>(
+                0,        // num_mcast_dests
+                noc_xy,   // NOC coordinates
+                l1_addr,  // destination address
+                length,   // data size
+                nullptr   // payload data
+            );
+
+            commands_per_iteration.push_back(std::move(cmd1));
+
+            const uint32_t total_cmd_bytes = tt::align(sizeof(CQPrefetchCmdLarge), host_alignment_);
+
+            // Create the the relay linear H command as a separate command as it must be
+            // the only entry in fetchQ
+            HostMemDeviceCommand cmd2(total_cmd_bytes);
+
+            // Create the relay linear H command
+            CQPrefetchCmdLarge cmd{};
+            std::memset(&cmd, 0, sizeof(CQPrefetchCmdLarge));
+            cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
+
+            // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
+            const uint32_t dram_bank_id = 0;
+            auto dram_channel = mmio_device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
+            CoreCoord dram_logical_core = mmio_device_->logical_core_from_dram_channel(dram_channel);
+            CoreCoord dram_physical_core = MetalContext::instance()
+                                               .get_cluster()
+                                               .get_soc_desc(mmio_device_->id())
+                                               .get_preferred_worker_core_for_dram_view(dram_channel, NOC::NOC_0);
+            cmd.relay_linear_h.noc_xy_addr =
+                mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dram_physical_core);
+
+            [[maybe_unused]] auto offset =
+                mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, dram_bank_id);
+            // Read from DRAM result data address where data is stored
+            // Common::DeviceData uses the logical coordinates as keys
+            cmd.relay_linear_h.addr = mmio_dram_base + offset;
+            cmd.relay_linear_h.length = length;
+            cmd.relay_linear_h.pad1 = 0;
+            cmd.relay_linear_h.pad2 = 0;
+
+            uint32_t length_words = length / sizeof(uint32_t);
+
+            // Use reserve_space to properly update cmd_write_offsetB
+            CQPrefetchCmdLarge* cmd_ptr = cmd2.reserve_space<CQPrefetchCmdLarge*>(sizeof(CQPrefetchCmdLarge));
+            std::memcpy(cmd_ptr, &cmd, sizeof(CQPrefetchCmdLarge));
+
+            // Align the write offset for any padding needed
+            cmd2.align_write_offset();
+
+            commands_per_iteration.push_back(std::move(cmd2));
+
+            DeviceDataUpdater::update_read(
+                default_worker_start, device_data, dram_logical_core, dram_bank_id, 0, length_words);
+
+            remaining_bytes -= length;
+        }
+
+        return commands_per_iteration;
+    }
+};
 
 class RandomTestFixture : public BasePrefetcherTestFixture {
     bool big_chunk_ = true;                                // TODO: make this parameterized
     static constexpr uint32_t MAX_PAGE_SIZE = 256 * 1024;  // TODO: make it equal to actual scratch_db_page_size
 
 protected:
-    std::optional<HostMemDeviceCommand> gen_random_linear_cmd(
-        Common::DeviceData& device_data,
-        const CoreCoord& worker_core,
-        uint32_t noc_xy,
-        uint32_t addr_base,
-        uint32_t& remaining_bytes) {
-        // Random length (bytes), aligned to 4, capped by remaining
-        uint32_t data_size_bytes = payload_generator_->get_rand<uint32_t>(0, dispatch_buffer_page_size_ - 1);
-        data_size_bytes &= ~(sizeof(uint32_t) - 1);
-        data_size_bytes = std::min(data_size_bytes, remaining_bytes);
-        if (data_size_bytes == 0) {
+    // L1 read to L1 write in same core
+    // Copies from worker core's start of data back to the end of data
+    std::optional<HostMemDeviceCommand> gen_random_linear_read_cmd(
+        Common::DeviceData& device_data, const CoreCoord& worker_core, uint32_t noc_xy, uint32_t& remaining_bytes) {
+        const uint32_t bank_id = 0;
+
+        const uint32_t avail_bytes = device_data.size_at(worker_core, bank_id) * sizeof(uint32_t);
+        if (avail_bytes < l1_alignment_ || avail_bytes == 0) {
+            return std::nullopt;  // nothing to read yet
+        }
+        // Random length (bytes), aligned to L1, capped by remaining
+        uint32_t data_size_bytes = payload_generator_->get_rand<uint32_t>(l1_alignment_, avail_bytes);
+        data_size_bytes = tt::align(data_size_bytes, l1_alignment_);
+        data_size_bytes = std::min(data_size_bytes, std::min(avail_bytes, remaining_bytes));
+        if (data_size_bytes == 0 || data_size_bytes > avail_bytes) {
             return std::nullopt;
         }
-
-        // Random offset within a dispatch page, aligned to 4
-        uint32_t offset_bytes = payload_generator_->get_rand<uint32_t>(0, dispatch_buffer_page_size_ - 1);
-        offset_bytes &= ~(sizeof(uint32_t) - 1);
-
+        // Offset within the available data, aligned to L1, ensure it fits
+        const uint32_t max_offset = avail_bytes - data_size_bytes;
+        uint32_t offset_bytes = tt::align(payload_generator_->get_rand<uint32_t>(0, max_offset), l1_alignment_);
+        if (offset_bytes + data_size_bytes > avail_bytes) {
+            return std::nullopt;
+        }
         // Destination address and payload
         uint32_t dst_addr = device_data.get_result_data_addr(worker_core, 0);
-        std::vector<uint32_t> payload = payload_generator_->generate_payload(data_size_bytes);
-
         // Source address
         uint32_t src_addr = device_data.get_base_result_addr(device_data.get_core_type(worker_core)) + offset_bytes;
 
-        // Model the write
-        const CoreRange worker_range{worker_core, worker_core};
-        Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, false);
+        // Shadow model: copy existing L1 data from src offset
+        const uint32_t data_size_words = data_size_bytes / sizeof(uint32_t);
+        const uint32_t offset_words = offset_bytes / sizeof(uint32_t);
+        DeviceDataUpdater::update_read(worker_core, device_data, worker_core, bank_id, offset_words, data_size_words);
+        device_data.pad(worker_core, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 
-        // Build command (dispatch write + relay)
+        // Build command (dispatcher linear write (dest) + relay linear read (src))
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_read<flush_prefetch_, inline_data_>(
             noc_xy, dst_addr, src_addr, data_size_bytes);
 
@@ -815,9 +1203,9 @@ protected:
         // Randomize source DRAM location
         uint32_t total_bytes = pages * page_size;
         uint32_t random_offset =
-            tt::align(payload_generator_->get_rand<uint32_t>(0, DRAM_DATA_SIZE_BYTES / 2), dram_alignment);
+            tt::align(payload_generator_->get_rand<uint32_t>(0, Common::DRAM_DATA_SIZE_BYTES / 2), dram_alignment);
 
-        if (random_offset + total_bytes > DRAM_DATA_SIZE_BYTES) {
+        if (random_offset + total_bytes > Common::DRAM_DATA_SIZE_BYTES) {
             random_offset = 0;
         }
 
@@ -1010,7 +1398,6 @@ public:
         payload_generator_ = std::make_unique<Common::DispatchPayloadGenerator>(cfg);
     }
 
-    // Create individual HostMemDeviceCommand linear write cmds of size length
     void add_unicast_write(const CoreRange worker_range, uint32_t length) {
         const auto worker = worker_range.start_coord;
         const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(worker, CoreType::WORKER);
@@ -1027,11 +1414,11 @@ public:
         // Create the HostMemDeviceCommand
         HostMemDeviceCommand cmd = Common::CommandBuilder::build_linear_write_command<flush_prefetch, inline_data>(
             payload, worker_range, is_mcast_, noc_xy, addr, length);
-        // Add command
-        cmds_.push_back(cmd);
+
+        cmds_.push_back(std::move(cmd));
     }
 
-    // Same as add_unicast_write except all lengths merged into a single fetchQ entry
+    // Merge multiple of unicast writes into a single fetchQ command entry
     void add_merged_unicast_writes(const CoreRange worker_range, const std::vector<uint32_t>& lengths) {
         const auto worker = worker_range.start_coord;
         const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(worker, CoreType::WORKER);
@@ -1068,11 +1455,10 @@ public:
                 payload.data()                        // payload data
             );
         }
-        // Add command
-        cmds_.push_back(cmd);
+
+        cmds_.push_back(std::move(cmd));
     }
 
-    // build_packed callable = PrefetcherPackedReadTestFixture::build_sub_cmds
     void add_packed_dram_read(
         const CoreRange worker_range,
         const uint32_t log_packed_read_page_size,
@@ -1097,8 +1483,7 @@ public:
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged_packed<flush_prefetch, inline_data>(
             sub_cmds, noc_xy, l1_addr, total_length);
 
-        // Add command
-        cmds_.push_back(cmd);
+        cmds_.push_back(std::move(cmd));
     }
 
     void add_paged_dram_read(
@@ -1140,8 +1525,7 @@ public:
                 worker_range, device_data_, bank_core, bank_id, bank_offset, page_size_words);
         }
 
-        // Add command
-        cmds_.push_back(cmd);
+        cmds_.push_back(std::move(cmd));
     }
 
     // Length should always be less than max_fetch_bytes_
@@ -1177,18 +1561,23 @@ public:
         HostMemDeviceCommand cmd = Common::CommandBuilder::build_packed_write_command(
             payload, sub_cmds, addr, info_.l1_alignment_, info_.packed_write_max_unicast_sub_cmds_, no_stride);
 
-        // Add command
-        cmds_.push_back(cmd);
+        cmds_.push_back(std::move(cmd));
     }
 
-    // L1 read to L1 write in same core
+    // L1 read to L1 write in same core: copies from worker core's start of data back to the end of data
     // For this function to run, there needs to prior data present in L1 already
-    // This function needs to run after L1 writes by previous commands
+    // Note: This function needs to run after L1 writes by previous commands
     void add_linear_read(const CoreRange worker_range, uint32_t length, uint32_t offset_from_current = 0) {
         const auto worker = worker_range.start_coord;
+        const uint32_t bank_id = 0;
+        // Ensure we have data to read
+        const uint32_t avail_bytes = device_data_.size_at(worker, bank_id) * sizeof(uint32_t);
+        if (length == 0 || offset_from_current >= avail_bytes) {
+            return;  // nothing to copy
+        }
+
         const CoreCoord first_worker = device_->virtual_core_from_logical_core(worker, CoreType::WORKER);
         uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_worker);
-        const uint32_t bank_id = 0;
 
         constexpr bool flush_prefetch = false;
         constexpr bool inline_data = false;
@@ -1207,13 +1596,13 @@ public:
 
         // Barrier/stall to avoid RAW hazards
         HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall();
-        cmds_.push_back(stall_cmd);
+        cmds_.push_back(std::move(stall_cmd));
 
         // Blit: dispatcher linear write (dest) + relay linear read (src)
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_read<flush_prefetch, inline_data>(
             noc_xy, dst_addr, src_addr, length);
 
-        cmds_.push_back(cmd);
+        cmds_.push_back(std::move(cmd));
     }
 
     // Relay inline dispatcher to host writes smoke test helper
@@ -1226,11 +1615,11 @@ public:
         // Create the HostMemDeviceCommand with pre-calculated size
         HostMemDeviceCommand cmd = CommandBuilder::build_relay_inline_host<inline_data>(payload, length);
 
-        cmds_.push_back(cmd);
+        cmds_.push_back(std::move(cmd));
 
         // The completion queue is page-aligned (4KB pages)
         // Each write reserves full pages but only writes actual data,
-        // leaving the remainder untouched (still 0xbaadf00d)
+        // leaving the remainder untouched (still HOST_DATA_DIRTY_PATTERN)
         // This ensures padding areas retain the sentinel value for validation
         pad_host_data(device_data_);
     }
@@ -1265,6 +1654,7 @@ TEST_P(BasePrefetcherTestFixture, TestTerminate) {
     // Generate payload
     std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
 
+    // PHASE 1: Generate terminate command metadata
     std::vector<HostMemDeviceCommand> work_cmds;
     HostMemDeviceCommand linear_write_cmd = Common::CommandBuilder::build_linear_write_command<true, true>(
         payload, worker_range, false, noc_xy, l1_addr, xfer_size_bytes);
@@ -1276,6 +1666,7 @@ TEST_P(BasePrefetcherTestFixture, TestTerminate) {
     HostMemDeviceCommand prefetch_term_cmd = CommandBuilder::build_prefetch_terminate();
     terminate_cmds.push_back(std::move(prefetch_term_cmd));
 
+    // PHASE 2, 3, 4: Execute and Validate
     // Don't wait for Finish()
     bool wait_for_completion = false;
 
@@ -1316,7 +1707,6 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
     const uint32_t dram_data_size_words = get_dram_data_size_words();
     const uint32_t page_size_bytes = get_page_size();
     const uint32_t num_pages = get_num_pages();
-    const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
 
     // Setup target worker cores
     const CoreCoord first_worker = default_worker_start;
@@ -1325,64 +1715,23 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
-    // Compute NOC encoding once
-    const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-    const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
     // No L1 -> Host writes, so pcie_data_addr is nullptr
     // We test DRAM -> L1
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
-    std::vector<HostMemDeviceCommand> commands_per_iteration;
-    uint32_t absolute_start_page = 0;
-    uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+    // PHASE 1: Generate paged read command metadata
+    auto commands_per_iteration = generate_paged_read_commands(first_worker, page_size_bytes, num_pages, device_data);
 
-    while (remaining_bytes > 0) {
-        // Calculate how many pages fit in this chunk
-        uint32_t max_bytes_in_chunk = num_pages * page_size_bytes;
-        uint32_t bytes_in_chunk = std::min(remaining_bytes, max_bytes_in_chunk);
-        uint32_t pages_in_chunk = bytes_in_chunk / page_size_bytes;
-
-        uint32_t start_page = absolute_start_page % num_banks_;
-        uint32_t base_addr = (absolute_start_page / num_banks_) * page_size_bytes + dram_base_;
-
-        // Capture address before updating device_data
-        uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
-
-        // Relay paged from prefetcher -> linear write from dispatcher to L1
-        HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
-            noc_xy, l1_addr, start_page, base_addr, page_size_bytes, pages_in_chunk);
-
-        // Shadow model updated per page
-        for (uint32_t page = 0; page < pages_in_chunk; ++page) {
-            const uint32_t page_id = absolute_start_page + page;
-            const uint32_t bank_id = page_id % num_banks_;
-            uint32_t bank_offset = page_size_words * (page_id / num_banks_);
-
-            // Get the logical core for this bank
-            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
-
-            // Update Common::DeviceData for paged read
-            DeviceDataUpdater::update_paged_dram_read(
-                worker_range, device_data, bank_core, bank_id, bank_offset, page_size_words);
-        }
-
-        commands_per_iteration.push_back(std::move(cmd));
-
-        absolute_start_page += pages_in_chunk;
-        remaining_bytes -= bytes_in_chunk;
-    }
-
+    // PHASE 2, 3, 4: Execute and Validate
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
 // In this test, the prefetcher reads from L1 and relays it to dispatcher. Dispatcher then
 // writes the data to the host completion queue.
 // Note: Since we're writing into completion queue, we skip distributed::Finish
-TEST_P(PrefecherHostTextFixture, HostTest) {
-    log_info(tt::LogTest, "PrefecherHostTextFixture - HostTest - Test Start");
+TEST_P(PrefetcherHostTextFixture, HostTest) {
+    log_info(tt::LogTest, "PrefetcherHostTextFixture - HostTest - Test Start");
 
     const uint32_t max_data_size = DEVICE_DATA_SIZE;
     const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
@@ -1405,10 +1754,6 @@ TEST_P(PrefecherHostTextFixture, HostTest) {
     MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
     MetalContext::instance().get_cluster().l1_barrier(device_->id());
 
-    // Compute NOC encoding once
-    const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-    const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
     // Get completion queue buffer pointer
     void* completion_queue_buffer = mgr_->get_completion_queue_ptr(fdcq_->id());
     uint32_t completion_queue_size = mgr_->get_completion_queue_size(fdcq_->id());
@@ -1420,29 +1765,11 @@ TEST_P(PrefecherHostTextFixture, HostTest) {
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, dram_data_size_words, cfg_);
 
-    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    // PHASE 1: Generate host write command metadata
+    auto commands_per_iteration = generate_host_write_commands(data, first_worker, l1_base, device_data);
 
-    for (uint32_t count = 1; count < 100; count++) {
-        uint32_t max_limit = max_data_size_words / 100;
-        uint32_t data_size_words = payload_generator_->get_rand<uint32_t>(0, max_limit - 1) * count + 1;
-        uint32_t data_size_bytes = data_size_words * sizeof(uint32_t);
-
-        // Create the HostMemDeviceCommand with pre-calculated size
-        HostMemDeviceCommand cmd =
-            CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(noc_xy, l1_base, data_size_bytes);
-
-        commands_per_iteration.push_back(cmd);
-
-        DeviceDataUpdater::update_host_data(device_data, data, data_size_bytes);
-
-        // The completion queue is page-aligned (4KB pages)
-        // Each write reserves full pages but only writes actual data,
-        // leaving the remainder untouched (still 0xbaadf00d)
-        // This ensures padding areas retain the sentinel value for validation
-        pad_host_data(device_data);
-    }
-
-    // Skip distributed::Finish since we are manually writing into the completion queue
+    // PHASE 2, 3, 4: Execute and Validate
+    // Note: Skip distributed::Finish since we are manually writing into the completion queue
     // which Finish doesn't expect
     bool wait_for_completion = false;
     // For host writes, we need to wait for all writes to be written into the completion queue
@@ -1462,8 +1789,7 @@ TEST_P(PrefetcherPackedReadTestFixture, PackedReadTest) {
     log_info(tt::LogTest, "PrefetcherPackedReadTestFixture - PackedReadTest - Test Start");
 
     const uint32_t num_iterations = 1;
-    const uint32_t dram_data_size_words = DRAM_DATA_SIZE_WORDS;
-    const bool relay_max_packed_paged_submcds = true;  // TODO: randomize?
+    const uint32_t dram_data_size_words = Common::DRAM_DATA_SIZE_WORDS;
 
     // Setup target worker cores
     const CoreCoord first_worker = default_worker_start;
@@ -1473,57 +1799,13 @@ TEST_P(PrefetcherPackedReadTestFixture, PackedReadTest) {
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
-    // Compute NOC encoding once
-    const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-    const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
-    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    // PHASE 1: Generate packed read command metadata
+    auto commands_per_iteration = generate_packed_read_commands(first_worker, dram_alignment, device_data);
 
-    uint32_t remaining_bytes = DEVICE_DATA_SIZE;
-
-    constexpr uint32_t max_size128b = (DEFAULT_SCRATCH_DB_SIZE / 2) >> 7;
-    while (remaining_bytes > 0) {
-        uint32_t packed_read_page_size =
-            payload_generator_->get_rand<uint32_t>(0, 2) + 9;  // log2 values. i.e., 512, 1024, 2048
-        uint32_t n_sub_cmds = relay_max_packed_paged_submcds ? CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS
-                                                             : payload_generator_->get_rand<uint32_t>(0, 6) + 1;
-        uint32_t max_read_size = std::min((1 << packed_read_page_size) * num_banks_, remaining_bytes);
-
-        std::vector<uint32_t> lengths;
-        lengths.reserve(n_sub_cmds);
-        uint32_t total_length = 0;
-        for (uint32_t i = 0; i < n_sub_cmds; i++) {
-            // limit the length to min and max read size
-            uint32_t length = tt::align(
-                std::min(
-                    std::max(MIN_READ_SIZE, (payload_generator_->get_rand<uint32_t>(0, max_size128b - 1)) << 7),
-                    max_read_size),
-                dram_alignment);
-            total_length += length;
-            lengths.push_back(length);
-        }
-
-        // If we're about to exceed DEVICE_DATA_SIZE, then exit
-        if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
-            break;
-        }
-
-        uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
-
-        // Create n_sub_cmds
-        std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds =
-            build_sub_cmds(lengths, device_data, packed_read_page_size, n_sub_cmds);
-
-        HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged_packed<flush_prefetch_, inline_data_>(
-            sub_cmds, noc_xy, l1_addr, total_length);
-
-        commands_per_iteration.push_back(std::move(cmd));
-        remaining_bytes -= total_length;
-    }
-
+    // PHASE 2, 3, 4: Execute and Validate
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
@@ -1545,55 +1827,13 @@ TEST_P(PrefetcherRingbufferReadTestFixture, RingbufferReadTest) {
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
-    // Compute NOC encoding once
-    const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-    const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
-    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    // PHASE 1: Generate ringbuffer command metadata
+    auto commands_per_iteration = generate_ringbuffer_relay_commands(first_worker, dram_alignment, device_data);
 
-    uint32_t remaining_bytes = DEVICE_DATA_SIZE;
-
-    while (remaining_bytes > 0) {
-        uint32_t ringbuffer_read_page_size_log2 =
-            payload_generator_->get_rand<uint32_t>(0, 2) + 9;  // log2 values. i.e., 512, 1024, 2048
-        uint32_t n_sub_cmds = payload_generator_->get_rand<uint32_t>(0, 6) + 1;
-        uint32_t max_read_size = std::min((1 << ringbuffer_read_page_size_log2) * num_banks_, remaining_bytes);
-
-        std::vector<uint32_t> lengths;
-        lengths.reserve(n_sub_cmds);
-
-        uint32_t total_length = 0;
-        for (uint32_t i = 0; i < n_sub_cmds; i++) {
-            // limit the length to min and max read size
-            uint32_t length = tt::align(
-                std::min(
-                    max_read_size,
-                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, DEFAULT_SCRATCH_DB_SIZE - 1))),
-                dram_alignment);
-            total_length += length;
-            lengths.push_back(length);
-        }
-
-        // If we're about to exceed DEVICE_DATA_SIZE, then exit
-        if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
-            break;
-        }
-
-        uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
-
-        // We build the sub commands to relay them from the ringbuffer to the dispatcher
-        std::vector<CQPrefetchRelayRingbufferSubCmd> sub_cmds = build_sub_cmds(lengths, n_sub_cmds);
-
-        HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_ringbuffer_relay<flush_prefetch_, inline_data_>(
-            sub_cmds, lengths, device_data, *this, noc_xy, l1_addr, total_length, ringbuffer_read_page_size_log2);
-
-        commands_per_iteration.push_back(std::move(cmd));
-        remaining_bytes -= total_length;
-    }
-
+    // PHASE 2, 3, 4: Execute and Validate
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
@@ -1610,7 +1850,6 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
     const uint32_t dram_data_size_words = get_dram_data_size_words();
     const uint32_t page_size_bytes = get_page_size();
     const uint32_t num_pages = get_num_pages();
-    const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
 
     // Setup target worker cores
     const CoreCoord first_worker = default_worker_start;
@@ -1619,95 +1858,14 @@ TEST_P(BasePrefetcherTestFixture, PagedReadWriteTest) {
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
-    // Compute NOC encoding once
-    const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-    const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
-    const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
+    // PHASE 1: Generate paged end to end read + write command metadata
+    auto commands_per_iteration =
+        generate_paged_end_to_end_commands(first_worker, page_size_bytes, num_pages, device_data);
 
-    std::vector<HostMemDeviceCommand> commands_per_iteration;
-
-    uint32_t remaining_bytes = DEVICE_DATA_SIZE;
-    uint32_t absolute_start_page = 0;
-
-    // This loop generates commands, payloads, and updates expectations all at once
-    // Each iteration represents one "chunk" that fits in max_payload_per_cmd_bytes
-    while (remaining_bytes > 0) {
-        // Calculate how many pages fit in this chunk
-        uint32_t max_bytes_in_chunk = num_pages * page_size_bytes;
-        uint32_t bytes_in_chunk = std::min(remaining_bytes, max_bytes_in_chunk);
-        uint32_t pages_in_chunk = bytes_in_chunk / page_size_bytes;
-
-        // Generate payload & update expectations for this chunk
-        std::vector<uint32_t> chunk_payload;
-        chunk_payload.reserve(pages_in_chunk * page_size_words);
-
-        for (uint32_t page = 0; page < pages_in_chunk; ++page) {
-            const uint32_t page_id = absolute_start_page + page;
-            const uint32_t bank_id = page_id % num_banks_;
-
-            // Get the logical core for this bank
-            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
-
-            // Generate payload with page id
-            std::vector<uint32_t> page_payload =
-                payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
-
-            // Update Common::DeviceData for paged write
-            Common::DeviceDataUpdater::update_paged_write(
-                page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
-
-            // Append page payload to chunk payload
-            chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
-        }
-
-        // Calculate base address for the command
-        const uint32_t bank_offset =
-            tt::align(page_size_bytes, page_size_alignment_bytes) * (absolute_start_page / num_banks_);
-        const uint32_t base_addr = device_data.get_base_result_addr(tt::CoreType::DRAM) + bank_offset;
-        // Calculate start page for the command
-        const uint16_t start_page_cmd = absolute_start_page % num_banks_;
-
-        //  Step 1: Paged Write of host data to DRAM banks by dispatcher cmd
-        HostMemDeviceCommand cmd_dispatch_dram = Common::CommandBuilder::build_paged_write_command<hugepage_write_>(
-            chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, true);
-        commands_per_iteration.push_back(std::move(cmd_dispatch_dram));
-
-        // Followed by stall to avoid RAW hazard
-        HostMemDeviceCommand cmd_stall = CommandBuilder::build_dispatch_prefetch_stall();
-        commands_per_iteration.push_back(std::move(cmd_stall));
-
-        uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
-
-        // Step 2: Paged Read of DRAM banks by prefetcher, relay data to dispatcher for linear write to L1
-        HostMemDeviceCommand cmd_prefetch = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
-            noc_xy, l1_addr, start_page_cmd, base_addr, page_size_bytes, pages_in_chunk);
-        commands_per_iteration.push_back(std::move(cmd_prefetch));
-
-        for (uint32_t page = 0; page < pages_in_chunk; ++page) {
-            const uint32_t page_id = absolute_start_page + page;
-            const uint32_t bank_id = page_id % num_banks_;
-            // Add dram_data_size_words since we're reading after the pre-populated DRAM data
-            uint32_t bank_offset = dram_data_size_words + page_size_words * (page_id / num_banks_);
-
-            // Get the logical core for this bank
-            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
-
-            // Update Common::DeviceData for paged read
-            DeviceDataUpdater::update_paged_dram_read(
-                worker_range, device_data, bank_core, bank_id, bank_offset, page_size_words);
-        }
-
-        // Update loop state
-        remaining_bytes -= bytes_in_chunk;
-        absolute_start_page += pages_in_chunk;
-    }
-
+    // PHASE 2, 3, 4: Execute and Validate
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
@@ -1729,6 +1887,7 @@ TEST_P(RandomTestFixture, RandomTest) {
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
+    // PHASE 1: Generate random command metadata
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
     uint32_t remaining_bytes = DEVICE_DATA_SIZE;
@@ -1747,24 +1906,29 @@ TEST_P(RandomTestFixture, RandomTest) {
         const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, worker_core_virt);
 
         switch (cmd) {
-            case CQ_PREFETCH_CMD_RELAY_LINEAR: {
-                CoreRange single_worker_range = {worker_core, worker_core};
-                // // TODO: disabled for now
-                // // test issue w/ handling re-leveling of results data after paged commands
-                // auto result = gen_random_linear_cmd(device_data, worker_core, noc_xy, l1_addr, remaining_bytes);
-                // if(result.has_value()){
-                //     const HostMemDeviceCommand& cmd = *result;
-                //     commands_per_iteration.push_back(cmd);
-                // }
-                break;
-            }
+            case CQ_PREFETCH_CMD_RELAY_LINEAR:
+            // TODO: Temporarily dropping the linear relay from random mix.
+            // Having this test enabled leads to intermittent validation failures
+            // Issue: Randomization is probably landing on holes the hardware never wrote (padding/gaps in the model?),
+            // so we're reading old L1 content and causing intermittent validation failures
+            // Note: this was disabled in legacy as well
+
+            /* if (has_l1_data) {
+            //     CoreRange single_worker_range = {worker_core, worker_core};
+            //     auto result = gen_random_linear_read_cmd(device_data, worker_core, noc_xy, remaining_bytes);
+            //     if(result.has_value()){
+            //         const HostMemDeviceCommand& cmd = *result;
+            //         commands_per_iteration.push_back(std::move(cmd));
+            //     }
+            //     break;
+            // }*/
             case CQ_PREFETCH_CMD_RELAY_PAGED: {
                 CoreRange single_worker_range = {worker_core, worker_core};
                 auto result =
                     gen_random_dram_paged_cmd(device_data, worker_core, single_worker_range, noc_xy, remaining_bytes);
                 if (result.has_value()) {
                     const HostMemDeviceCommand& cmd = *result;
-                    commands_per_iteration.push_back(cmd);
+                    commands_per_iteration.push_back(std::move(cmd));
                 }
                 break;
             }
@@ -1774,29 +1938,25 @@ TEST_P(RandomTestFixture, RandomTest) {
                 auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                 if (result.has_value()) {
                     const HostMemDeviceCommand& cmd = *result;
-                    commands_per_iteration.push_back(cmd);
+                    commands_per_iteration.push_back(std::move(cmd));
                 }
                 break;
             }
             case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH: break;
             case CQ_PREFETCH_CMD_STALL: break;
-            case CQ_PREFETCH_CMD_DEBUG: break; break;
+            case CQ_PREFETCH_CMD_DEBUG: break;
             default: break;
         }
     }
 
+    // PHASE 2, 3, 4: Execute and Validate
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
 // This test targets relay linear H command: PREFETCH_H (MMIO) -> PREFETCH_D (Remote) -> DISPATCHER (Remote)
+// Note: CQ_PREFETCH_CMD_RELAY_LINEAR_H needs to a standalone entry in fetchQ
 TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     log_info(tt::LogTest, "PrefetchRelayLinearHTestFixture - RelayLinearHTest - Test Start");
-
-    const uint32_t max_read_size =
-        std::min(
-            DEFAULT_SCRATCH_DB_SIZE,
-            DEFAULT_PREFETCH_Q_ENTRIES * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type)) -
-        64;
 
     // Test parameters
     const uint32_t num_iterations = get_num_iterations();
@@ -1810,90 +1970,13 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     const uint32_t l1_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
-    // Compute NOC encoding: Destination (Worker on Remote Device) -> Use device_ (Chip 1)
-    const CoreCoord first_virt_worker = remote_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-    const uint32_t noc_xy = remote_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
     // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
     auto mmio_dram_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
     Common::DeviceData device_data(
         mmio_device_, worker_range, l1_base, mmio_dram_base, nullptr, false, dram_data_size_words, cfg_);
 
-    std::vector<HostMemDeviceCommand> commands_per_iteration;
-
-    uint32_t remaining_bytes = DEVICE_DATA_SIZE;
-
-    while (remaining_bytes > 0) {
-        uint32_t length = std::min(
-            tt::align(
-                std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, max_read_size - 1)), dram_alignment),
-            remaining_bytes);
-
-        // Capture address before updating device_data
-        uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
-
-        DeviceCommandCalculator calc;
-        calc.add_dispatch_write_linear<false, false>(length);
-        const uint32_t dispatch_cmd_size = calc.write_offset_bytes();
-
-        // Create the HostMemDeviceCommand with pre-calculated size
-        HostMemDeviceCommand cmd1(dispatch_cmd_size);
-
-        cmd1.add_dispatch_write_linear<false, false>(
-            0,        // num_mcast_dests
-            noc_xy,   // NOC coordinates
-            l1_addr,  // destination address
-            length,   // data size
-            nullptr   // payload data
-        );
-
-        commands_per_iteration.push_back(cmd1);
-
-        const uint32_t total_cmd_bytes = tt::align(sizeof(CQPrefetchCmdLarge), host_alignment_);
-
-        // Create the HostMemDeviceCommand with pre-calculated size
-        HostMemDeviceCommand cmd2(total_cmd_bytes);
-
-        // Create the relay linear H command
-        CQPrefetchCmdLarge cmd{};
-        std::memset(&cmd, 0, sizeof(CQPrefetchCmdLarge));
-        cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
-
-        // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
-        const uint32_t dram_bank_id = 0;
-        auto dram_channel = mmio_device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
-        CoreCoord dram_logical_core = mmio_device_->logical_core_from_dram_channel(dram_channel);
-        CoreCoord dram_physical_core = MetalContext::instance()
-                                           .get_cluster()
-                                           .get_soc_desc(mmio_device_->id())
-                                           .get_preferred_worker_core_for_dram_view(dram_channel, NOC::NOC_0);
-        cmd.relay_linear_h.noc_xy_addr =
-            mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dram_physical_core);
-
-        [[maybe_unused]] auto offset = mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, dram_bank_id);
-        // Read from DRAM result data address where data is stored
-        // Common::DeviceData uses the logical coordinates as keys
-        cmd.relay_linear_h.addr = mmio_dram_base + offset;
-        cmd.relay_linear_h.length = length;
-        cmd.relay_linear_h.pad1 = 0;
-        cmd.relay_linear_h.pad2 = 0;
-
-        uint32_t length_words = length / sizeof(uint32_t);
-
-        // Use reserve_space to properly update cmd_write_offsetB
-        CQPrefetchCmdLarge* cmd_ptr = cmd2.reserve_space<CQPrefetchCmdLarge*>(sizeof(CQPrefetchCmdLarge));
-        std::memcpy(cmd_ptr, &cmd, sizeof(CQPrefetchCmdLarge));
-
-        // Align the write offset for any padding needed
-        cmd2.align_write_offset();
-
-        commands_per_iteration.push_back(cmd2);
-
-        DeviceDataUpdater::update_read(
-            default_worker_start, device_data, dram_logical_core, dram_bank_id, 0, length_words);
-
-        remaining_bytes -= length;
-    }
+    auto commands_per_iteration =
+        generate_prefetch_relay_h_commands(first_worker, mmio_dram_base, dram_alignment, device_data);
 
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
@@ -1915,6 +1998,7 @@ TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
+    // PHASE 1: Generate smoke test command metadata
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
     HelperInfo info{
@@ -2040,15 +2124,15 @@ TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
     commands_per_iteration.push_back(std::move(write_offset_cmd1));
     commands_per_iteration.push_back(std::move(write_offset_cmd2));
 
-    // Execute
+    // PHASE 2, 3, 4: Execute and Validate
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
 // Smoke test for writes to Host from dispatcher
 // This needed to be separate since it executes differently than others
 // (we skip distributed::Finish)
-TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
-    log_info(tt::LogTest, "PrefecherHostTextFixture - HostSmokeTest - Test Start");
+TEST_P(PrefetcherHostTextFixture, HostSmokeTest) {
+    log_info(tt::LogTest, "PrefetcherHostTextFixture - HostSmokeTest - Test Start");
 
     const uint32_t num_iterations = get_num_iterations();
     const uint32_t dram_data_size_words = get_dram_data_size_words();
@@ -2071,6 +2155,7 @@ TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, dram_data_size_words, cfg_);
 
+    // PHASE 1: Generate host smoke test command metadata
     std::vector<HostMemDeviceCommand> commands_per_iteration;
 
     HelperInfo info{
@@ -2079,7 +2164,7 @@ TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
     SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
 
     auto add_host_write_func = [this](Common::DeviceData& device_data) {
-        PrefecherHostTextFixture::pad_host_data(device_data);
+        PrefetcherHostTextFixture::pad_host_data(device_data);
     };
 
     for (uint32_t multiplier = 1; multiplier < 3; multiplier++) {
@@ -2093,6 +2178,7 @@ TEST_P(PrefecherHostTextFixture, HostSmokeTest) {
         helper.add_host_write((multiplier * dispatch_buffer_page_size_) + sizeof(CQDispatchCmd), add_host_write_func);
     }
 
+    // PHASE 2, 3, 4: Execute and Validate
     // Skip distributed::Finish since we are manually writing into the completion queue
     // which Finish doesn't expect
     bool wait_for_completion = false;
@@ -2114,10 +2200,18 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
         // With exec buf enabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
@@ -2131,23 +2225,27 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
         // With exec buf enabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true},
+            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, Common::DRAM_DATA_SIZE_WORDS, true},
         // With exec buf disabled + higher iterations
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
             DRAM_PAGES_TO_READ_DEFAULT,
             DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            DRAM_DATA_SIZE_WORDS,
+            Common::DRAM_DATA_SIZE_WORDS,
             false},
         // With exec buf enabled + higher iterations
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
             DRAM_PAGES_TO_READ_DEFAULT,
             DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            DRAM_DATA_SIZE_WORDS,
+            Common::DRAM_DATA_SIZE_WORDS,
             true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
@@ -2155,17 +2253,25 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
-// PrefecherHostTextFixture test with exec buff enabled / disabled
+// PrefetcherHostTextFixture test with exec buff enabled / disabled
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
-    PrefecherHostTextFixture,
+    PrefetcherHostTextFixture,
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
         // With exec buf enabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
@@ -2179,10 +2285,18 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
         // With exec buf enabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
@@ -2196,23 +2310,27 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false},
         // With exec buf enabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true},
+            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, Common::DRAM_DATA_SIZE_WORDS, true},
         // With exec buf disabled + higher iterations
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
             DRAM_PAGES_TO_READ_DEFAULT,
             DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            DRAM_DATA_SIZE_WORDS,
+            Common::DRAM_DATA_SIZE_WORDS,
             false},
         // With exec buf enabled + higher iterations
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
             DRAM_PAGES_TO_READ_DEFAULT,
             DEFAULT_ITERATIONS_SMOKE_RANDOM,
-            DRAM_DATA_SIZE_WORDS,
+            Common::DRAM_DATA_SIZE_WORDS,
             true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
@@ -2227,7 +2345,11 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false}),
+            DRAM_PAGE_SIZE_DEFAULT,
+            DRAM_PAGES_TO_READ_DEFAULT,
+            DEFAULT_ITERATIONS,
+            Common::DRAM_DATA_SIZE_WORDS,
+            false}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
