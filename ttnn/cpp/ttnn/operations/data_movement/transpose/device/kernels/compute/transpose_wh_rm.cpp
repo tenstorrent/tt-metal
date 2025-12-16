@@ -32,7 +32,7 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         cb_push_back(cb_untilize, Ht);
 
         // untilize
-        compute_kernel_lib::untilize<Ht>(cb_untilize, cb_out, 1);
+        compute_kernel_lib::untilize<Ht, cb_untilize, cb_out>(1);
     }
 }
 
