@@ -217,6 +217,7 @@ class WanAttention(Module):
         addcmul_residual: ttnn.Tensor,
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
+        parallel_config=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
@@ -231,20 +232,52 @@ class WanAttention(Module):
         else:
             weight = to_out.weight.data
 
-        M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = get_matmul_core_grid(self.mesh_device)
-        matmul_config = get_matmul_config(M, K, N_out, core_grid)
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid)
 
-        output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-            x,
-            weight,
-            1.0,  # scalar
-            addcmul_residual,
-            addcmul_gate,
-            bias_tensor=to_out.bias.data if to_out.bias is not None else None,
-            config=matmul_config,
-            compute_kernel_config=compute_kernel_config or to_out.compute_config,
-        )
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=6,
+                num_buffers_per_channel=48,
+                scalar=1.0,
+                addcmul_input_tensor1=addcmul_residual,
+                addcmul_input_tensor2=addcmul_gate,
+            )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = get_matmul_core_grid(self.mesh_device)
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,  # scalar
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+            )
         return output
 
     def forward(
@@ -284,18 +317,24 @@ class WanAttention(Module):
             assert trans_mat is not None
             assert prompt_1BLP is None
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-
         if self.is_self:
             # Fused QKV matmul with split output for self-attention
-            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+            )
         else:
             # Cross-attention: Q from spatial, fused KV from prompt
-            kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
-            q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            if prompt_1BLP is not None:
+                kv_input = prompt_1BLP
+            else:
+                if self.parallel_config.tensor_parallel.factor > 1:
+                    spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                        spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                    )
+                kv_input = spatial_1BND
+            q_1BNF = self.to_q(
+                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+            )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
@@ -374,18 +413,18 @@ class WanAttention(Module):
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            # Gather spatial on TP axis before projection
-            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-
         if addcmul_residual is not None and addcmul_gate is not None:
             # Fused to_out projection + addcmul (self-attention only)
             spatial_1BND = self._to_out_fused_addcmul(
-                spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
+                spatial_1BND,
+                addcmul_residual,
+                addcmul_gate,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=self.parallel_config,
             )
         else:
-            spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            spatial_1BND = self.to_out(
+                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+            )
 
         return spatial_1BND
