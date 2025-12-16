@@ -394,6 +394,9 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
+        logger.info(
+            f"wqkv linear:\nmemory_config: {ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG}\nprogram_config: {self.model_config['XQKV_DECODE_PROGCFG']}"
+        )
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -547,6 +550,9 @@ class Attention(LightweightModule):
             # Fused AGMM only valid for ring topology
             if self.ccl_topology == ttnn.Topology.Ring:
                 logger.info(f"Attention Decode: MATMUL_ALL_GATHER, input shape: {attn_output_cat.shape}")
+                logger.info(
+                    f"all_gather_matmul_async:\nmemory_config_ag: {self.model_config['ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG']}\nmemory_config_mm: {self.model_config['DECODE_RESIDUAL_MEMCFG']}\nprogram_config: {self.model_config['ATTN_ALL_GATHER_MATMUL_PROGCFG']}"
+                )
                 _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
                     attn_output_cat,
                     self.wo,
