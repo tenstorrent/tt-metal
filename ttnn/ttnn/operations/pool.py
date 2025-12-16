@@ -85,7 +85,9 @@ def golden_rotate(
     Args:
         input_tensor: Input tensor in NHWC format
         angle: Rotation angle in degrees (positive = counter-clockwise)
-        center: Optional rotation center (cx, cy). If None, uses image center
+        center: Optional rotation center as (x, y) in pixel coordinates, where x is
+                the horizontal/width coordinate and y is the vertical/height coordinate.
+                If None, uses image center.
         fill: Fill value for areas outside the rotated tensor
         expand: Must be False (only same-size rotation supported)
         interpolation_mode: "nearest" or "bilinear"

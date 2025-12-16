@@ -535,8 +535,9 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
     # Simulate vadv2 BEV features: (bev_h * bev_w, batch_size, embed_dims)
     flattened_bev = torch.randn(bev_h * bev_w, batch_size, embed_dims, dtype=torch.bfloat16)
 
-    # vadv2 rotation center (typically [100, 100] but adapt to smaller sizes)
-    rotate_center = [100, 100]
+    # vadv2 rotation center as (x, y) coordinates
+    rotate_center_x = 100
+    rotate_center_y = 100
 
     # Process each batch item (vadv2 pattern)
     torch_outputs = []
@@ -551,10 +552,13 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
         torch_spatial = prev_bev_single.view(bev_h, bev_w, embed_dims)
         # Add batch dimension for golden function: (1, bev_h, bev_w, embed_dims)
         torch_spatial_batched = torch_spatial.unsqueeze(0)
-        # Use golden function with custom center
+        # Use golden function with custom center (x, y)
         golden_function = ttnn.get_golden_function(ttnn.rotate)
         torch_spatial_out_batched = golden_function(
-            torch_spatial_batched, angle=rotation_angle, center=rotate_center, interpolation_mode="nearest"
+            torch_spatial_batched,
+            angle=rotation_angle,
+            center=(rotate_center_x, rotate_center_y),
+            interpolation_mode="nearest",
         )
         # Remove batch dimension: (bev_h, bev_w, embed_dims)
         torch_spatial_out = torch_spatial_out_batched.squeeze(0)
@@ -564,11 +568,11 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
         # Convert flattened to NHWC format for ttnn.rotate
         ttnn_spatial = prev_bev_single.view(bev_h, bev_w, embed_dims).unsqueeze(0)  # Add batch dim
         ttnn_input = ttnn.from_torch(ttnn_spatial, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        # Rotate using ttnn.rotate with custom center
+        # Rotate using ttnn.rotate with custom center (x, y)
         ttnn_rotated = ttnn.rotate(
             ttnn_input,
             angle=rotation_angle,
-            center=(float(rotate_center[1]), float(rotate_center[0])),  # ttnn expects (x, y)
+            center=(float(rotate_center_x), float(rotate_center_y)),
             interpolation_mode="nearest",
         )
         ttnn_spatial_out = ttnn.to_torch(ttnn_rotated).squeeze(0)  # Remove batch dim

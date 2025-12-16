@@ -15,7 +15,7 @@ namespace ttnn::operations::rotate {
 namespace py = pybind11;
 
 void py_bind_rotate(py::module& module) {
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Rotates a tensor by an arbitrary angle around a specified center point using configurable interpolation.
 
         The rotate operation performs spatial transformation by rotating each pixel position
@@ -27,8 +27,10 @@ void py_bind_rotate(py::module& module) {
             angle (float): Rotation angle in degrees. Positive values rotate counter-clockwise
 
         Keyword Args:
-            center (Optional[Tuple[float, float]]): Rotation center point (cx, cy) in pixel coordinates.
-                                                    Default: ((W-1)/2, (H-1)/2) - tensor center
+            center (Optional[Tuple[float, float]]): Rotation center point as (x, y) in pixel coordinates,
+                                                    where x is the horizontal/width coordinate and y is
+                                                    the vertical/height coordinate. Default: tensor center
+                                                    at ((W-1)/2, (H-1)/2)
             fill (float): Fill value for areas outside the rotated tensor. Default: 0.0
             expand (bool): If True, return error. Only False is supported (same output dimensions). Default: False
             interpolation_mode (str): Interpolation method - "bilinear" (smooth) or "nearest" (sharp, faster). Default: "nearest"
@@ -48,8 +50,8 @@ void py_bind_rotate(py::module& module) {
             >>> # Rotate 90 degrees clockwise with nearest interpolation (faster)
             >>> output_cw = ttnn.rotate(input_tensor, -90.0, interpolation_mode="nearest")
             >>>
-            >>> # Rotate around custom center with white fill and smooth interpolation
-            >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 128), fill=1.0, interpolation_mode="nearest")
+            >>> # Rotate around custom center (x=128, y=64) with white fill
+            >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 64), fill=1.0, interpolation_mode="nearest")
         )doc";
 
     ttnn::bind_registered_operation(

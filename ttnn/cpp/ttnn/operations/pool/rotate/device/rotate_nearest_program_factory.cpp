@@ -189,15 +189,14 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
 
     // Recalculate rotation parameters
     const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
     const float cos_angle = std::cos(angle_rad);
     const float sin_angle = std::sin(angle_rad);
 
-    // Center point
     const auto& input_shape = tensor_args.input.padded_shape();
     const uint32_t input_width = input_shape[2];
     const uint32_t input_height = input_shape[1];
