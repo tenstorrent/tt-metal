@@ -58,6 +58,8 @@ void log_external_operation(const operation::ExternalOperation& operation, const
     if (not attributes.empty()) {
         log_debug(tt::LogOp, "Attributes:");
         for (auto&& [name, value] : attributes) {
+            (void)name;
+            (void)value;
             log_debug(tt::LogOp, "\t{} = {}", name, value);
         }
     }
@@ -65,6 +67,7 @@ void log_external_operation(const operation::ExternalOperation& operation, const
     log_debug(tt::LogOp, "Input std::vector<Tensor>:");
     for (auto index = 0; index < input_tensors.size(); index++) {
         const auto& tensor = input_tensors[index];
+        (void)tensor;
         log_debug(tt::LogOp, "\t{}: {}", index, tensor);
     }
 
