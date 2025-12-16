@@ -21,15 +21,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 
-namespace {
-constexpr int log2(int n) {
-    int log = 0;
-    while (n >>= 1) {
-        ++log;
-    }
-    return log;
-}
-}  // namespace
+constexpr int log2(int n) { return (n <= 1) ? 0 : std::bit_width(static_cast<unsigned>(n)) - 1; }
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
