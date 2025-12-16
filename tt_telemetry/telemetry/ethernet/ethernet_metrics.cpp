@@ -97,6 +97,20 @@ void create_ethernet_metrics(
             *tray_id);
         tt::ChipId chip_id = chip_id_optional.value();
 
+        // Skip remote chips to avoid device contention during fabric tests
+        // Remote chip telemetry requires ERISC-mediated I/O which conflicts with active fabric operations
+        tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
+        if (!cluster_descriptor->is_chip_mmio_capable(chip_id)) {
+            log_info(
+                tt::LogAlways,
+                "Skipping remote chip {} (tray={}, asic={}, channel={}) - telemetry disabled for remote chips",
+                chip_id,
+                *tray_id,
+                *asic_location,
+                channel);
+            continue;
+        }
+
         log_info(
             tt::LogAlways,
             "Creating Ethernet metrics for tray_id={}, asic_location={}, channel={}, chip_id={}...",
