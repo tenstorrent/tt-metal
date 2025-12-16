@@ -501,12 +501,12 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     std::vector<nlohmann::json> matmul_ops;
     for (const auto& node : trace) {
         if (node["node_type"] == "function_start" &&
-            node["params"]["name"].get<std::string>().find("matmul") != std::string::npos) {
+            node["params"]["name"].get<std::string>().find("ttnn::matmul") != std::string::npos) {
             matmul_ops.push_back(node);
         }
     }
 
-    ASSERT_EQ(matmul_ops.size(), 6);
+    ASSERT_EQ(matmul_ops.size(), 3);
     ASSERT_TRUE(matmul_ops[0].contains("input_tensors"));
     ASSERT_TRUE(matmul_ops[1].contains("input_tensors"));
     ASSERT_TRUE(matmul_ops[2].contains("input_tensors"));
