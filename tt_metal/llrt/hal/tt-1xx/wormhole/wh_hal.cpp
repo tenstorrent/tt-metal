@@ -64,12 +64,12 @@ static constexpr float EPS_WHB0 = 1.19209e-7f;
 static constexpr float NAN_WHB0 = 7.0040e+19;
 static constexpr float INF_WHB0 = 1.7014e+38;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
@@ -386,5 +386,4 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
         4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

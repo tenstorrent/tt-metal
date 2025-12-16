@@ -34,7 +34,7 @@
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
 // compiler will complain (ODR violation when compiling with LTO).
 // Wrap the definitions in a unique namespace to avoid that.
-namespace HAL_BUILD {
+namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #endif
 
 // TODO: move these to processor specific files
@@ -352,6 +352,12 @@ constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
 constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
 constexpr std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
 constexpr std::uint8_t CORE_COORD_INVALID = 0xFF;
+
+enum class CoreMagicNumber : uint32_t {
+    WORKER = 0x50ec09a3,
+    ACTIVE_ETH = 0xc63050d1,
+    IDLE_ETH = 0x837b6cae,
+};
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
@@ -368,6 +374,7 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
+    volatile CoreMagicNumber core_magic_number;
     uint8_t pad;  // CODEGEN:skip
 };
 
@@ -375,6 +382,7 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;

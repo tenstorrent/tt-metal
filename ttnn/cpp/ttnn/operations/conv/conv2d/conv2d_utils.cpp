@@ -30,8 +30,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::conv {
+namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
@@ -1749,5 +1748,4 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
     }
 }
 
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv

@@ -50,6 +50,7 @@ using PerformanceTestMode = tt::tt_fabric::fabric_tests::PerformanceTestMode;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
+using TestTrafficSyncConfig = tt::tt_fabric::fabric_tests::TestTrafficSyncConfig;
 using SenderCreditInfo = tt::tt_fabric::fabric_tests::SenderCreditInfo;
 using ReceiverCreditInfo = tt::tt_fabric::fabric_tests::ReceiverCreditInfo;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
@@ -116,6 +117,8 @@ public:
 
     void reset_devices();
 
+    void add_sync_traffic_to_devices(const TestConfig& config);
+
     void process_traffic_config(TestConfig& config);
 
     bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
@@ -144,6 +147,7 @@ public:
     void profile_results(const TestConfig& config);
 
     void collect_latency_results();
+
     void report_latency_results(const TestConfig& config);
 
     void generate_latency_summary();
@@ -164,9 +168,15 @@ public:
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
 
+    void set_skip_packet_validation(bool skip_packet_validation) { skip_packet_validation_ = skip_packet_validation; }
+
+    bool get_skip_packet_validation() { return skip_packet_validation_; }
+
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
+
     void set_code_profiling_enabled(bool enabled);
+
     const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const {
         static const std::vector<CodeProfilingEntry> empty_entries{};
         if (code_profiler_) {
@@ -176,8 +186,6 @@ public:
     }
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
-
-    void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
 
     bool has_test_failures() const { return has_test_failures_; }
 
@@ -204,15 +212,14 @@ public:
     void setup_latency_test_mode(const TestConfig& config);
 
 private:
-    void reset_local_variables() {
-        performance_test_mode_ = PerformanceTestMode::NONE;
-        global_sync_ = false;
-        global_sync_val_ = 0;
-    }
+    void reset_local_variables();
 
     void setup_latency_test_workers(TestConfig& config);
+
     void create_latency_kernels_for_device(TestDevice& test_device);
+
     LatencyTestManager::LatencyWorkerLocation get_latency_sender_location();
+
     LatencyTestManager::LatencyWorkerLocation get_latency_receiver_location();
 
     void add_traffic_config(const TestTrafficConfig& traffic_config);
@@ -243,8 +250,8 @@ private:
 
     PerformanceTestMode performance_test_mode_ = PerformanceTestMode::NONE;  // Performance test mode for current test
     bool telemetry_enabled_ = false;                                         // Telemetry enabled for current test
-    bool global_sync_ = false;        // Line sync for current test
-    uint32_t global_sync_val_ = 0;
+    bool skip_packet_validation_ = false;  // Enable benchmark mode in kernels only (skips validation)
+    bool global_sync_ = false;             // Line sync for current test
 
     // Managers (bandwidth)
     std::unique_ptr<BandwidthProfiler> bandwidth_profiler_;

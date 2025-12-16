@@ -7,6 +7,76 @@
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
+void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
+    for (const auto& sync_config : config.sync_configs) {
+        // currently initializing our sync configs to be on senders local to the current host
+        const auto& sync_sender = sync_config.sender_config;
+        if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
+            CoreCoord sync_core = sync_sender.core.value();
+            const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
+
+            // Track global sync core for this device
+            device_global_sync_cores_[sync_sender.device] = sync_core;
+
+            // Process each already-split sync pattern for this device
+            for (const auto& sync_pattern : sync_sender.patterns) {
+                // Convert sync pattern to TestTrafficSenderConfig format
+                const auto& dest = sync_pattern.destination.value();
+
+                TrafficParameters sync_traffic_parameters = {
+                    .chip_send_type = sync_pattern.ftype.value(),
+                    .noc_send_type = sync_pattern.ntype.value(),
+                    .payload_size_bytes = sync_pattern.size.value(),
+                    .num_packets = sync_pattern.num_packets.value(),
+                    .atomic_inc_val = sync_pattern.atomic_inc_val,
+                    .mcast_start_hops = sync_pattern.mcast_start_hops,
+                    .seed = config.seed,
+                    .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
+                    .mesh_shape = this->fixture_->get_mesh_shape(),
+                    .topology = this->fixture_->get_topology()};
+
+                // For sync patterns, we use a dummy destination core and fixed sync address
+                // The actual sync will be handled by atomic operations
+                CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
+                uint32_t sync_address = this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
+                uint32_t dst_noc_encoding =
+                    this->fixture_->get_worker_noc_encoding(sync_core);  // populate the master coord
+
+                TestTrafficSenderConfig sync_traffic_sender_config = {
+                    .parameters = sync_traffic_parameters,
+                    .src_node_id = sync_sender.device,
+                    .dst_logical_core = dummy_dst_core,
+                    .target_address = sync_address,
+                    .atomic_inc_address = sync_address,
+                    .dst_noc_encoding = dst_noc_encoding,
+                    .link_id = sync_sender.link_id};  // Derive from SenderConfig (always 0 for sync)
+
+                // Determine destination node IDs
+                auto single_direction_hops = dest.hops.value();
+                sync_traffic_sender_config.hops = single_direction_hops;
+                // for 2d mcast case
+                sync_traffic_sender_config.dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+                    sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
+                // for 2d, we need to specify the mcast start node id
+                if (fixture_->is_2D_routing_enabled() &&
+                    sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                    sync_traffic_sender_config.mcast_start_node_id =
+                        fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
+                } else {
+                    sync_traffic_sender_config.mcast_start_node_id = std::nullopt;
+                }
+
+                // Add sync config to the master sender on this device
+                TestTrafficSyncConfig sync_traffic_sync_config = {
+                    .sync_val = sync_config.sync_val, .sender_config = std::move(sync_traffic_sender_config)};
+
+                this->test_devices_.at(device_coord)
+                    .add_sender_sync_config(sync_core, std::move(sync_traffic_sync_config));
+            }
+        }
+    }
+}
+
 void TestContext::wait_for_programs_with_progress() {
     if (!progress_config_.enabled) {
         fixture_->wait_for_programs();
@@ -187,6 +257,12 @@ void TestContext::reset_devices() {
     reset_local_variables();
 }
 
+void TestContext::reset_local_variables() {
+    performance_test_mode_ = PerformanceTestMode::NONE;
+    skip_packet_validation_ = false;
+    global_sync_ = false;
+}
+
 void TestContext::profile_results(const TestConfig& config) {
     TT_FATAL(bandwidth_profiler_ && bandwidth_results_manager_, "Bandwidth managers not initialized");
 
@@ -229,21 +305,25 @@ void TestContext::initialize_bandwidth_results_csv_file() {
 void TestContext::compile_programs() {
     fixture_->setup_workload();
     for (auto& [coord, test_device] : test_devices_) {
-        test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+        bool enable_kernel_benchmark =
+            skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+        test_device.set_benchmark_mode(enable_kernel_benchmark);
         test_device.set_global_sync(global_sync_);
-        test_device.set_global_sync_val(global_sync_val_);
         test_device.set_progress_monitoring_enabled(progress_config_.enabled);
 
         auto device_id = test_device.get_node_id();
         test_device.set_sync_core(device_global_sync_cores_[device_id]);
 
+        // Create kernels (latency or normal)
         if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
             create_latency_kernels_for_device(test_device);
         } else {
+            // Normal mode: create standard kernels for all devices
             test_device.create_kernels();
         }
     }
 
+    // Enqueue all programs
     for (auto& [coord, test_device] : test_devices_) {
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.impl().num_kernels()) {
@@ -377,6 +457,8 @@ void TestContext::validate_packet_sizes_for_policy(const TestConfig& config, uin
 }
 
 void TestContext::process_traffic_config(TestConfig& config) {
+    // Latency test mode: manually populate senders_ and receivers_ maps
+    // with latency-specific kernels and configurations
     if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
         setup_latency_test_workers(config);
         return;
@@ -386,12 +468,16 @@ void TestContext::process_traffic_config(TestConfig& config) {
     this->allocator_->allocate_resources(config);
     log_debug(tt::LogTest, "Resource allocation complete");
 
+    // Use unified connection manager when BOTH sync AND flow control are enabled
+    // - This ensures sync and credit returns use the same link tracking for correct mux detection
+    // - When only sync is enabled (no flow control), separate managers avoid mux overhead
     if (config.enable_flow_control && config.global_sync) {
         for (auto& [_, device] : test_devices_) {
             device.set_use_unified_connection_manager(true);
         }
     }
 
+    // Transfer pristine cores from allocator to each device
     for (auto& [coord, device] : test_devices_) {
         auto node_id = device.get_node_id();
         auto pristine_cores = allocator_->get_pristine_cores_for_device(node_id);
@@ -399,66 +485,17 @@ void TestContext::process_traffic_config(TestConfig& config) {
     }
 
     if (config.global_sync) {
+        // set it only after the test_config is built since it needs set the sync value during expand the high-level
+        // patterns.
         this->set_global_sync(config.global_sync);
-        this->set_global_sync_val(config.global_sync_val);
         this->set_performance_test_mode(config.performance_test_mode);
+        this->set_skip_packet_validation(config.skip_packet_validation);
 
-        log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
-        log_debug(tt::LogTest, "Performance test mode: {}", enchantum::to_string(performance_test_mode_));
+        // Convert sync configs to traffic configs recognized by the test devuces
+        this->add_sync_traffic_to_devices(config);
 
-        for (const auto& sync_sender : config.global_sync_configs) {
-            if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
-                CoreCoord sync_core = sync_sender.core.value();
-                const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
-
-                device_global_sync_cores_[sync_sender.device] = sync_core;
-
-                for (const auto& sync_pattern : sync_sender.patterns) {
-                    const auto& dest = sync_pattern.destination.value();
-                    auto single_direction_hops = dest.hops.value();
-
-                    TrafficParameters sync_traffic_parameters = {
-                        .chip_send_type = sync_pattern.ftype.value(),
-                        .noc_send_type = sync_pattern.ntype.value(),
-                        .payload_size_bytes = sync_pattern.size.value(),
-                        .num_packets = sync_pattern.num_packets.value(),
-                        .atomic_inc_val = sync_pattern.atomic_inc_val,
-                        .mcast_start_hops = sync_pattern.mcast_start_hops,
-                        .seed = config.seed,
-                        .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
-                        .mesh_shape = this->fixture_->get_mesh_shape(),
-                        .topology = this->fixture_->get_topology()};
-
-                    CoreCoord dummy_dst_core = {0, 0};
-                    uint32_t sync_address = this->sender_memory_map_.get_global_sync_address();
-                    uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(sync_core);
-
-                    auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                        sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
-
-                    std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
-                    if (fixture_->is_2D_routing_enabled() &&
-                        sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
-                        mcast_start_node_id =
-                            fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
-                    }
-
-                    TestTrafficSenderConfig sync_config = {
-                        .parameters = sync_traffic_parameters,
-                        .src_node_id = sync_sender.device,
-                        .dst_node_ids = dst_node_ids,
-                        .hops = single_direction_hops,
-                        .mcast_start_node_id = mcast_start_node_id,
-                        .dst_logical_core = dummy_dst_core,
-                        .target_address = sync_address,
-                        .atomic_inc_address = sync_address,
-                        .dst_noc_encoding = dst_noc_encoding,
-                        .link_id = sync_sender.link_id};
-
-                    this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
-                }
-            }
-        }
+        log_debug(tt::LogTest, "Enabled sync and created sync configs");
+        log_debug(tt::LogTest, "Set performance test mode to: {}", performance_test_mode_);
 
         if (!device_global_sync_cores_.empty()) {
             CoreCoord reference_sync_core = device_global_sync_cores_.begin()->second;
@@ -485,8 +522,11 @@ void TestContext::process_traffic_config(TestConfig& config) {
 
     for (const auto& sender : config.senders) {
         for (const auto& pattern : sender.patterns) {
+            // Track local sync core for this device
             device_local_sync_cores_[sender.device].push_back(sender.core.value());
 
+            // The allocator has already filled in all the necessary details.
+            // We just need to construct the TrafficConfig and pass it to add_traffic_config.
             const auto& dest = pattern.destination.value();
 
             TrafficParameters traffic_parameters = {
