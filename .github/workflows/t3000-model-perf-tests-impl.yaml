@@ -132,7 +132,7 @@ jobs:
                 "model-type": "ViT",
                 "arch": "wormhole_b0",
                 "cmd": "run_t3000_gemma3_tests_op_to_op",
-                "timeout": 75,
+                "timeout": 25,
                 "owner_id": "U094PKWHNJ0" # Petar Milojevic
             }
           ]')
