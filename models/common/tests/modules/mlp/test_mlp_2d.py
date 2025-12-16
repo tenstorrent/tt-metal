@@ -413,6 +413,8 @@ def test_ttnn_linear_2d_mesh_topology_bug(ttnn_linear_2d_mesh_has_topology_bug: 
         )
 
 
+# [INFO] currently tt_transformers is not testing 2D mesh MLP in CI -- existing TG tests are DP only that runs 1D MLPs in parallel
+# todo)) add more targeted unit tests like the ones in test_mlp_1d.py when relevant model are implemented
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
@@ -511,7 +513,7 @@ def test_mlp_2d_vs_reference(
 
     # Create MLP2DConfig subclass with lazy weights
     class TestMLP2DConfig(MLP2DConfig):
-        @cached_property
+        @property
         def lazy_w1(self) -> LazyWeight:
             return make_lazy_weight(w1_torch, self.w1_shard_dims)
 
@@ -529,6 +531,10 @@ def test_mlp_2d_vs_reference(
         mesh_ctx=mesh_ctx,
         max_batch_size=batch_size,
     )
+
+    mlp_config.lazy_w1 = make_lazy_weight(w1_torch, mlp_config.w1_shard_dims)
+    mlp_config.lazy_w2 = make_lazy_weight(w2_torch, mlp_config.w2_shard_dims)
+    mlp_config.lazy_w3 = make_lazy_weight(w3_torch, mlp_config.w1_shard_dims)
 
     # Create MLP2D directly with config
     tt_model = MLP2D(mlp_config)
@@ -556,6 +562,8 @@ def test_mlp_2d_vs_reference(
     # WORKAROUND: ttnn.linear produces incorrect topology metadata for 2D mesh matmul.
     # The output topology shows [Shard(-1), Shard(3)] but the correct data layout after
     # the final all-reduce on axis 0 is [Replicated, Shard(3)]:
+    # expected: [ttnn.PlacementReplicate, ttnn.PlacementShard(3)]
+    # got: [ttnn.PlacementShard(-1), ttnn.PlacementShard(3)]
     #   - Axis 0 (size 8): Replicated (all-reduced/gathered)
     #   - Axis 1 (size 4): Sharded on dim 3
     # The fixture `ttnn_linear_2d_mesh_has_topology_bug` checks this once per module.
