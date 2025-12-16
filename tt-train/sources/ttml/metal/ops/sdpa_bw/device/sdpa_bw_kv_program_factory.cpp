@@ -44,20 +44,17 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
-
-constexpr auto kPrevGradValueHolderCbIndex = tt::CBIndex::c_9;
-constexpr auto kCurGradValueHolderCbIndex = tt::CBIndex::c_10;
-constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_11;
-constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_12;
-
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_13;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_14;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_15;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_16;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_17;
-
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_19;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_20;
+constexpr auto kPrevGradValueHolderCbIndex = tt::CBIndex::c_8;
+constexpr auto kCurGradValueHolderCbIndex = tt::CBIndex::c_9;
+constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_10;
+constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_11;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_12;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_13;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_14;
+constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_15;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_16;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_17;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_18;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
@@ -242,20 +239,10 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
         program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    // Could we write intermediates in fp32 to improve numerical stability?
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    // [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
-    //     program,
-    //     all_cores,
-    //     kIntermediatesCbIndex,
-    //     precise_data_format,
-    //     float32_single_tile_size_bytes,
-    //     kNumOfIntermCBTiles);
     [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
         program, all_cores, kIntermediatesCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
 
     // Utility buffers
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program,
         all_cores,
@@ -263,35 +250,19 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         precise_data_format,
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-    //     program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
         program, all_cores, kPrevGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
         program, all_cores, kCurGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
-    // [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
-    //     program, all_cores, kPrevGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    // [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
-    //     program, all_cores, kCurGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
-
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
         program, all_cores, kPrevGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
         program, all_cores, kCurGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
-    // [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
-    //     program, all_cores, kPrevGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    // [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
-    //     program, all_cores, kCurGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
-
-    // used to hold transpose value of attention weights, which is used in grad_V computation
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
         program,
         all_cores,
@@ -299,11 +270,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         precise_data_format,
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
-    //     program, all_cores, kTransposeWhCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    // Intermediate computation buffers
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
         program,
         all_cores,
@@ -311,11 +278,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         precise_data_format,
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
-    //     program, all_cores, kAttentionWeightsCbIndex, data_format, bfloat16_single_tile_size_bytes,
-    //     kSingleTileBuffer);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
         program,
         all_cores,
@@ -323,10 +286,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         precise_data_format,
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
-    //     program, all_cores, kGradAttentionCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
         create_circular_buffer(
             program,
@@ -335,10 +295,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_grad_scores = create_circular_buffer(
-    //     program, all_cores, kGradScoresCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    //[Debug]: switch to fp32 to improve numerical stability when computing u_scalar_row
     [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
         create_circular_buffer(
             program,
@@ -347,8 +304,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_u_scaler_row = create_circular_buffer(
-    //     program, all_cores, kUScalarRowCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     // Output gradient buffers (grad_query is computed by Q kernel, not KV kernel)
     [[maybe_unused]] auto cb_grad_key =
@@ -424,10 +379,10 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
     auto create_unpack_to_dest_mode = []() {
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradValueHolderCbIndex
-        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradValueHolderCbIndex
-        mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradKeyHolderCbIndex
-        mode[tt::CBIndex::c_12] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradKeyHolderCbIndex
+        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradValueHolderCbIndex
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kCurGradValueHolderCbIndex
+        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradKeyHolderCbIndex
+        mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradKeyHolderCbIndex
         return mode;
     };
 
@@ -515,14 +470,14 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // -------------------------------------------------------------------------
     return cached_program_t{
         std::move(program),
-        {/* sdpa_bw_reader_kernel  = */ kernels.reader,
-         /* sdpa_bw_writer_kernel  = */ kernels.writer,
-         /* sdpa_bw_kernel_group_1 = */ kernels.compute_group_1,
-         /* sdpa_bw_kernel_group_2 = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+        {.sdpa_bw_reader_kernel = kernels.reader,
+         .sdpa_bw_writer_kernel = kernels.writer,
+         .sdpa_bw_kernel_group_1 = kernels.compute_group_1,
+         .sdpa_bw_kernel_group_2 = kernels.compute_group_2,
+         .core_group_1 = core_group_1,
+         .core_group_2 = core_group_2,
+         .num_cores = num_cores,
+         .num_cores_y = num_cores_y}};
 }
 
 void SDPABackwardKVProgramFactory::override_runtime_arguments(

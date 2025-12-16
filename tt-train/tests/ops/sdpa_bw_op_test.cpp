@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -556,9 +556,14 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     using namespace ttml;
 
     fmt::print("\n========== {} ==========\n", config.test_name);
-    fmt::print("Config: B={}, S={}, qD={}, kvD={}, qNH={}, kvNH={}\n",
-               config.batch_size, config.sequence_length, config.query_dim, config.key_value_dim,
-               config.num_query_heads, config.num_kv_heads);
+    fmt::print(
+        "Config: B={}, S={}, qD={}, kvD={}, qNH={}, kvNH={}\n",
+        config.batch_size,
+        config.sequence_length,
+        config.query_dim,
+        config.key_value_dim,
+        config.num_query_heads,
+        config.num_kv_heads);
     fmt::print("Tolerances: atol={:.2e}, rtol={:.2e}\n\n", config.atol, config.rtol);
 
     const uint32_t B = config.batch_size;
@@ -649,7 +654,8 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     fmt::print("\n=== Intermediates for Numerical Stability Check ===\n");
     fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
     if (S > 32) {
-        fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
+        fmt::print(
+            "Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
     }
 
     // ========== SDPA Forward Kernel (get attn_output and intermediates) ==========
@@ -805,22 +811,17 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // Backward pass results
     fmt::print("\nBackward Pass (sdpa_bw kernel using sdpa_fw outputs):\n");
     fmt::print(
-        "dQ: Kernel vs Float: {}, Kernel vs Composite: {}\n",
+        "dQ: Kernel vs Float: {}, Composite vs Float: {}\n",
         kernel_dQ_matches_float ? "PASS" : "FAIL",
-        kernel_dQ_matches_composite ? "PASS" : "FAIL");
+        composite_dQ_matches_float ? "PASS" : "FAIL");
     fmt::print(
-        "dK: Kernel vs Float: {}, Kernel vs Composite: {}\n",
+        "dK: Kernel vs Float: {}, Composite vs Float: {}\n",
         kernel_dK_matches_float ? "PASS" : "FAIL",
-        kernel_dK_matches_composite ? "PASS" : "FAIL");
+        composite_dK_matches_float ? "PASS" : "FAIL");
     fmt::print(
-        "dV: Kernel vs Float: {}, Kernel vs Composite: {}\n",
+        "dV: Kernel vs Float: {}, Composite vs Float: {}\n",
         kernel_dV_matches_float ? "PASS" : "FAIL",
-        kernel_dV_matches_composite ? "PASS" : "FAIL");
-
-    fmt::print("\nComposite vs Float Reference:\n");
-    fmt::print("dQ: {}\n", composite_dQ_matches_float ? "PASS" : "FAIL");
-    fmt::print("dK: {}\n", composite_dK_matches_float ? "PASS" : "FAIL");
-    fmt::print("dV: {}\n", composite_dV_matches_float ? "PASS" : "FAIL");
+        composite_dV_matches_float ? "PASS" : "FAIL");
 
     // Assertions
     EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output mismatch in " << config.test_name;
@@ -828,9 +829,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     EXPECT_TRUE(kernel_dQ_matches_float) << "Kernel dQ vs Float mismatch in " << config.test_name;
     EXPECT_TRUE(kernel_dK_matches_float) << "Kernel dK vs Float mismatch in " << config.test_name;
     EXPECT_TRUE(kernel_dV_matches_float) << "Kernel dV vs Float mismatch in " << config.test_name;
-    EXPECT_TRUE(kernel_dQ_matches_composite) << "Kernel dQ vs Composite mismatch in " << config.test_name;
-    EXPECT_TRUE(kernel_dK_matches_composite) << "Kernel dK vs Composite mismatch in " << config.test_name;
-    EXPECT_TRUE(kernel_dV_matches_composite) << "Kernel dV vs Composite mismatch in " << config.test_name;
+    EXPECT_TRUE(composite_dQ_matches_float) << "Composite dQ vs Float mismatch in " << config.test_name;
+    EXPECT_TRUE(composite_dK_matches_float) << "Composite dK vs Float mismatch in " << config.test_name;
+    EXPECT_TRUE(composite_dV_matches_float) << "Composite dV vs Float mismatch in " << config.test_name;
 }
 
 // ========== Test Cases ==========
@@ -911,8 +912,8 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
         .sequence_length = 256U,  // Using smaller seq for faster test (full is 2048)
         .query_dim = 64U,         // head_dim = embedding_dim / num_heads = 2048 / 32
         .key_value_dim = 64U,
-        .num_query_heads = 32U,   // num_heads from config
-        .num_kv_heads = 4U,       // num_groups from config (8 query heads per kv head)
+        .num_query_heads = 32U,  // num_heads from config
+        .num_kv_heads = 4U,      // num_groups from config (8 query heads per kv head)
         .dropout_prob = 0.0F,
         .fp32_dest_acc_en = true,
         .atol = 3e-2F,

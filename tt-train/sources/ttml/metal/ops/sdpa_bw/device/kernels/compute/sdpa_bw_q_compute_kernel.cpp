@@ -43,30 +43,22 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-1e9F
 
-// Circular buffer indices
-constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;    // Gradient w.r.t. output
-constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;    // Attention output from forward pass
-constexpr uint32_t cb_query = tt::CBIndex::c_2;          // Original query
-constexpr uint32_t cb_key = tt::CBIndex::c_3;            // Original key
-constexpr uint32_t cb_value = tt::CBIndex::c_4;          // Original value
-constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;      // Original mask
-constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;  // Forward pass intermediates
-// Temporary/utility buffers
-constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;  // Temporary computations
-
-constexpr uint32_t cb_prev_grad_query = tt::CBIndex::c_9;  // used for holding previous grad query
-constexpr uint32_t cb_cur_grad_query = tt::CBIndex::c_10;  // used for holding current grad query
-
-// Intermediate computation buffers
-constexpr uint32_t cb_attention_weights = tt::CBIndex::c_13;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
-constexpr uint32_t cb_grad_attn_weights =
-    tt::CBIndex::c_14;  // Gradient w.r.t. attention: dL/dP = dL/d(softmax(QK^T / sqrt(Et)))
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_15;   // Gradient w.r.t. QK scores
-constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_16;  // Transpose of key/value
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_17;  // u_scalar per row
-
-// Output buffers
-constexpr uint32_t cb_grad_query = tt::CBIndex::c_18;  // Output: grad_Q
+constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
+constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
+constexpr uint32_t cb_query = tt::CBIndex::c_2;               // Original query
+constexpr uint32_t cb_key = tt::CBIndex::c_3;                 // Original key
+constexpr uint32_t cb_value = tt::CBIndex::c_4;               // Original value
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;           // Original mask
+constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
+constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
+constexpr uint32_t cb_prev_grad_query = tt::CBIndex::c_8;     // used for holding previous grad query
+constexpr uint32_t cb_cur_grad_query = tt::CBIndex::c_9;      // used for holding current grad query
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
+constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
+constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
+constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of key/value
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row
+constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;         // Output: grad_Q
 
 const uint32_t onetile = 1U;
 const uint32_t tiles_per_row = qWt;  // number of tiles per row(qWt == kWt == vWt)
@@ -88,8 +80,8 @@ void MAIN {
         uint32_t alias_cb_prev_grad_query = cb_prev_grad_query;
         uint32_t alias_cb_cur_grad_query = cb_cur_grad_query;
 
-        // Step 2: calculate u_scalar row
-        // Calculate u_scalar row once before K/V loop
+        // Step 1: calculate u_scalar row, one per query row
+        // Calculate u_scalar row once before K/V loop(could be shared with kv kernel for optimization)
         compute_u_scalar_row(
             cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
 
@@ -98,12 +90,10 @@ void MAIN {
             cb_wait_front(cb_key, tiles_per_row);
             cb_wait_front(cb_value, tiles_per_row);
 
-            // Step 1: Recompute attention weights(by row)
-            // P = softmax(QK^T / sqrt(Et) + mask)
+            // Step 2: Recompute attention scores(by row) Z = QK^T/sqrt(Et) + mask
             reconfig_data_format(cb_query, cb_key);
             // This call is required to set up the matmul correctly
-            mm_init(cb_query, cb_key, cb_attention_weights, /* transpose */ 1);
-            // TODO(vmelnykov): switch to use mm_init_short instead of mm_init
+            mm_init_short(cb_query, cb_key, /*transpose*/ 1);
             tile_regs_acquire();
             for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
                 matmul_tiles(
@@ -127,20 +117,22 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_attention_weights, onetile);
 
-            // apply statistics inplace: softmax(QK^T / sqrt(Et))
+            // Step 3: apply statistics inplace: P = softmax(Z) = softmax(QK^T / sqrt(Et) + mask)
             apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
 
-            // Step 3: compute grad w.r.t attention weights
+            // Step 4: compute grad w.r.t attention weights
             // dP = dO @ V^T (where dO is upsteam grad_output)
             compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
 
-            // Step 4: softmax backward block
+            // Step 5: softmax backward block
             // dZ = (dP - u_scalar_row) * P (where P is attention weights, * - element-wise multiplication)
             compute_grad_scores(
                 cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
-            // Step 5: compute grad w.r.t. query
+            // Step 6: compute grad w.r.t. query
             // dQ = scaler * (dZ @ K)
+            // we apply scaler inside compute_grad_scores function to improve numerical stablility of upcoming matmul
+            // for grad Q(and grad K in kv kernel)
             update_grad_query(
                 cb_grad_scores,
                 cb_key,

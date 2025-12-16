@@ -11,10 +11,10 @@ namespace ttml::metal::ops::sdpa_bw::device {
 
 struct SDPABackwardQProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle sdpa_bw_q_reader_kernel;
-        tt::tt_metal::KernelHandle sdpa_bw_q_writer_kernel;
-        tt::tt_metal::KernelHandle sdpa_bw_q_kernel_group_1;
-        tt::tt_metal::KernelHandle sdpa_bw_q_kernel_group_2;
+        tt::tt_metal::KernelHandle sdpa_bw_q_reader_kernel{};
+        tt::tt_metal::KernelHandle sdpa_bw_q_writer_kernel{};
+        tt::tt_metal::KernelHandle sdpa_bw_q_kernel_group_1{};
+        tt::tt_metal::KernelHandle sdpa_bw_q_kernel_group_2{};
         tt::tt_metal::CoreRangeSet core_group_1;
         tt::tt_metal::CoreRangeSet core_group_2;
         uint32_t num_cores{};
@@ -35,4 +35,3 @@ struct SDPABackwardQProgramFactory {
 };
 
 }  // namespace ttml::metal::ops::sdpa_bw::device
-

@@ -43,17 +43,14 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
-
-constexpr auto kPrevGradQueryHolderCbIndex = tt::CBIndex::c_9;
-constexpr auto kCurGradQueryHolderCbIndex = tt::CBIndex::c_10;
-
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_13;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_14;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_15;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_16;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_17;
-
-constexpr auto kGradQueryCbIndex = tt::CBIndex::c_18;
+constexpr auto kPrevGradQueryHolderCbIndex = tt::CBIndex::c_8;
+constexpr auto kCurGradQueryHolderCbIndex = tt::CBIndex::c_9;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
+constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
+constexpr auto kGradQueryCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
@@ -242,15 +239,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         create_circular_buffer(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    // [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
-    //     create_circular_buffer(
-    //         program,
-    //         all_cores,
-    //         kIntermediatesCbIndex,
-    //         precise_data_format,
-    //         float32_single_tile_size_bytes,
-    //         kNumOfIntermCBTiles);
     [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
         create_circular_buffer(
             program,
@@ -260,7 +248,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             bfloat16_single_tile_size_bytes,
             kNumOfIntermCBTiles);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
         create_circular_buffer(
             program,
@@ -269,12 +256,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
-    //     create_circular_buffer(
-    //         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes,
-    //         kSingleTileBuffer);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_prev_grad_query =  // CBIndex::c_9
         create_circular_buffer(
             program, all_cores, kPrevGradQueryHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
@@ -283,15 +265,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         create_circular_buffer(
             program, all_cores, kCurGradQueryHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    // [[maybe_unused]] auto cb_prev_grad_query =  // CBIndex::c_9
-    //     create_circular_buffer(
-    //         program, all_cores, kPrevGradQueryHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
-
-    // [[maybe_unused]] auto cb_cur_grad_query =  // CBIndex::c_10
-    //     create_circular_buffer(
-    //         program, all_cores, kCurGradQueryHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
-
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_13
         create_circular_buffer(
             program,
@@ -301,16 +274,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    // [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_13
-    //     create_circular_buffer(
-    //         program,
-    //         all_cores,
-    //         kAttentionWeightsCbIndex,
-    //         data_format,
-    //         bfloat16_single_tile_size_bytes,
-    //         kSingleTileBuffer);
-
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_14
         create_circular_buffer(
             program,
@@ -319,12 +282,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_14
-    //     create_circular_buffer(
-    //         program, all_cores, kGradAttentionCbIndex, data_format, bfloat16_single_tile_size_bytes,
-    //         kSingleTileBuffer);
 
-    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
         create_circular_buffer(
             program,
@@ -333,15 +291,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
-    //     create_circular_buffer(
-    //         program, all_cores, kGradScoresCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_transpose_wh =  // CBIndex::c_16
         create_circular_buffer(
             program, all_cores, kTransposeWhCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    //[Debug]: switch to fp32 to improve numerical stability when computing u_scalar_row
     [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
         create_circular_buffer(
             program,
@@ -350,9 +304,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
-    // [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
-    //     create_circular_buffer(
-    //         program, all_cores, kUScalarRowCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_18
         create_circular_buffer(
@@ -423,8 +374,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
     auto create_unpack_to_dest_mode = []() {
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradQueryHolderCbIndex
-        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradQueryHolderCbIndex
+        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradQueryHolderCbIndex
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradQueryHolderCbIndex
         return mode;
     };
 
@@ -506,14 +457,14 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // -------------------------------------------------------------------------
     return cached_program_t{
         std::move(program),
-        {/* sdpa_bw_q_reader_kernel_id  = */ kernels.reader,
-         /* sdpa_bw_q_writer_kernel_id  = */ kernels.writer,
-         /* sdpa_bw_q_kernel_group_1_id = */ kernels.compute_group_1,
-         /* sdpa_bw_q_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+        {.sdpa_bw_q_reader_kernel = kernels.reader,
+         .sdpa_bw_q_writer_kernel = kernels.writer,
+         .sdpa_bw_q_kernel_group_1 = kernels.compute_group_1,
+         .sdpa_bw_q_kernel_group_2 = kernels.compute_group_2,
+         .core_group_1 = core_group_1,
+         .core_group_2 = core_group_2,
+         .num_cores = num_cores,
+         .num_cores_y = num_cores_y}};
 }
 
 void SDPABackwardQProgramFactory::override_runtime_arguments(

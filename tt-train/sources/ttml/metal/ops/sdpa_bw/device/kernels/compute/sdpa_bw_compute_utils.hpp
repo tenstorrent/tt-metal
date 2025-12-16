@@ -164,7 +164,6 @@ void compute_u_scalar_row(
 
     // This call is required to set up the matmul correctly
     mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
-    // mm_init(cb_u_scalar_row, cb_mat_mul_reduction, cb_u_scalar_row, /* transpose */ 0);
     matmul_tiles(
         cb_u_scalar_row,
         cb_mat_mul_reduction,
@@ -247,6 +246,7 @@ void compute_grad_scores(
     mul_binary_tile_init();
     mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);  // result in grad_reg
 
+    // We apply scaling here to improve numerical stability of upcoming matmuls for grad Q and grad K
     binop_with_scalar_tile_init();
     mul_unary_tile(/* dst_reg_idx*/ grad_reg, scaler_bits);  // multiply by scaler factor
 
@@ -274,13 +274,10 @@ void update_grad_value(
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);
 
-    // mm_init(cb_transpose_wh, cb_grad_output, cb_cur_grad_value, 0);
     cb_reserve_back(cb_cur_grad_value, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_value);
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         tile_regs_acquire();
-        // reconfig_data_format(cb_transpose_wh, cb_grad_output);
-        // mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
         // This call is required to set up the matmul correctly
         mm_init_short_with_dt(cb_transpose_wh, cb_grad_output, cb_prev_grad_value, /*transpose*/ 0);
         matmul_tiles(
@@ -322,18 +319,13 @@ void update_grad_key(
     uint32_t cb_cur_grad_key,
     uint32_t tiles_per_row,
     bool do_accumulate = false) {
-    // TODO: rename trasnpose function
     transpose_tile(cb_grad_scores, cb_transpose_wh);
     cb_wait_front(cb_transpose_wh, onetile);
 
-    // mm_init(cb_transpose_wh, cb_query, cb_cur_grad_key, 0);
     cb_reserve_back(cb_cur_grad_key, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_key);
-    // reconfig_data_format(cb_transpose_wh, cb_query);
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         tile_regs_acquire();
-        // reconfig_data_format(cb_transpose_wh, cb_query);
-        // mm_init_short(cb_transpose_wh, cb_query, /* transpose */ 0);
         // This call is required to set up the matmul correctly
         mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_prev_grad_key, /*transpose*/ 0);
         matmul_tiles(
@@ -343,14 +335,7 @@ void update_grad_key(
             /* tile_idx */ tile_idx,
             /* dst_reg_idx*/ 0);
 
-        // apply scaler factor to the result before matmul accumulation
-        // maybe will achive better accuracy
-        // binop_with_scalar_tile_init();
-        // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
-
         if (do_accumulate) {
-            // reconfig_data_format_srca(cb_prev_grad_key);
-            // copy_tile_init(cb_prev_grad_key);
             copy_tile_to_dst_init_short_with_dt(cb_transpose_wh, cb_prev_grad_key);
             copy_tile(cb_prev_grad_key, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
@@ -396,11 +381,6 @@ void update_grad_query(
             /* tile_idx */ 0,
             /* tile_idx */ tile_idx,
             /* dst_reg_idx*/ 0);
-
-        // apply scaler factor to the result before matmul accumulation
-        // maybe will achive better accuracy
-        // binop_with_scalar_tile_init();
-        // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
 
         if (do_accumulate) {
             copy_tile_to_dst_init_short_with_dt(cb_grad_scores, cb_prev_grad_query);
