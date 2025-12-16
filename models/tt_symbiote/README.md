@@ -115,6 +115,7 @@ Tests require manual invocation with a TTNN device:
 ```python
 pytest tests/test_vit.py
 pytest tests/test_llama.py
+pytest tests/test_owl_vit.py
 ```
 
 ## Architecture
@@ -141,3 +142,4 @@ utils/
 See [tests/](tests/) directory:
 - [test_vit.py](tests/test_vit.py) - Vision Transformer with TTNN Linear, LayerNorm, Attention
 - [test_llama.py](tests/test_llama.py) - LLaMA-3-8B with bfloat8 optimizations
+- [test_owl_vit.py](tests/test_owl_vit.py) - OWL-ViT with TTNN Attention and Linear
