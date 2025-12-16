@@ -156,7 +156,7 @@ void MAIN {
 
             cb_pop_front(cb_xmm2, block.size());
 
-            const auto final_iter = block.start() + block.size() == Wt;
+            const auto final_iter = block.last() == Wt;
             const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
             if (final_iter) {
                 // Divide by W

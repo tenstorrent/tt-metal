@@ -67,7 +67,9 @@ public:
         bool is_full() const { return size() == block_size_; }
         bool is_partial() const { return size() < block_size_; }
         bool is_first() const { return start_ == 0; }
+        bool is_last() const { return start_ + size() == end_; }
         SizeT start() const { return start_; }
+        SizeT last() const { return end_; }
         SizeT remainder() const { return block_size_ - size(); }
         SizeT full_block_size() const { return block_size_; }
 
