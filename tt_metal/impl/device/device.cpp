@@ -667,9 +667,11 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-void Device::mark_allocations_unsafe() const { this->allocator_impl()->mark_allocations_unsafe(); }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() const { this->allocator_impl()->mark_allocations_safe(); }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
