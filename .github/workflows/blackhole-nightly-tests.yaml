@@ -51,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        card_type: ["P100", "P150"]  # Cannot use P150b yet because CIv2 is using LFC and not MLPerf
+        card_type: ["P100", "P150", "p150b"]  # P100, P150 -> CIv1, p150b -> CIv2; mapped to jobs in impl workflow
     secrets: inherit
     with:
       runner-label: ${{ matrix.card_type }}
