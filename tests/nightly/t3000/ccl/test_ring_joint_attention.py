@@ -77,6 +77,7 @@ def run_ring_joint_sdpa(
     up_axis,
     all_gather_topology,
     skip_check,
+    pcc_threshold,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -283,7 +284,7 @@ def run_ring_joint_sdpa(
 
             passing = True
             for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
-                out_pass, out_pcc = comp_pcc(gt, out, 0.994)
+                out_pass, out_pcc = comp_pcc(gt, out, pcc_threshold)
                 logger.debug(f"python vs pytorch: {out_pcc}")
                 logger.debug(f"mse: {((gt - out) ** 2).mean()}")
                 passing = passing and out_pass
