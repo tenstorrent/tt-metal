@@ -1529,7 +1529,7 @@ KernelHandle CreateQuasarDataMovementKernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_ranges,
     const experimental::QuasarDataMovementConfig& config) {
-    const std::set<DataMovementProcessor> dm_cores = AllocateDataMovementCoresForKernel(config);
+    const std::set<DataMovementProcessor> dm_cores = std::set<DataMovementProcessor>(config.processors.begin(), config.processors.end());
     std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
