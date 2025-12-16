@@ -85,17 +85,12 @@ class Conv2dNormActivation:
         if isinstance(dilation, int):
             dilation = (dilation, dilation)
 
-        if padding == None:
+        if padding is None:
             padding = (kernel_size[0] - 1) // 2 * dilation[0]
 
         # Normalize padding to tuple if it's an integer
         if isinstance(padding, int):
             padding = (padding, padding)
-
-        if groups == 576:
-            width_sharding = True
-        else:
-            width_sharding = None
 
         self.conv_config = _create_conv_config_from_params(
             input_height=input_height,
@@ -117,7 +112,7 @@ class Conv2dNormActivation:
     def __call__(self, device, input_tensor, return_output_dim=True):
         [input_tensor, [_out_height, _out_width]] = self.conv(input_tensor, return_output_dim=True)
         input_tensor = post_conv_reshape(input_tensor, out_height=_out_height, out_width=_out_width)
-        if self.activation_layer != None:
+        if self.activation_layer is not None:
             input_tensor = self.activation_layer(input_tensor)
         return input_tensor
 

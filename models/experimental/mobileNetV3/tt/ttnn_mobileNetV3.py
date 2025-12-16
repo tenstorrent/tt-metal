@@ -39,7 +39,6 @@ class ttnn_MobileNetV3:
         layers = []
         index = 0
         # building first layer
-        firstconv_output_channels = inverted_residual_setting[0].input_channels
         layers.append(
             Conv2dNormActivation(
                 kernel_size=3,
@@ -55,7 +54,7 @@ class ttnn_MobileNetV3:
         index += 1
 
         # building inverted residual blocks
-        for i, cnf in enumerate[InvertedResidualConfig](inverted_residual_setting):
+        for i, cnf in enumerate(inverted_residual_setting):
             layers.append(
                 block(
                     cnf,
@@ -66,8 +65,6 @@ class ttnn_MobileNetV3:
             index += 1
 
         # building last several layers
-        lastconv_input_channels = inverted_residual_setting[-1].out_channels
-        lastconv_output_channels = 6 * lastconv_input_channels
         layers.append(
             Conv2dNormActivation(
                 kernel_size=1,

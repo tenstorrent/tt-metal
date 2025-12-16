@@ -115,7 +115,7 @@ class Demo:
         return output
 
     def preprocess_image(self, image_path: str, device):
-        imgage = Image.open(image_path).convert("RGB")
+        input_image = Image.open(image_path).convert("RGB")
         preprocess = transforms.Compose(
             [
                 transforms.Resize(256),
@@ -124,7 +124,7 @@ class Demo:
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]
         )
-        input_tensor = preprocess(imgage)
+        input_tensor = preprocess(input_image)
         torch_input = input_tensor.unsqueeze(0)
         ttnn_input = ttnn.from_torch(
             torch_input.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
@@ -182,8 +182,6 @@ class Demo:
 
         # Preprocess image
         torch_input, ttnn_input = self.preprocess_image(image_path, self.ttnn_device)
-
-        base_name = Path(image_path).stem
 
         # Run inference
         torch_output = self.run_torch_inference(torch_input)

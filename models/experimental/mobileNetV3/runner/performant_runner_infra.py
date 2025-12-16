@@ -101,7 +101,7 @@ class MobileNetV3PerformanceRunnerInfra:
         # Inputs to MobileNetV3 need to be in ttnn.DRAM_MEMORY_CONFIG for supporting DRAM sliced Conv2d
         mesh_mapper = self.inputs_mesh_mapper if mesh_mapper is None else mesh_mapper
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
         return tt_inputs_host, ttnn.DRAM_MEMORY_CONFIG
 
     def setup_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, pad_channels=16):

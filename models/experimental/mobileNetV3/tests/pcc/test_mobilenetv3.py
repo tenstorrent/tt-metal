@@ -95,7 +95,7 @@ class MobilenetV3TestInfra:
             draw = ImageDraw.Draw(self.img)
             try:
                 font = ImageFont.truetype("arial.ttf", 24)  # Windows
-            except:
+            except OSError:
                 font = ImageFont.load_default()  # fallback
 
             text = f"{label}: {confidence:.2%}"
