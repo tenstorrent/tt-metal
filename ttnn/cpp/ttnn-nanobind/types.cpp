@@ -44,7 +44,7 @@ void py_module_types(nb::module_& mod) {
             nb::sig("def __eq__(self, arg: object, /) -> bool"))  // see Typing in nb docs for explanation
         .def(
             "__init__",
-            [](ttnn::QueueId* t, nb::int_ arg) {
+            [](ttnn::QueueId* t, const nb::int_& arg) {
                 // QueueId uses a strong alias so we have to do this manually
                 new (t) ttnn::QueueId(static_cast<uint8_t>(arg));
             })

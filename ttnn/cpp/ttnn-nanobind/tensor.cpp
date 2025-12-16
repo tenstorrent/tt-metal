@@ -154,7 +154,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
             },
             nb::rv_policy::reference_internal)
         .def("__dlpack_device__", [](nb::handle) { return std::make_pair(nb::device::cpu::value, 0); })
-        .def("__dlpack__", [](nb::pointer_and_handle<tt::tt_metal::HostBuffer> self, nb::kwargs kwargs) {
+        .def("__dlpack__", [](nb::pointer_and_handle<tt::tt_metal::HostBuffer> self, const nb::kwargs& kwargs) {
             using array_api_t = nb::ndarray<uint8_t, nb::array_api, nb::device::cpu, nb::shape<-1>, nb::c_contig>;
             nb::object aa = nb::cast(
                 array_api_t(self.p->view_bytes().data(), {self.p->view_bytes().size()}),
