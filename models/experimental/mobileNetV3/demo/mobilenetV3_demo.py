@@ -24,7 +24,7 @@ import torchvision.transforms as transforms
 
 
 class Demo:
-    """Panoptic-DeepLab demo supporting both PyTorch and TTNN pipelines."""
+    """MobileNetV3 demo supporting both PyTorch and TTNN pipelines."""
 
     def __init__(self) -> None:
         self.torch_model: Optional[Any] = None
@@ -42,14 +42,14 @@ class Demo:
 
     def initialize_torch_model(self) -> None:
         """Initialize PyTorch model and load weights."""
-        logger.info("Initializing PyTorch Panoptic-DeepLab model…")
+        logger.info("Initializing PyTorch MobileNetV3 model…")
         model = models.mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1).eval()
         self.torch_model = model
         logger.info("PyTorch model ready.")
 
     def initialize_ttnn_model(self) -> None:
         """Initialize TTNN model, preprocess parameters, and build runtime graph."""
-        logger.info("Initializing TTNN Panoptic-DeepLab model…")
+        logger.info("Initializing TTNN MobileNetV3 model…")
 
         # Initialize TT device
         self.ttnn_device = ttnn.open_device(device_id=0, l1_small_size=24576)
