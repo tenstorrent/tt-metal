@@ -177,9 +177,25 @@ void print_comparison(
 }  // namespace
 
 /**
+ * Test fixture for TILE layout round-trip tests.
+ * Manages device lifecycle to ensure proper test isolation.
+ */
+class TileLayoutRoundTripTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        autograd::ctx().reset_graph();
+        autograd::ctx().close_device();
+    }
+};
+
+/**
  * Test: Random data should survive round-trip through TILE layout
  */
-TEST(TileLayoutRoundTripTest, RandomDataPreserved) {
+TEST_F(TileLayoutRoundTripTest, RandomDataPreserved) {
     std::cout << "\n################################################################################\n";
     std::cout << "TEST: Random Data Round-Trip (Control Group)\n";
     std::cout << "################################################################################\n";
@@ -209,7 +225,7 @@ TEST(TileLayoutRoundTripTest, RandomDataPreserved) {
  * Test: Structured data should survive round-trip through TILE layout
  * FIXED: Bug was in Python bindings (non-contiguous arrays), not TILE layout
  */
-TEST(TileLayoutRoundTripTest, StructuredDataPreserved) {
+TEST_F(TileLayoutRoundTripTest, StructuredDataPreserved) {
     std::cout << "\n################################################################################\n";
     std::cout << "TEST: Structured Data Round-Trip (Verifies TILE layout works)\n";
     std::cout << "################################################################################\n";
@@ -242,7 +258,7 @@ TEST(TileLayoutRoundTripTest, StructuredDataPreserved) {
  * Test: Compare random vs structured data corruption
  * FIXED: Both types of data now preserve well (bug was in Python bindings)
  */
-TEST(TileLayoutRoundTripTest, CompareRandomVsStructured) {
+TEST_F(TileLayoutRoundTripTest, CompareRandomVsStructured) {
     std::cout << "\n################################################################################\n";
     std::cout << "TEST: Comparison - Random vs Structured Data\n";
     std::cout << "################################################################################\n";
@@ -275,7 +291,7 @@ TEST(TileLayoutRoundTripTest, CompareRandomVsStructured) {
  * Test: Different tensor shapes
  * Check if certain shapes are more affected
  */
-TEST(TileLayoutRoundTripTest, DifferentShapes) {
+TEST_F(TileLayoutRoundTripTest, DifferentShapes) {
     std::cout << "\n################################################################################\n";
     std::cout << "TEST: Different Tensor Shapes\n";
     std::cout << "################################################################################\n";

@@ -83,9 +83,8 @@ TEST_F(BertWeightLoadingTest, QKVCombinationCorrectness) {
     // Test that QKV combination produces correct results
     // by manually combining Q, K, V and comparing to expected output
 
-    const size_t hidden = 4;
-    const size_t batch = 1;
-    const size_t seq_len = 2;
+    // Test dimensions (documented for clarity, but using literals below)
+    // hidden=4, batch=1, seq_len=2
 
     // Create simple Q, K, V matrices for testing
     // Q = [[1, 2, 3, 4],    K = [[10, 11, 12, 13],    V = [[20, 21, 22, 23],
