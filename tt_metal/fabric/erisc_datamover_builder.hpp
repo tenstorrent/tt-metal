@@ -504,7 +504,7 @@ public:
 
     FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
-    bool isInterMesh = false;  // True if this data mover connects to a different mesh (inter-mesh router)
+    bool is_inter_mesh = false;  // True if this data mover connects to a different mesh (inter-mesh router)
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 

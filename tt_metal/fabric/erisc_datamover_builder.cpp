@@ -661,7 +661,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     config(config),
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
-    isInterMesh(local_fabric_node_id.mesh_id != peer_fabric_node_id.mesh_id),
+    is_inter_mesh(local_fabric_node_id.mesh_id != peer_fabric_node_id.mesh_id),
     handshake_address(tt::round_up(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
@@ -977,7 +977,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         static_cast<uint32_t>(this->firmware_context_switch_interval),
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction_),
-        this->isInterMesh,  // Whether this router connects different meshes (determines VC crossover)
+        this->is_inter_mesh,  // Whether this router connects different meshes (determines VC crossover)
         is_handshake_master,
         static_cast<uint32_t>(this->handshake_address),
         static_cast<uint32_t>(this->channel_buffer_size),
