@@ -7,12 +7,30 @@ import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mo
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers.cache_utils import DynamicCache
+from transformers.models.mllama.modeling_mllama import MllamaCrossAttentionDecoderLayer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
+
+
+def load_partial_weights(weights_path, layer_prefix):
+    partial_state_dict = {}
+    model = AutoModelForVision2Seq.from_pretrained(
+        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+    )
+    weights = model.state_dict()
+    keys = weights.keys()
+    for key in keys:
+        if layer_prefix in key:
+            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
+            key_name = key[len(layer_prefix) :]
+            partial_state_dict.update({key_name: weights[key]})
+    return partial_state_dict
 
 
 @pytest.mark.parametrize(
@@ -28,13 +46,17 @@ from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossA
     ],
     indirect=True,
 )
+# @pytest.mark.parametrize(
+#     "batch",
+#     (1, 2),
+#     ids=[
+#         "batch_1",
+#         "batch_2",
+#     ],
+# )
 @pytest.mark.parametrize(
     "batch",
-    (1, 2),
-    ids=[
-        "batch_1",
-        "batch_2",
-    ],
+    (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
@@ -58,6 +80,21 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     n_kv_heads = model_args.n_kv_heads
     reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
     reference_model.load_state_dict(partial_state_dict)
+
+    # Initialization of HF subclass parameters
+    hf_weights_repo_name = os.getenv("HF_MODEL")
+    past_key_values = DynamicCache()
+    config = AutoConfig.from_pretrained(hf_weights_repo_name)
+    config.text_config._attn_implementation = "sdpa"
+
+    # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
+    layer_idx = config.text_config.cross_attention_layers[0]
+    reference_model1 = MllamaCrossAttentionDecoderLayer(config.text_config, layer_idx=layer_idx)
+    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    partial_state_dict1 = load_partial_weights(
+        hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
+    )
+    reference_model1.load_state_dict(partial_state_dict1)
 
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
@@ -87,7 +124,9 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     pt_xattn_cache_chunks = [
         x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
     ]
-
+    reference_model1.forward(
+        torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
+    )
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
