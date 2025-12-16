@@ -40,8 +40,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-        # CCACHE_REMOTE_ONLY: "true"
-        CCACHE_DIR: /tmp/ccache
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
         # Force JIT compilation and enable debug logging
         TT_METAL_LOGGER_LEVEL: Debug
@@ -81,7 +81,12 @@ jobs:
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           echo "=== Initial ccache configuration ==="
-          ccache --show-config | head -20
+          ccache --show-config | head -30
+          echo ""
+          echo "=== Redis Remote Storage Configuration ==="
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
+          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
+          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
           echo ""
           echo "=== Git commit info ==="
           echo "Git commit: $(git rev-parse HEAD)"
@@ -106,6 +111,17 @@ jobs:
         run: |
           echo "=== Testing kernel compilation to trigger JIT and verify debug logging ==="
           cd /work
+
+          # Verify Redis ccache configuration is active
+          echo "=== Verifying ccache Redis configuration ==="
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
+          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
+          ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
+
+          # Set debug environment
+          export TT_METAL_LOGGER_LEVEL=Debug
+          export TT_METAL_LOGGER_TYPES=BuildKernels
+          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
 
           # Set debug environment
           export TT_METAL_LOGGER_LEVEL=Debug
@@ -161,12 +177,18 @@ jobs:
           echo "Checking for ttnn operations:"
           grep -iE "(ttnn|tensor|relu|add|mul)" /tmp/kernel_test.log || echo "No ttnn operations logged"
 
-      - name: First test run - populate kernel ccache
-        timeout-minutes: 25
-        run: |
-          echo "=== ccache Kernel Consistency Test ==="
-          echo "Testing JIT kernel compilation caching during TT-Train tests"
+          # Store initial stats
+          echo "=== Initial ccache stats ==="
+          ccache -s
 
+          echo ""
+          echo "=== Verifying Redis remote storage is active ==="
+          ccache --show-config | grep -A 5 "remote_storage"
+          echo "CCACHE_REMOTE_STORAGE env: ${CCACHE_REMOTE_STORAGE:-not set}"
+          echo "CCACHE_REMOTE_ONLY env: ${CCACHE_REMOTE_ONLY:-not set}"
+
+          echo ""
+          echo "=== First TT-Train test run (should compile and cache kernels to Redis) ==="
           # Store initial stats
           echo "=== Initial ccache stats ==="
           ccache -s
@@ -233,12 +255,16 @@ jobs:
 
           echo "Running main test..."
           ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/first_run.log
+      - name: Second test run - test kernel cache hits from Redis
+        timeout-minutes: 25
+        run: |
+          echo "=== Second TT-Train test run (should hit JIT kernel cache from Redis) ==="
 
-          echo ""
-          echo "=== ccache stats after first run ==="
-          ccache -s
+          echo "=== Verifying Redis connection before second run ==="
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
+          ccache --show-config | grep -E "(remote_storage|remote_only)" || true
 
-          echo ""
+          cd /work/build/tt-train
           echo "=== Cache directory structure after first run ==="
           echo "HOME/.cache/tt-metal-cache/:"
           find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files in ~/.cache/tt-metal-cache/"
@@ -267,12 +293,15 @@ jobs:
           # Run the same tests again - JIT kernels should hit ccache now
           echo "Running second test - should hit cached kernels..."
           ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log
+      - name: Third test run with Redis cache analysis
+        timeout-minutes: 25
+        run: |
+          echo "=== Third TT-Train test run for Redis cache analysis ==="
 
-          echo ""
-          echo "=== ccache stats after second run ==="
-          ccache -s
+          echo "=== Verifying Redis is still configured ==="
+          ccache --show-config | grep -E "(remote_storage|remote_only)" || true
 
-          echo ""
+          cd /work/build/tt-train
           echo "=== Cache directory structure after second run ==="
           echo "Kernel files generated:"
           find ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files found"
@@ -362,10 +391,17 @@ jobs:
             echo "--- Second Run Build Keys ---"
             grep -E "(build_key|git_hash|out_root)" /tmp/second_run.log | head -10 || echo "No build key info found"
 
-            echo ""
-            echo "Compile command differences:"
-            echo "--- First Run Commands ---"
-            grep "Full compile command" /tmp/first_run.log | head -5 || echo "No compile commands found"
+          echo '## CCache Kernel Consistency Test Results (with Redis Remote Storage)' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks if ccache works consistently for JIT kernel compilation across rebuilds from the same commit using Redis as the remote storage backend.' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '### Redis Configuration' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not configured}" >> $GITHUB_STEP_SUMMARY
+          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}" >> $GITHUB_STEP_SUMMARY
+          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARYtmp/first_run.log | head -5 || echo "No compile commands found"
             echo "--- Second Run Commands ---"
             grep "Full compile command" /tmp/second_run.log | head -5 || echo "No compile commands found"
           else
@@ -388,17 +424,17 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
           # Parse and analyze the stats
-          CACHE_HITS=$(echo "$STATS" | grep -E "cache hit" | grep -oE "[0-9]+" | head -1 || echo "0")
-          CACHE_MISSES=$(echo "$STATS" | grep -E "cache miss" | grep -oE "[0-9]+" | head -1 || echo "0")
-          TOTAL=$((CACHE_HITS + CACHE_MISSES))
-
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '### Analysis' >> $GITHUB_STEP_SUMMARY
-          echo "- Cache hits: $CACHE_HITS" >> $GITHUB_STEP_SUMMARY
-          echo "- Cache misses: $CACHE_MISSES" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$TOTAL" -gt 0 ]; then
-            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
+            if [ "$HIT_RATE" -lt 30 ]; then
+              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for kernel compilation across rebuilds with Redis.' >> $GITHUB_STEP_SUMMARY
+              echo 'This confirms the suspected cache-busting issue in JIT kernel builds even with remote Redis storage.' >> $GITHUB_STEP_SUMMARY
+            elif [ "$HIT_RATE" -lt 70 ]; then
+              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring with Redis backend.' >> $GITHUB_STEP_SUMMARY
+            else
+              echo '🟢 **GOOD**: High cache hit rate indicates ccache with Redis is working well for kernel compilation.' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo '⚪ **NO DATA**: No cache activity detected. Redis remote storage may not be configured properly.' >> $GITHUB_STEP_SUMMARY
+          fiHIT_RATE=$((CACHE_HITS * 100 / TOTAL))
             echo "- Hit rate: ${HIT_RATE}%" >> $GITHUB_STEP_SUMMARY
             echo '' >> $GITHUB_STEP_SUMMARY
 
