@@ -88,20 +88,22 @@ void matmul_single_core_tensor(
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
     // Create tensor specs for src0 (MxK), src1 (KxN), and dst (MxN)
-    Shape src0_shape({1, 1, M, K});
-    Shape src1_shape({1, 1, K, N});
-    Shape dst_shape({1, 1, M, N});
+    Shape src0_shape({M, K});
+    Shape src1_shape({K, N});
+    Shape dst_shape({M, N});
 
     MemoryConfig dram_mem_config(BufferType::DRAM);
     TensorSpec src0_spec(src0_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), dram_mem_config));
     TensorSpec src1_spec(src1_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), dram_mem_config));
     TensorSpec dst_spec(dst_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), dram_mem_config));
 
-    // Allocate device tensors (this allocates buffers on device but doesn't transfer data yet)
-    // We'll use EnqueueWriteMeshBuffer to write data, matching the original code's flow
-    auto src0_tensor = allocate_tensor_on_device(src0_spec, mesh_device.get());
-    auto src1_tensor = allocate_tensor_on_device(src1_spec, mesh_device.get());
-    auto dst_tensor = allocate_tensor_on_device(dst_spec, mesh_device.get());
+    // Create device tensors from input data using Tensor::from_vector
+    // This creates the tensors and transfers data to device in one step
+    auto src0_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), src0_spec, mesh_device.get());
+    auto src1_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), src1_spec, mesh_device.get());
+    // Create output tensor initialized with zeros
+    auto dst_tensor =
+        Tensor::from_vector<bfloat16>(std::vector<bfloat16>(output.size(), 0), dst_spec, mesh_device.get());
 
     // Get mesh buffers from tensors for use with TensorAccessorArgs and runtime args
     auto src0_mesh_buffer = src0_tensor.mesh_buffer();
@@ -184,13 +186,12 @@ void matmul_single_core_tensor(
     // been set at compile time. The compute kernel does not need any runtime arguments to execute. And so we can skip
     // this step.
 
-    // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
-    // buffer
-    distributed::EnqueueWriteMeshBuffer(cq, src0_mesh_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_mesh_buffer, b, false);
+    // Execute the kernels (data is already on device from Tensor::from_vector)
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_mesh_buffer, true);
+    distributed::EnqueueMeshWorkload(cq, workload, true);  // Wait for workload to complete
+
+    // Read the result back from device using Tensor::to_vector
+    output = dst_tensor.to_vector<bfloat16>();
 }
 
 ///////////////////////////////////////
@@ -229,20 +230,9 @@ int main() {
         std::vector<bfloat16> golden_vec(M * N, 0);
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
 
-        // Tilize the input vectors to match the expected tiled layout for the device
-        // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
-        // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
-        // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
-        // (32x32 elements) is stored contiguously. This matches the native data access patterns of the matrix engine
-        // and enables efficient operations on the accelerator.
-        src0_vec = tilize_nfaces(src0_vec, M, K);
-        src1_vec = tilize_nfaces(src1_vec, K, N);
-
-        // Invoke the matrix multiplication on the device
+        // Invoke the matrix multiplication on the Tensix device
         std::vector<bfloat16> result_vec(M * N, 0);
         matmul_single_core_tensor(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
-        // Reverse the tilization to get the result in the row-major format that the CPU expects
-        result_vec = untilize_nfaces(result_vec, M, N);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
 
