@@ -137,7 +137,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
@@ -155,7 +154,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
