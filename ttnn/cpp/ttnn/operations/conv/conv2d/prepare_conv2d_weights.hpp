@@ -66,6 +66,13 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
+// Converts conv_transpose2d weights to grouped layout with padded zeros
+// Input shape: [in_channels, out_channels/groups, H, W]
+// Output shape: [in_channels, out_channels, H, W]
+// This is used BEFORE transform_weights_for_conv_transpose2d for grouped convolutions
+Tensor convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
@@ -135,7 +142,8 @@ struct Conv2dWeightsBiasPrepConfig {
         bool enable_activation_reuse_ = false,
         std::array<uint32_t, 2> kernel_size_ = {1, 1},
         std::array<uint32_t, 2> stride_ = {1, 1},
-        std::array<uint32_t, 4> padding_n4_ = {0, 0, 0, 0}) :
+        std::array<uint32_t, 4> padding_n4_ = {0, 0, 0, 0},
+        std::optional<uint32_t> out_channels_ = std::nullopt) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
         weight_block_h_ntiles(weight_block_h_ntiles_),
@@ -153,7 +161,8 @@ struct Conv2dWeightsBiasPrepConfig {
         kernel_size(kernel_size_),
         stride(stride_),
         padding_n4(padding_n4_),
-        interleaved_mm_conv(interleaved_mm_conv) {}
+        interleaved_mm_conv(interleaved_mm_conv),
+        out_channels(out_channels_) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -180,6 +189,9 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 4> padding_n4;
     // This conv will go through auto shard codepath for matmul based convs
     const bool interleaved_mm_conv;
+    // Optional explicit out_channels for conv_transpose2d with groups
+    // (since transformed weights have shape [out_channels/groups, ...] instead of [out_channels, ...])
+    const std::optional<uint32_t> out_channels;
 
     static constexpr auto attribute_names = std::make_tuple(
         "input_channels_alignment",
@@ -198,7 +210,8 @@ struct Conv2dWeightsBiasPrepConfig {
         "kernel_size",
         "stride",
         "padding_n4",
-        "interleaved_mm_conv");
+        "interleaved_mm_conv",
+        "out_channels");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->input_channels_alignment),
@@ -217,7 +230,8 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->kernel_size),
             std::cref(this->stride),
             std::cref(this->padding_n4),
-            std::cref(this->interleaved_mm_conv));
+            std::cref(this->interleaved_mm_conv),
+            std::cref(this->out_channels));
     }
 };
 

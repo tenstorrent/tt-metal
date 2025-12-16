@@ -182,10 +182,24 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         "PyTorch expects weights for ConvTranspose2D in IOHW format. If you have passed the correct weights, then make "
         "sure that the weights_format string is set to \"IOHW\".");
 
+    // For grouped conv_transpose2d (groups > 1), we need to:
+    // 1. Apply grouped layout conversion BEFORE the transpose to expand the weight tensor
+    // 2. Then apply the standard transpose transformation
+    // 3. Use groups=1 for the rest of the pipeline since grouping is already handled
+    Tensor weight_for_transform = weight_tensor;
+    uint32_t groups_for_prep = groups;
+    if (groups > 1) {
+        // Convert [in_channels, out_channels/groups, H, W] -> [in_channels, out_channels, H, W]
+        weight_for_transform = conv2d::convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
+            weight_tensor, groups, weight_tensor.dtype());
+        // After grouped conversion, we use groups=1 since the grouping is already embedded in the weights
+        groups_for_prep = 1;
+    }
+
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(
         tt::tt_metal::StorageType::DEVICE, input_memory_config, dram_slice_config_);
-    Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel);
+    Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
     if (path == ConvT2dExecutionPath::L1) {
         // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
         // "full_input" dimensions (after halo/padding expansion), not the original input dimensions.
@@ -209,7 +223,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
             dilation,
             has_bias,
-            groups,
+            groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             device,
             input_dtype,
             output_dtype,
@@ -327,7 +341,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
             dilation,
             has_bias,
-            groups,
+            groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             device,
             input_dtype,
             output_dtype,
