@@ -109,14 +109,13 @@ struct RMSNorm {
             // Generate both scalar tiles in scalars_cb
             // Tile 0: epsilon
             // Tile 1: reduction scalar (1/sqrt(num_elements))
-            cb_reserve_back(args.scalars_cb, 2);
+            cb_reserve_back(args.scalars_cb, 1);
             volatile tt_l1_ptr uint16_t* epsilon_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(args.scalars_cb));
             epsilon_ptr[0] = args.epsilon;
             cb_push_back(args.scalars_cb, 1);
 
             generate_reduce_scaler<CTArgs::tiny_tile>(args.scalars_cb, args.scalar);
-            cb_push_back(args.scalars_cb, 1);
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)

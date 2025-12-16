@@ -49,6 +49,7 @@ class PreSDPA:
         input_tensor,
         gamma_tensor,
         matmul_weights_tensor,
+        rmsnorm2_gamma_tensor,
         output_tensor,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
@@ -60,6 +61,7 @@ class PreSDPA:
             input_tensor: Input tensor (must be sharded on single core)
             gamma_tensor: Gamma/weight tensor (must be sharded, same shape as input)
             matmul_weights_tensor: Matmul weights tensor (must be width sharded)
+            rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements padded to 2 tiles)
             output_tensor: Pre-allocated output tensor (must be sharded on single core)
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
@@ -166,6 +168,18 @@ class PreSDPA:
         matmul_output_cb = 9
         output_cb = 7
         matmul_input_cb = 8
+        rmsnorm2_gamma_cb = 10  # New gamma for second RMSNorm (1536 elements padded to 2 tiles)
+        rmsnorm2_input_cb = 11  # Separate input CB for RMSNorm2
+        rmsnorm2_interm_cb = 12  # Separate interm CB for RMSNorm2
+        rmsnorm2_output_cb = 13  # Separate output CB for RMSNorm2
+
+        # RMSNorm2 parameters (for 1536 element input, padded to 2 full 32x32 tiles)
+        rmsnorm2_numel = 1536
+        rmsnorm2_num_tiles = 2  # 2 full 32x32 tiles
+
+        # Compute 1/sqrt(1536) for RMSNorm2 reduction
+        inv_sqrt_rmsnorm2_numel = 1.0 / math.sqrt(float(rmsnorm2_numel))
+        scalar2_packed = float_to_bfloat16_packed(inv_sqrt_rmsnorm2_numel)
 
         # Calculate mcast page counts for source and destination CBs
         # Source CB (rmsnorm_output): uses RMSNorm tile format (32x32 or 16x32)
@@ -247,6 +261,23 @@ class PreSDPA:
             ("rmsnorm_num_tiles", num_tiles),
             ("rmsnorm_epsilon_index", 0),
             ("rmsnorm_scalar_index", 1),
+        ]
+
+        # RMSNorm2 compile-time args (for second RMSNorm on gathered data)
+        # Uses separate CBs with exact sizes for testing
+        rmsnorm2_ncrisc_named_compile_time_args = [
+            ("rmsnorm2_input_cb", rmsnorm2_input_cb),
+            ("rmsnorm2_interm_cb", rmsnorm2_interm_cb),
+            ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
+            ("rmsnorm2_output_cb", rmsnorm2_output_cb),
+            ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
+        ]
+        rmsnorm2_trisc_named_compile_time_args = [
+            ("rmsnorm2_input_cb", rmsnorm2_input_cb),
+            ("rmsnorm2_interm_cb", rmsnorm2_interm_cb),
+            ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
+            ("rmsnorm2_output_cb", rmsnorm2_output_cb),
+            ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
         ]
 
         # ========================================================================
@@ -355,6 +386,56 @@ class PreSDPA:
         gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
+        # CB 10: RMSNorm2 Gamma (created from sharded tensor, 2 full 32x32 tiles)
+        rmsnorm2_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor)
+        # Update the tile descriptor in the format descriptor
+        rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+        rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+
+        # RMSNorm2 uses separate CBs with exact sizes (32x32 tiles)
+        TILE_32x32 = ttnn.Tile((32, 32))
+        rmsnorm2_tile_descriptor = ttnn.TileDescriptor(TILE_32x32)
+        rmsnorm2_page_size = TILE_32x32.get_tile_size(data_format)
+
+        # CB 11: RMSNorm2 input buffer (2 tiles)
+        rmsnorm2_input_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=rmsnorm2_input_cb,
+            data_format=data_format,
+            page_size=rmsnorm2_page_size,
+            tile=rmsnorm2_tile_descriptor,
+        )
+        rmsnorm2_input_cb_descriptor = ttnn.CBDescriptor(
+            total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 2 tiles
+            core_ranges=rmsnorm_core_grid,
+            format_descriptors=[rmsnorm2_input_cb_format],
+        )
+
+        # CB 12: RMSNorm2 intermediate buffer (num_tiles + 1 = 3 tiles)
+        rmsnorm2_interm_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=rmsnorm2_interm_cb,
+            data_format=data_format,
+            page_size=rmsnorm2_page_size,
+            tile=rmsnorm2_tile_descriptor,
+        )
+        rmsnorm2_interm_cb_descriptor = ttnn.CBDescriptor(
+            total_size=(rmsnorm2_num_tiles + 1) * rmsnorm2_page_size,  # 3 tiles
+            core_ranges=rmsnorm_core_grid,
+            format_descriptors=[rmsnorm2_interm_cb_format],
+        )
+
+        # CB 13: RMSNorm2 output buffer (2 tiles)
+        rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=rmsnorm2_output_cb,
+            data_format=data_format,
+            page_size=rmsnorm2_page_size,
+            tile=rmsnorm2_tile_descriptor,
+        )
+        rmsnorm2_output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 2 tiles
+            core_ranges=rmsnorm_core_grid,
+            format_descriptors=[rmsnorm2_output_cb_format],
+        )
+
         # CB 4: RMSNorm output buffer (dynamically created)
         rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=rmsnorm_output_cb,
@@ -439,25 +520,28 @@ class PreSDPA:
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
             core_ranges=full_device_grid,
-            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul + gather sender
+            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul + gather sender + rmsnorm2
             ncrisc_named_compile_time_args=rmsnorm_reader_named_compile_time_args
             + mcast_sender_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
-            + gather_sender_named_compile_time_args,
-            # NCRISC common runtime args: epsilon + scalar + gather output address
+            + gather_sender_named_compile_time_args
+            + rmsnorm2_ncrisc_named_compile_time_args,
+            # NCRISC common runtime args: epsilon + scalar + gather output address + scalar2
             ncrisc_common_runtime_args=[
                 epsilon_packed,
                 scalar_packed,
                 output_tensor.buffer_address(),  # gather receiver data address
+                scalar2_packed,  # scalar for rmsnorm2 (1/sqrt(1536))
             ],
             # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul + gather receiver
             brisc_named_compile_time_args=rmsnorm_writer_named_compile_time_args
             + mcast_receiver_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_receiver_named_compile_time_args,
-            # TRISC named compile-time args: rmsnorm compute + matmul
+            # TRISC named compile-time args: rmsnorm compute + matmul + rmsnorm2
             trisc_named_compile_time_args=rmsnorm_compute_named_compile_time_args
-            + matmul_trisc_named_compile_time_args,
+            + matmul_trisc_named_compile_time_args
+            + rmsnorm2_trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
@@ -494,6 +578,10 @@ class PreSDPA:
                 matmul_output_cb_descriptor,
                 output_cb_descriptor,
                 matmul_input_cb_descriptor,
+                rmsnorm2_gamma_cb_descriptor,  # CB 10: RMSNorm2 gamma
+                rmsnorm2_input_cb_descriptor,  # CB 11: RMSNorm2 input
+                rmsnorm2_interm_cb_descriptor,  # CB 12: RMSNorm2 interm
+                rmsnorm2_output_cb_descriptor,  # CB 13: RMSNorm2 output
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,  # ID 0
@@ -504,7 +592,7 @@ class PreSDPA:
         )
 
         # Execute generic op
-        io_tensors = [input_tensor, gamma_tensor, matmul_weights_tensor, output_tensor]
+        io_tensors = [input_tensor, gamma_tensor, matmul_weights_tensor, rmsnorm2_gamma_tensor, output_tensor]
         print("launching generic op")
         output = ttnn.generic_op(io_tensors, program_descriptor)
 

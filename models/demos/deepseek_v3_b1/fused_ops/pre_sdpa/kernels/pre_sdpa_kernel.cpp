@@ -39,7 +39,7 @@ KERNEL_ENTRY {
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
         get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
         get_arg_val<uint32_t>(0),  // epsilon
-        get_arg_val<uint32_t>(1),  // scalar
+        get_arg_val<uint32_t>(1),  // scalar (1/sqrt(7168))
     };
 
     // Mcast CB indices from named compile-time args
@@ -84,6 +84,13 @@ KERNEL_ENTRY {
     constexpr uint32_t gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
     constexpr uint32_t gather_dst_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
 
+    // RMSNorm2 reader args (uses same scalars_cb, different scalar value)
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{
+        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
+        get_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_arg_val<uint32_t>(3),  // scalar2 (1/sqrt(1536))
+    };
+
 // ============================================================================
 // BRISC (Writer + Mcast Receiver) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: rmsnorm writer, mcast receiver, matmul writer, gather receiver
@@ -95,6 +102,9 @@ KERNEL_ENTRY {
 
     // RMSNorm writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
+
+    // RMSNorm2 writer args (BRISC is no-op)
+    deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
@@ -151,6 +161,18 @@ KERNEL_ENTRY {
 
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+
+    // RMSNorm2 compute args (separate CBs with exact sizes for testing)
+    deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
+        get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (2 tiles)
+        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),  // reuse scalars cb
+        get_named_compile_time_arg_val("rmsnorm2_interm_cb"),  // separate interm CB (3 tiles)
+        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
+        get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (2 tiles)
+        get_named_compile_time_arg_val("rmsnorm2_num_tiles"),  // 2 tiles
+        get_named_compile_time_arg_val("rmsnorm_epsilon_index"),
+        get_named_compile_time_arg_val("rmsnorm_scalar_index"),
+    };
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
@@ -162,6 +184,11 @@ KERNEL_ENTRY {
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
         deepseek_b1_ops::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         deepseek_b1_ops::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+
+        // RMSNorm2 gamma buffer (2 tiles, padded from 1536 elements)
+        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
+        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
+        deepseek_b1_ops::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
     }
     if constexpr (Core::is_matmul_core) {
         // Matmul weights
@@ -171,13 +198,15 @@ KERNEL_ENTRY {
     }
 #endif
 
+    // Set up reusable operations
+    // pop_input = true (input is consumed after RMSNorm)
+    deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+
     // ========================================================================
     // Input core: RMSNorm + Mcast send
     // ========================================================================
     {
         DeviceZoneScopedN("RMSNORM");
-        // pop_input = true (input is consumed after RMSNorm)
-        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
         rmsnorm(rmsnorm_args);
     }
 
@@ -219,7 +248,7 @@ KERNEL_ENTRY {
     if constexpr (Core::is_input_core) {
         DeviceZoneScopedN("GATHER_TO_RMSNORM_HACK");
 
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm2_input_cb = get_named_compile_time_arg_val("rmsnorm2_input_cb");
         constexpr uint32_t gather_data_size_bytes = 1536 * 2;  // 1.5 half tiles
         constexpr uint32_t rmsnorm_tile_size_bytes = 4096;     // 2 tiles (32x32 each) in bfloat16
         constexpr uint32_t padding_size_bytes = rmsnorm_tile_size_bytes - gather_data_size_bytes;
@@ -227,14 +256,14 @@ KERNEL_ENTRY {
         // Wait for gather dst cb data (already pushed by gather receiver)
         cb_wait_front(gather_dst_cb, gather_dst_num_pages);
 
+        // Reserve space in rmsnorm2 input cb (2 tiles)
+        cb_reserve_back(rmsnorm2_input_cb, 2);
+
         // Get source and destination addresses
         uint32_t src_addr = get_read_ptr(gather_dst_cb);
-        uint32_t dst_addr = get_write_ptr(rmsnorm_input_cb);
+        uint32_t dst_addr = get_write_ptr(rmsnorm2_input_cb);
 
-        // Reserve space in rmsnorm input cb (2 tiles)
-        cb_reserve_back(rmsnorm_input_cb, 2);
-
-        // Copy gather data to rmsnorm cb using local NOC read
+        // Copy gather data to rmsnorm2 cb using local NOC read
         uint64_t src_noc_addr = get_noc_addr(src_addr);
         noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
         noc_async_read_barrier();
@@ -247,12 +276,26 @@ KERNEL_ENTRY {
             pad_ptr[i] = 0;
         }
 
-        // Push the completed 2 tiles to rmsnorm cb
-        cb_push_back(rmsnorm_input_cb, 2);
+        // Push the completed 2 tiles to rmsnorm2 input cb
+        cb_push_back(rmsnorm2_input_cb, 2);
 
         // Pop the gather dst cb
         cb_pop_front(gather_dst_cb, gather_dst_num_pages);
     }
 #endif
+
+    // ========================================================================
+    // RMSNorm2: Apply RMSNorm to the gathered/padded data (1536 elements -> 2 tiles)
+    // Uses SEPARATE CBs with exact sizes:
+    //   - Input: rmsnorm2_input_cb (2 tiles from copy)
+    //   - Interm: rmsnorm2_interm_cb (3 tiles)
+    //   - Output: rmsnorm2_output_cb (2 tiles)
+    //   - Gamma: rmsnorm2_gamma_cb (2 tiles, padded from 1536 elements)
+    //   - Scalars: reuses scalars_cb (same epsilon, different scalar)
+    // ========================================================================
+    {
+        DeviceZoneScopedN("RMSNORM2");
+        rmsnorm(rmsnorm2_args);
+    }
 }
 KERNEL_END
