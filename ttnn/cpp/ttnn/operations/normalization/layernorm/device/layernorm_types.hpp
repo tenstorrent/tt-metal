@@ -6,9 +6,9 @@
 
 #include <variant>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::normalization {
 
@@ -35,18 +35,20 @@ struct LayerNormShardedMultiCoreProgramConfig {
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
 
 // Creates a program config appropriate for the input tensor's memory layout.
-// - If input_tensor is sharded, creates a sharded config derived from its shard spec
+// - If shard_spec is provided, creates a sharded config derived from it
 // - Otherwise, returns a default interleaved config
-inline LayerNormProgramConfig create_program_config(const Tensor& input_tensor) {
-    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value()) {
-        const auto& shard_spec = input_tensor.shard_spec().value();
-        const auto bbox = shard_spec.grid.bounding_box();
+// Usage: create_program_config(tensor.shard_spec())
+inline LayerNormProgramConfig create_program_config(
+    const std::optional<tt::tt_metal::ShardSpec>& shard_spec = std::nullopt) {
+    if (shard_spec.has_value()) {
+        const auto& spec = shard_spec.value();
+        const auto bbox = spec.grid.bounding_box();
         return LayerNormShardedMultiCoreProgramConfig{
             .compute_with_storage_grid_size =
                 {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1},
             .subblock_w = 1,
-            .block_h = shard_spec.shape[0] / tt::constants::TILE_HEIGHT,
-            .block_w = shard_spec.shape[1] / tt::constants::TILE_WIDTH,
+            .block_h = spec.shape[0] / tt::constants::TILE_HEIGHT,
+            .block_w = spec.shape[1] / tt::constants::TILE_WIDTH,
             .inplace = false,
         };
     }
