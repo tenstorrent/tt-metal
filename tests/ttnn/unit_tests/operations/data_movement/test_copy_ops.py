@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, tt_dtype_to_torch_dtype
 from models.common.utility_functions import is_grayskull
 
 
@@ -267,3 +267,58 @@ def test_typecast_community(device):
     y = ttnn.typecast(x, ttnn.types.bfloat16)
     assert y.dtype == ttnn.types.bfloat16
     assert_with_pcc(ttnn.to_torch(x), ttnn.to_torch(y), 0.99)
+
+
+@pytest.mark.parametrize(
+    "output_dtype",
+    (
+        ttnn.uint32,
+        ttnn.int32,
+        ttnn.uint16,
+        ttnn.uint8,
+        ttnn.bfloat16,
+    ),
+    ids=[
+        "UINT32",
+        "INT32",
+        "UINT16",
+        "UINT8",
+        "BFLOAT16",
+    ],
+)
+@pytest.mark.parametrize("preferred_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_typecast_host_tensor(output_dtype, preferred_layout, device):
+    """
+    Test that typecast works on host tensors (fixes issue #16279).
+
+    This test reproduces the scenario from the bug report and tests various dtypes:
+    - Create a host tensor from torch (no device parameter)
+    - Call typecast on the host tensor
+    - Verify it works without throwing an error
+    """
+    torch.manual_seed(2005)
+    shape = [32, 32]
+    torch_tensor = torch.rand(shape, dtype=torch.float32)
+
+    # Create host tensor
+    ttnn_tensor_host = ttnn.from_torch(torch_tensor, layout=preferred_layout)
+
+    # Verify input is on host
+    assert ttnn_tensor_host.storage_type() == ttnn.StorageType.HOST
+
+    # Perform typecast on host tensor
+    ttnn_tensor_typecast = ttnn.typecast(ttnn_tensor_host, dtype=output_dtype)
+
+    # Verify output properties
+    assert ttnn_tensor_typecast.shape == ttnn_tensor_host.shape
+    assert ttnn_tensor_typecast.dtype == output_dtype
+    assert ttnn_tensor_typecast.storage_type() == ttnn.StorageType.HOST
+
+    # Convert back to torch and verify the shape
+    torch_output = ttnn.to_torch(ttnn_tensor_typecast)
+    assert torch_output.shape == tuple(shape)
+
+    # Verify values are reasonable
+    torch_dtype = tt_dtype_to_torch_dtype[output_dtype]
+    torch_expected = torch_tensor.to(torch_dtype)
+    assert_allclose(torch_expected, torch_output)
