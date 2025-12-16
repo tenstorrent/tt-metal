@@ -7,8 +7,7 @@
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 /*
  * This function implements expm1(x) = exp(x) - 1 using a polynomial approximation algorithm
@@ -42,7 +41,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         // factor = 0x00b8aa3b (computed through log(e))
         // bias = 0x3f800000
 
-        sfpi::vInt z = sfpu::_float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt z = _float_to_int32_for_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
 
@@ -50,7 +49,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vConstIntPrgm1 + zif, 0);
         sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vConstIntPrgm2 + zif, 0);
         d2 = d1 * d2;
-        zif = sfpu::_float_to_int32_exp21f_(d2 * d3);
+        zif = _float_to_int32_for_exp21f_(d2 * d3);
 
         // Restore exponent
         zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
@@ -162,5 +161,4 @@ void expm1_init() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
