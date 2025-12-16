@@ -105,6 +105,20 @@ pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evalua
 - Batch size: 8
 - Sequence Length: Supports both **384** and **512** sequence lengths
 
+### Changing Sequence Length
+To change the sequence length from 384 to 512 (or vice versa), modify the `BGE_SEQ_LENGTH` constant in `models/demos/wormhole/bge_large_en/ttnn/common.py`:
+
+```python
+BGE_SEQ_LENGTH = 512  # Change from 384 to 512
+```
+
+**Note:** This change affects:
+- `demo.py` - Demo inference scripts
+- `dataset_evaluation.py` - Dataset evaluation scripts
+- `test_bge_e2e_performant.py` - End-to-end performance tests
+
+All these files import `BGE_SEQ_LENGTH` from `common.py`, so modifying it in one place will update the sequence length across all demos, evaluations, and performance tests.
+
 ## Performance
 BGE-Large-EN-v1.5 achieves state-of-the-art results on:
 - MTEB English benchmark (Rank #1)
