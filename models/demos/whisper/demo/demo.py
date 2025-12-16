@@ -712,10 +712,6 @@ def test_demo_for_audio_classification_dataset(
     "prompt",
     [None],
 )
-@pytest.mark.parametrize(
-    "prompt",
-    [None],
-)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
     "device_params",
