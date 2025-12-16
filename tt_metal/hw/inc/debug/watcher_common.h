@@ -5,6 +5,7 @@
 #pragma once
 
 #include "dev_msgs.h"
+#include "risc_attribs.h"
 
 #if defined(WATCHER_ENABLED)
 

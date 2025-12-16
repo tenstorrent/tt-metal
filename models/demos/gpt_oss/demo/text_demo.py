@@ -399,7 +399,7 @@ def test_gpt_oss_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Decode forward (matching tt_transformers call)
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_decode_trace,
