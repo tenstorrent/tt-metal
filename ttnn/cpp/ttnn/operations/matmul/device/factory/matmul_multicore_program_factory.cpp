@@ -17,9 +17,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    TT_FATAL(
-        !tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors[0].has_value(),
-        "Bias is not supported for matmul multi core");
+    if (!tensor_args.optional_input_tensors.empty()) {
+        TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
+    }
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
