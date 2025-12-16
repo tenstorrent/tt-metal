@@ -6,8 +6,12 @@ import torch
 from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.llk_params import DestAccumulation, DestSync, DstSync, format_dict
+from helpers.param_config import (
+    generate_unary_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.utils import passed_test
@@ -25,8 +29,10 @@ from helpers.utils import passed_test
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[32, 128], [128, 32], [64, 64], [32, 64], [64, 32]],
+    dst_sync=[DstSync.SyncHalf, DstSync.SyncFull],
 )
-def test_pack_untilize(test_name, formats, dest_acc):
+def test_pack_untilize(test_name, formats, dest_acc, input_dimensions, dst_sync):
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b format")
 
@@ -42,7 +48,14 @@ def test_pack_untilize(test_name, formats, dest_acc):
     ):
         pytest.skip("Dest must be in 32bit mode when input and output are Int32")
 
-    input_dimensions = [32, 128]
+    # dst_sync and dest_sync are different enums representing the same concept.
+    # TODO: unify them once the enum conflict is resolved in test_config.
+    if input_dimensions not in generate_unary_input_dimensions(
+        dest_acc, DestSync.Full if dst_sync == DstSync.SyncFull else DestSync.Half
+    ):
+        pytest.skip(
+            "Input dimensions not supported for the given dest_acc and dst_sync configuration"
+        )
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format, formats.input_format, input_dimensions=input_dimensions
@@ -57,8 +70,10 @@ def test_pack_untilize(test_name, formats, dest_acc):
         "tile_cnt": tile_cnt,
         "input_A_dimensions": input_dimensions,
         "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": formats.input_format.is_32_bit(),
+        "unpack_to_dest": formats.input_format.is_32_bit()
+        and dest_acc == DestAccumulation.Yes,
         "dest_acc": dest_acc,
+        "dst_sync": dst_sync,
     }
 
     res_address = write_stimuli_to_l1(
