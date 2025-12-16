@@ -131,6 +131,42 @@ Expected: true
 3. Compare memory access patterns between passing and failing tests
 4. Verify the layer norm backward kernel handles non-L1-fitting data correctly
 
+## Reproduction Confirmed
+
+**Date:** 2025-12-16 15:41 UTC
+
+Bug successfully reproduced on clean rebuild:
+
+```bash
+# Clean rebuild
+cd $TT_METAL_HOME/tt-train
+rm -rf build/
+cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -B build -GNinja
+cmake --build build --config Debug
+
+# Run test
+./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit"
+```
+
+**Output:**
+```
+[ RUN      ] LayerNormBackwardOpTest.NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit
+2025-12-16 15:41:20.845 | info     |           Metal | DPRINT enabled on device 0, worker core (x=0,y=0) (virtual (x=18,y=18)). (dprint_server.cpp:688)
+2025-12-16 15:41:20.845 | info     |           Metal | DPRINT Server attached device 0 (dprint_server.cpp:735)
+/home/ivoitovych/tt/tt-metal/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp:183: Failure
+Value of: xt::allclose(metal_dx_flat, dx_ref, 1.0e-3F, 5e-1F)
+  Actual: false
+Expected: true
+[  FAILED  ] LayerNormBackwardOpTest.NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit (27633 ms)
+```
+
+**Observations:**
+- Bug is consistently reproducible on clean builds
+- This run showed 1 failure (dx only), vs 3 failures in original run (dx, dgamma, dbeta)
+- The variation suggests the failures may be data-dependent (random test data each iteration)
+- Test duration: ~27 seconds (consistent with original)
+
 ## Reporter
 
 - **Date:** 2025-12-16
