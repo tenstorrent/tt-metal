@@ -504,6 +504,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
             .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
+// Shard a tensor across one mesh dimension, and replicate the tensor along the other dimensions.
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim, std::optional<int> shard_dim) {
     if (!shard_dim.has_value()) {
         return shard_tensor_to_mesh_mapper(mesh_device, dim);
