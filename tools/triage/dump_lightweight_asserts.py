@@ -26,7 +26,6 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.hardware.risc_debug import CallstackEntryVariable
-from utils import ORANGE, RED, BLUE, RST
 
 
 script_config = ScriptConfig(
@@ -102,7 +101,7 @@ def serialize_variables(variables: list[CallstackEntryVariable], assert_code: st
         var_name = var.name or "?"
         var_value = var.value if var.value is not None else "?"
         if var_name in assert_code:
-            serialized = f"- {BLUE}{var_name}{RST} = {RED}{var_value}{RST}\n"
+            serialized = f"- [info]{var_name}[/] = [command]{var_value}[/]\n"
         else:
             serialized = f"- {var_name} = {var_value}\n"
         result += serialized
@@ -173,12 +172,15 @@ def dump_lightweight_asserts(
                 )
                 for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
                     if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"{BLUE}{var.name}{RST}")
+                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
             if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
                 arguments_and_locals += serialize_variables(
                     callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code
                 )
+                for var in callstack_data.kernel_callstack_with_message.callstack[0].locals:
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
         return LightweightAssertInfo(
             kernel_name=callstack_data.dispatcher_core_data.kernel_name,
             kernel_callstack_with_message=LightweightAssertCallstackWithCode(
@@ -192,7 +194,7 @@ def dump_lightweight_asserts(
             risc_name,
             location,
             False,
-            f"{ORANGE}Failed to dump lightweight asserts: {e}{RST}",
+            f"[warning]Failed to dump lightweight asserts: {e}[/]",
         )
         return None
 
