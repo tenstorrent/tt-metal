@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.sign_bw &mdash; TT-NN  documentation</title>
+  <title>ttnn.bitcast &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.sign_bw.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.bitcast.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -20,14 +20,12 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.div_no_nan_bw" href="ttnn.div_no_nan_bw.html" />
-    <link rel="prev" title="ttnn.log2_bw" href="ttnn.log2_bw.html" /> 
+    <link rel="next" title="ttnn.bitwise_not" href="ttnn.bitwise_not.html" />
+    <link rel="prev" title="ttnn.atanh" href="ttnn.atanh.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -75,7 +73,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.asinh.html">ttnn.asinh</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.atan.html">ttnn.atan</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.atanh.html">ttnn.atanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitcast.html">ttnn.bitcast</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.bitcast</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_not.html">ttnn.bitwise_not</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_left_shift.html">ttnn.bitwise_left_shift</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_right_shift.html">ttnn.bitwise_right_shift</a></li>
@@ -233,7 +231,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cosh_bw.html">ttnn.cosh_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.logiteps_bw.html">ttnn.logiteps_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log2_bw.html">ttnn.log2_bw</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.sign_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.sign_bw.html">ttnn.sign_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.div_no_nan_bw.html">ttnn.div_no_nan_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.exp2_bw.html">ttnn.exp2_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.expm1_bw.html">ttnn.expm1_bw</a></li>
@@ -311,9 +309,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.sign_bw</li>
+      <li class="breadcrumb-item active">ttnn.bitcast</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.sign_bw.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.bitcast.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -321,35 +319,36 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-sign-bw">
-<h1>ttnn.sign_bw<a class="headerlink" href="#ttnn-sign-bw" title="Permalink to this heading"></a>
+  <section id="ttnn-bitcast">
+<h1>ttnn.bitcast<a class="headerlink" href="#ttnn-bitcast" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.sign_bw">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sign_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sign_bw" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.bitcast">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">bitcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.bitcast" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs backward operations for sign on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p>
-<div class="math notranslate nohighlight">
-\[\mathrm{{output\_tensor}}_i = \verb|sign_bw|(\mathrm{{grad\_tensor}}_i, \mathrm{{input\_tensor}}_i)\]</div>
+<p>Bitcast reinterprets the bit pattern without conversion (unlike typecast which converts values).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>) – the input gradient tensor.</p></li>
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em>) – output data type. Must have the same bit size as input dtype. Supported pairs: UINT16 &lt;-&gt; BFLOAT16 (both 16 bits), UINT32 &lt;-&gt; FLOAT32 (both 32 bits), UINT32 &lt;-&gt; INT32 (both 32 bits).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p>
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>List of ttnn.Tensor</em> – the output tensor.</p>
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -365,8 +364,8 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE, ROW MAJOR</p></td>
+<td><p>BFLOAT16, FLOAT32, INT32, UINT16, UINT32</p></td>
+<td><p>TILE</p></td>
 <td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
@@ -375,17 +374,17 @@
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Create sample tensors for backward sign operation</span>
-<span class="n">grad_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-<span class="p">)</span>
-<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor with uint16 values</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">16457</span><span class="p">,</span> <span class="mi">16429</span><span class="p">],</span> <span class="p">[</span><span class="mi">32641</span><span class="p">,</span> <span class="mi">31744</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">uint16</span><span class="p">),</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="c1"># Call the sign_bw function</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sign_bw</span><span class="p">(</span><span class="n">grad_tensor</span><span class="p">,</span> <span class="n">input_tensor</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sign Backward: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># Bitcast uint16 to bfloat16 (reinterprets bit pattern)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bitcast</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Bitcast uint16-&gt;bfloat16: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -399,8 +398,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.log2_bw.html" class="btn btn-neutral float-left" title="ttnn.log2_bw" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.div_no_nan_bw.html" class="btn btn-neutral float-right" title="ttnn.div_no_nan_bw" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.atanh.html" class="btn btn-neutral float-left" title="ttnn.atanh" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.bitwise_not.html" class="btn btn-neutral float-right" title="ttnn.bitwise_not" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

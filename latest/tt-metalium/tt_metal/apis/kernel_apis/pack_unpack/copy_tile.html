@@ -216,8 +216,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel27copy_tile_to_dst_init_shortE8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a3cb69b507ecaecca494fe6739599bf3b"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">copy_tile_to_dst_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cbid</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel27copy_tile_to_dst_init_shortE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel27copy_tile_to_dst_init_shortE8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1adef00151c72cfab4bc9560943dadaeaf"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">copy_tile_to_dst_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cbid</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose_within_16x16_face</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel27copy_tile_to_dst_init_shortE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Perform the init short for copy tile. This does not reconfigure the unpacker data types. Return value: None</p>
@@ -245,6 +245,13 @@
 <td><p>Flag to perform transpose on SrcA   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>Any positive value will indicate tranpose is set   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>transpose_within_16x16_face   </p></td>
+<td><p>Flag to perform transpose within 16x16 face   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any positive value will indicate transpose within 16x16 face is set   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>

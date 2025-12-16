@@ -177,7 +177,9 @@
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: Value to pad the output tensor. Default is 0
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: number
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code>: Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
-:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code>: bool</p>
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code>: bool
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code>: CoreRangeSet, optional</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>

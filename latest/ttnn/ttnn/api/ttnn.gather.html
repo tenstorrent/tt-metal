@@ -175,6 +175,7 @@ The output tensor will have the same shape as the index tensor. Note that the in
 <li><p><strong>sparse_grad</strong> (<em>bool</em><em>, </em><em>optional</em>) – If <cite>True</cite>, the gradient computation will be sparse. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>out</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – A preallocated tensor to store the gathered values. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 </dl>

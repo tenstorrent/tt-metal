@@ -151,7 +151,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.sort">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.sort" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sort" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Sorts the elements of the input tensor along the specified dimension in ascending order by default.
@@ -172,6 +172,11 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>out</strong> (<em>tuple</em><em> of </em><em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensors for the sorted values and indices. Defaults to <cite>None</cite>. The index tensor must be of type uint16 or uint32.</p></li>
 </ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>List of ttnn.Tensor</em> – A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.</p>
 </dd>
 </dl>
 <dl class="simple">

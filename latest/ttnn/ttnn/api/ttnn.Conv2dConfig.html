@@ -204,7 +204,7 @@ Config tensors are used by Conv2D, Pooling and other 2D ops to store how data sh
 </dt>
 <dd>
 <p>Core Grid to be used for sharding the input tensor.
-This flag is only used when override_sharding_config is set to true.</p>
+This flag is only used when override_sharding_config or override_output_sharding_config is set to true.</p>
 </dd>
 </dl>
 
@@ -336,17 +336,6 @@ This will increase perf, but it will take more L1 space.</p>
 </dl>
 
 <dl class="py property">
-<dt class="sig sig-object py" id="ttnn.Conv2dConfig.in_place">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">in_place</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.in_place" title="Permalink to this definition"></a>
-</dt>
-<dd>
-<p>Enables support for in_place halo.
-This re-uses the input tensor as the output for halo, overwriting the input tensor.
-This can be used if the input tensor is not used by any other op after the conv op.</p>
-</dd>
-</dl>
-
-<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.output_layout">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">output_layout</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.output_layout" title="Permalink to this definition"></a>
 </dt>
@@ -358,6 +347,20 @@ So if the next op is a conv op, it is recommended to set this to <code class="xr
 </dd>
 </dl>
 
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.override_output_sharding_config">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">override_output_sharding_config</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.override_output_sharding_config" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>===================== EXPERIMENTAL FEATURE ======================</p>
+<p>override_output_sharding_config enables the user to specify the memory config of the output tensor
+This impacts the core grid that executes matmul part of conv2d
+Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
+Additionally, NHW number of cores must match between input and output tensors</p>
+</dd>
+</dl>
+
+<hr class="docutils">
 <dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.override_sharding_config">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">override_sharding_config</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.override_sharding_config" title="Permalink to this definition"></a>

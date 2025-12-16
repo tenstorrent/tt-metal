@@ -130,6 +130,7 @@
 </dt>
 <dd>
 <p>Performs element-wise computation of logarithm on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Note: The base scale is the bit representation of the inverse of the log base. e.g. 1/ln(2) for log2(x) is 0x3fb8aa3b.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">

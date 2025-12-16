@@ -189,7 +189,6 @@ should be on the device. Height, width and block sharding schemes are supported.
 <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
 <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span>
 <span class="n">nchw_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
-<span class="n">dilation_h</span><span class="p">,</span> <span class="n">dilation_w</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
 <span class="n">in_N</span><span class="p">,</span> <span class="n">in_C</span><span class="p">,</span> <span class="n">in_H</span><span class="p">,</span> <span class="n">in_W</span> <span class="o">=</span> <span class="n">nchw_shape</span>
 <span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">in_N</span> <span class="o">*</span> <span class="n">in_H</span> <span class="o">*</span> <span class="n">in_W</span><span class="p">,</span> <span class="n">in_C</span><span class="p">)</span>
 
@@ -209,7 +208,6 @@ should be on the device. Height, width and block sharding schemes are supported.
     <span class="n">kernel_size</span><span class="o">=</span><span class="p">[</span><span class="n">kernel_h</span><span class="p">,</span> <span class="n">kernel_w</span><span class="p">],</span>
     <span class="n">stride</span><span class="o">=</span><span class="p">[</span><span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">],</span>
     <span class="n">padding</span><span class="o">=</span><span class="p">[</span><span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span><span class="p">],</span>
-    <span class="n">dilation</span><span class="o">=</span><span class="p">[</span><span class="n">dilation_h</span><span class="p">,</span> <span class="n">dilation_w</span><span class="p">],</span>
     <span class="n">ceil_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
     <span class="n">count_include_pad</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">divisor_override</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
@@ -219,6 +217,7 @@ should be on the device. Height, width and block sharding schemes are supported.
     <span class="n">reallocate_halo_output</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
     <span class="n">output_layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span>
+    <span class="n">compute_kernel_config</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Output: </span><span class="si">{</span><span class="n">tt_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 <span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
