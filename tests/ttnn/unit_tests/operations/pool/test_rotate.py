@@ -166,12 +166,10 @@ def test_various_tensor_sizes(device, input_shape):
     # Adaptive tolerances based on tensor size and angle
     h, w = input_shape[1], input_shape[2]
     tensor_size = h * w
-    is_diagonal_rotation = True  # 45 degrees
 
-    if tensor_size >= 1024 and is_diagonal_rotation:
+    # Large tensor sizes with diagonal rotation need higher tolerance
+    if tensor_size >= 1024:
         atol, rtol = 5.0, 0.05
-    elif tensor_size >= 1024:
-        atol, rtol = 0.2, 0.1
     else:
         atol, rtol = 0.05, 0.05
 
