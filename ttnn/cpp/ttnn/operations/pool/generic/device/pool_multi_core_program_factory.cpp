@@ -481,8 +481,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     if (is_output_tiled) {
         out_cb_pagesize = tt::tile_size(params.output_data_format);
-        out_cb_npages =
-            outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] / tt::constants::TILE_HW;
+        out_cb_npages = outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] /
+                        tt::constants::TILE_HW;
     } else {
         out_cb_pagesize =
             std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
@@ -624,6 +624,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,                      // 44
         out_idx_cb_id};                 // 45
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
+    reader1_ct_args[0] -= 1;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
     std::string reader_kernel_fname =
