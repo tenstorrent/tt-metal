@@ -9,25 +9,6 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 #include "accessor/tensor_accessor.h"
 
-#if defined(WATCHER_OVERHEAD_OK)
-template <bool is_output_cb, bool is_wr_ptr>
-void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
-    noc_async_read_barrier();
-    noc_async_write_barrier();
-    for (uint8_t i = 0; i < 32; ++i) {
-        DPRINT << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                      is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
-                      is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
-                      true,
-                      true)
-               << ENDL();
-    }
-}
-#endif
-
 template <uint32_t tile_bytes>
 void clear_mantissa_range(
     ArrayView<uint32_t, CBAccessType::CB_BACK_RW>& uint32_arr,
@@ -488,11 +469,6 @@ void kernel_main() {
                                 }
                             } while (window_low_idx < window_high_idx && covered_window_q_end_idx < q_end_idx &&
                                      covered_window_k_end_idx < k_end_idx);
-
-                            DPRINT_ARRAY_VIEW({
-                                DPRINT << "  [COL ITER] WINDOW tile: in_mask_tile_id: " << in_mask_tile_id << ENDL();
-                                (dprint_cb_tile<true, true>(cb_mask_in, in_mask_tile_id));
-                            });
                         }
                     }
                     // sync up the read and writes, push back the mask cb, after processing each chunk
