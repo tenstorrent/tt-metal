@@ -107,7 +107,7 @@ class TTPenalties(LightweightModule):
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=(None, None))
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
         self.decode_src = self._alloc_int_buffer(
-            host=torch.zeros(self.max_batch_size, 1), shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT
+            host=torch.ones(self.max_batch_size, 1), shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT
         )
         self.zeros = self._alloc_int_buffer(shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT)
         self.presence_penalties = self._alloc_bf16_buffer()

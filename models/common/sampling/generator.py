@@ -153,7 +153,7 @@ class SamplingGenerator:
         tt_out_tok: Optional[ttnn.Tensor],
     ):
         if penalties_on:
-            self.tt_penalties.apply(logits)
+            logits = self.tt_penalties.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
         return tt_tokens, tt_log_probs
 
