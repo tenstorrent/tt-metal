@@ -1052,8 +1052,78 @@ enum SDPAType {
     RING = 2,
 };
 
+/******************************************************************************
+ *                           FLASH ATTENTION LOOP                             *
+ ******************************************************************************/
 /**
+ * Template Parameters:
+ * @tparam sdpa_type - SDPA variant: STANDARD, JOINT, or RING
+ * @tparam cb_qk_im - QK intermediate buffer
+ * @tparam cb_identity_scale_in - Identity scale buffer
+ * @tparam cb_attention_sink - Attention sink buffer
+ * @tparam cb_scale_in - Scale buffer
+ * @tparam Sq_chunk_t - Query chunk size in tiles
+ * @tparam Sk_chunk_t - Key chunk size in tiles
+ * @tparam DHt - Head dimension in tiles
+ * @tparam vDHt - Value head dimension in tiles
+ * @tparam use_attention_sink - Whether to use attention sink
+ * @tparam is_causal - Whether to use causal masking
+ * @tparam use_provided_mask - Whether to use user-provided mask
+ * @tparam use_padded_mask - Whether to use padding mask
+ * @tparam use_joint_mask - Whether to use joint mask
+ * @tparam is_chunked - Whether query is chunked
+ * @tparam scale_fp32 - FP32 scale factor
+ * @tparam sliding_window_size - Sliding window attention size
  *
+ * Runtime Parameters:
+ * @param Skt - Sequence length in tiles
+ * @param qk_in0_block_w - QK matmul block width
+ * @param qk_subblock_w - QK matmul subblock width
+ * @param qk_subblock_h - QK matmul subblock height
+ * @param qk_in0_num_subblocks - QK input0 subblocks
+ * @param qk_in1_num_subblocks - QK input1 subblocks
+ * @param qk_num_blocks - QK number of blocks
+ * @param out_in0_block_w - Output matmul block width
+ * @param out_subblock_w - Output matmul subblock width
+ * @param out_subblock_h - Output matmul subblock height
+ * @param out_in0_num_subblocks - Output input0 subblocks
+ * @param out_in1_num_subblocks - Output input1 subblocks
+ * @param out_num_blocks - Output number of blocks
+ * @param iter_q_start - Query iteration start
+ * @param iter_q_end - Query iteration end
+ * @param q_num_chunks - Total query chunks
+ * @param local_q_start - Local query start
+ * @param chunked_q_chunk_offset - Chunked query offset
+ * @param iter_k_chunk_start - Key chunk iteration start
+ * @param iter_k_chunk_end - Key chunk iteration end
+ * @param q_chunk_tiles - Query chunk tiles
+ * @param k_chunk_tiles - Key chunk tiles
+ * @param qk_chunk_tiles - QK chunk tiles
+ * @param out_chunk_tiles - Output chunk tiles
+ * @param mask_chunk_0 - First mask chunk index
+ * @param mask_chunk_1 - Second mask chunk index
+ * @param ring_iter - Ring iteration index
+ * @param ring_id - Ring ID
+ * @param N_mask_ring_id - N mask ring ID
+ * @param L_mask_ring_id - L mask ring ID
+ * @param global_logical_NK_chunks - Global logical NK chunks
+ * @param global_padded_NK_chunks - Global padded NK chunks
+ * @param cb_q_in - Query input buffer
+ * @param cb_k_in - Key input buffer
+ * @param cb_v_in - Value input buffer
+ * @param cb_mask_in - Mask input buffer
+ * @param cb_col_identity - Column identity buffer
+ * @param cb_out_im_A - Output intermediate buffer A
+ * @param cb_out_im_B - Output intermediate buffer B
+ * @param cb_max_A - Max buffer A
+ * @param cb_max_B - Max buffer B
+ * @param cb_sum_A - Sum buffer A
+ * @param cb_sum_B - Sum buffer B
+ * @param cb_exp_max_diff - Exp max diff buffer
+ * @param cb_lse_in - LSE input buffer
+ * @param cb_lse_out - LSE output buffer
+ * @param cb_prev_out - Previous output buffer
+ * @param cb_out - Output buffer
  */
 template <
     SDPAType sdpa_type,
