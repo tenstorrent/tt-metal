@@ -38,7 +38,6 @@ def run_strided_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     cluster_axis=1,
-    tiles_per_chunk=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     allowed_pcc=1,
@@ -131,7 +130,6 @@ def run_strided_all_gather_impl(
             memory_config=mem_config_ag,
             topology=all_gather_topology,
             cluster_axis=cluster_axis,
-            tiles_per_chunk=tiles_per_chunk,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
             mm_cores_y=mm_cores_y,
@@ -194,33 +192,32 @@ def run_strided_all_gather_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
 
-# tiles_per_chunk needs to be divisible by num_workers_per_link
 # mm_cores_y is the number of in0 first col cores
 # mm_block_h and mm_block_w is the mm_block of a single mm_core_y
-# so the result of one chunk transfer will be mm_cores_y * mm_block_h * mm_block_w, which will be tiles_per_chunk.  tiles_per_chunk % num_workers_per_link must equal 0
+# so the result of one chunk transfer will be mm_cores_y * mm_block_h * mm_block_w
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, other_dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    "ag_output_shape, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [
-        # ([1, 1, 32, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        # ([1, 1, 32, 512], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        # ([1, 1, 32, 512], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        # ([1, 1, 32, 512], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        # ([1, 1, 32, 768], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        # ([1, 1, 32, 1024], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        # ([1, 1, 32, 256], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        # ([1, 1, 32, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        # ([1, 1, 32, 512], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        # ([1, 1, 32, 512], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        # ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        # ([1, 1, 32, 1024], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         # # 2 row tests
-        # ([1, 1, 64, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        # ([1, 1, 64, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        # ([1, 1, 64, 512], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        # ([1, 1, 64, 256], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        # ([1, 1, 64, 256], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        # ([1, 1, 64, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         # # 4 row tests
-        # ([1, 1, 128, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        # ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
         # # Multiple y core tests
-        # ([1, 1, 128, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
-        # ([1, 1, 128, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        # ([1, 1, 128, 256], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        # ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
         # Full tests
-        ([1, 1, 4096, 2560], 3, 2, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+        ([1, 1, 4096, 2560], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
     ],
     ids=[
         # "1tile1chunk1worker1row",
@@ -280,7 +277,6 @@ def test_strided_all_gather_async(
     all_gather_topology,
     num_iters,
     num_workers_per_link,
-    tiles_per_chunk,
     mm_cores_y,
     mm_block_h,
     mm_block_w,
@@ -300,7 +296,6 @@ def test_strided_all_gather_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
-        tiles_per_chunk=tiles_per_chunk,
         mm_cores_y=mm_cores_y,
         mm_block_h=mm_block_h,
         mm_block_w=mm_block_w,
