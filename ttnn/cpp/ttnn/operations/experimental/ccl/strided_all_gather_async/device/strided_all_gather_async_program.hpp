@@ -13,12 +13,10 @@ struct StridedAllGatherAsyncProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
         std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-        std::vector<CoreCoord> all_cores;
+        std::vector<CoreCoord> all_worker_cores;
         uint32_t num_links;
         uint32_t num_directions_per_link;
         uint32_t num_workers_per_direction;
-        uint32_t num_mux_cores_per_direction_per_link;
-        uint32_t num_cores_per_link;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -50,7 +48,6 @@ struct StridedAllGatherAsyncProgramFactory {
         const std::vector<GlobalSemaphore>& semaphore,
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         bool read_local_slice_from_input,
-        std::optional<uint32_t> tiles_per_chunk,
         std::optional<uint32_t> num_workers_per_direction_opt,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
