@@ -13,9 +13,9 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include "tt-metalium/mesh_graph_descriptor.hpp"
-#include "tt-metalium/mesh_coord.hpp"
-#include "tt-metalium/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -93,7 +93,7 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
     }
 
     const auto& topology_types = device_topology->dim_types();
-    const auto& channels_count = channels->count();
+    const uint32_t channels_count = static_cast<uint32_t>(channels->count());
     const auto& policy = channels->policy();
 
     MeshShape mesh_shape = mesh_coord_range.shape();
@@ -820,7 +820,7 @@ GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(
     const auto* mesh_desc = it->second;
 
     InstanceData data{
-        .local_id = mesh_ref.mesh_id(),
+        .local_id = static_cast<LocalNodeId>(mesh_ref.mesh_id()),
         .name = mesh_desc->name(),
         .type = "MESH",
         .kind = NodeKind::Mesh,
@@ -863,7 +863,7 @@ GlobalNodeId MeshGraphDescriptor::populate_switch_instance(
     const auto* switch_desc = it->second;
 
     InstanceData data{
-        .local_id = switch_ref.switch_id(),
+        .local_id = static_cast<LocalNodeId>(switch_ref.switch_id()),
         .name = switch_desc->name(),
         .type = "SWITCH",
         .kind = NodeKind::Switch,
@@ -1100,7 +1100,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data{
                 .nodes = {src_device_id, dst_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1111,7 +1111,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data_reverse{
                 .nodes = {dst_device_id, src_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1129,7 +1129,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data{
                 .nodes = {src_device_id, dst_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1140,7 +1140,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data_reverse{
                 .nodes = {dst_device_id, src_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1236,8 +1236,8 @@ GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id) {
-    auto& graph_instance = get_instance(graph_id);
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(graph_instance.desc);
+    const auto& graph_instance = get_instance(graph_id);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(graph_instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1251,7 +1251,7 @@ void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id)
 void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId graph_id) {
     auto & instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1295,7 +1295,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
             ConnectionData data{
                 .nodes = nodes_copy,
-                .count = connection.channels().count(),
+                .count = static_cast<uint32_t>(connection.channels().count()),
                 .policy = connection.channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
@@ -1313,11 +1313,11 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
 void MeshGraphDescriptor::populate_inter_mesh_topology_connections(GlobalNodeId graph_id) {
     auto& instance = instances_.at(graph_id);
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
-    auto& graph_topology = graph_desc->graph_topology();
+    const auto& graph_topology = graph_desc->graph_topology();
 
     switch (graph_topology.layout_type()) {
         case proto::GraphTopology::ALL_TO_ALL: populate_inter_mesh_topology_connections_all_to_all(graph_id); break;
@@ -1335,7 +1335,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
     // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1348,7 +1348,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
             // Create a connection between the two instances
             ConnectionData data{
                 .nodes = {sub_instance_a, sub_instance_b},
-                .count = graph_desc->graph_topology().channels().count(),
+                .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
                 .policy = graph_desc->graph_topology().channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
@@ -1365,7 +1365,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
     // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1378,7 +1378,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
 
         ConnectionData data{
             .nodes = {src_instance, dst_instance},
-            .count = graph_desc->graph_topology().channels().count(),
+            .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
@@ -1390,7 +1390,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
 
         ConnectionData data_reverse{
             .nodes = {dst_instance, src_instance},
-            .count = graph_desc->graph_topology().channels().count(),
+            .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,

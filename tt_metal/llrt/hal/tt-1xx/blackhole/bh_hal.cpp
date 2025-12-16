@@ -37,32 +37,36 @@ constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
+constexpr static std::uint32_t get_dram_profiler_size(
+    [[maybe_unused]] uint32_t profiler_dram_bank_size_per_risc_bytes) {
 #if defined(TRACY_ENABLE)
-constexpr static std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 140;
-constexpr static std::uint32_t MAX_NUM_ETH_CORES = 14;
-constexpr static std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
-constexpr static std::uint32_t NUM_DRAM_CHANNELS = 8;
-constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
-    (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
-constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
-      DRAM_ALIGNMENT - 1) /
-     DRAM_ALIGNMENT) *
-    DRAM_ALIGNMENT;
+    constexpr std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 140;
+    constexpr std::uint32_t MAX_NUM_ETH_CORES = 14;
+    constexpr std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
+    constexpr std::uint32_t NUM_DRAM_CHANNELS = 8;
+    constexpr std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
+        (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
+    return (((profiler_dram_bank_size_per_risc_bytes * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+             DRAM_ALIGNMENT - 1) /
+            DRAM_ALIGNMENT) *
+           DRAM_ALIGNMENT;
 #else
-constexpr static std::uint32_t DRAM_PROFILER_SIZE = 0;
+    return 0;
 #endif
+}
 
-constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_PROFILER_BASE + DRAM_PROFILER_SIZE;
-constexpr static std::uint32_t DRAM_UNRESERVED_SIZE = MEM_DRAM_SIZE - DRAM_UNRESERVED_BASE;
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+    return DRAM_PROFILER_BASE + dram_profiler_size;
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+}
 
 static constexpr float EPS_BH = 1.19209e-7f;
 static constexpr float NAN_BH = 7.0040e+19;
 static constexpr float INF_BH = 1.7014e+38;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 private:
@@ -70,6 +74,8 @@ private:
 
 public:
     HalJitBuildQueryBlackHole(bool enable_2_erisc_mode) : enable_2_erisc_mode_(enable_2_erisc_mode) {}
+
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
@@ -102,7 +108,6 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole");
         includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines");
         includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/noc");
-        includes.push_back("tt_metal/lite_fabric/hw/inc/blackhole");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -232,6 +237,8 @@ public:
             enchantum::to_string(params.core_type));
     }
 
+    bool firmware_is_kernel_object(const Params&) const override { return false; }
+
     std::string target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
@@ -243,7 +250,7 @@ public:
     }
 };
 
-void Hal::initialize_bh(bool enable_2_erisc_mode) {
+void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -265,9 +272,12 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_BASE;
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_SIZE;
-    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_SIZE;
+    const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
+        get_dram_unreserved_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
+        get_dram_unreserved_size(dram_profiler_size);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -322,6 +332,10 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) {
+        // Use non-iATU range for 64-bit inputs.
+        return NOC_XY_ENCODING(x, y);
+    };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
@@ -385,6 +399,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/PCIExpressTile for more details.
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
+    this->supports_64_bit_pcie_addressing_ = true;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -419,7 +434,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
         }
         return true;
     };
+
+    this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
+    this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

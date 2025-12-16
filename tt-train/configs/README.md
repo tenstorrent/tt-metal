@@ -1,14 +1,14 @@
 # TT-Train Configuration Guide
 
-This directory contains YAML configuration files for training transformer models with TT-Metal. This README explains all valid parameters for each configuration type.
+This directory contains YAML configuration files for training transformer models with TT-Metal. This README explains all valid parameters for each configuration type based on the actual implementation.
 
 ## Configuration Types
 
 There are four main configuration types:
 - **Training Config**: Training hyperparameters and optimization settings
-- **Device Config**: Device mesh and distributed training setup
-- **Transformer Config**: Model architecture parameters
-- **MultiHost Config**: Multi-process execution settings
+- **Device Config**: Device mesh and distributed training setup; *this is expected to be in the same file as the training config*
+- **Model Config**: Model type and architecture configuration
+- **MultiHost Config**: Multi-process execution and pipeline parallelism settings
 
 ## Training Configuration (`training_config`)
 
@@ -17,35 +17,56 @@ Training hyperparameters and optimization settings.
 ### Core Training Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `seed` | int | 42 | Random seed for reproducibility |
+| `project_name` | str | "tt_train_nano_gpt" | Project name for tracking |
+| `seed` | int | 5489 | Random seed for reproducibility |
+| `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
+| `num_epochs` | int | 1 | Number of training epochs |
 | `max_steps` | int | 1000 | Maximum number of training steps |
-| `eval_every` | int | 200 | Evaluate model every N steps |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
-| `model_config` | str | null | Path to model configuration file |
-| `use_bpe` | bool | true | Whether to use Byte Pair Encoding |
+| `model_config` | str | "" | Path to model configuration file |
+| `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
+| `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
+| `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
 
 ### Optimizer Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `lr` | float | 3e-4 | Learning rate |
+| `learning_rate` | float | 3e-4 | Learning rate |
 | `beta1` | float | 0.9 | Adam beta1 parameter |
 | `beta2` | float | 0.999 | Adam beta2 parameter |
 | `eps` | float | 1e-8 | Adam epsilon parameter |
-| `weight_decay` | float | 0.01 | Weight decay for regularization |
+| `weight_decay` | float | 1e-2 | Weight decay for regularization |
+| `use_no_op` | bool | false | Use no-op optimizer (no parameter updates) |
+| `use_moreh_adamw` | bool | false | Use Moreh AdamW optimizer |
+| `use_kahan_summation` | bool | false | Use Kahan summation in AdamW |
+
+### Gradient Clipping Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `use_clip_grad_norm` | bool | false | Enable gradient norm clipping |
+| `clip_grad_norm_max_norm` | float | 1.0 | Maximum gradient norm for clipping |
 
 ### Example
 ```yaml
 training_config:
+  project_name: "my_training_project"
+  model_type: "llama"
   seed: 5489
   batch_size: 8
   gradient_accumulation_steps: 8
+  num_epochs: 1
   max_steps: 5000
-  eval_every: 500
-  lr: 0.0003
+  learning_rate: 0.0003
   weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/tinyllama.yaml"
-  use_bpe: true
+  data_path: "data/my_dataset.txt"
+  scheduler_type: "warmup_linear"
+  tokenizer_type: "bpe"
 ```
 
 ## Device Configuration (`device_config`)
@@ -61,13 +82,19 @@ Device mesh and distributed training configuration.
 ### Distributed Training Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable_tp` | bool | false | Enable Tensor Parallelism |
 | `enable_ddp` | bool | false | Enable Distributed Data Parallelism |
+| `enable_tp` | bool | false | Enable Tensor Parallelism |
 
-### Notes
+### Constraints
 - DDP and TP cannot both be enabled simultaneously
-- Only `[1, N]` mesh shapes are currently supported (single row)
-- Total devices = `mesh_shape[0] * mesh_shape[1]`
+- For DDP: batch_size must be divisible by number of devices
+- For TP: vocab_size is automatically rounded up to be divisible by (num_devices * 32)
+
+### Device Mesh Shapes
+- Single-device (N150, P150): [1, 1]
+- Dual-device (N300, P300): [1, 2]
+- LoudBox: [1, 8]
+- Single Galaxy: [1, 32]
 
 ### Example
 ```yaml
@@ -77,13 +104,15 @@ device_config:
   device_ids: []
 ```
 
-## Transformer Configuration (`transformer_config`)
+## Model Configuration (`model_config`)
 
-Model architecture parameters for transformer models.
+Model type and architecture configuration loaded from separate files.
 
-### Base Architecture Parameters
+### Model Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `model_type` | str | "gpt2" | Model architecture ("gpt2" or "llama") |
+| `model_path` | str | "" | Path to saved model parameters (as HF SafeTensors) |
 | `runner_type` | str | "default" | Type of model runner (`default` or `memory_efficient`)|
 | `num_heads` | int | 6 | Number of attention heads |
 | `embedding_dim` | int | 384 | Embedding/hidden dimension |
@@ -111,6 +140,8 @@ Model architecture parameters for transformer models.
 ### Example
 ```yaml
 transformer_config:
+  model_type: "llama"
+  model_path: "saved_models/my_model.safetensors"
   num_heads: 32
   embedding_dim: 2048
   num_blocks: 22
@@ -123,6 +154,8 @@ transformer_config:
     high_freq_factor: 4.0
     low_freq_factor: 1.0
     original_context_length: 8192
+
+# Additional transformer-specific configuration follows...
 ```
 
 ## MultiHost Configuration (`multihost_config`)
@@ -133,14 +166,26 @@ Multi-process execution and pipeline parallelism settings.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | bool | false | Enable multihost execution |
-| `num_workers` | int | 1 | Number of worker processes |
-| `socket_type` | str | "mpi" | Communication backend (`mpi`, `fabric`) |
+| `num_workers` | int | 0 | Number of worker processes |
+| `socket_type` | str | "mpi" | Communication backend ("mpi" or "fabric") |
 
 ### Pipeline Parallel Configuration (`pipeline_parallel_config`)
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `num_blocks` | int | 0 | Total number of pipeline blocks |
-| `blocks_per_rank` | dict | {} | Mapping of rank ID to number of blocks |
+Optional configuration for pipeline parallelism:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `num_blocks` | int | Total number of pipeline blocks |
+| `blocks_per_rank` | dict | Mapping of rank ID to number of blocks |
+
+### Training Mode Effects
+- **Three-tier training**: When `enabled=true` and no pipeline_parallel_config
+- **Pipeline parallel**: When `enabled=true` and pipeline_parallel_config is provided
+- **Standard training**: When `enabled=false`
+
+### Constraints
+- Gradient clipping is not supported with multihost training
+- Model save/load is handled differently in multihost mode
+- Seeds are automatically adjusted per rank
 
 ### Example
 ```yaml
@@ -157,44 +202,92 @@ multihost_config:
       3: 6
 ```
 
+## Command Line Options
+
+The main executable accepts these command line arguments:
+
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--config` | `-c` | Training config file path | `$TT_METAL_HOME/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml` |
+| `--multihost` | | Multihost config file path | "" (optional) |
+| `--name` | `-n` | Run name | "" |
+| `--add_time_to_name` | `-t` | Add timestamp to run name | true |
+| `--save_and_exit` | `-s` | Save model and exit (msgpack path) | "" |
+| `--safetensors` | | Load model from safetensors path | "" |
+
 ## File Organization
 
 ```
 tt-train/configs/
 ├── training_configs/          # Training configuration files
 ├── model_configs/            # Model architecture configurations
-├── device_configs/           # Device mesh configurations
-├── multihost_configs/        # MultiHost execution configurations
+├── multihost_configs/        # MultiHost execution configurations (if separated)
 └── README.md                 # This file
 ```
 
-## Loading Configurations
+## Configuration Loading
 
-Configurations can be loaded using the provided utility functions:
+Configurations are loaded using YAML::LoadFile in the main application:
 
-```python
-from ttml.common.config import (
-    get_training_config,
-    get_device_config,
-    get_model_config,
-    get_multihost_config
-)
+```cpp
+// Load configurations from files
+TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
+DeviceConfig device_config = parse_device_config(YAML::LoadFile(training_config_name));
+ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
-# Load configurations
-training_config = get_training_config("training_shakespeare_tinyllama.yaml")
-device_config = get_device_config("device_config.yaml")
-model_config = get_model_config("configs/model_configs/tinyllama.yaml")
-multihost_config = get_multihost_config("multihost_config.yaml")
+// Optional multihost config
+MultihostConfig multihost_config;
+if (!multihost_config_name.empty()) {
+    multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
+}
+```
+
+## Complete Example Configuration
+
+```yaml
+# Complete training configuration file
+training_config:
+  project_name: "shakespeare_training"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_epochs: 1
+  max_steps: 5000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  model_config: "configs/model_configs/tinyllama.yaml"
+  data_path: "data/shakespeare.txt"
+  scheduler_type: "warmup_linear"
+  tokenizer_type: "char"
+
+device_config:
+  enable_tp: true
+  mesh_shape: [1, 32]
+  device_ids: []
+
+# Optional multihost configuration (separate file)
+multihost_config:
+  enabled: false
+  num_workers: 1
+  socket_type: "mpi"
 ```
 
 ## Notes
 
-- All paths in existing configuration files are relative to `TT_METAL_HOME/tt-train/configs/`, but absolute paths are supported
-- YAML files support comments using `#`
-- Boolean values should be lowercase: `true`/`false`
-- Numeric values don't need quotes
-- String values should be quoted
+- Environment variable `TT_METAL_HOME` must be set
+- For BPE tokenization, data should be pre-tokenized (space-separated tokens)
+- Vocabulary size is automatically adjusted to be divisible by 32 (or 32 * num_devices for TP)
+- Model parameters are automatically loaded if both safetensors_path and model_path exist
+- Training state (optimizer, scheduler) is saved/loaded separately from model weights
 
-## Examples
+## Supported Model Types
 
-See the files in each subdirectory for complete examples of each configuration type.
+- **GPT-2**: Traditional transformer with learned positional embeddings
+- **LLaMA**: Transformer with RMSNorm, SwiGLU activation, and RoPE positional encoding
+
+See the respective model configuration files for architecture-specific parameters.

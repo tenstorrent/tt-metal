@@ -10,10 +10,7 @@
 
 namespace tt::tt_metal::inspector {
 
-Logger::Logger(const std::filesystem::path& logging_path)
-    : initialized(false)
-    , logging_path(logging_path)
-{
+Logger::Logger(const std::filesystem::path& logging_path) : logging_path(logging_path) {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
@@ -212,11 +209,11 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
             mesh_devices_ostream << "    parent_mesh_id: " << *mesh_device_data.parent_mesh_id << "\n";
         }
 
-        auto mesh_device = mesh_device_data.mesh_device;
+        const auto* mesh_device = mesh_device_data.mesh_device;
         if (mesh_device) {
             mesh_devices_ostream << "    devices: [";
             bool first = true;
-            for (const auto& device : mesh_device->get_devices()) {
+            for (const auto& device : mesh_device->get_view().get_devices()) {
                 if (!first) {
                     mesh_devices_ostream << ", ";
                 }
@@ -225,7 +222,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
             }
             mesh_devices_ostream << "]\n";
 
-            auto& shape = mesh_device->get_view().shape();
+            const auto& shape = mesh_device->get_view().shape();
             mesh_devices_ostream << "    shape: [";
             for (size_t i = 0; i < shape.dims(); ++i) {
                 if (i > 0) {
@@ -307,7 +304,7 @@ void Logger::log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload
         mesh_workloads_ostream << "    program_id: " << program_id << "\n";
         mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_workloads_ostream << "    coordinates:\n";
-        for (auto& coordinate : device_range) {
+        for (const auto& coordinate : device_range) {
             auto vector = coordinate.coords();
             mesh_workloads_ostream << "      - [";
             for (size_t i = 0; i < vector.size(); ++i) {

@@ -15,8 +15,8 @@
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
-#include "ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -33,7 +33,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
@@ -331,7 +331,7 @@ void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& src_tensor = tensor_args.input;
+    const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = tensor_return_value;
 
     UpdateDynamicCircularBufferAddress(

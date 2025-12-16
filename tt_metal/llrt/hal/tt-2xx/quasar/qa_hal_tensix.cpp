@@ -4,6 +4,7 @@
 
 #define HAL_BUILD tt::tt_metal::quasar::tensix
 #include "dev_msgs.h"
+#include "fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::quasar::tensix;
 
 #include <cstdint>
@@ -25,6 +26,10 @@ namespace tt::tt_metal::quasar {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace tensix_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace tensix_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_tensix_mem_map() {
@@ -87,7 +92,42 @@ HalCoreInfoType create_tensix_mem_map() {
         // DM
         {
             {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
              .local_init_addr = MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
@@ -150,7 +190,8 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(processor_classes_names),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
-        tensix_dev_msgs::create_factory()};
+        tensix_dev_msgs::create_factory(),
+        tensix_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::quasar

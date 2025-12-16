@@ -12,10 +12,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation.hpp"
 
-namespace ttnn {
-
-namespace operations {
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 namespace detail {
 
@@ -149,6 +146,14 @@ ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
+    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+        TT_FATAL(
+            !parameters.user_fused_activation.has_value(),
+            "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
+            "field",
+            parameters.user_fused_activation.value().op_type);
+    }
+
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
@@ -206,7 +211,7 @@ ttnn::Tensor bound_matmul(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            parameters.output_mem_config,
+            output_tensor.memory_config(),
             optional_output_tensor);
     }
 
@@ -214,7 +219,7 @@ ttnn::Tensor bound_matmul(
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
+            output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;
@@ -482,6 +487,4 @@ Tensor SparseMatmulOperation::invoke(
         optional_output_tensor);
 }
 
-}  // namespace matmul
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

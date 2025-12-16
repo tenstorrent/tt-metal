@@ -7,11 +7,11 @@
 #include <utility>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #include "compile_time_args.h"
 
-namespace tensor_accessor {
-namespace detail {
+namespace tensor_accessor::detail {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
 constexpr auto make_struct_from_sequence_wrapper(std::index_sequence<Is...>)
     -> Wrapper<get_compile_time_arg_val(BASE_IDX + Is)...>;
@@ -25,11 +25,11 @@ template <bool Enable, typename T = void>
 struct ConditionalField {
     T value;
     // Constructor that forwards a single argument
-    template <typename T_>
+    template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
     ConditionalField(T_&& val) : value(std::forward<T_>(val)) {}
 
     // Variadic constructor that forwards multiple arguments to T's constructor
-    template <typename... Args>
+    template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
     ConditionalField(Args&&... args) : value(std::forward<Args>(args)...) {}
 
     ConditionalField() = default;
@@ -39,11 +39,11 @@ struct ConditionalField {
 template <typename T>
 struct ConditionalField<false, T> {
     // Constructor that ignores a single argument
-    template <typename T_>
+    template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
     ConditionalField(T_&& val) {}  // Ignore value if passed to constructor
 
     // Variadic constructor that ignores all arguments
-    template <typename... Args>
+    template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
     ConditionalField(Args&&... args) {}  // Ignore all arguments if passed to constructor
 
     ConditionalField() = default;
@@ -89,5 +89,4 @@ struct Span {
     std::size_t size() const { return _size; }
 };
 
-}  // namespace detail
-}  // namespace tensor_accessor
+}  // namespace tensor_accessor::detail

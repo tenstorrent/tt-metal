@@ -34,8 +34,17 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    extern uint32_t __kernel_data_lma[];
-    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
+    // TODO: initilaize globals and bss
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    extern uint32_t __tdata_lma[];
+    // for now this works for legacy kernels, we need to revisit this for new kernels
+    // if (hartid == /* leading core */ 0) {
+    extern uint32_t __ldm_tdata_start[];
+    extern uint32_t __ldm_tdata_end[];
+    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+    // }
+    do_thread_crt1(__tdata_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         // noc_local_state_init(NOC_INDEX); //TODO revisit this
@@ -53,13 +62,15 @@ uint32_t _start() {
         WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
+            // TODO enable once NOC is ready
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
             // NOC interface is in a known idle state for the next kernel. Dispatch kernels don't increment noc counters
             // so we only include this for non-dispatch kernels
-            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
-            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
-            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
-            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
+            // ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+            // ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            // ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX),
+            // DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+            // ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             WAYPOINT("NKFD");
         }
     }

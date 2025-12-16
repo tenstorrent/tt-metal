@@ -13,10 +13,9 @@
 #include <string>
 #include <cstdlib>
 
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -58,8 +57,7 @@ using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct pair_hash {
     template <class T1, class T2>
@@ -89,12 +87,10 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
 
-    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_fabric::FabricConfig, pair_hash>
-        topology_to_fabric_config_map;
+    static const std::unordered_map<Topology, tt::tt_fabric::FabricConfig> topology_to_fabric_config_map;
 
-    static const std::
-        unordered_map<std::tuple<Topology, std::string, RoutingType>, tt::tt_fabric::FabricConfig, tuple_hash>
-            torus_topology_to_fabric_config_map;
+    static const std::unordered_map<std::pair<Topology, std::string>, tt::tt_fabric::FabricConfig, pair_hash>
+        torus_topology_to_fabric_config_map;
 
 public:
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
@@ -113,7 +109,6 @@ public:
 
     bool open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
-        const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
         // Fabric Reliability Mode
@@ -131,21 +126,16 @@ public:
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
             const auto& torus_config = fabric_setup.torus_config.value();
-            auto it = torus_topology_to_fabric_config_map.find({topology, torus_config, routing_type});
+            auto it = torus_topology_to_fabric_config_map.find({topology, torus_config});
             TT_FATAL(
                 it != torus_topology_to_fabric_config_map.end(),
-                "Unsupported topology: {} with torus_config: {} and routing type: {}",
+                "Unsupported topology: {} with torus_config: {}",
                 topology,
-                torus_config,
-                routing_type);
+                torus_config);
             new_fabric_config = it->second;
         } else {
-            auto it = topology_to_fabric_config_map.find({topology, routing_type});
-            TT_FATAL(
-                it != topology_to_fabric_config_map.end(),
-                "Unsupported topology: {} with routing type: {}",
-                topology,
-                routing_type);
+            auto it = topology_to_fabric_config_map.find(topology);
+            TT_FATAL(it != topology_to_fabric_config_map.end(), "Unsupported topology: {}", topology);
             new_fabric_config = it->second;
         }
 
@@ -173,7 +163,6 @@ public:
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
-            routing_type_ = routing_type;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
@@ -458,7 +447,7 @@ public:
         uint32_t size_bytes,
         bool blocking,
         std::unordered_map<CoreCoord, std::vector<uint32_t>>& results_out) const {
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
@@ -485,7 +474,7 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         const std::vector<uint8_t>& data) const {
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
 
@@ -734,27 +723,16 @@ public:
         return hops;
     }
 
-    std::vector<RoutingDirection> get_neighbor_directions_for_topology() const {
-        switch (topology_) {
-            case Topology::Mesh:
-            case Topology::Torus:
-                return {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
-            case Topology::Linear: return {RoutingDirection::E, RoutingDirection::W};
-            case Topology::Ring:
-                // Ring topology handled separately - no directional logic
-                return {};
-        }
-        return {};
-    }
-
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const override {
         const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        auto directions = get_neighbor_directions_for_topology();
+        // To support device meshes that do not have wraparound connections, Ring topology is handled separately
+        if (topology_ != Topology::Ring) {
+            // Handle mesh, torus, neighbor exchange and linear topologies with directional neighbors
+            const std::vector<RoutingDirection> directions = {
+                RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-        if (!directions.empty()) {
-            // Handle mesh, torus, and linear topologies with directional neighbors
             for (const auto& src_node : device_ids) {
                 for (const auto& direction : directions) {
                     // Check if neighbor exists in this direction
@@ -786,8 +764,10 @@ public:
                     }
                 }
             }
-        } else if (topology_ == Topology::Ring) {
-            // Handle ring topology with logical ring neighbors
+        } else {
+            // If a Ring topology is used, only the devices on the perimeter of a mesh participate in the test.
+            // Instead of using physical wraparound connections, a large "ring" is formed with the perimeter devices, as
+            // is enforced by the get_wrap_around_mesh_ring_neighbors function.
             for (const auto& src_node : device_ids) {
                 auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
                 if (ring_neighbors.has_value()) {
@@ -991,7 +971,8 @@ public:
         std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
         split_hops.reserve(4);
 
-        if (this->topology_ == Topology::Linear || this->topology_ == Topology::Ring) {
+        if (this->topology_ == Topology::Linear || this->topology_ == Topology::Ring ||
+            this->topology_ == Topology::NeighborExchange) {
             for (const auto& [dir, hop_count] : hops) {
                 if (hop_count > 0) {
                     split_hops.push_back({{dir, hop_count}});
@@ -1082,7 +1063,7 @@ public:
 
     RoutingDirection get_forwarding_direction(
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
-        if (topology_ == Topology::Linear || topology_ == Topology::Ring) {
+        if (topology_ == Topology::Linear || topology_ == Topology::Ring || topology_ == Topology::NeighborExchange) {
             // for 1d, we expect hops only in one direction to be non-zero
             for (const auto& [direction, hop] : hops) {
                 if (hop != 0) {
@@ -1099,7 +1080,7 @@ public:
                 }
             }
         } else {
-            TT_THROW("Unsupported topology: {} for get_forwarding_direction", topology_);
+            TT_THROW("Unsupported topology: {} for hop-based get_forwarding_direction", topology_);
         }
 
         TT_THROW("Failed to find a forwarding direction for hops: {}", hops);
@@ -1128,17 +1109,40 @@ public:
         return tt::tt_fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
     }
 
-    FabricNodeId get_neighbor_node_id(
+    std::optional<FabricNodeId> get_neighbor_node_id_or_nullopt(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        // This function is used to get the neighbor node ID for a given source node ID and direction, returning nullopt
+        // if no neighbor is found.
+        std::optional<FabricNodeId> neighbor_node_id = std::nullopt;
+
         const auto& neighbors =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
-        TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
+
+        // If more than 1 mesh is returned, throw an error.
         TT_FATAL(
-            !neighbors.begin()->second.empty(),
+            neighbors.size() <= 1,
+            "Expected at most one neighbor mesh for {} in direction: {}",
+            src_node_id,
+            direction);
+
+        if (!neighbors.empty()) {
+            neighbor_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+        }
+
+        return neighbor_node_id;
+    }
+
+    FabricNodeId get_neighbor_node_id(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        // This function is used to get the neighbor node ID for a given source node ID and direction, throwing an error
+        // if no neighbor is found.
+        std::optional<FabricNodeId> neighbor_node_id = get_neighbor_node_id_or_nullopt(src_node_id, direction);
+        TT_FATAL(
+            neighbor_node_id.has_value(),
             "Expected at least 1 neighbor chip for {} in direction: {}",
             src_node_id,
             direction);
-        return FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+        return neighbor_node_id.value();
     }
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -1199,8 +1203,14 @@ public:
                 global_sync_val = this->get_num_sync_devices() - 1;
                 break;
             }
+            case tt::tt_fabric::Topology::NeighborExchange: {
+                // NeighborExchange topology only performs syncs between a device's nearest neighbors
+                multi_directional_hops = this->get_hops_to_nearest_neighbors(src_device);
+                global_sync_val = multi_directional_hops.size();
+                break;
+            }
             // for torus, the handling should be same as mesh since we need to sync with all the devices
-            // it doesnt matter if we use torus links or internal links to get the sync pacekts across
+            // it doesnt matter if we use torus links or internal links to get the sync packets across
             case tt::tt_fabric::Topology::Torus:
             case tt::tt_fabric::Topology::Mesh: {
                 multi_directional_hops = this->get_full_mcast_hops(src_device);
@@ -1482,9 +1492,39 @@ public:
         distributed_context->barrier();
     }
 
+    // Returns a map of the hops to the nearest neighbors for a node in all directions. If there is no neighbor in a
+    // direction, the key will not be present in the map.
+    std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
+        const FabricNodeId& src_device) const override {
+        std::unordered_map<RoutingDirection, uint32_t> hops_to_nearest_neighbors;
+        for (const auto& direction :
+             {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
+            const std::optional<FabricNodeId> neighbor_node_id = get_neighbor_node_id_or_nullopt(src_device, direction);
+            // If there is no neighbor, function will return src_device
+            if (neighbor_node_id.has_value()) {
+                hops_to_nearest_neighbors[direction] = 1;
+            }
+        }
+        return hops_to_nearest_neighbors;
+    }
+
+    void validate_single_hop(const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
+        // A valid hop map will have exactly 1 hop in 1 direction
+        bool hop_encountered = false;
+        for (const auto& [direction, hop_count] : hops) {
+            TT_FATAL((hop_count <= 1), "NeighborExchange topology does not support multi-hop traffic patterns");
+            if (hop_count == 1) {
+                TT_FATAL(
+                    !hop_encountered,
+                    "NeighborExchange topology does not support hops in multiple directions inside the same traffic "
+                    "pattern");
+                hop_encountered = true;
+            }
+        }
+    }
+
 private:
     Topology topology_{0};
-    RoutingType routing_type_{0};
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
     std::vector<FabricNodeId> local_available_node_ids_;
@@ -1574,12 +1614,10 @@ private:
         }
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
-
         // Now fabric context should be initialized, safe to query wrap_around_mesh
         wrap_around_mesh_ =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
                 user_meshes[0]);
-
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
         current_fabric_config_ = fabric_config;
@@ -1897,5 +1935,4 @@ private:
     }
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

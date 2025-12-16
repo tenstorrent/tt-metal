@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
         use_float32_reduction,
     };
 
-    auto compute_kernel_file =
+    const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/"
         "rmsnorm_pre_allgather.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{

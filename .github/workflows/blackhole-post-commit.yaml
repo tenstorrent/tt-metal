@@ -159,7 +159,6 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       gtest_filter: ${{ contains(inputs.runner-label, 'P100') && '*' || '*-*NIGHTLY_*' }}
   models-unit-tests:
@@ -243,7 +242,6 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   blackhole-20-cores-tests:

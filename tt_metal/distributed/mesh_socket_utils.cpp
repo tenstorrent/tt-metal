@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
@@ -35,7 +35,7 @@ group_socket_connections(const SocketConfig& config, SocketEndpoint socket_endpo
             grouped_connections;
     uint32_t conn_idx = 0;
     for (const auto& connection : config.socket_connection_config) {
-        auto& core = is_sender ? connection.sender_core : connection.receiver_core;
+        const auto& core = is_sender ? connection.sender_core : connection.receiver_core;
         grouped_connections[core.device_coord][core.core_coord].push_back(std::make_pair(conn_idx++, connection));
     }
     return grouped_connections;
@@ -172,7 +172,7 @@ Tag generate_descriptor_exchange_tag(Rank peer_rank, std::optional<DistributedCo
     // exchanging the correct descriptors.
     static std::unordered_map<DistributedContextId, std::unordered_map<Rank, uint32_t>> exchange_tags;
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
-    return Tag{exchange_tags[unique_context_id][peer_rank]++};
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_rank]++)};
 }
 }  // namespace
 
@@ -206,7 +206,8 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     auto num_cores = all_cores_set.size();
     auto total_config_buffer_size = num_cores * config_buffer_size;
 
-    auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    auto shard_params =
+        ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {static_cast<uint32_t>(num_cores), 1});
 
     DeviceLocalBufferConfig buffer_specs = {
         .page_size = config_buffer_size,
@@ -272,8 +273,8 @@ void write_socket_configs(
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint) {
-    auto mesh_device = config_buffer->device();
-    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    auto* mesh_device = config_buffer->device();
+    const auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     const auto& config = peer_descriptor.config;
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
@@ -386,7 +387,7 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
         .exchange_tag = generate_descriptor_exchange_tag(peer_rank, context_id)  // Unique tag for this exchange
     };
-    auto device = socket_endpoint.get_config_buffer()->device();
+    auto* device = socket_endpoint.get_config_buffer()->device();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {
         const auto& device_coord = is_sender ? sender_core.device_coord : recv_core.device_coord;
         auto fabric_node_id = device->get_fabric_node_id(device_coord);

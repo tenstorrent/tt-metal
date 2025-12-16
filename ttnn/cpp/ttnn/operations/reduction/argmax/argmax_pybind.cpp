@@ -1,19 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_pybind.hpp"
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn-pybind/decorators.hpp"
-
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
-
 namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.

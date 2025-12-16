@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <tensix_types.h>
 #include "cfg_defines.h"
-#include "dev_mem_map.h"
 
 // Convenience and type defines
 using uint = std::uint32_t;
@@ -42,6 +41,17 @@ using byte = std::uint8_t;
 // Reads and writes here access the tensix core register set. Each register is four bytes, but subword reads are
 // supported through byte enables. Register indices and contents are defined in local_regs.yaml.
 #define REGFILE_BASE 0xFFE00000  // 0xFFE00000 - 0xFFE3FFFF
+
+// Writes here are appended to the tensix core instruction FIFO. This
+// has priority over incoming instruction fetch returns, which are
+// simply dropped. The instruction will stay in the queue if a loop
+// instruction is in progress. If the FIFO is full a write will stall
+// the RISC-V core (until there is space). Additionally, the
+// instruction queue is flushed in some cases.
+
+#define INSTRN_BUF_BASE 0xFFE40000
+// The HAL needs to know the size per cpu
+#define INSTRN_BUF_STRIDE 0x00010000
 
 // PC buffer is used to pass kernel IDs and parameters from Brisc to Triscs, and also as a sync point -- a read from pc
 // buffer+1 address will not return until that thread is idle.
@@ -94,6 +104,8 @@ using byte = std::uint8_t;
 
 // Debug registers
 #define RISCV_DEBUG_REGS_START_ADDR 0xFFB12000
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x120)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x124)
 #define RISCV_DEBUG_REG_SOFT_RESET_0 (RISCV_DEBUG_REGS_START_ADDR | 0x1B0)
 #define RISCV_DEBUG_REG_WDT (RISCV_DEBUG_REGS_START_ADDR | 0x1E0)
 #define RISCV_DEBUG_REG_WDT_CNTL (RISCV_DEBUG_REGS_START_ADDR | 0x1E4)

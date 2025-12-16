@@ -4,30 +4,24 @@
 
 #pragma once
 
-#include <string>
-#include <tt_stl/indestructible.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include "llrt/core_descriptor.hpp"
-#include <tt-metalium/hal_types.hpp>
-#include <llrt/tt_cluster.hpp>
-#include <llrt/hal.hpp>
-#include <llrt/rtoptions.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
-#include <impl/allocator/allocator_types.hpp>
-
-#include <array>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <unordered_set>
 #include <vector>
+#include <llrt/rtoptions.hpp>
+#include <impl/allocator/allocator_types.hpp>
+#include "experimental/fabric/routing_table_generator.hpp"
+#include "llrt/hal/generated/dev_msgs.hpp"
+#include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
+
+namespace tt {
+class Cluster;
+}  // namespace tt
+
+namespace tt::tt_metal::distributed::multihost {
+class DistributedContext;
+}
 
 namespace tt::tt_metal {
 struct ProfilerStateManager;
@@ -37,6 +31,14 @@ class Data;
 }
 
 class DataCollector;
+class DeviceManager;
+class Hal;
+class dispatch_core_manager;
+class DispatchQueryManager;
+class DPrintServer;
+class WatcherServer;
+class DispatchMemMap;
+
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
@@ -66,6 +68,18 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
+
+    void initialize_device_manager(
+        const std::vector<ChipId>& device_ids,
+        uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        const tt_metal::DispatchCoreConfig& dispatch_core_config,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        bool init_profiler = true,
+        bool initialize_fabric_and_dispatch_fw = true);
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
@@ -92,6 +106,7 @@ public:
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
+    tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
@@ -120,6 +135,8 @@ private:
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
+    void construct_control_plane();
+    void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
 
@@ -164,6 +181,10 @@ private:
 
     // Used to track which FW has been built already
     std::unordered_set<uint64_t> firmware_built_keys_;
+    std::mutex firmware_built_keys_mutex_;
+
+    // Mutex to protect control_plane_ for thread-safe access
+    std::mutex control_plane_mutex_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
@@ -184,6 +205,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<DeviceManager> device_manager_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;

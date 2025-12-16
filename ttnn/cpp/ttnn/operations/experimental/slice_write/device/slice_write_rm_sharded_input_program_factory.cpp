@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -15,9 +14,8 @@
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::slice_write::program {
@@ -31,7 +29,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores,
     uint32_t max_read_size) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < input_shape.rank(); i++) {
         input_shape[i] = output_tensor_end[i] - output_tensor_start[i];

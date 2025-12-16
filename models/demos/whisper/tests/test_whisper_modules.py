@@ -20,10 +20,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"
 
+WHISPER_BATCH_SIZE = 2
+
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize(
     "sequence_size, use_encoder_states, use_attn_mask, use_kv_cache",
     (
@@ -97,14 +99,15 @@ def test_whisper_attention(
     past_key_values = None
     if use_kv_cache:
         past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
-        kv_cache = init_kv_cache(
+        kv_cache, _ = init_kv_cache(
             config,
             mesh_device,
             max_batch_size=batch_size_per_device,
             max_seq_len=512,
             n_layers=1,
             weights_mesh_mapper=weights_mesh_mapper,
-        )[0]
+        )
+        kv_cache = kv_cache[0]  # Get first layer's cache for attention test
         current_decode_pos = ttnn.from_torch(
             torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
         )
@@ -153,6 +156,9 @@ def test_whisper_attention(
             parameters=ttnn_parameters,
         )
         output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+        # 4D to 3D
+        if len(output.shape) == 4:
+            output = output.squeeze(1)
 
         pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
         logger.info(f"[pos={i}] Output PCC: {output_pcc}")
@@ -187,7 +193,7 @@ def test_whisper_attention(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_size):
@@ -219,13 +225,18 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D and unpadding
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+    output = output[:, :sequence_size, :]
+
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
@@ -250,7 +261,7 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
 
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         config=config,
-        input_features=torch_input_features,
+        input_features=torch_input_features.unsqueeze(1),
         parameters=ttnn_parameters,
         device=mesh_device,
         weights_mesh_mapper=weights_mesh_mapper,
@@ -259,13 +270,19 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
     output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
+    # 4D to 3D and unpadding
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
+    sequence_size = torch_output.shape[-2]
+    output = output[:, :sequence_size, :]
+
     _, pcc_message = assert_with_pcc(torch_output, output, 0.998)
     logger.info(f"Output PCC: {pcc_message}")
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -330,14 +347,16 @@ def test_decoder_layer(
     )
 
     if use_kv_cache:
-        kv_cache = init_kv_cache(
+        kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
             max_batch_size=batch_size_per_device,
             max_seq_len=512,
             n_layers=1,
             weights_mesh_mapper=weights_mesh_mapper,
-        )[0]
+        )
+        kv_cache = kv_cache[0]
+        cross_attn_cache = cross_attn_cache[0]
         current_decode_pos = ttnn.from_torch(
             torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
         )
@@ -348,10 +367,15 @@ def test_decoder_layer(
         ttnn_attention_mask,
         ttnn_encoder_hidden_states,
         kv_cache=kv_cache if use_kv_cache else None,
+        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
+        cross_attn_cache_valid=False,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    # 4D to 3D
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -359,7 +383,7 @@ def test_decoder_layer(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -389,7 +413,7 @@ def test_decoder(
         (batch_size, encoder_sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32
     )
 
-    decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
+    decoder_input_ids = torch.ones(batch_size, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
 
     attention_mask = None
 
@@ -425,7 +449,7 @@ def test_decoder(
     )
 
     if use_kv_cache:
-        kv_cache = init_kv_cache(
+        kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
             max_batch_size=batch_size_per_device,
@@ -442,10 +466,16 @@ def test_decoder(
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=ttnn_encoder_hidden_states,
         kv_cache=kv_cache if use_kv_cache else None,
+        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
+        cross_attn_cache_valid=False,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+
+    # 4D to 3D
+    if len(output.shape) == 4:
+        output = output.squeeze(1)
 
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -460,7 +490,7 @@ def test_decoder(
         [1, True],
     ),
 )
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_whisper(
     tmp_path, mesh_device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, batch_size_per_device
@@ -493,7 +523,7 @@ def test_ttnn_whisper(
 
     (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
         config=config,
-        input_features=input_features,
+        input_features=input_features.unsqueeze(1),
         input_ids=decoder_input_ids,
         attention_mask=attention_mask,
         parameters=ttnn_parameters,
@@ -503,7 +533,7 @@ def test_ttnn_whisper(
     )
 
     if use_kv_cache:
-        kv_cache = init_kv_cache(
+        kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
             max_batch_size=batch_size_per_device,
@@ -520,10 +550,15 @@ def test_ttnn_whisper(
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         kv_cache=kv_cache if use_kv_cache else None,
+        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
+
+    # 4D to 3D
+    if len(last_hidden_state.shape) == 4:
+        last_hidden_state = last_hidden_state.squeeze(1)
 
     if is_blackhole():
         expec_out_pcc = 0.990
@@ -531,3 +566,194 @@ def test_ttnn_whisper(
         expec_out_pcc = 0.991
     _, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, expec_out_pcc)
     logger.info(f"Output PCC: {pcc_message}")
+
+
+@pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("encoder_sequence_size", [1500])
+@pytest.mark.parametrize("num_decode_iterations", [5])
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 1000000}], indirect=True
+)
+def test_traced_decoder_executor(
+    mesh_device,
+    ttnn_model,
+    model_name,
+    batch_size_per_device,
+    encoder_sequence_size,
+    num_decode_iterations,
+):
+    """
+    Test that traced decoder execution produces correct outputs compared to HF reference model.
+
+    This test:
+    1. Sets up decoder with KV cache and cross-attention cache
+    2. Runs first iteration to populate cross-attention cache (non-traced)
+    3. Captures the trace after first iteration
+    4. Runs subsequent iterations using traced execution
+    5. Compares traced outputs with HF reference model outputs
+    """
+    torch.manual_seed(0)
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
+    config = transformers.WhisperConfig.from_pretrained(model_name)
+    embed_dim = config.d_model
+
+    # Create encoder hidden states (simulating encoder output)
+    torch_encoder_hidden_states = torch_random(
+        (batch_size, encoder_sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32
+    )
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        torch_encoder_hidden_states, dtype=ttnn.bfloat16, mesh_mapper=input_mesh_mapper
+    )
+    ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
+    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, mesh_device)
+
+    # Create HF reference model
+    hf_model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
+    hf_past_key_values = EncoderDecoderCache.from_legacy_cache(None)
+
+    # Preprocess model parameters for TTNN
+    ttnn_parameters = preprocess_model_parameters(
+        initialize_model=lambda: hf_model,
+        convert_to_ttnn=ttnn_model.convert_to_ttnn,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=mesh_device,
+        prefix="decoder",
+    )
+
+    # Initialize KV cache and cross-attention cache for TTNN
+    kv_cache, cross_attn_cache = init_kv_cache(
+        config,
+        mesh_device,
+        max_batch_size=batch_size_per_device,
+        max_seq_len=512,
+        weights_mesh_mapper=weights_mesh_mapper,
+    )
+    current_decode_pos = ttnn.from_torch(
+        torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
+    )
+
+    # Trace management variables
+    trace_id_decoder = None
+    trace_input_decoder = None
+    trace_compiled = False
+    cross_attn_cache_valid = False
+
+    for i in range(num_decode_iterations):
+        # Create decoder input for this iteration
+        decoder_input_ids = torch.ones(batch_size, 1).type(torch.int32) * (config.decoder_start_token_id + i)
+
+        # Run HF reference model
+        hf_output = hf_model(
+            decoder_input_ids,
+            attention_mask=None,
+            encoder_hidden_states=torch_encoder_hidden_states,
+            past_key_values=hf_past_key_values,
+            use_cache=True,
+        )
+        hf_reference_output = hf_output.last_hidden_state
+        hf_past_key_values = hf_output.past_key_values
+
+        # Preprocess decoder inputs for TTNN
+        decoder_hidden_states, _ = ttnn_model.preprocess_decoder_inputs(
+            config,
+            decoder_input_ids,
+            attention_mask=None,
+            parameters=ttnn_parameters,
+            device=mesh_device,
+            decode_pos=i,
+            create_attention_mask=False,
+            input_mesh_mapper=input_mesh_mapper,
+        )
+
+        if trace_compiled and trace_id_decoder is not None:
+            # Use traced execution
+            # Copy new input to persistent L1 tensor
+            trace_input_decoder = ttnn.to_memory_config(
+                decoder_hidden_states,
+                ttnn.L1_MEMORY_CONFIG,
+                output_tensor=trace_input_decoder,
+            )
+            # Execute trace
+            ttnn.execute_trace(mesh_device, trace_id_decoder, cq_id=0, blocking=True)
+            # traced_output = trace_output_decoder
+        else:
+            # Non-traced execution (first iteration populates cross-attention cache)
+            traced_output = ttnn_model.decoder(
+                config,
+                hidden_states=decoder_hidden_states,
+                decoder_attention_mask=None,
+                encoder_hidden_states=ttnn_encoder_hidden_states,
+                kv_cache=kv_cache,
+                cross_attn_cache=cross_attn_cache,
+                cross_attn_cache_valid=cross_attn_cache_valid,
+                current_decode_pos=current_decode_pos,
+                parameters=ttnn_parameters,
+            )
+
+            # After first iteration, cross_attn_cache is populated
+            if i == 0:
+                cross_attn_cache_valid = True
+
+            # After first iteration, capture the trace
+            if i == 0:
+                logger.info("Capturing decoder trace after first iteration")
+
+                # Create a decoder function that captures the required parameters
+                def traced_decoder_fn(hidden_states):
+                    return ttnn_model.decoder(
+                        config,
+                        hidden_states=hidden_states,
+                        decoder_attention_mask=None,
+                        encoder_hidden_states=ttnn_encoder_hidden_states,
+                        kv_cache=kv_cache,
+                        cross_attn_cache=cross_attn_cache,
+                        cross_attn_cache_valid=True,  # Cache is now populated
+                        current_decode_pos=current_decode_pos,
+                        parameters=ttnn_parameters,
+                    )
+
+                # Move input to L1 for trace capture
+                l1_memory_config = ttnn.L1_MEMORY_CONFIG
+                l1_input = ttnn.to_memory_config(decoder_hidden_states, l1_memory_config)
+
+                # Compile run
+                compile_output = traced_decoder_fn(l1_input)
+                ttnn.deallocate(compile_output, force=True)
+                ttnn.deallocate(l1_input)
+                logger.info("Decoder trace compile run complete")
+
+                # Allocate L1 input for trace capture
+                trace_input_decoder = ttnn.to_memory_config(decoder_hidden_states, l1_memory_config)
+
+                # Capture trace
+                trace_id_decoder = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                traced_output = traced_decoder_fn(trace_input_decoder)
+
+                ttnn.end_trace_capture(mesh_device, trace_id_decoder, cq_id=0)
+                ttnn.synchronize_device(mesh_device)
+
+                trace_compiled = True
+                logger.info("Decoder trace capture complete")
+
+        traced_output_torch = ttnn.to_torch(traced_output, mesh_composer=output_mesh_composer)
+        ttnn.plus_one(current_decode_pos)
+
+        # Compare traced output with HF reference output
+        pcc_passed, pcc_message = comp_pcc(hf_reference_output, traced_output_torch, 0.999)
+        logger.info(f"[iteration={i}] Traced vs HF Reference PCC: {pcc_message}")
+
+        if not pcc_passed:
+            # Cleanup before assertion
+            if trace_id_decoder is not None:
+                ttnn.release_trace(mesh_device, trace_id_decoder)
+            assert pcc_passed, f"[iteration={i}] PCC check failed: {pcc_message}"
+
+    # Cleanup trace
+    if trace_id_decoder is not None:
+        ttnn.release_trace(mesh_device, trace_id_decoder)
+        logger.info("Trace released successfully")
+
+    logger.info(f"All {num_decode_iterations} iterations passed PCC checks!")

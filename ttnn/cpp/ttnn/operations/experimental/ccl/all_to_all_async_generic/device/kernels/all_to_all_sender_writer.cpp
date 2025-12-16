@@ -25,19 +25,25 @@ constexpr uint32_t has_half_tile = get_compile_time_arg_val(7);
 constexpr uint32_t output_page_size = get_compile_time_arg_val(8);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(9);
 
+inline tt::tt_fabric::WorkerToFabricEdmSender& select_connection(
+    FabricConnectionManager& fabric_connection, int device_offset) {
+    return (device_offset > 0) ? fabric_connection.get_forward_connection()
+                               : fabric_connection.get_backward_connection();
+}
+
 template <typename AddrGenType>
 void write_data(
     bool last,
-    bool local,
     uint32_t dest_id,
     AddrGenType addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    FabricConnectionManager& fabric_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes,
     uint32_t offset,
     uint64_t output_semaphore_noc_addr_in_pkt,
-    uint32_t device_id) {
+    int device_offset) {
+    bool local = device_offset == 0;
     if (last) {
         if (local) {
             noc_semaphore_inc(output_semaphore_noc_addr_in_pkt, 1);
@@ -48,7 +54,7 @@ void write_data(
                 pkt_hdr,
                 dest_id,
                 addrgen,
-                fabric_connection,
+                select_connection(fabric_connection, device_offset),
                 l1_read_addr,
                 payload_size_bytes,
                 output_semaphore_noc_addr_in_pkt,
@@ -61,7 +67,8 @@ void write_data(
             noc_async_write(l1_read_addr, addrgen.get_noc_addr(dest_id, offset), payload_size_bytes);
         } else {
             tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr, dest_id, addrgen, offset);
-            perform_payload_send(fabric_connection, l1_read_addr, payload_size_bytes, pkt_hdr);
+            perform_payload_send(
+                select_connection(fabric_connection, device_offset), l1_read_addr, payload_size_bytes, pkt_hdr);
         }
     }
     noc_async_writes_flushed();
@@ -70,19 +77,19 @@ void write_data(
 template <typename AddrGenType>
 void write_data(
     bool last,
-    bool local,
     uint32_t dest_id0,
     uint32_t dest_id1,
     AddrGenType addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    FabricConnectionManager& fabric_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes0,
     uint32_t payload_size_bytes1,
     uint32_t offset0,
     uint32_t offset1,
     uint64_t output_semaphore_noc_addr_in_pkt,
-    uint32_t device_id) {
+    int device_offset) {
+    bool local = device_offset == 0;
     if (last) {
         if (local) {
             noc_semaphore_inc(output_semaphore_noc_addr_in_pkt, 1);
@@ -92,14 +99,15 @@ void write_data(
             noc_async_write_barrier();
         } else {
             tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes0, pkt_hdr, dest_id0, addrgen, offset0);
-            perform_payload_send(fabric_connection, l1_read_addr, payload_size_bytes0, pkt_hdr);
+            perform_payload_send(
+                select_connection(fabric_connection, device_offset), l1_read_addr, payload_size_bytes0, pkt_hdr);
             size_t l1_read_addr_plus_payload = l1_read_addr + output_page_size;
             noc_async_writes_flushed();
             perform_atomic_fabric_write(
                 pkt_hdr,
                 dest_id1,
                 addrgen,
-                fabric_connection,
+                select_connection(fabric_connection, device_offset),
                 l1_read_addr_plus_payload,
                 payload_size_bytes1,
                 output_semaphore_noc_addr_in_pkt,
@@ -126,9 +134,10 @@ void write_data(
 
             pkt_hdr->to_noc_unicast_scatter_write(
                 NocUnicastScatterCommandHeader(
-                    {{noc_address0, noc_address1}, static_cast<uint16_t>(payload_size_bytes0)}),
+                    {noc_address0, noc_address1}, {static_cast<uint16_t>(payload_size_bytes0)}),
                 payload_size);
-            perform_payload_send(fabric_connection, l1_read_addr, payload_size, pkt_hdr);
+            perform_payload_send(
+                select_connection(fabric_connection, device_offset), l1_read_addr, payload_size, pkt_hdr);
         }
     }
     noc_async_writes_flushed();
@@ -210,16 +219,9 @@ void kernel_main() {
 
     for (uint32_t device_id = 0; device_id < num_devices; ++device_id) {
         volatile PACKET_HEADER_TYPE* pkt_hdr;
-        tt::tt_fabric::WorkerToFabricEdmSender& cur_connection = (device_id > current_device_id)
-                                                                     ? fabric_connection.get_forward_connection()
-                                                                     : fabric_connection.get_backward_connection();
-        if (device_id > current_device_id) {
-            pkt_hdr = pkt_hdr_forward;
-            pkt_hdr->to_chip_unicast(device_id - current_device_id);
-        } else {
-            pkt_hdr = pkt_hdr_backward;
-            pkt_hdr->to_chip_unicast(current_device_id - device_id);
-        }
+        int device_offset = device_id - current_device_id;
+        int distance = abs(device_offset);
+
 #elif TOPOLOGY == RING
     if (fabric_connection.has_forward_connection()) {
         pkt_hdr_forward->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -235,22 +237,22 @@ void kernel_main() {
     noc_semaphore_set(global_init_semaphore_addr_ptr, 0);
 
     for (int d = num_devices - 1; d >= 0; --d) {
-        int distance = (d + 1) / 2;
-        int val = (d % 2 == 0) ? distance : -distance;
-        uint32_t device_id = (current_device_id + val + num_devices) % num_devices;
         volatile PACKET_HEADER_TYPE* pkt_hdr;
-        tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
-            (val >= 0) ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
-        if (val >= 0) {
-            pkt_hdr = pkt_hdr_forward;
-            pkt_hdr->to_chip_unicast(distance);
-        } else {
-            pkt_hdr = pkt_hdr_backward;
-            pkt_hdr->to_chip_unicast(distance);
-        }
+        int distance = (d + 1) / 2;
+        int device_offset = (d % 2 == 0) ? distance : -distance;
+        uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
+
 #else
 #error "Unsupported Topology Type"
 #endif
+        if (device_offset > 0) {
+            pkt_hdr = pkt_hdr_forward;
+            pkt_hdr->to_chip_unicast(distance);
+        }
+        if (device_offset < 0) {
+            pkt_hdr = pkt_hdr_backward;
+            pkt_hdr->to_chip_unicast(distance);
+        }
 
         uint64_t block_size = outer_dims_size * concat_num_tiles * inner_dims_size;
         auto calculate_params = [&](int b) {
@@ -279,40 +281,39 @@ void kernel_main() {
 
                 write_data(
                     last1,
-                    device_id == current_device_id,
                     dest_tile_id0,
                     dest_tile_id1,
                     output_addrgen,
                     pkt_hdr,
-                    cur_connection,
+                    fabric_connection,
                     l1_read_addr,
                     payload_size0,
                     payload_size1,
                     offset0,
                     offset1,
                     output_semaphore_noc_addr_in_pkt,
-                    device_id);
+                    device_offset);
             } else {
                 auto [dest_tile_id, last, payload_size, offset] = calculate_params(b);
 
                 write_data(
                     last,
-                    device_id == current_device_id,
                     dest_tile_id,
                     output_addrgen,
                     pkt_hdr,
-                    cur_connection,
+                    fabric_connection,
                     l1_read_addr,
                     payload_size,
                     offset,
                     output_semaphore_noc_addr_in_pkt,
-                    device_id);
+                    device_offset);
             }
 
             cb_pop_front(cb0_id, tiles_this_iteration);
         }
     }
 
+    noc_async_write_barrier();
     fabric_connection.close();
 
     noc_semaphore_wait(global_semaphore_addr_ptr, num_devices);

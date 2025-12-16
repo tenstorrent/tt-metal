@@ -111,8 +111,8 @@ ALWI void initialize_return_indices_data() {
     // Calculate initial index based on padding conditions
     uint16_t init_index = 0;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
-    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
-    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(1);
+    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(2);
 
     if (start_row <= pad_t) {
         // top left is in top padding, we increment from the padding index in the top left
@@ -329,7 +329,12 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     }
 }
 
-template <bool one_scalar_per_core, uint32_t in_scalar_cb_id, uint32_t reader_nindices, bool split_reader>
+template <
+    bool one_scalar_per_core,
+    uint32_t in_scalar_cb_id,
+    uint32_t reader_nindices,
+    bool split_reader,
+    uint32_t multi_buffering_factor>
 ALWI void fill_scalar(
     uint32_t& scalar_start,
     uint32_t& scalar_end,
@@ -337,31 +342,27 @@ ALWI void fill_scalar(
     uint32_t& scalar_index,
     uint32_t& counter,
     volatile uint16_t* config_ptr) {
+    constexpr uint32_t num_readers = split_reader ? 2 : 1;
     cb_reserve_back(in_scalar_cb_id, 1);
-    while ((counter >= scalar_end) && scalar_end != reader_nindices) {
+
+    while (counter >= scalar_end && scalar_end < reader_nindices) {
+        scalar_index++;
         scalar_start = scalar_end;
         scalar_value = config_ptr[3 * scalar_index + 1];
         scalar_end = config_ptr[3 * scalar_index + 2];
-        scalar_index++;
     }
-    // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
-    // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
-    // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
-    // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
-    // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
-    // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
-    if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1 ||
-                                 (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
+
+    // We want to fill the scalar CB the fewest times possible, this will be min(scalar_end - scalar_start, num_readers
+    // * multi_buffering_factor)
+    if (counter < scalar_start + num_readers * multi_buffering_factor) {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
         fill_with_val(get_write_ptr(in_scalar_cb_id), FACE_WIDTH, scalar_value, false);
     }
+    counter += num_readers;
+
     cb_push_back(in_scalar_cb_id, 1);
-    counter++;
-    if constexpr (split_reader) {
-        counter++;
-    }
 }
 
 /**
@@ -432,16 +433,12 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id =
         use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
-    uint32_t scalar_index = 0;
-    uint32_t scalar_start = 0;
-    uint32_t scalar_end = 1;
-    uint32_t scalar_value = 0;
-
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
     constexpr uint32_t num_faces_in_input_tile =
         (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
+    constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
@@ -501,25 +498,26 @@ void kernel_main() {
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
-    uint32_t config_l1_addr;
-    volatile tt_l1_ptr uint16_t* config_ptr;
 
     uint32_t segments_counter = 1;
-    uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = kernel_h * kernel_w;
-    constexpr bool wide_reduction = in_nblocks_c > 1;
 
+    volatile tt_l1_ptr uint16_t* config_ptr;
+    uint32_t scalar_index = 0;
+    uint32_t scalar_start;
+    uint32_t scalar_value;
+    uint32_t scalar_end;
+    uint32_t counter = reader_id;
     if constexpr (!one_scalar_per_core) {
-        config_l1_addr = get_read_ptr(config_cb_id);
+        uint32_t config_l1_addr = get_read_ptr(config_cb_id);
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
-        scalar_start = config_ptr[3 * scalar_index];
-        scalar_value = config_ptr[3 * scalar_index + 1];
-        scalar_end = config_ptr[3 * scalar_index + 2];
-        scalar_index++;
+        scalar_start = config_ptr[0];
+        scalar_value = config_ptr[1];
+        scalar_end = config_ptr[2];
     }
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
-    bool first_row_value = reader_id == 0;
+    bool first_row_value = reader_id == 0 || !use_split_reader;
 
     uint32_t reader_indices_on_core = 0;
 
@@ -546,8 +544,12 @@ void kernel_main() {
         constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
-                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, use_split_reader>(
-                    scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+                fill_scalar<
+                    one_scalar_per_core,
+                    in_scalar_cb_id,
+                    reader_nindices,
+                    use_split_reader,
+                    multi_buffering_factor>(scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
             reader_indices_on_core--;
             read_kernel_with_top_left_index<
@@ -581,39 +583,5 @@ void kernel_main() {
                 first_row_value = false;
             }
         }
-    }
-
-    while (reader_indices_on_core--) {
-        if constexpr (!one_scalar_per_core) {
-            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, use_split_reader>(
-                scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
-        }
-        read_kernel_with_top_left_index<
-            in_nblocks_c,
-            in_cb_id,
-            kernel_h,
-            kernel_w,
-            in_w_padded,
-            in_nbytes_leftover,
-            in_c,
-            max_sticks_for_reduction,
-            total_elems_to_reduce,
-            is_avg_pool,
-            wide_reduction,
-            clear_value_cb_id,
-            in_cb_ntiles,
-            in_nbytes_c,
-            shard_width_bytes,
-            is_large_kernel,
-            last_tile_is_partial,
-            dilation_h,
-            dilation_w,
-            return_indices,
-            zero_pages,
-            out_cb_id,
-            out_idx_cb_id,
-            reader_id,
-            pack_tmp_cb_id,
-            pack_idx_tmp_cb_id>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

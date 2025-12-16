@@ -21,8 +21,8 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "fabric_edm_types.hpp"
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/inspector.hpp"
@@ -30,6 +30,8 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 
@@ -70,7 +72,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     auto l1_size = my_dispatch_constants.get_prefetcher_l1_size();
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
@@ -265,7 +267,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         bool found_dispatch = false;
         bool found_dispatch_s = false;
         for (FDKernel* k : downstream_kernels_) {
-            if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+            if (auto* dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch = true;
 
@@ -275,7 +277,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_log_page_size =
                     dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size;
                 dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages;
-            } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
+            } else if (auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
 
@@ -308,7 +310,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         // PREFETCH_D ||
         // FABRIC_MUX
         for (FDKernel* ds_kernel : downstream_kernels_) {
-            if (auto prefetch_d = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
+            if (auto* prefetch_d = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
                 TT_ASSERT(
                     prefetch_d->GetStaticConfig().is_d_variant.value() &&
                     !prefetch_d->GetStaticConfig().is_h_variant.value());
@@ -327,7 +329,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, prefetch_d->GetDeviceId());
                 assemble_2d_fabric_packet_header_args(
                     this->dependent_config_, GetDeviceId(), prefetch_d->GetDeviceId());
-            } else if (auto fabric_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
+            } else if (auto* fabric_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
                 constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
                 tt::tt_metal::assemble_fabric_mux_client_config_args(
@@ -342,7 +344,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         TT_ASSERT(upstream_kernels_.size() == 1);
         // May be overwritten below
         dependent_config_.num_hops = 0;
-        if (auto prefetch_h = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
+        if (auto* prefetch_h = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = prefetch_h->GetLogicalCore();
             dependent_config_.upstream_cb_sem_id = prefetch_h->GetStaticConfig().my_downstream_cb_sem_id;
             dependent_config_.num_hops = tt::tt_metal::get_num_hops(prefetch_h->GetDeviceId(), device_id_);
@@ -357,7 +359,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         bool found_dispatch_s = false;
         bool found_relay_mux = false;
         for (FDKernel* k : downstream_kernels_) {
-            if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+            if (auto* dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch = true;
 
@@ -367,14 +369,14 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_log_page_size =
                     dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size;
                 dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages;
-            } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
+            } else if (auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
 
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
                 dependent_config_.downstream_dispatch_s_cb_sem_id =
                     dispatch_s_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
-            } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(k)) {
+            } else if (auto* relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(k)) {
                 TT_ASSERT(!found_relay_mux, "PREFETCH_D kernel has multiple downstream RELAY_MUX kernels.");
                 found_relay_mux = true;
                 constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
@@ -402,6 +404,19 @@ void PrefetchKernel::GenerateDependentConfigs() {
     } else {
         TT_FATAL(false, "PrefetchKernel must be one of (or both) H and D variants");
     }
+}
+
+void PrefetchKernel::InitializeRuntimeArgsValues() {
+    // Initialize runtime args offsets
+    int current_offset = 0;
+    static_config_.offsetof_my_dev_id = current_offset++;
+    static_config_.offsetof_to_dev_id = current_offset++;
+    static_config_.offsetof_router_direction = current_offset++;
+    // Initialize runtime args
+    runtime_args_.resize(current_offset);
+    runtime_args_[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
 }
 
 void PrefetchKernel::CreateKernel() {
@@ -493,11 +508,8 @@ void PrefetchKernel::CreateKernel() {
 
         {"NUM_HOPS", std::to_string(dependent_config_.num_hops.value())},
 
-        {"MY_DEV_ID", std::to_string(dependent_config_.my_dev_id.value_or(0))},
         {"EW_DIM", std::to_string(dependent_config_.ew_dim.value_or(0))},
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
-        {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
-        {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
@@ -508,6 +520,12 @@ void PrefetchKernel::CreateKernel() {
             defines["FABRIC_2D"] = "1";
         }
     }
+
+    // Runtime args offsets
+    defines["OFFSETOF_MY_DEV_ID"] = std::to_string(static_config_.offsetof_my_dev_id.value_or(0));
+    defines["OFFSETOF_TO_DEV_ID"] = std::to_string(static_config_.offsetof_to_dev_id.value_or(0));
+    defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
+
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
@@ -529,7 +547,7 @@ void PrefetchKernel::ConfigureCore() {
         // Initialize the FetchQ
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-        auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+        const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);

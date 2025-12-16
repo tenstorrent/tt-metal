@@ -125,7 +125,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     EXPECT_TRUE(input_tensor.is_allocated());
 
     const auto& storage = input_tensor.storage();
-    auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&storage);
+    const auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&storage);
 
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
@@ -136,7 +136,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
     for (auto* device : view.get_devices()) {
         auto coordinate = view.find_device(device->id());
-        auto buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
+        auto* buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
         EXPECT_TRUE(buffer->is_allocated());
@@ -224,7 +224,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     std::vector<distributed::MeshCoordinate> device_shard_coords;
     EXPECT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& tensor_shard : device_tensors) {
-        auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.storage());
+        const auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.storage());
         ASSERT_NE(shard_storage, nullptr);
         EXPECT_NE(shard_storage->mesh_buffer, nullptr);
         EXPECT_THAT(shard_storage->coords, SizeIs(1));
