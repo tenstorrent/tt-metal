@@ -406,7 +406,16 @@ class StableDiffusion3Pipeline:
 
         return pipeline
 
-    def run_single_prompt(self, prompt, negative_prompt="", num_inference_steps=40, seed=None, traced=True):
+    def run_single_prompt(
+        self,
+        prompt,
+        negative_prompt="",
+        num_inference_steps=40,
+        seed=None,
+        traced=True,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
+    ):
         return self.__call__(
             prompt_1=[prompt],
             prompt_2=[prompt],
@@ -417,6 +426,8 @@ class StableDiffusion3Pipeline:
             num_inference_steps=num_inference_steps,
             seed=seed,
             traced=traced,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
     def __call__(

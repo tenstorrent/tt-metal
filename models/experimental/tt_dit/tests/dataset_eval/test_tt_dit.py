@@ -151,13 +151,6 @@ def check_accuracy(num_prompts, score, score_key, model_info):
     ],
     indirect=["mesh_device"],
 )
-# @pytest.mark.parametrize(
-#    "device_params",
-# [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
-# [{"fabric_config": ttnn.FabricConfig.FABRIC_1D,"trace_region_size": 50000000}],
-#    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-#    indirect=True,
-# )
 def test_tt_dit_accuracy(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -168,6 +161,7 @@ def test_tt_dit_accuracy(
     dit_pipeline,
     model_metadata,
     evaluation_range,
+    is_video,
     is_24hrs_test,
     monkeypatch,
 ) -> None:
@@ -196,16 +190,15 @@ def test_tt_dit_accuracy(
     )
 
     images = []
-
-    logger.info(f"Starting generation of {len(prompts)} images...")
+    gen_type = "image" if not is_video else "video"
+    logger.info(f"Starting generation of {len(prompts)} {gen_type}s...")
 
     # Generate images for each prompt
-    is_video = False
     iter = itertools.cycle(prompts) if is_24hrs_test else prompts
     start_time = time.time()
     for i, prompt in enumerate(iter):
         logger.info(
-            f"Generating image {i+1} of {len(prompts) if not is_24hrs_test else '24hrs images'}: {prompt[:50]}..."
+            f"Generating {gen_type} {i+1} of {len(prompts) if not is_24hrs_test else '24hrs {gen_type}s'}: {prompt[:50]}..."
         )
 
         # Generate image using TT-Metal pipeline
@@ -221,13 +214,7 @@ def test_tt_dit_accuracy(
             )
 
         images.append(generated_images[0])
-        logger.info(f"Image {i+1} completed in {benchmark_profiler.get_duration('inference', i):.2f}s")
-
-        # Save image for inspection
-        if not isinstance(generated_images[0], list):  # Save only images for fid computation
-            os.makedirs("generated_images", exist_ok=True)
-            generated_images[0].save(f"generated_images/tt_dit_image_{i+1}.png")
-            is_video = False
+        logger.info(f"{gen_type} {i+1} completed in {benchmark_profiler.get_duration('inference', i):.2f}s")
 
         if is_24hrs_test:
             if (time.time() - start_time) > 24 * 60 * 60:

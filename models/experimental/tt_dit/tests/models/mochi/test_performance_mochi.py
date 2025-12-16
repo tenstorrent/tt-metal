@@ -37,7 +37,6 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -91,7 +90,7 @@ def test_mochi_pipeline_performance(
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
     logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
 
-    tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name, use_cache=use_cache)
+    tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name)
 
     # Use a generator for deterministic results.
     generator = torch.Generator("cpu").manual_seed(0)

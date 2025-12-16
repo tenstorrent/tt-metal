@@ -108,8 +108,6 @@ def test_pipeline_performance(
 
     num_frames = 81
     num_inference_steps = 40
-    guidance_scale = 3.0
-    guidance_scale_2 = 4.0
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -118,8 +116,6 @@ def test_pipeline_performance(
         parallel_config=parallel_config,
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,
-        use_cache=True,
-        boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
@@ -137,8 +133,6 @@ def test_pipeline_performance(
                 width=width,
                 num_frames=num_frames,
                 num_inference_steps=2,  # Small number of steps to reduce test time.
-                guidance_scale=guidance_scale,
-                guidance_scale_2=guidance_scale_2,
             )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -186,8 +180,6 @@ def test_pipeline_performance(
                     width=width,
                     num_frames=num_frames,
                     num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    guidance_scale_2=guidance_scale_2,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                 )
