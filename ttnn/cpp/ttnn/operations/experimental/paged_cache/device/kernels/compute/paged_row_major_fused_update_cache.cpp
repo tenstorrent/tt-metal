@@ -35,7 +35,7 @@ void MAIN {
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         // Untilize a block from the cache
-        compute_kernel_lib::untilize<Wt>(cache_cb, untilized_cache_cb, 1);
+        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);

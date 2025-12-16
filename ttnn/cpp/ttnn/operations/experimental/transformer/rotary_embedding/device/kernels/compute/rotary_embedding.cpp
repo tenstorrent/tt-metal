@@ -42,9 +42,9 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 #endif
 }
 
-template <uint32_t num_tiles>
-ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb) {
-    compute_kernel_lib::untilize<num_tiles, true, true, true>(in0_cb, out_cb, 1);
+template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
+ALWI void UNTILIZE_TILES() {
+    compute_kernel_lib::untilize<num_tiles, in0_cb, out_cb, true, true, true>(1);
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -84,8 +84,8 @@ void MAIN {
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
     binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
-    UNTILIZE_TILES<Wt>(sin_cb, untilized_sin_cb);
-    UNTILIZE_TILES<Wt>(cos_cb, untilized_cos_cb);
+    UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>();
+    UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
     TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);

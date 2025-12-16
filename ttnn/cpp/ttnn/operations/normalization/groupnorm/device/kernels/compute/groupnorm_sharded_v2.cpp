@@ -665,8 +665,8 @@ void MAIN {
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    compute_kernel_lib::untilize<per_core_N, true, true, true>(
-        cb_untilize_in, cb_untilize_out, per_core_M, 1, per_core_MN);
+    compute_kernel_lib::untilize<per_core_N, cb_untilize_in, cb_untilize_out, true, true, true>(
+        per_core_M, 1, per_core_MN);
 #endif
 }
 }  // namespace NAMESPACE
