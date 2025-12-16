@@ -682,6 +682,36 @@ struct CatAddrGenerator {
     }
 };
 
+template <typename ReaderType>
+struct PaddedAddrGenerator {
+    ReaderType reader;
+    TensorTileShape tensor_shape;
+
+    PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
+        reader(reader), tensor_shape(tensor_shape) {}
+
+    uint32_t maybe_read_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t dst_addr) const {
+        if (d2 < tensor_shape.shape[2]) {
+            uint32_t tile_id = tensor_shape.id_of(d0, d1, d2, d3);
+            noc_async_read_tile(tile_id, reader, dst_addr);
+            return 1;
+        } else {
+            // fill with zeros
+            fill_zeros_async(dst_addr, reader.page_size);
+            return 1;
+        }
+    }
+
+    uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
+        if (d2 < tensor_shape.shape[2]) {
+            uint32_t tile_id = tensor_shape.id_of(d0, d1, d2, d3);
+            noc_async_write_tile(tile_id, reader, src_addr);
+            return 1;
+        }
+        return 0;
+    }
+};
+
 struct Slice {
     uint32_t d0;        // batch dimension
     uint32_t d1;        // head dimension
@@ -703,7 +733,6 @@ void read_block(
     const Slice& src_slice,
     const uint32_t cb_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold,
     const bool transpose) {
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
