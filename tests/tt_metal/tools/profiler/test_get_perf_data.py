@@ -74,8 +74,22 @@ def test_profiler_perf_data_with_workload(monkeypatch):
 
         latest_data = ttnn.GetLatestProgramsPerfData()
         all_data = ttnn.GetAllProgramsPerfData()
-        print("\nLatest programs perf data:\n" + _format_perf_data(latest_data))
-        print("\nAll programs perf data:\n" + _format_perf_data(all_data))
+        print("\nFirst call to Latest programs perf data:\n" + _format_perf_data(latest_data))
+        print("\nFirst call to All programs perf data:\n" + _format_perf_data(all_data))
+
+        # Run a heavier/different op (elementwise mul on a larger tensor) to create more profiler records.
+        heavy_shape = (1, 32, 256, 256)
+        heavy_a = ttnn.ones(heavy_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        heavy_b = ttnn.ones(heavy_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        _ = ttnn.mul(heavy_a, heavy_b)
+
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
+
+        latest_data = ttnn.GetLatestProgramsPerfData()
+        all_data = ttnn.GetAllProgramsPerfData()
+        print("\nSecond call to Latest programs perf data (after mul workload):\n" + _format_perf_data(latest_data))
+        print("\nSecond call to All programs perf data (after mul workload):\n" + _format_perf_data(all_data))
     finally:
         ttnn.close_device(device)
 
@@ -109,9 +123,13 @@ def _format_perf_data(perf_data: dict) -> str:
             continue
         for program in programs:
             uid = program.program_execution_uid
-            analyses_keys = sorted(program.program_analyses_results.keys())
+            analyses_items = sorted(program.program_analyses_results.items())
             lines.append(
                 f"  uid(runtime={uid.runtime_id}, trace={uid.trace_id}, ctr={uid.trace_id_counter}), "
-                f"analyses={analyses_keys}"
+                f"analyses={list(k for k, _ in analyses_items)}"
             )
+            for name, res in analyses_items:
+                lines.append(
+                    f"    {name}: start={res.start_timestamp}, end={res.end_timestamp}, duration={res.duration}"
+                )
     return "\n".join(lines)
