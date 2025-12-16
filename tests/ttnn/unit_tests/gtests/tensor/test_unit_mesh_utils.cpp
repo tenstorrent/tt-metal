@@ -5,9 +5,11 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <memory>
+#include <numeric>
 #include <vector>
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -20,7 +22,7 @@
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::experimental::unit_mesh {
@@ -253,25 +255,35 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
     ASSERT_THAT(unit_meshes, SizeIs(mesh_device_->shape().mesh_size()));
 
+    const uint32_t tensor_height = 32;
+    const uint32_t tensor_width = 32;
+    const size_t tensor_size = tensor_height * tensor_width;
+    const float add_scalar = 1.0f;
+
+    // Create unit tensors with known values: each tensor filled with its device index
     std::vector<Tensor> unit_tensors;
     unit_tensors.reserve(unit_meshes.size());
     {
         ZoneScopedN("CreateUnitTensors");
-        for (const auto& unit_mesh : unit_meshes) {
-            unit_tensors.push_back(create_device_tensor(
-                tt::tt_metal::TensorSpec(
-                    ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
-                    tt::tt_metal::TensorLayout(
-                        tt::tt_metal::DataType::BFLOAT16,
-                        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-                        tt::tt_metal::MemoryConfig())),
-                unit_mesh.get()));
+        for (size_t i = 0; i < unit_meshes.size(); ++i) {
+            // Create host tensor filled with device index value
+            std::vector<bfloat16> host_data(tensor_size, bfloat16(static_cast<float>(i)));
+            auto tensor_spec = tt::tt_metal::TensorSpec(
+                ttnn::Shape(std::array<uint32_t, 2>{tensor_height, tensor_width}),
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::BFLOAT16,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                    tt::tt_metal::MemoryConfig()));
+
+            // Create tensor from host data and move to device
+            auto host_tensor = Tensor::from_vector(host_data, tensor_spec);
+            unit_tensors.push_back(host_tensor.to_device(unit_meshes[i].get()));
         }
     }
 
-    // Pre-allocate abs outputs for each unit tensor (to reuse in trace)
-    std::vector<Tensor> abs_outputs;
-    abs_outputs.reserve(unit_tensors.size());
+    // Pre-allocate add outputs for each unit tensor (to reuse in trace)
+    std::vector<Tensor> add_outputs;
+    add_outputs.reserve(unit_tensors.size());
     Tensor all_gathered_output;
 
     // Run full flow during warmup to:
@@ -281,19 +293,19 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
     {
         ZoneScopedN("CacheWarmup");
 
-        // Run abs on each unit tensor
+        // Run add with scalar on each unit tensor
         {
-            ZoneScopedN("RunAbsOps");
+            ZoneScopedN("RunAddOps");
             for (const auto& unit_tensor : unit_tensors) {
-                abs_outputs.push_back(ttnn::abs(unit_tensor));
+                add_outputs.push_back(ttnn::add(unit_tensor, add_scalar));
             }
         }
 
-        // Aggregate the abs outputs
-        Tensor aggregated_abs;
+        // Aggregate the add outputs
+        Tensor aggregated_add;
         {
             ZoneScopedN("Aggregate");
-            aggregated_abs = aggregate(abs_outputs);
+            aggregated_add = aggregate(add_outputs);
         }
 
         // Quiesce the parent mesh before all gather
@@ -305,7 +317,7 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         {
             ZoneScopedN("AllGather");
             // Use cluster_axis=1 (columns) for 2x4 mesh -> ring_size=4
-            all_gathered_output = ttnn::all_gather(aggregated_abs, /*dim=*/0, /*cluster_axis=*/1);
+            all_gathered_output = ttnn::all_gather(aggregated_add, /*dim=*/0, /*cluster_axis=*/1);
         }
 
         // Quiesce parent mesh after all gather to ensure command queues are finished
@@ -320,17 +332,62 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         }
     }
 
+    // Verify correctness of all_gather results
+    // For a 2x4 mesh with cluster_axis=1 (columns), each row gathers from 4 column devices
+    // Row 0 devices: 0, 1, 2, 3 (indices in unit_meshes)
+    // Row 1 devices: 4, 5, 6, 7 (indices in unit_meshes)
+    // After all_gather on dim=0, output shape is [4*32, 32] = [128, 32]
+    {
+        ZoneScopedN("VerifyResults");
+
+        auto disaggregated_tensors = disaggregate(all_gathered_output);
+        ASSERT_THAT(disaggregated_tensors, SizeIs(unit_meshes.size()));
+
+        const uint32_t ring_size = 4;  // 4 columns
+        const uint32_t expected_height = ring_size * tensor_height;
+
+        for (size_t device_idx = 0; device_idx < disaggregated_tensors.size(); ++device_idx) {
+            auto& output_tensor = disaggregated_tensors[device_idx];
+            auto output_shape = output_tensor.logical_shape();
+
+            // Verify output shape
+            EXPECT_EQ(output_shape[0], expected_height) << "Device " << device_idx << " has wrong output height";
+            EXPECT_EQ(output_shape[1], tensor_width) << "Device " << device_idx << " has wrong output width";
+
+            // Read back data and verify values
+            auto output_data = output_tensor.to_vector<bfloat16>();
+            ASSERT_EQ(output_data.size(), expected_height * tensor_width)
+                << "Device " << device_idx << " has wrong output size";
+
+            // Determine which row this device is in (0 or 1)
+            size_t row = device_idx / ring_size;
+
+            // Each chunk of 32x32 should contain data from the corresponding column device in this row
+            // The order depends on all_gather implementation, but typically it's the gather order
+            for (uint32_t chunk = 0; chunk < ring_size; ++chunk) {
+                // The source device for this chunk is in the same row, column = chunk
+                size_t source_device = row * ring_size + chunk;
+                float expected_value = static_cast<float>(source_device) + add_scalar;
+
+                // Check a sample of values in this chunk
+                size_t chunk_start = chunk * tensor_height * tensor_width;
+                for (size_t j = 0; j < std::min<size_t>(10, tensor_size); ++j) {
+                    float actual_value = static_cast<float>(output_data[chunk_start + j]);
+                    EXPECT_NEAR(actual_value, expected_value, 0.1f)
+                        << "Device " << device_idx << ", chunk " << chunk << ", element " << j << ": expected "
+                        << expected_value << " (from device " << source_device << ")";
+                }
+            }
+        }
+    }
+
     // Trace capture on each unit mesh individually
-    // Captures full flow: abs -> aggregate -> all_gather
+    // Captures full flow: add -> aggregate -> all_gather
     //
-    // NOTE: For this to work properly, operations on the parent mesh (like all_gather)
-    // need to internally route through the submesh's command queues. This requires
-    // splitting up the mesh workload and going through the submesh's CQ when enqueueing,
-    // rather than the parent mesh's CQ. This way we don't need to enable tracing on
-    // the parent mesh - the submesh traces capture everything.
-    //
-    // TODO: Implement workaround where parent mesh operations go through the
-    // "representative submesh's" command queue (which is being traced).
+    // Operations on the parent mesh (like all_gather) internally route through the
+    // submesh's command queues via the workaround in FDMeshCommandQueue::enqueue_mesh_workload.
+    // When submeshes have active traces, parent mesh workloads are dispatched through
+    // the submesh CQs, allowing the submesh traces to capture everything.
     std::vector<distributed::MeshTraceId> unit_trace_ids;
     unit_trace_ids.reserve(unit_meshes.size());
 
@@ -347,19 +404,19 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
             }
         }
 
-        // Run abs on each unit tensor with pre-allocated outputs
+        // Run add on each unit tensor with pre-allocated outputs
         {
-            ZoneScopedN("RunAbsOps");
+            ZoneScopedN("RunAddOps");
             for (size_t i = 0; i < unit_tensors.size(); ++i) {
-                ttnn::abs(unit_tensors[i], std::nullopt, abs_outputs[i]);
+                ttnn::add(unit_tensors[i], add_scalar, std::nullopt, std::nullopt, add_outputs[i]);
             }
         }
 
-        // Aggregate the abs outputs (host-side view operation)
-        Tensor aggregated_abs;
+        // Aggregate the add outputs (host-side view operation)
+        Tensor aggregated_add;
         {
             ZoneScopedN("Aggregate");
-            aggregated_abs = aggregate(abs_outputs);
+            aggregated_add = aggregate(add_outputs);
         }
 
         // NOTE: Cannot quiesce during trace capture - it tries to reset worker state
@@ -373,7 +430,7 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         {
             ZoneScopedN("AllGather");
             ttnn::all_gather(
-                aggregated_abs,
+                aggregated_add,
                 /*dim=*/0,
                 /*cluster_axis=*/1,
                 /*subdevice_id=*/std::nullopt,
@@ -395,7 +452,7 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
     for (int j = 0; j < 10; j++) {
         ZoneScopedN("TraceExecution");
 
-        // Replay traces on each unit mesh (contains full flow: abs + all_gather)
+        // Replay traces on each unit mesh (contains full flow: add + all_gather)
         {
             ZoneScopedN("ReplayUnitTraces");
             for (size_t i = 0; i < unit_meshes.size(); ++i) {
@@ -405,11 +462,54 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         }
     }
 
-    // Release all traces and quiesce
+    // Quiesce to ensure all trace replays complete before verification
+    mesh_device_->quiesce_devices();
+
+    // Verify correctness after trace replay
+    auto disaggregated_tensors = disaggregate(all_gathered_output);
+    ASSERT_THAT(disaggregated_tensors, SizeIs(unit_meshes.size()));
+
+    const uint32_t ring_size = 4;  // 4 columns
+    const uint32_t expected_height = ring_size * tensor_height;
+
+    for (size_t device_idx = 0; device_idx < disaggregated_tensors.size(); ++device_idx) {
+        auto& output_tensor = disaggregated_tensors[device_idx];
+        auto output_shape = output_tensor.logical_shape();
+
+        // Verify output shape
+        EXPECT_EQ(output_shape[0], expected_height)
+            << "Trace replay: Device " << device_idx << " has wrong output height";
+        EXPECT_EQ(output_shape[1], tensor_width) << "Trace replay: Device " << device_idx << " has wrong output width";
+
+        // Read back data and verify values
+        auto output_data = output_tensor.to_vector<bfloat16>();
+        ASSERT_EQ(output_data.size(), expected_height * tensor_width)
+            << "Trace replay: Device " << device_idx << " has wrong output size";
+
+        // Determine which row this device is in (0 or 1)
+        size_t row = device_idx / ring_size;
+
+        // Each chunk of 32x32 should contain data from the corresponding column device in this row
+        for (uint32_t chunk = 0; chunk < ring_size; ++chunk) {
+            // The source device for this chunk is in the same row, column = chunk
+            size_t source_device = row * ring_size + chunk;
+            float expected_value = static_cast<float>(source_device) + add_scalar;
+
+            // Check a sample of values in this chunk
+            size_t chunk_start = chunk * tensor_height * tensor_width;
+            for (size_t j = 0; j < std::min<size_t>(10, tensor_size); ++j) {
+                float actual_value = static_cast<float>(output_data[chunk_start + j]);
+                EXPECT_NEAR(actual_value, expected_value, 0.1f)
+                    << "Trace replay: Device " << device_idx << ", chunk " << chunk << ", element " << j
+                    << ": expected " << expected_value << " (from device " << source_device << ")";
+            }
+        }
+    }
+
+    // Release all traces
     for (size_t i = 0; i < unit_meshes.size(); ++i) {
         unit_meshes[i]->release_mesh_trace(unit_trace_ids[i]);
     }
-    mesh_device_->quiesce_devices();
     FrameMark;  // Mark the end of a frame
 }
 
