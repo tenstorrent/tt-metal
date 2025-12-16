@@ -219,7 +219,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im6_t = block_size * 2;  // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
         im6_t = Wt_next_block_up;
-        // cout << "im6_t=Wt=" << Wt << endl;
         in0_t = 2 * block_size;
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
@@ -230,6 +229,8 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
+    constexpr uint32_t with_weights_max_size = 56;
+    constexpr uint32_t without_weights_max_size = 112;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -251,10 +252,10 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
-            Wt_next_block_up = 56;
+            Wt_next_block_up = with_weights_max_size;
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
-            Wt_next_block_up = 112;
+            Wt_next_block_up = without_weights_max_size;
         }
     }
     if (large_tensor_needed) {
