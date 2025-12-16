@@ -52,6 +52,8 @@ download_headers() {
     local base_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/tt-1xx/${chip_arch}"
     local headers=("cfg_defines.h" "dev_mem_map.h" "tensix.h" "tensix_types.h")
 
+    local risc_attribs_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/risc_attribs.h"
+
     local specific_url=""
     if [[ "$chip_arch" == "wormhole" ]]; then
         specific_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/tt-1xx/${chip_arch}/wormhole_b0_defines"
@@ -73,6 +75,12 @@ download_headers() {
             fi
         fi
     done
+
+    local download_url="${risc_attribs_url}"
+    if ! wget -O "${header_dir}/risc_attribs.h" --waitretry=5 --retry-connrefused "$download_url" > /dev/null; then
+        echo "ERROR: Failed to download risc_attribs.h from ${download_url}" >&2
+        exit 1
+    fi
 
     touch "$stamp_file"
     echo "Headers for ${chip_arch} downloaded successfully."
