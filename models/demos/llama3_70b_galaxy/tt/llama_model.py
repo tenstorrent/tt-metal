@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import ttnn
 import torch
 from tqdm import tqdm
@@ -440,6 +441,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.lm_head(x, None, mode="prefill")
 
             # Gather the output across all devices and untilize the tensor (for argmax)
+            logger.info(f"process_output_prefill line_all_gather: tt_logits[0] shape : {tt_logits[0].shape}")
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
@@ -448,6 +450,7 @@ class TtTransformer(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
             )
+            logger.info(f"process_output_prefill line_all_gather: tt_logits shape : {tt_logits.shape}")
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
@@ -553,6 +556,7 @@ class TtTransformer(LightweightModule):
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
         if return_logits:
+            logger.info(f"ttnn_decode_forward line_all_gather: tt_logits[0] shape : {tt_logits[0].shape}")
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
@@ -561,6 +565,7 @@ class TtTransformer(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
             )
+            logger.info(f"ttnn_decode_forward line_all_gather: tt_logits shape : {tt_logits.shape}")
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
 

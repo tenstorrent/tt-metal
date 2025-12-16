@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from loguru import logger
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -227,6 +228,7 @@ class LMHead(LightweightModule):
 
         outputs_reduced = []
         for output in outputs:
+            logger.info(f"LMHead forward line_all_reduce: output shape : {output.shape}")
             output_reduced = self.tt_ccl.line_all_reduce(
                 output,
                 cluster_axis=1,
@@ -235,5 +237,6 @@ class LMHead(LightweightModule):
                 lm_head=True,
                 buffer_key="LM_HEAD",
             )  # self.output_memory_config
+            logger.info(f"LMHead forward line_all_reduce: output_reduced shape : {output_reduced.shape}")
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced

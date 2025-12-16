@@ -126,6 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         use_optimal_ccl_for_llama ? llama_specific::get_custom_worker_core_placement(num_links)
                                   : ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
 
+    log_info(tt::LogOp, "ar_async: sender_worker_core_range: {}", sender_worker_core_range);
     constexpr bool has_work = true;
 
     // output_cores_unused is the cores that should do no work
@@ -133,13 +134,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // all_cores is both sender and worker cores
     auto all_cores = output_cores_all.merge(sender_worker_core_range);
 
-    log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
-    log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
-    log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    log_debug(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
-    log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
-    log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
+    if (sub_device_id.has_value()) {
+        log_info(
+            tt::LogOp, "ar_async: device id: {}, sub_device_id: {}", target_device_coord, sub_device_id.value().get());
+    } else {
+        log_info(tt::LogOp, "ar_async: device id: {}, sub_device_id: None", target_device_coord);
+    }
+    log_info(tt::LogOp, "ar_async: num_links {}, use_optimal_ccl_for_llama {}", num_links, use_optimal_ccl_for_llama);
+    log_info(tt::LogOp, "ar_async: ring_size {}, topology {}", ring_size, topology);
+    log_info(tt::LogOp, "ar_async: input_tensor.dtype {}", input_tensor.dtype());
+    log_info(tt::LogOp, "ar_async: output_tensor.dtype {}", output_tensor.dtype());
+    log_info(tt::LogOp, "ar_async: use_noc1_only {}", use_noc1_only);
+    log_info(tt::LogOp, "ar_async: input_tensor.logical_shape(): {}", input_tensor.logical_shape());
+    log_info(tt::LogOp, "ar_async: output_tensor.logical_shape(): {}", output_tensor.logical_shape());
+
+    log_info(tt::LogOp, "ar_async: input_tensor_num_pages: {}", input_tensor_num_pages);
+    log_info(tt::LogOp, "ar_async: input_tensor_cores: {}", input_tensor_cores);
+    log_info(tt::LogOp, "ar_async: input_tensor_shard_shape: {}", input_tensor_shard_shape);
+    log_info(tt::LogOp, "ar_async: input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+    log_info(tt::LogOp, "ar_async: output_tensor_cores: {}", output_tensor_cores);
+    log_info(tt::LogOp, "ar_async: output_tensor_shard_shape: {}", output_tensor_shard_shape);
+    log_info(tt::LogOp, "ar_async: output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();

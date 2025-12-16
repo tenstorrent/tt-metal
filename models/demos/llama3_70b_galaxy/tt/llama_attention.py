@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+from loguru import logger
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -302,6 +303,9 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
+        logger.info(
+            f"Attention decode llama_reduce_scatter_create_heads_device_op: xqkv_fused_sharded shape: {xqkv_fused_sharded.shape}"
+        )
         (
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
@@ -313,6 +317,15 @@ class TtLlamaAttention(LightweightModule):
             dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             use_optimal_ccl_for_llama=True,
+        )
+        logger.info(
+            f"Attention decode llama_reduce_scatter_create_heads_device_op: q_heads_pre_rot_1BQD shape: {q_heads_pre_rot_1BQD.shape}"
+        )
+        logger.info(
+            f"Attention decode llama_reduce_scatter_create_heads_device_op: k_heads_pre_rot_1BKD shape: {k_heads_pre_rot_1BKD.shape}"
+        )
+        logger.info(
+            f"Attention decode llama_reduce_scatter_create_heads_device_op: v_heads_1BKD shape: {v_heads_1BKD.shape}"
         )
 
         # print("done create qkv heads")
@@ -378,6 +391,7 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
 
+        logger.info(f"Attention decode ag_concat: attn_output_1G4D_sharded shape: {attn_output_1G4D_sharded.shape}")
         attn_output_cat = self.tt_ccl.all_gather_concat(
             attn_output_1G4D_sharded,
             dim=1,
@@ -386,6 +400,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
+        logger.info(f"Attention decode ag_concat: attn_output_cat shape: {attn_output_cat.shape}")
         ttnn.deallocate(attn_output_1G4D_sharded)
         # print("done concat heads")
 
@@ -402,6 +417,7 @@ class TtLlamaAttention(LightweightModule):
         )
         # [1, 1, 32, 2304]
         # print("done matmul")
+        logger.info(f"Attention decode line_all_reduce: dense_out_ttnn shape: {dense_out_ttnn.shape}")
         dense_out_reduced = self.tt_ccl.line_all_reduce(
             dense_out_ttnn,
             cluster_axis=0,
@@ -409,6 +425,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
+        logger.info(f"Attention decode line_all_reduce: dense_out_reduced shape: {dense_out_reduced.shape}")
         ttnn.deallocate(dense_out_ttnn)
 
         # print("done all reduce")
@@ -458,6 +475,7 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
+        logger.info(f"Attention prefill line_all_reduce: xqkv shape: {xqkv.shape}")
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
@@ -465,6 +483,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
         )
+        logger.info(f"Attention prefill line_all_reduce: xqkv_fused shape: {xqkv_fused.shape}")
         ttnn.deallocate(xqkv)
 
         if seq_len > 2048:
@@ -620,6 +639,9 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH.deallocate(True)
 
             # Perform ring all-gather on the first chunk (normal order)
+            logger.info(
+                f"Attention prefill ring_all_gather: attn_output_11SH_chunks[0] shape: {attn_output_11SH_chunks[0].shape}"
+            )
             attn_output_11SH_chunk_0 = self.tt_ccl.ring_all_gather(
                 attn_output_11SH_chunks[0],
                 dim=2,
@@ -627,9 +649,15 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SDPA",
             )
+            logger.info(
+                f"Attention prefill ring_all_gather: attn_output_11SH_chunk_0 shape: {attn_output_11SH_chunk_0.shape}"
+            )
             attn_output_11SH_chunks[0].deallocate(True)
 
             # Perform ring all-gather on the second chunk (reverse order)
+            logger.info(
+                f"Attention prefill ring_all_gather: attn_output_11SH_chunks[1] shape: {attn_output_11SH_chunks[1].shape}"
+            )
             attn_output_11SH_chunk_1 = self.tt_ccl.ring_all_gather(
                 attn_output_11SH_chunks[1],
                 dim=2,
@@ -637,6 +665,9 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 reverse_order=True,
                 buffer_key="SDPA_REVERSE",
+            )
+            logger.info(
+                f"Attention prefill ring_all_gather: attn_output_11SH_chunk_1 shape: {attn_output_11SH_chunk_1.shape}"
             )
             attn_output_11SH_chunks[1].deallocate(True)
 
@@ -673,6 +704,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
+        logger.info(f"Attention prefill line_all_reduce: output_11SH shape before all-reduce: {output_11SH.shape}")
         output_11SH = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
@@ -680,6 +712,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO",
         )
+        logger.info(f"Attention prefill line_all_reduce: output_11SH shape after all-reduce: {output_11SH.shape}")
 
         return output_11SH
 

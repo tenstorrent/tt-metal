@@ -733,6 +733,41 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
 
+    if (sub_device_id.has_value()) {
+        log_info(
+            tt::LogOp,
+            "rs_async minimal: device id: {}, sub_device_id: {}",
+            sender_device_coord,
+            sub_device_id.value().get());
+    } else {
+        log_info(tt::LogOp, "rs_async minimal: device id: {}, sub_device_id: None", sender_device_coord);
+    }
+    log_info(tt::LogOp, "rs_async minimal: num_links {}", num_links);
+    log_info(tt::LogOp, "rs_async minimal: ring_size {}, topology {}", ring_size, topology);
+    log_info(tt::LogOp, "rs_async minimal: input_tensor.dtype {}", input_tensor.dtype());
+    log_info(tt::LogOp, "rs_async minimal: output_tensor.dtype {}", output_tensor.dtype());
+    log_info(tt::LogOp, "rs_async minimal: input_tensor.logical_shape(): {}", input_tensor.logical_shape());
+    log_info(tt::LogOp, "rs_async minimal: output_tensor.logical_shape(): {}", output_tensor.logical_shape());
+    log_info(tt::LogOp, "rs_async minimal: input_tensor_num_pages: {}", input_tensor.buffer()->num_pages());
+
+    if (input_tensor.is_sharded()) {
+        const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
+        const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
+        const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
+        log_info(tt::LogOp, "rs_async minimal: input_tensor_cores: {}", input_tensor_cores);
+        log_info(tt::LogOp, "rs_async minimal: input_tensor_shard_shape: {}", input_tensor_shard_shape);
+        log_info(tt::LogOp, "rs_async minimal: input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+    }
+    if (output_tensor.is_sharded()) {
+        const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
+        const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
+        const auto output_tensor_shard_num_pages =
+            output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
+        log_info(tt::LogOp, "rs_async minimal: output_tensor_cores: {}", output_tensor_cores);
+        log_info(tt::LogOp, "rs_async minimal: output_tensor_shard_shape: {}", output_tensor_shard_shape);
+        log_info(tt::LogOp, "rs_async minimal: output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
+    }
+
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;
     std::vector<CoreRange> termination_master_core_ranges;
@@ -754,6 +789,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     }
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
+
+    log_info(tt::LogOp, "rs_async minimal: sender_worker_core_ranges: {}", sender_worker_core_ranges);
+    log_info(tt::LogOp, "rs_async minimal: mux_core_ranges: {}", mux_core_ranges);
+    log_info(tt::LogOp, "rs_async minimal: termination_master_core_ranges: {}", termination_master_core_ranges);
 
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();

@@ -300,6 +300,7 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
     uint32_t num_links = operation_attributes.num_links;
     const uint32_t num_devices = ring_size;
     auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
+    log_info(tt::LogOp, "llama_reduce_scatter: intermediate_packet_buffer_grid {}", intermediate_packet_buffer_grid);
     uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
     if (ncores_input % num_devices != 0) {
         ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
@@ -317,6 +318,7 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    log_info(tt::LogOp, "llama_reduce_scatter: packet_worker_cores_grid {}", packet_worker_cores_grid);
 
     auto available_cores = llama_specific::get_custom_cores(num_links);
 
@@ -382,7 +384,19 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
+    const auto& input_shape = input_tensor.logical_shape();
+    if (operation_attributes.subdevice_id.has_value()) {
+        log_info(
+            tt::LogOp,
+            "llama_reduce_scatter: device id: {}, sub_device_id: {}",
+            target_device->id(),
+            operation_attributes.subdevice_id.value());
+    } else {
+        log_info(tt::LogOp, "llama_reduce_scatter: device id: {}, sub_device_id: None", target_device->id());
+    }
+    log_info(tt::LogOp, "llama_reduce_scatter: input_shape {}", input_shape);
     auto& output_tensor = tensor_return_value;
+    log_info(tt::LogOp, "llama_reduce_scatter: output_tensor {}", output_tensor.logical_shape());
     const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& output_tile_shape = output_tensor.tensor_spec().tile().get_tile_shape();
     auto input_tensor_width = input_tensor.logical_shape()[-1];
@@ -445,14 +459,22 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     uint32_t num_workers_per_link = 1;
 
+    log_info(tt::LogOp, "llama_reduce_scatter: sub_device_cores {}", sub_device_cores);
     auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
+    log_info(tt::LogOp, "llama_reduce_scatter: intermediate_packet_buffer_grid {}", intermediate_packet_buffer_grid);
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t num_packets_total_per_device =
         (input_shard_cores_per_device * input_tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
+    log_info(tt::LogOp, "llama_reduce_scatter: input_shard_cores_per_device {}", input_shard_cores_per_device);
+    log_info(tt::LogOp, "llama_reduce_scatter: input_tiles_per_core_width {}", input_tiles_per_core_width);
+    log_info(tt::LogOp, "llama_reduce_scatter: num_pages_per_packet {}", num_pages_per_packet);
+    log_info(tt::LogOp, "llama_reduce_scatter: num_packets_total_per_device {}", num_packets_total_per_device);
+
     auto packet_worker_cores_grid = detail::get_worker_cores(
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    log_info(tt::LogOp, "llama_reduce_scatter: packet_worker_cores_grid {}", packet_worker_cores_grid);
 
     auto schedule = detail::distribute_work_evenly(
         input_shard_cores_per_device,
@@ -460,7 +482,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         input_tiles_per_core_width,
         num_pages_per_packet);
     auto schedule_string = detail::schedule_to_string(schedule);
+    log_info(tt::LogOp, "llama_reduce_scatter: num_links {}", num_links);
+    log_info(tt::LogOp, "llama_reduce_scatter: ring_size {} topology {}", ring_size, operation_attributes.topology);
+    log_info(tt::LogOp, "llama_reduce_scatter: cluster_axis {}", operation_attributes.cluster_axis);
+    log_info(tt::LogOp, "llama_reduce_scatter: input_tensor.dtype {}", input_tensor.dtype());
+    log_info(tt::LogOp, "llama_reduce_scatter: output_tensor.dtype {}", output_tensor.dtype());
+    log_info(
+        tt::LogOp, "llama_reduce_scatter: operation_attributes.use_noc1_only {}", operation_attributes.use_noc1_only);
     auto [sender_core_grid, all_cores_grid] = get_rs_core_grids(operation_attributes, tensor_args);
+    log_info(tt::LogOp, "llama_reduce_scatter: sender_core_grid {}", sender_core_grid);
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;

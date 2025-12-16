@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -120,6 +121,9 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
+        logger.info(
+            f"MLP double_matmul_line_reduce_scatter: x shape: {x.shape}, self.w1 shape: {self.w1.shape}, self.w3 shape: {self.w3.shape}"
+        )
         w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
             x,
             self.w1,
@@ -137,7 +141,13 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
             use_noc1_only=False,
         )
+        logger.info(
+            f"MLP double_matmul_line_reduce_scatter: w1_out_reduced shape: {w1_out_reduced.shape}, w3_out shape: {w3_out.shape}"
+        )
+
         ttnn.deallocate(x)
+
+        logger.info(f"MLP line_reduce_scatter: w3_out shape : {w3_out.shape}")
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
@@ -145,6 +155,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
             use_noc1_only=False,
         )
+        logger.info(f"MLP line_reduce_scatter: w3_out_reduced shape : {w3_out_reduced.shape}")
         ttnn.deallocate(w3_out)
 
         ff1ff3 = ttnn.mul(
@@ -160,6 +171,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
+        logger.info(f"MLP line_all_gather: ff1ff3 shape : {ff1ff3.shape}")
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,
             dim=3,
@@ -169,6 +181,8 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="BINARY_MUL",
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
+        logger.info(f"MLP line_all_gather: w2_in shape : {w2_in.shape}")
+
         ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
@@ -183,6 +197,7 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
+        logger.info(f"MLP line_all_reduce: w2_out shape : {w2_out.shape}")
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
@@ -190,7 +205,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-
+        logger.info(f"MLP line_all_reduce: w2_out_reduced shape : {w2_out_reduced.shape}")
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced
@@ -236,9 +251,11 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        logger.info(f"MLP prefill line_reduce_scatter: w1_out shape: {w1_out.shape}")
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
         )
+        logger.info(f"MLP prefill line_reduce_scatter: w1_out_reduced shape: {w1_out_reduced.shape}")
         ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
@@ -264,9 +281,11 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         ttnn.deallocate(x)
+        logger.info(f"MLP prefill line_reduce_scatter: w3_out shape: {w3_out.shape}")
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
+        logger.info(f"MLP prefill line_reduce_scatter: w3_out_reduced shape: {w3_out_reduced.shape}")
         ttnn.deallocate(w3_out)
         w2_in = ttnn.mul(
             w1_out_reduced,
@@ -275,9 +294,11 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
+        logger.info(f"MLP prefill line_all_gather: w2_in shape : {w2_in.shape}")
         w2_in_gathered = self.tt_ccl.line_all_gather(
             w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
+        logger.info(f"MLP prefill line_all_gather: w2_in_gathered shape : {w2_in_gathered.shape}")
         ttnn.deallocate(w2_in)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
@@ -298,10 +319,11 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
+        logger.info(f"MLP prefill line_all_reduce: w2_out shape : {w2_out.shape}")
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
+        logger.info(f"MLP prefill line_all_reduce: w2_out_reduced shape : {w2_out_reduced.shape}")
         ttnn.deallocate(w2_out)
         if 1024 <= seq_len < 4096:
             original_shape = w2_out_reduced.shape

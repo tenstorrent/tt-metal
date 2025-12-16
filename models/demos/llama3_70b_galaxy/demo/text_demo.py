@@ -211,7 +211,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            2,  # num layers
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
@@ -257,7 +257,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            2,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -728,6 +728,7 @@ def test_demo_text(
         use_paged_kv_cache=paged_attention,
         prefill_profile=prefill_profile,
     )
+    logger.info(f"Model created with {num_layers} layers.")
 
     model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer

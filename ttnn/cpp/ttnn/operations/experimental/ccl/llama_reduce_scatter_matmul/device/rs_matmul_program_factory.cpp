@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rs_matmul_op.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
@@ -41,6 +42,13 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
     auto [part_cores, rs_cores] =
         LlamaReduceScatterDeviceOperation::get_rs_core_grids(operation_attributes.rs_op, tensor_args.rs);
     std::optional<CoreRangeSet> reduce_scatter_core_range = rs_cores;
+
+    if (reduce_scatter_core_range.has_value()) {
+        log_info(
+            tt::LogOp, "matmul_rs: reduce_scatter_core_range has {} cores", reduce_scatter_core_range->num_cores());
+    } else {
+        log_info(tt::LogOp, "matmul_rs: reduce_scatter_core_range has no cores");
+    }
     if (tensor_args.second_weight_tensor.has_value()) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler base_signaler = ttnn::experimental::ccl::MatmulFusedOpSignaler(
             ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER);

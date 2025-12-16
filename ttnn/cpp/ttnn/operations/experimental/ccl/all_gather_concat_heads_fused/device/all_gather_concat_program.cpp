@@ -127,9 +127,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         batch_end_1 = 24;
         start_local = 24;
     }
-
+    if (sub_device_id.has_value()) {
+        log_info(
+            tt::LogOp, "ag_concat: device id: {}, sub_device_id: {}", target_device->id(), sub_device_id.value().get());
+    } else {
+        log_info(tt::LogOp, "ag_concat: device id: {}, sub_device_id: None", target_device->id());
+    }
+    log_info(tt::LogOp, "ag_concat: num_links {}, operation_attributes.num_heads {}", num_links, num_heads);
+    log_info(tt::LogOp, "ag_concat: ring_size {}, topology {}", ring_size, topology);
+    log_info(tt::LogOp, "ag_concat: input_tensor.dtype {}", input_tensor.dtype());
+    log_info(tt::LogOp, "ag_concat: output_tensor.dtype {}", output_tensor.dtype());
+    log_info(tt::LogOp, "ag_concat: operation_attributes.use_noc1_only {}", use_noc1_only);
+    log_info(tt::LogOp, "ag_concat: input_tensor.logical_shape(): {}", input_tensor.logical_shape());
+    log_info(tt::LogOp, "ag_concat: output_tensor.logical_shape(): {}", output_tensor.logical_shape());
     // Get worker cores, assuming 1 worker per link
     auto [sender_worker_core_range, sender_worker_cores] = llama_specific::get_custom_worker_core_placement(num_links);
+    log_info(tt::LogOp, "ag_concat: sender_worker_core_range: {}", sender_worker_core_range);
 
     // Tensor Info
     const uint32_t logical_dim_2 = std::min(input_tensor.logical_shape()[2], num_heads);
@@ -143,10 +156,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const auto output_interm_tensor_shard_num_pages = logical_dim_2;
     const auto row_size = input_tensor.padded_shape()[-1] / 2 * output_tensor.element_size();
 
-    log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
-    log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
-    log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+    log_info(tt::LogOp, "ag_concat: input_tensor_num_pages: {}", input_tensor_num_pages);
+    log_info(tt::LogOp, "ag_concat: input_tensor_cores: {}", input_tensor_cores);
+    log_info(tt::LogOp, "ag_concat: input_tensor_shard_shape: {}", input_tensor_shard_shape);
+    log_info(tt::LogOp, "ag_concat: input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+
+    log_info(tt::LogOp, "ag_concat: output_interm_tensor_cores: {}", output_interm_tensor_cores);
 
     // concat info
     uint32_t single_tile_size =
@@ -161,6 +176,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     uint32_t sub_tile_line_bytes = face_w * element_size;
     auto q_shard_spec = output_tensor.shard_spec().value();
     auto q_cores = q_shard_spec.grid;
+    log_info(tt::LogOp, "ag_concat: output_tensor_cores: {}", q_cores);
+
     auto in_shard_spec = temp_tensor.shard_spec().value();
     auto in_cores = in_shard_spec.grid;
 
@@ -211,7 +228,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             break;
         }
     }
+    log_info(tt::LogOp, "ag_concat: concat_num_cores: {}", llama_configuration.concat_num_cores);
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
+    log_info(tt::LogOp, "ag_concat: q_cores_updated: {}", q_cores_updated);
     std::vector<CoreRange> sem_cores_vector;
     if (num_links == 4) {
         sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
@@ -227,6 +246,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         }
     }
     const auto& sem_cores_updated = CoreRangeSet(sem_cores_vector);
+    log_info(tt::LogOp, "ag_concat: sem_cores_updated: {}", sem_cores_updated);
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
     const auto& cores = corerange_to_cores(q_cores, num_cores, true);

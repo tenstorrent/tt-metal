@@ -5,6 +5,7 @@
 #include "rms_allgather_program_factory.hpp"
 
 #include <algorithm>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -132,6 +133,11 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     const auto stats_tensor_cores = stats.value().memory_config().shard_spec()->grid;
     const auto stats_tensor_shard_shape = stats.value().memory_config().shard_spec()->shape;
     const auto stats_tensor_shard_num_pages = stats_tensor_shard_shape[0] * stats_tensor_shard_shape[1] / TILE_HW;
+
+    log_info(tt::LogOp, "rms_ag: input_tensor_cores: {}", input_tensor_cores);
+    log_info(tt::LogOp, "rms_ag: output_tensor_cores: {}", output_tensor_cores);
+    log_info(tt::LogOp, "rms_ag: stats_tensor_cores: {}", stats_tensor_cores);
+    log_info(tt::LogOp, "rms_ag: stats_tensor_shard_shape: {}", stats_tensor_shard_shape);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -284,6 +290,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
+    log_info(tt::LogOp, "rms_ag: num_cores_x: {}, num_cores_y: {}", num_cores_x, num_cores_y);
     uint32_t num_cores_all_to_all = 1;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
@@ -316,6 +323,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         none_core_grid_size = grid_size;
     }
     all_to_all_cores = num_cores_to_corerangeset(start_core, num_cores_all_to_all, all_core_grid_size, true);
+    log_info(tt::LogOp, "rms_ag: num_cores_all_to_all:{} all_to_all_cores: {}", num_cores_all_to_all, all_to_all_cores);
     if (use_mcast) {
         CoreCoord all_start_core;
         CoreCoord end_core = sender_cores.end_coord;

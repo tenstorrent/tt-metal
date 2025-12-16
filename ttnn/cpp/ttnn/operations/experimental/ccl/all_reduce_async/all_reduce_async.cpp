@@ -409,7 +409,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
-    log_debug(tt::LogOp, "Using minimal all_reduce_async");
+    log_info(tt::LogOp, "Using minimal all_reduce_async");
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensor,
         buffer_tensor,

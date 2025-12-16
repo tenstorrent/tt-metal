@@ -4,6 +4,7 @@
 
 #include "llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
@@ -336,9 +337,28 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
     const auto& input_shape = input_tensor.logical_shape();
+    if (operation_attributes.subdevice_id.has_value()) {
+        log_info(
+            tt::LogOp,
+            "llama_reduce_scatter_create_heads_device_op: device id: {}, sub_device_id: {}",
+            target_device->id(),
+            operation_attributes.subdevice_id.value());
+    } else {
+        log_info(
+            tt::LogOp,
+            "llama_reduce_scatter_create_heads_device_op: device id: {}, sub_device_id: None",
+            target_device->id());
+    }
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: input_shape {}", input_shape);
     auto& q_output_tensor = tensor_return_value[0];
     auto& k_output_tensor = tensor_return_value[1];
     auto& v_output_tensor = tensor_return_value[2];
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: q_output_shape {}", q_output_tensor.logical_shape());
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: k_output_shape {}", k_output_tensor.logical_shape());
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: v_output_shape {}", v_output_tensor.logical_shape());
     auto input_tensor_width = input_tensor.logical_shape()[-1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto q_output_shard_spec = q_output_tensor.shard_spec().value();
@@ -422,24 +442,68 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     uint32_t num_workers_per_link = 1;
 
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: sub_device_cores {}", sub_device_cores);
     auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
+
+    log_info(
+        tt::LogOp,
+        "llama_reduce_scatter_create_heads_device_op: intermediate_packet_buffer_grid {}",
+        intermediate_packet_buffer_grid);
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t num_packets_total_per_device =
         (input_blocks_per_stick + num_blocks_per_packet - 1) / num_blocks_per_packet;
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: input_blocks_per_stick {}", input_blocks_per_stick);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: num_blocks_per_packet {}", num_blocks_per_packet);
+    log_info(
+        tt::LogOp,
+        "llama_reduce_scatter_create_heads_device_op: num_packets_total_per_device {}",
+        num_packets_total_per_device);
+
     auto packet_worker_cores_grid = detail::rs_heads_fusion::get_worker_cores(
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    log_info(
+        tt::LogOp,
+        "llama_reduce_scatter_create_heads_device_op: packet_worker_cores_grid {}",
+        packet_worker_cores_grid);
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
-
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: available_cores {}", available_cores);
+    log_info(
+        tt::LogOp,
+        "llama_reduce_scatter_create_heads_device_op: num_links {}, operation_attributes.use_optimal_ccl_for_llama {}",
+        num_links,
+        operation_attributes.use_optimal_ccl_for_llama);
+    log_info(
+        tt::LogOp,
+        "llama_reduce_scatter_create_heads_device_op: ring_size {} topology {}",
+        ring_size,
+        operation_attributes.topology);
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: cluster_axis {}", operation_attributes.cluster_axis);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: input_tensor.dtype {}", input_tensor.dtype());
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: q_output_tensor.dtype {}", q_output_tensor.dtype());
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: k_output_tensor.dtype {}", k_output_tensor.dtype());
+    log_info(
+        tt::LogOp, "llama_reduce_scatter_create_heads_device_op: v_output_tensor.dtype {}", v_output_tensor.dtype());
+    log_info(
+        tt::LogOp,
+        "llama_reduce_scatter_create_heads_device_op: operation_attributes.use_noc1_only {}",
+        operation_attributes.use_noc1_only);
     auto sender_core_grid = operation_attributes.use_optimal_ccl_for_llama
                                 ? llama_specific::get_custom_cores(num_workers_per_link * num_links)
                                 : detail::rs_heads_fusion::get_worker_cores(
                                       available_cores,
                                       num_workers_per_link * num_links,
                                       input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: sender_core_grid {}", sender_core_grid);
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: all_cores_grid {}", all_cores_grid);
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
         ncores_input, num_workers_per_link * num_links, 1, num_blocks_per_packet);
@@ -589,6 +653,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         packet_worker_cores_grid, std::nullopt, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto packet_receiver_core = packet_worker_cores.at(0);
 
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: input_grid {}", input_grid);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: q_output_grid {}", q_output_grid);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: k_output_grid {}", k_output_grid);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: v_output_grid {}", v_output_grid);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: sender_core_grid {}", sender_core_grid);
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: all_cores_grid {}", all_cores_grid);
     const uint32_t chip_id = ring_index;
 
     auto to_worker_cores = [mesh_device](
@@ -604,6 +674,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     };
 
     auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
+    log_info(tt::LogOp, "llama_reduce_scatter_create_heads_device_op: packet_bounding_box {}", packet_bounding_box);
     auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
     auto packet_end_worker_core = to_worker_cores({packet_bounding_box.end_coord});
     auto total_num_read_txns = detail::rs_heads_fusion::get_num_entries_in_schedule(schedule);

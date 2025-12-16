@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import ttnn
 import torch
 import os
@@ -585,7 +586,7 @@ class TT_CCL:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
-
+            logger.info(f"  ar_async: input_tensor_mesh shape: {input_tensor_mesh.shape}")
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -602,11 +603,13 @@ class TT_CCL:
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
             )
+            logger.info(f"  ar_async: output_tensor_mesh shape: {output_tensor_mesh.shape}")
             if lm_head:
                 persistent_buffer.deallocate(True)
 
         else:
             if lm_head:
+                logger.info(f"  line_all_gather: input_tensor_mesh shape: {input_tensor_mesh.shape}")
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
                     dim=0,
@@ -615,6 +618,7 @@ class TT_CCL:
                     memory_config=memory_config,
                     buffer_key=buffer_key,
                 )
+                logger.info(f"  line_all_gather: ttnn_tensor_gathered shape: {ttnn_tensor_gathered.shape}")
                 ttnn_tensor_out = ttnn.experimental.fast_reduce_nc(
                     ttnn_tensor_gathered,
                     dims=[0],
@@ -624,6 +628,7 @@ class TT_CCL:
                 )
                 return ttnn_tensor_out
             # ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"  line_reduce_scatter: input_tensor_mesh shape: {input_tensor_mesh.shape}")
             output_tensor_scattered = self.line_reduce_scatter(
                 input_tensor_mesh,
                 memory_config,
@@ -633,6 +638,7 @@ class TT_CCL:
                 math_op=ttnn.ReduceType.Sum,
                 buffer_key=buffer_key,
             )
+            logger.info(f"  line_reduce_scatter: output_tensor_scattered shape: {output_tensor_scattered.shape}")
             # ttnn.synchronize_device(self.mesh_device)
             # Gather the scattered tensor
             output_tensor_mesh = self.line_all_gather(
@@ -643,6 +649,7 @@ class TT_CCL:
                 num_links=num_links,
                 buffer_key=buffer_key,
             )
+            logger.info(f"  line_all_gather: output_tensor_mesh shape: {output_tensor_mesh.shape}")
             # ttnn.synchronize_device(self.mesh_device)
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
@@ -876,6 +883,7 @@ class TT_CCL:
                 self.reduce_scatter_buffer_idx[cluster_axis]
             ]
 
+            logger.info(f"  llama_reduce_scatter: input_tensor_mesh shape: {input_tensor_mesh.shape}")
             ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh,
                 persistent_interim_buffer,
@@ -889,6 +897,7 @@ class TT_CCL:
                 topology=self.model_config["CCL_TOPOLOGY"],
                 use_noc1_only=use_noc1_only,
             )
+            logger.info(f"  llama_reduce_scatter: ttnn_tensor_out shape: {ttnn_tensor_out.shape}")
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
             self.reduce_scatter_buffer_idx[cluster_axis] = (
                 self.reduce_scatter_buffer_idx[cluster_axis] + 1
@@ -916,6 +925,7 @@ class TT_CCL:
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
+        logger.info(f"  rs_async minimal: input_tensor_mesh shape: {input_tensor_mesh.shape}")
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
@@ -929,6 +939,7 @@ class TT_CCL:
             cluster_axis=cluster_axis,
             num_workers_per_link=1,
         )
+        logger.info(f"  rs_async minimal: ttnn_tensor_out shape: {ttnn_tensor_out.shape}")
 
         # reshape input back
         ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
@@ -991,6 +1002,7 @@ class TT_CCL:
                 self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs],
             ]
         )
+        logger.info(f"  ag_async: input_tensor_mesh shape: {input_tensor_mesh.shape} topology: {topology}")
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
@@ -1004,6 +1016,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
         )
+        logger.info(f"  ag_async: ttnn_tensor_out shape: {ttnn_tensor_out.shape} topology: {topology}")
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back
             if buffer_key != "LM_HEAD":
@@ -1033,6 +1046,9 @@ class TT_CCL:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
             all_gather_function = ttnn.experimental.all_gather_async
+        logger.info(
+            f"  ag_async_ring: input_tensor_mesh shape: {input_tensor_mesh.shape} reverse_order: {reverse_order}"
+        )
         ttnn_tensor_out = all_gather_function(
             input_tensor=input_tensor_mesh,
             persistent_output_buffer=persistent_buffers,
@@ -1045,6 +1061,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
         )
+        logger.info(f"  ag_async_ring: ttnn_tensor_out shape: {ttnn_tensor_out.shape} reverse_order: {reverse_order}")
         if self.mode == "prefill" and buffer_key is not None and dim != 2:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
@@ -1160,9 +1177,11 @@ def tt_distributed_rmsnorm(
         inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
     )
 
+    logger.info(f"tt_distributed_rmsnorm: line_all_gather tt_stats shape: {tt_stats.shape}")
     tt_stats_gathered = tt_ccl.line_all_gather(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
     )
+    logger.info(f"tt_distributed_rmsnorm: line_all_gather tt_stats_gathered shape: {tt_stats_gathered.shape}")
 
     tt_stats.deallocate(True)
 
@@ -1202,6 +1221,7 @@ def tt_sharded_distributed_rmsnorm(
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
+    logger.info(f"fused_rms_1_1_32_8192: inp shape: {inp.shape}")
     tt_out = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
@@ -1217,5 +1237,6 @@ def tt_sharded_distributed_rmsnorm(
         memory_config=output_mem_config,
         use_noc1_only=use_noc1_only,
     )
+    logger.info(f"fused_rms_1_1_32_8192: tt_out shape: {tt_out.shape}")
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res
