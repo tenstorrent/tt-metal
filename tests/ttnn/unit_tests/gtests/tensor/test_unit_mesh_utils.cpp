@@ -269,15 +269,9 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         }
     }
 
-    // Aggregate unit tensors first (this is a host-side view operation)
-    Tensor aggregated_tensor;
-    {
-        ZoneScopedN("Aggregate");
-        aggregated_tensor = aggregate(unit_tensors);
-    }
-
-    // Tensors to be reused across warmup and trace
-    Tensor abs_output;
+    // Pre-allocate abs outputs for each unit tensor (to reuse in trace)
+    std::vector<Tensor> abs_outputs;
+    abs_outputs.reserve(unit_tensors.size());
     Tensor all_gathered_output;
 
     // Run full flow during warmup to:
@@ -287,10 +281,19 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
     {
         ZoneScopedN("CacheWarmup");
 
-        // Run abs on the aggregated tensor (operates on parent mesh)
+        // Run abs on each unit tensor
         {
-            ZoneScopedN("RunAbsOp");
-            abs_output = ttnn::abs(aggregated_tensor);
+            ZoneScopedN("RunAbsOps");
+            for (const auto& unit_tensor : unit_tensors) {
+                abs_outputs.push_back(ttnn::abs(unit_tensor));
+            }
+        }
+
+        // Aggregate the abs outputs
+        Tensor aggregated_abs;
+        {
+            ZoneScopedN("Aggregate");
+            aggregated_abs = aggregate(abs_outputs);
         }
 
         // Quiesce the parent mesh before all gather
@@ -302,7 +305,7 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         {
             ZoneScopedN("AllGather");
             // Use cluster_axis=1 (columns) for 2x4 mesh -> ring_size=4
-            all_gathered_output = ttnn::all_gather(abs_output, /*dim=*/0, /*cluster_axis=*/1);
+            all_gathered_output = ttnn::all_gather(aggregated_abs, /*dim=*/0, /*cluster_axis=*/1);
         }
 
         // Quiesce parent mesh after all gather to ensure command queues are finished
@@ -317,26 +320,60 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         }
     }
 
-    // Trace capture - reuse same tensors for cache hit
-    distributed::MeshTraceId trace_id;
+    // Trace capture on each unit mesh individually
+    // Captures full flow: abs -> aggregate -> all_gather
+    //
+    // NOTE: For this to work properly, operations on the parent mesh (like all_gather)
+    // need to internally route through the submesh's command queues. This requires
+    // splitting up the mesh workload and going through the submesh's CQ when enqueueing,
+    // rather than the parent mesh's CQ. This way we don't need to enable tracing on
+    // the parent mesh - the submesh traces capture everything.
+    //
+    // TODO: Implement workaround where parent mesh operations go through the
+    // "representative submesh's" command queue (which is being traced).
+    std::vector<distributed::MeshTraceId> unit_trace_ids;
+    unit_trace_ids.reserve(unit_meshes.size());
+
     {
         ZoneScopedN("TraceCapture");
 
-        // Begin trace on parent mesh (trace_region_size was set in fixture config)
-        uint8_t cq_id = mesh_device_->mesh_command_queue().id();
-        trace_id = distributed::BeginTraceCapture(mesh_device_.get(), cq_id);
-
-        // Run abs on aggregated tensor with pre-allocated output
+        // Begin trace capture on ALL unit meshes simultaneously
         {
-            ZoneScopedN("RunAbsOp");
-            ttnn::abs(aggregated_tensor, std::nullopt, abs_output);
+            ZoneScopedN("BeginTraces");
+            for (size_t i = 0; i < unit_meshes.size(); ++i) {
+                uint8_t cq_id = unit_meshes[i]->mesh_command_queue().id();
+                auto trace_id = distributed::BeginTraceCapture(unit_meshes[i].get(), cq_id);
+                unit_trace_ids.push_back(trace_id);
+            }
         }
 
+        // Run abs on each unit tensor with pre-allocated outputs
+        {
+            ZoneScopedN("RunAbsOps");
+            for (size_t i = 0; i < unit_tensors.size(); ++i) {
+                ttnn::abs(unit_tensors[i], std::nullopt, abs_outputs[i]);
+            }
+        }
+
+        // Aggregate the abs outputs (host-side view operation)
+        Tensor aggregated_abs;
+        {
+            ZoneScopedN("Aggregate");
+            aggregated_abs = aggregate(abs_outputs);
+        }
+
+        // NOTE: Cannot quiesce during trace capture - it tries to reset worker state
+        // which is not allowed. Quiescing would need to be handled differently
+        // (perhaps as a traced synchronization primitive).
+
+        // Run all_gather on aggregated tensor
+        // CURRENT LIMITATION: all_gather goes through parent mesh's CQ, not submesh CQs.
+        // For this to be captured in submesh traces, we need the architectural change
+        // where parent mesh ops internally route through submesh command queues.
         {
             ZoneScopedN("AllGather");
-            // Use same cluster_axis and pass pre-allocated output
             ttnn::all_gather(
-                abs_output,
+                aggregated_abs,
                 /*dim=*/0,
                 /*cluster_axis=*/1,
                 /*subdevice_id=*/std::nullopt,
@@ -344,20 +381,34 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
                 /*output_tensor=*/all_gathered_output);
         }
 
-        // End trace on parent mesh
-        mesh_device_->end_mesh_trace(cq_id, trace_id);
+        // End traces on each unit mesh
+        {
+            ZoneScopedN("EndTraces");
+            for (size_t i = 0; i < unit_meshes.size(); ++i) {
+                uint8_t cq_id = unit_meshes[i]->mesh_command_queue().id();
+                unit_meshes[i]->end_mesh_trace(cq_id, unit_trace_ids[i]);
+            }
+        }
     }
 
-    // Measure TraceExecution
+    // Measure TraceExecution - replay all unit traces
     for (int j = 0; j < 10; j++) {
         ZoneScopedN("TraceExecution");
 
-        uint8_t cq_id = mesh_device_->mesh_command_queue().id();
-        mesh_device_->replay_mesh_trace(cq_id, trace_id, /*blocking=*/false);
+        // Replay traces on each unit mesh (contains full flow: abs + all_gather)
+        {
+            ZoneScopedN("ReplayUnitTraces");
+            for (size_t i = 0; i < unit_meshes.size(); ++i) {
+                uint8_t cq_id = unit_meshes[i]->mesh_command_queue().id();
+                unit_meshes[i]->replay_mesh_trace(cq_id, unit_trace_ids[i], /*blocking=*/false);
+            }
+        }
     }
 
-    // Release trace and quiesce
-    mesh_device_->release_mesh_trace(trace_id);
+    // Release all traces and quiesce
+    for (size_t i = 0; i < unit_meshes.size(); ++i) {
+        unit_meshes[i]->release_mesh_trace(unit_trace_ids[i]);
+    }
     mesh_device_->quiesce_devices();
     FrameMark;  // Mark the end of a frame
 }

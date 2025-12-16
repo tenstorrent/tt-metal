@@ -735,6 +735,33 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     return result;
 }
 
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes_with_active_traces() const {
+    std::vector<std::shared_ptr<MeshDevice>> result;
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            // Check if any command queue on this submesh has an active trace
+            for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
+                if (submesh->mesh_command_queue(cq_id).trace_id().has_value()) {
+                    result.push_back(submesh);
+                    break;  // Only add once per submesh
+                }
+            }
+        }
+    }
+    return result;
+}
+
+std::shared_ptr<MeshDevice> MeshDevice::get_submesh_for_coordinate(const MeshCoordinate& coord) const {
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            if (submesh->get_view().contains(coord)) {
+                return submesh;
+            }
+        }
+    }
+    return nullptr;
+}
+
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_program_cache() {

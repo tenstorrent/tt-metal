@@ -318,6 +318,14 @@ public:
     const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
+    // Returns submeshes that have active traces on any of their command queues.
+    // This is used to route parent mesh operations through submesh CQs when tracing.
+    std::vector<std::shared_ptr<MeshDevice>> get_submeshes_with_active_traces() const;
+
+    // Given a coordinate in this mesh's coordinate space, find the submesh that contains it.
+    // Returns nullptr if no submesh contains the coordinate.
+    std::shared_ptr<MeshDevice> get_submesh_for_coordinate(const MeshCoordinate& coord) const;
+
     /**
      * @brief Synchronize with all devices derived from this mesh (including submeshes).
      *

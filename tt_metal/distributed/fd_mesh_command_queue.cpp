@@ -218,6 +218,31 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     auto lock = lock_api_function_();
+
+    // Check if this is a parent mesh and if any submeshes have active traces.
+    // If so, route the workload through the submesh CQs instead of the parent's CQ.
+    // This allows submesh traces to capture parent mesh operations.
+    if (mesh_device_->is_parent_mesh() && !this->trace_id_.has_value()) {
+        auto traced_submeshes = mesh_device_->get_submeshes_with_active_traces();
+        if (!traced_submeshes.empty()) {
+            // Route through submesh CQs - each submesh's CQ will handle its portion
+            // The workload needs to be dispatched through each submesh that has an active trace.
+            // Each submesh's CQ is in bypass mode (tracing), so the work will be captured.
+            for (auto& submesh : traced_submeshes) {
+                auto& submesh_cq = submesh->mesh_command_queue(this->id_);
+                // The submesh CQ will handle the intersection of the workload with its devices
+                submesh_cq.enqueue_mesh_workload(mesh_workload, false);
+            }
+            if (blocking) {
+                for (auto& submesh : traced_submeshes) {
+                    auto& submesh_cq = submesh->mesh_command_queue(this->id_);
+                    submesh_cq.finish();
+                }
+            }
+            return;
+        }
+    }
+
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
