@@ -182,7 +182,7 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--max_num_seqs 1 --num_scheduler_steps 1",
+              "additional-server-args": "--max_num_seqs 1 --num_scheduler_steps 1 --no-enable-prefix-caching",
               "use-vllm-v1": true,
               "structured-output": true,
               "co-owner-1-id": "U08TJ70UFRT",
