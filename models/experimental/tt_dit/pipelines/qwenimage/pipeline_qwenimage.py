@@ -280,6 +280,26 @@ class QwenImagePipeline:
         # Following Flux pattern: no reshaping needed, encoder works on full submesh
         yield
 
+    def run_single_prompt(
+        self,
+        *,
+        prompt: str,
+        negative_prompt: str | None = None,
+        num_inference_steps: int = 50,
+        cfg_scale: float = 4.0,
+        seed: int = 0,
+        traced: bool = True,
+    ) -> list[Image.Image]:
+        """Run inference for a single prompt. Convenience method for inference server."""
+        return self(
+            prompts=[prompt],
+            negative_prompts=[negative_prompt],
+            num_inference_steps=num_inference_steps,
+            cfg_scale=cfg_scale,
+            seed=seed,
+            traced=traced,
+        )
+
     @staticmethod
     def create_pipeline(
         *,
