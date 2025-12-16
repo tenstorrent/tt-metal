@@ -9,8 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
-namespace tt {
-namespace test_utils {
+namespace tt::test_utils {
 
 //! Generic Library of templated stimulus generation + packing/unpacking functions.
 //! Custom type is supported as long as the custom type supports the following custom functions
@@ -149,5 +148,4 @@ std::vector<PackType> generate_packed_increment_vector(
     return pack_vector<PackType, ValueType>(generate_increment_vector(init, numel, increment, start, count, slide));
 }
 
-}  // namespace test_utils
-}  // namespace tt
+}  // namespace tt::test_utils

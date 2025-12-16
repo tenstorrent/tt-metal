@@ -812,7 +812,7 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
             }
         }
     }
-    TT_FATAL(false, "No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
+    TT_THROW("No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
     return {AsicID{0}, 0};
 }
 
@@ -909,6 +909,15 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {
     TT_FATAL(host_to_rank_.find(host_name) != host_to_rank_.end(), "Rank for host {} not found", host_name);
     return host_to_rank_.at(host_name);
+}
+
+std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const {
+    for (const auto& [host, host_rank] : host_to_rank_) {
+        if (host_rank == rank) {
+            return host;
+        }
+    }
+    TT_THROW("Hostname for rank {} not found", rank);
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {

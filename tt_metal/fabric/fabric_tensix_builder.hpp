@@ -6,9 +6,11 @@
 
 #include <stdint.h>
 #include <optional>
+#include <set>
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <limits>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
@@ -97,10 +99,46 @@ public:
 
     std::pair<uint32_t, uint32_t> get_termination_address_and_signal(FabricTensixCoreType core_id) const;
 
-    // Get router NOC coordinates for a specific fabric node, routing plane, and direction
-    // Returns pointer to pair (noc_x, noc_y) if router exists, nullptr otherwise
-    const std::pair<uint32_t, uint32_t>* get_router_noc_coords(
+    // Get tensix NOC coordinates for a specific fabric node, routing plane, and direction
+    // Returns pointer to pair (noc_x, noc_y) if tensix exists, nullptr otherwise
+    // This includes both active directions (from eth channels) and missing directions (UDM mode)
+    const std::pair<uint32_t, uint32_t>* get_tensix_noc_coords(
         const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
+    // Get tensix NOC coordinates for active directions only (directions with eth channels)
+    // Returns pointer to pair (noc_x, noc_y) if active tensix exists, nullptr otherwise
+    const std::pair<uint32_t, uint32_t>* get_active_tensix_noc_coords(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
+    // Get the set of missing (routing_plane_id, direction) pairs for a device
+    // Only applicable in UDM mode - returns empty set in MUX mode or if all directions have channels
+    // Each pair represents a routing plane that doesn't have a tensix builder in that direction
+    std::set<std::pair<routing_plane_id_t, eth_chan_directions>> get_missing_directions(ChipId device_id) const;
+
+    // Check if a device has any missing directions
+    bool has_missing_directions(ChipId device_id) const;
+
+    // Get core index for a (routing_plane_id, direction) pair on a device
+    // Used for missing direction tensix builders where there's no eth channel
+    size_t get_core_index_for_direction(
+        ChipId device_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
+    // Get core for a (routing_plane_id, direction) pair on a device
+    CoreCoord get_core_for_direction(
+        ChipId device_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
+    // Get NOC coordinates for a (routing_plane_id, direction) pair on a device
+    std::pair<uint32_t, uint32_t> get_noc_xy_for_direction(
+        tt::tt_metal::IDevice* device, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
+    // UDM mode: Worker assignment info
+    struct WorkerTensixInfo {
+        CoreCoord tensix_core;     // The tensix mux core assigned to this worker (virtual coordinate)
+        uint32_t channel_index{};  // The channel index on that tensix mux core
+    };
+
+    // Get worker assignment info (tensix core + channel index) for a specific worker (UDM mode only)
+    WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const CoreCoord& worker_coord) const;
 
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
@@ -134,11 +172,18 @@ private:
     std::unordered_map<FabricTensixCoreType, std::shared_ptr<FabricTensixDatamoverBaseConfig>> configs_;
 
     // Mapping: [fabric_node_id] -> [routing_plane_id] -> [direction (E/W/N/S)] -> (noc_x, noc_y)
-    // If an entry exists, the router/tensix is active in that direction; otherwise it doesn't exist
+    // Contains ALL directions (active + missing in UDM mode)
     std::unordered_map<
         FabricNodeId,
         std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, std::pair<uint32_t, uint32_t>>>>
-        fabric_router_noc_coords_map_;
+        fabric_tensix_noc_coords_map_;
+
+    // Mapping for ACTIVE directions only (directions with eth channels)
+    // [fabric_node_id] -> [routing_plane_id] -> [direction (E/W/N/S)] -> (noc_x, noc_y)
+    std::unordered_map<
+        FabricNodeId,
+        std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, std::pair<uint32_t, uint32_t>>>>
+        fabric_active_tensix_noc_coords_map_;
 
     // Channel type configuration maps (sorted by ChannelTypes enum)
     // [channel type] -> [number of channels of that type]
@@ -149,6 +194,29 @@ private:
     // Cached min/max ethernet channels across all devices
     size_t min_eth_channels_ = 0;
     size_t max_eth_channels_ = 0;
+
+    // Dispatch link info (same for all devices, calculated once in find_min_max_eth_channels)
+    uint32_t dispatch_link_idx_ = 0;
+    bool has_dispatch_tunnel_ = false;
+
+    // Number of non-dispatch routing planes (excluding dispatch link if present)
+    size_t num_non_dispatch_routing_planes_ = 0;
+
+    // Per-device missing (routing_plane_id, direction) pairs without active eth channels
+    // Only populated in UDM mode - for edge devices that don't have neighbors in all 4 directions
+    // Each pair represents a routing plane that needs a tensix builder in that direction
+    std::unordered_map<ChipId, std::set<std::pair<routing_plane_id_t, eth_chan_directions>>>
+        missing_directions_per_device_;
+
+    // [device_id][routing_plane_id][direction] -> core_index mapping for ALL directions (active + missing)
+    // This is the authoritative lookup for (routing_plane_id, direction) -> core_index
+    // Populated for both active directions (from eth channels) and missing directions (UDM mode)
+    std::unordered_map<ChipId, std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, size_t>>>
+        direction_to_core_index_;
+
+    // [device_id][worker coord] -> [WorkerTensixInfo] mapping for UDM mode
+    // Maps each worker to its assigned tensix mux core and channel index
+    std::unordered_map<ChipId, std::map<CoreCoord, WorkerTensixInfo>> worker_to_tensix_info_map_;
 
     // Helper methods for initialization
 
@@ -182,15 +250,43 @@ private:
      * For each active device and its ethernet channels, this function records the tensix NOC
      * coordinates in the map, keyed by fabric node ID, routing plane ID, and direction.
      */
-    void build_fabric_router_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
+    void build_fabric_tensix_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
 
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
 
+    // Helper to track missing directions for UDM mode
+    // For edge devices that don't have neighbors in all 4 directions, tracks which (routing_plane_id, direction)
+    // pairs are missing and assigns core indices for the missing direction tensix builders
+    // Also populates fabric_tensix_noc_coords_map_ for the missing directions
+    void track_missing_directions_for_udm(
+        tt::tt_metal::IDevice* device,
+        const FabricNodeId& fabric_node_id,
+        const std::set<std::pair<chan_id_t, eth_chan_directions>>& active_channels,
+        size_t& channel_index);
+
     // Helper methods for config creation
     std::shared_ptr<FabricTensixDatamoverMuxConfig> create_mux_config(FabricTensixCoreType core_id);
     std::shared_ptr<FabricTensixDatamoverRelayConfig> create_relay_config(FabricTensixCoreType core_id);
+
+    // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
+    // Also builds worker_to_tensix_core_map_ in UDM mode
+    std::map<ChannelTypes, uint32_t> calculate_mux_channel_counts(
+        const std::vector<tt_metal::IDevice*>& all_active_devices);
+
+    // UDM mode helper: builds list of workers sorted by column (y first, then x)
+    std::vector<CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device) const;
+
+    // UDM mode helper: gets unique tensix cores for worker assignment (excludes dispatch routing plane)
+    std::vector<CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const;
+
+    // UDM mode helper: assigns workers to tensix cores in contiguous chunks
+    void assign_workers_to_tensix_cores(
+        ChipId device_id,
+        const std::vector<CoreCoord>& workers_by_column,
+        const std::vector<CoreCoord>& tensix_cores_for_workers,
+        uint32_t num_worker_channels);
 };
 
 /**
@@ -210,6 +306,17 @@ public:
         uint32_t ethernet_channel_id,
         eth_chan_directions direction,
         std::vector<bool>&& sender_channel_injection_flags);
+
+    // Static builder method for missing directions (UDM mode only)
+    // Creates a tensix builder for a direction that doesn't have an active eth channel
+    // This is used for edge devices that need tensix builders in all 4 directions for inter-mux communication
+    // routing_plane_id specifies which routing plane (link index) this tensix builder belongs to
+    static FabricTensixDatamoverBuilder build_for_missing_direction(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        tt::tt_fabric::FabricNodeId local_fabric_node_id,
+        routing_plane_id_t routing_plane_id,
+        eth_chan_directions direction);
 
     // Create and compile the kernel(s) based on mode
     void create_and_compile(tt::tt_metal::Program& program);
@@ -255,7 +362,8 @@ private:
         uint32_t link_idx,
         uint32_t noc_x,
         uint32_t noc_y,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        bool has_fabric_router);
 
     // Sub-builders based on mode
     std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder_;      // Always created

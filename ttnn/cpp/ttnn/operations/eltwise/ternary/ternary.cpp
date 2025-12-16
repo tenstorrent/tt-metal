@@ -14,9 +14,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ternary_composite_op.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace ternary {
+namespace ttnn::operations::ternary {
 
 namespace ternary_utils {
 
@@ -283,6 +281,4 @@ Tensor AddcmulOperation::invoke(
         std::nullopt);
 }
 
-}  // namespace ternary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::ternary

@@ -99,8 +99,6 @@ void MAIN {
             uint32_t alias_mm2_prev_out = cb_out_im_A;
             uint32_t alias_mm2_cur_out = cb_out_im_B;
 
-            cb_wait_front(cb_q_in, q_chunk_tiles);
-
             for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
                 if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
                     // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
@@ -158,7 +156,6 @@ void MAIN {
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
                     alias_cur_max, alias_cur_sum);
 
-                cb_wait_front(cb_qk_im, qk_chunk_tiles);
                 /* OUT_IM = QK @ V_CHUNK */
                 matmul_blocks(
                     cb_qk_im,
@@ -233,10 +230,14 @@ void MAIN {
                 sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
 
                 // alias_sub = cb_prev_out - alias_cur_out
+                reconfig_data_format(cb_prev_out, alias_cur_out);
                 sub_block(cb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
+                reconfig_data_format(alias_sub, alias_sig);
                 mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
                 // cb_out = cb_prev_out - alias_sub
+                reconfig_data_format(cb_prev_out, alias_sub);
+                pack_reconfig_data_format(cb_out);
                 sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
                 cb_pop_front(cb_prev_out, out_chunk_tiles);
                 cb_pop_front(alias_cur_out, out_chunk_tiles);
@@ -245,6 +246,8 @@ void MAIN {
                 // alias_sig = sigmoid(cb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // cb_lse_out = cb_lse_in - alias_cur_lse
+                pack_reconfig_data_format(alias_sig);
+                reconfig_data_format(cb_lse_in, alias_cur_lse);
                 logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
                 sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
                 cb_pop_front(alias_sig, Sq_chunk_t);
@@ -255,6 +258,7 @@ void MAIN {
                 pack_reconfig_data_format(cb_out);
                 copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
 
+                pack_reconfig_data_format(cb_lse_out);
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
             }
 

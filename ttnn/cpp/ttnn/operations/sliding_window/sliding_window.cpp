@@ -184,11 +184,20 @@ std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() 
     uint32_t strided_input_height = ((input_hw.first - 1) * stride_hw.first) + 1;
     uint32_t strided_input_width = ((input_hw.second - 1) * stride_hw.second) + 1;
 
-    uint32_t input_pad_top = (full_input_shape[1] - strided_input_height) / 2;
-    uint32_t input_pad_bottom = full_input_shape[1] - strided_input_height - input_pad_top;
+    uint32_t base_pad_height = dilation_hw.first * (window_hw.first - 1);
+    uint32_t base_pad_width = dilation_hw.second * (window_hw.second - 1);
+    uint32_t input_pad_top = base_pad_height - padding[0];
+    uint32_t input_pad_bottom = base_pad_height - padding[1];
 
-    uint32_t input_pad_left = (full_input_shape[2] - strided_input_width) / 2;
-    uint32_t input_pad_right = full_input_shape[2] - strided_input_width - input_pad_left;
+    uint32_t input_pad_left = base_pad_width - padding[2];
+    uint32_t input_pad_right = base_pad_width - padding[3];
+
+    TT_FATAL(
+        full_input_shape[1] - strided_input_height == input_pad_top + input_pad_bottom + output_pad_hw.first,
+        "Calculated input padding height does not match the expected value.");
+    TT_FATAL(
+        full_input_shape[2] - strided_input_width == input_pad_left + input_pad_right + output_pad_hw.second,
+        "Calculated input padding width does not match the expected value.");
 
     return {std::pair{input_pad_top, input_pad_bottom}, std::pair{input_pad_left, input_pad_right}};
 }
@@ -814,6 +823,99 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         number_of_blocks_per_core};
 }
 
+void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
+    log_info(tt::LogOp, "========================================");
+    log_info(tt::LogOp, "  Sliding Window Op Config Visualization");
+    log_info(tt::LogOp, "========================================");
+    log_info(tt::LogOp, "Total Cores: {}", config.size());
+
+    // Calculate statistics
+    uint32_t total_elements = 0;
+    uint32_t max_config_size = 0;
+    uint32_t min_config_size = config.empty() ? 0 : config[0].size();
+
+    for (const auto& core_config : config) {
+        total_elements += core_config.size();
+        max_config_size = std::max(max_config_size, static_cast<uint32_t>(core_config.size()));
+        min_config_size = std::min(min_config_size, static_cast<uint32_t>(core_config.size()));
+    }
+
+    log_info(tt::LogOp, "Total Elements: {}", total_elements);
+    log_info(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
+    log_info(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
+    log_info(tt::LogOp, "========================================");
+
+    // Visualize each core's configuration
+    for (uint32_t core_id = 0; core_id < config.size(); ++core_id) {
+        const auto& core_config = config[core_id];
+        log_info(tt::LogOp, "");
+        log_info(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
+
+        if (core_config.empty()) {
+            log_info(tt::LogOp, "  [EMPTY]");
+            continue;
+        }
+
+        // Parse the structure: [num_segments, 0, indices...]
+        uint32_t idx = 0;
+        uint32_t block_num = 0;
+
+        while (idx < core_config.size()) {
+            // Check if we have at least 2 elements for header
+            if (idx + 1 >= core_config.size()) {
+                break;
+            }
+
+            uint32_t num_segments = core_config[idx];
+            // core_config[idx + 1] is alignment/padding, we skip it
+
+            // Skip if this looks like padding (all zeros)
+            if (num_segments == 0 && (idx + 2 >= core_config.size() || core_config[idx + 2] == 0)) {
+                break;
+            }
+
+            log_info(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
+            idx += 2;  // Skip num_segments and alignment
+
+            // Display segments (pairs of start-end indices)
+            uint32_t segment_count = 0;
+            while (segment_count < num_segments && idx + 1 < core_config.size()) {
+                uint16_t start_idx = core_config[idx];
+                uint16_t end_idx = core_config[idx + 1];
+                uint16_t range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
+
+                log_info(
+                    tt::LogOp,
+                    "    Segment {}: [{:5d} -> {:5d}] (len: {})",
+                    segment_count,
+                    start_idx,
+                    end_idx,
+                    range_size);
+
+                idx += 2;
+                segment_count++;
+            }
+
+            // If we didn't find all segments, something might be wrong
+            if (segment_count < num_segments) {
+                log_info(
+                    tt::LogOp, "    WARNING: Expected {} segments but only parsed {}", num_segments, segment_count);
+                break;
+            }
+
+            block_num++;
+        }
+
+        // Show remaining padding if any
+        if (idx < core_config.size()) {
+            uint32_t padding_count = core_config.size() - idx;
+            log_info(tt::LogOp, "  [Padding: {} elements]", padding_count);
+        }
+    }
+
+    log_info(tt::LogOp, "========================================");
+}
+
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
@@ -1062,7 +1164,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), padding=(({}, {}), "
         "({}, {})), output_padding = ({}, {}), "
-        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
+        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={}, is_transpose={})",
         t.batch_size,
         t.input_hw.first,
         t.input_hw.second,
@@ -1080,7 +1182,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.dilation_hw.second,
         t.num_cores_nhw,
         t.num_cores_c,
-        t.core_range_set.str());
+        t.core_range_set.str(),
+        t.is_transpose);
     return fmt::format_to(ctx.out(), "{}", str);
 }
 

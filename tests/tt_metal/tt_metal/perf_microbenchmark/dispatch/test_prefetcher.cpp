@@ -460,7 +460,7 @@ void add_paged_dram_data_to_device_data(
     uint32_t last_page = start_page + pages;
     for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
         CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -516,7 +516,7 @@ void gen_dram_packed_read_cmd(
         uint32_t page_idx = sub_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -1073,7 +1073,7 @@ void gen_dram_ringbuffer_read_cmd(
         uint32_t page_idx = ringbuffer_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -1648,7 +1648,7 @@ void gen_relay_linear_h_test(
             // Set up the source NOC address - we'll read from DRAM where data is initialized
             // Use DRAM bank 0 for simplicity
             const uint32_t dram_bank_id = 0;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord dram_logical_core = device->logical_core_from_dram_channel(dram_channel);
             CoreCoord dram_physical_core = tt::tt_metal::MetalContext::instance()
                                                .get_cluster()
@@ -2114,16 +2114,30 @@ void configure_for_single_chip(
 
         {"NUM_HOPS", std::to_string(0)},
 
-        {"MY_DEV_ID", std::to_string(0)},
         {"EW_DIM", std::to_string(0)},
         {"TO_MESH_ID", std::to_string(0)},
-        {"TO_DEV_ID", std::to_string(0)},
-        {"ROUTER_DIRECTION", std::to_string(0)},
     };
+
+    // Initialize runtime args offsets
+    int rta_offset = 0;
+    uint32_t offsetof_my_dev_id = rta_offset++;
+    uint32_t offsetof_to_dev_id = rta_offset++;
+    uint32_t offsetof_router_direction = rta_offset++;
+    std::vector<uint32_t> runtime_args(rta_offset);
+
+    prefetch_defines["OFFSETOF_MY_DEV_ID"] = std::to_string(offsetof_my_dev_id);
+    prefetch_defines["OFFSETOF_TO_DEV_ID"] = std::to_string(offsetof_to_dev_id);
+    prefetch_defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(offsetof_router_direction);
+
+    // Initialize runtime args
+    runtime_args[offsetof_my_dev_id] = 0;
+    runtime_args[offsetof_to_dev_id] = 0;
+    runtime_args[offsetof_router_direction] = 0;
 
     constexpr NOC my_noc_index = NOC::NOC_0;
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
+    KernelHandle kernel_handle;
     if (split_prefetcher_g) {
         log_info(LogTest, "split prefetcher test");
 
@@ -2140,7 +2154,7 @@ void configure_for_single_chip(
             std::to_string(prefetch_d_buffer_pages * (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE));
         prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
         CoreCoord phys_prefetch_d_upstream_core = phys_prefetch_core_g;
-        configure_kernel_variant<true, false>(
+        kernel_handle = configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
             prefetch_defines,
@@ -2154,6 +2168,8 @@ void configure_for_single_chip(
             my_noc_index,
             my_noc_index);
 
+        tt_metal::SetRuntimeArgs(program, kernel_handle, prefetch_d_core, runtime_args);
+
         // prefetch_h
         prefetch_defines["DOWNSTREAM_CB_BASE"] = std::to_string(prefetch_d_buffer_base);
         prefetch_defines["DOWNSTREAM_CB_LOG_PAGE_SIZE"] =
@@ -2165,7 +2181,7 @@ void configure_for_single_chip(
         prefetch_defines["CMDDAT_Q_SIZE"] = std::to_string(cmddat_q_size_g);
         prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
         CoreCoord phys_prefetch_h_downstream_core = phys_prefetch_d_core;
-        configure_kernel_variant<false, true>(
+        kernel_handle = configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
             prefetch_defines,
@@ -2178,13 +2194,15 @@ void configure_for_single_chip(
             my_noc_index,
             my_noc_index,
             my_noc_index);
+
+        tt_metal::SetRuntimeArgs(program, kernel_handle, prefetch_core, runtime_args);
     } else {
         uint32_t scratch_db_base =
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
         prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
 
-        configure_kernel_variant<true, true>(
+        kernel_handle = configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
             prefetch_defines,
@@ -2197,6 +2215,8 @@ void configure_for_single_chip(
             my_noc_index,
             my_noc_index,
             my_noc_index);
+
+        tt_metal::SetRuntimeArgs(program, kernel_handle, prefetch_core, runtime_args);
     }
 
     uint32_t host_completion_queue_wr_ptr = MetalContext::instance()
@@ -2283,6 +2303,21 @@ void configure_for_single_chip(
         {"WORKER_MCAST_GRID", "0"},
         {"NUM_WORKER_CORES_TO_MCAST", "0"},
     };
+    // Initialize runtime args offsets
+    rta_offset = 0;
+    offsetof_my_dev_id = rta_offset++;
+    offsetof_to_dev_id = rta_offset++;
+    offsetof_router_direction = rta_offset++;
+    runtime_args.resize(rta_offset);
+
+    dispatch_defines["OFFSETOF_MY_DEV_ID"] = std::to_string(offsetof_my_dev_id);
+    dispatch_defines["OFFSETOF_TO_DEV_ID"] = std::to_string(offsetof_to_dev_id);
+    dispatch_defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(offsetof_router_direction);
+
+    // Initialize runtime args
+    runtime_args[offsetof_my_dev_id] = 0;
+    runtime_args[offsetof_to_dev_id] = 0;
+    runtime_args[offsetof_router_direction] = 0;
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
     if (split_dispatcher_g) {
@@ -2302,7 +2337,7 @@ void configure_for_single_chip(
         dispatch_d_defines["IS_D_VARIANT"] = "1";
         dispatch_d_defines["IS_H_VARIANT"] = "0";
 
-        configure_kernel_variant<true, false>(
+        kernel_handle = configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_d_defines,
@@ -2315,6 +2350,8 @@ void configure_for_single_chip(
             my_noc_index,
             dispatch_upstream_noc_index,
             my_noc_index);
+
+        tt_metal::SetRuntimeArgs(program, kernel_handle, dispatch_core, runtime_args);
 
         // dispatch_h
         CoreCoord phys_dispatch_h_upstream_core = phys_dispatch_core;
@@ -2332,7 +2369,7 @@ void configure_for_single_chip(
         dispatch_h_defines["IS_D_VARIANT"] = "0";
         dispatch_h_defines["IS_H_VARIANT"] = "1";
 
-        configure_kernel_variant<false, true>(
+        kernel_handle = configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_h_defines,
@@ -2345,8 +2382,10 @@ void configure_for_single_chip(
             my_noc_index,
             dispatch_upstream_noc_index,
             my_noc_index);
+
+        tt_metal::SetRuntimeArgs(program, kernel_handle, dispatch_h_core, runtime_args);
     } else {
-        configure_kernel_variant<true, true>(
+        kernel_handle = configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_defines,
@@ -2359,6 +2398,8 @@ void configure_for_single_chip(
             my_noc_index,
             dispatch_upstream_noc_index,
             my_noc_index);
+
+        tt_metal::SetRuntimeArgs(program, kernel_handle, dispatch_core, runtime_args);
     }
 }
 
@@ -2448,7 +2489,7 @@ int main(int argc, char** argv) {
             all_workers_g,
             l1_buf_base_g,
             device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
-            (uint32_t*)host_hugepage_completion_buffer_base_g,
+            static_cast<uint32_t*>(host_hugepage_completion_buffer_base_g),
             false,
             DRAM_DATA_SIZE_WORDS);
         num_dram_banks_g = device->allocator()->get_num_banks(BufferType::DRAM);

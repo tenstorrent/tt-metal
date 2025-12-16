@@ -17,11 +17,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Shape;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace test_utils {
 

@@ -36,9 +36,7 @@
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace fs = std::filesystem;
 
@@ -114,8 +112,7 @@ Kernel::Kernel(
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
-    common_runtime_args_count_(0),
-    max_runtime_args_per_core_(0),
+
     core_with_max_runtime_args_({0, 0}),
     defines_(defines) {
     this->register_kernel_with_watcher();
@@ -433,9 +430,10 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     //                  Should this check only be enabled in debug mode?
     TT_ASSERT(
         this->is_on_logical_core(logical_core),
-        "Cannot set runtime args for core {} since kernel {} is not placed on it!",
+        "Cannot set runtime args for core {} since kernel {} is not placed on it. core range set: {}!",
         logical_core.str(),
-        this->name());
+        this->name(),
+        core_range_set_.str());
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
 
@@ -743,6 +741,4 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     return os;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

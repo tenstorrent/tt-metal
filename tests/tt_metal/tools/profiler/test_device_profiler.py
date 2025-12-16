@@ -23,6 +23,7 @@ from tracy.common import (
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
     PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_DEFAULT_OP_SUPPORT_COUNT,
     clear_profiler_runtime_artifacts,
 )
 
@@ -64,11 +65,21 @@ def set_env_vars(**kwargs):
         "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
         "do_mid_run_dump": "TT_METAL_PROFILER_MID_RUN_DUMP=1 ",
         "do_cpp_post_process": "TT_METAL_PROFILER_CPP_POST_PROCESS=1 ",
+        "set_program_support_count": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
-        if argVal:
-            envVarsStr += envVarsDict[arg]
+        if arg == "set_program_support_count":
+            # Only set the program support count here if it's not equal to the default program support count and the environment variable isn't already set
+            if (
+                argVal
+                and argVal != PROFILER_DEFAULT_OP_SUPPORT_COUNT
+                and os.getenv("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") is None
+            ):
+                envVarsStr += f"{envVarsDict[arg]}{argVal} "
+        else:
+            if argVal:
+                envVarsStr += f"{envVarsDict[arg]}"
     return envVarsStr
 
 
@@ -109,6 +120,7 @@ def run_device_profiler_test(
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
+    setOpSupportCount=PROFILER_DEFAULT_OP_SUPPORT_COUNT,
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
@@ -120,6 +132,7 @@ def run_device_profiler_test(
         slowDispatch=slowDispatch,
         doSync=doSync,
         doDispatchCores=doDispatchCores,
+        set_program_support_count=setOpSupportCount,
     )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
@@ -143,7 +156,6 @@ def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
         "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
         "blackhole": [130 * OP_COUNT * RUN_COUNT, 120 * OP_COUNT * RUN_COUNT, 110 * OP_COUNT * RUN_COUNT],
     }
@@ -151,7 +163,7 @@ def test_multi_op():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True, setOpSupportCount=1200)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -162,8 +174,8 @@ def test_multi_op():
 
 
 def test_multi_op_buffer_overflow():
-    COMPUTE_OP_COUNT = 267
-    DATA_MOVEMENT_OP_COUNT = 1333
+    COMPUTE_OP_COUNT = 200
+    DATA_MOVEMENT_OP_COUNT = 1000
     RUN_COUNT = 1
     REF_COMPUTE_COUNT_DICT = {
         "wormhole_b0": [
@@ -260,11 +272,10 @@ def test_custom_cycle_count():
 
 
 def test_full_buffer():
-    OP_COUNT = 26
+    OP_COUNT = 23
     RISC_COUNT = 5
     ZONE_COUNT = 125
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [
             72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
@@ -437,10 +448,10 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383, 7422, 9830],
         "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
-        "dispatch_total_cq_cmd_op_time": [236],
-        "dispatch_go_send_wait_time": [236],
+        "dispatch_total_cq_cmd_op_time": [219],
+        "dispatch_go_send_wait_time": [219],
     }
 
     verify_stats(
@@ -455,6 +466,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
+            setOpSupportCount=1500,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -466,6 +478,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
+            setOpSupportCount=3000,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -489,13 +502,30 @@ def test_dispatch_cores():
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2777, 3285, 3530, 3769, 4237, 4881, 6681, 7150],
-        "Ethernet CQ Prefetch": [572, 1058, 2108, 4030, 7795],
+        "Ethernet CQ Dispatch": [
+            590,
+            1080,
+            1430,
+            1660,
+            1994,
+            2083,
+            2464,
+            2648,
+            2827,
+            3178,
+            3661,
+            5011,
+            5362,
+            7661,
+            10224,
+        ],
+        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 4577, 5846, 7795],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
+        setOpSupportCount=1500,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -515,6 +545,7 @@ def test_ethernet_dispatch_cores():
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
+        setOpSupportCount=3000,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -603,7 +634,6 @@ def test_timestamped_events():
             BH_COMBO_COUNTS.append((T, E))
 
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
     }

@@ -13,7 +13,7 @@ inline void tilizeA_B_binary_init(
     uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
     UNPACK((llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim)));
 
-    MATH((llk_math_eltwise_binary_init<ELWADD, NONE>(0 /*transpose*/, 0 /*acc_to_dest*/)));
+    MATH((llk_math_eltwise_binary_init<ELWADD, NONE>(0 /*acc_to_dest*/)));
 }
 
 inline void add_tiles_math(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {

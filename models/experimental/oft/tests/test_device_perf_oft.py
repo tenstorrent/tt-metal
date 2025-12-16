@@ -11,7 +11,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
     [
         (
             "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet",
-            195_580_212,
+            194_101_249,
             "oft_oftnet",
             "oft_oftnet",
             1,
@@ -31,7 +31,7 @@ from models.perf.device_perf_utils import run_model_device_perf_test
         ),
         (
             "pytest models/experimental/oft/demo/demo.py::test_demo_inference",
-            198_184_176,
+            196_845_002,
             "oft_demo",
             "oft_demo",
             1,

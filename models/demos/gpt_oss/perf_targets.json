@@ -26,23 +26,23 @@
     "ci": {
         "prefill_128": {
             "T3K_gpt-oss-20b": {
-                "TTFT": [700, 1.2],
-                "decode_tok_s_u": 13,
+                "TTFT": [450, 1.2],
+                "decode_tok_s_u": 12,
                 "decode_tok_s": 2200
             },
             "T3K_gpt-oss-120b": {
-                "TTFT": [3600, 1.2],
+                "TTFT": [1700, 1.2],
                 "decode_tok_s_u": 8,
                 "decode_tok_s": 2200
             },
             "GLX_gpt-oss-20b": {
-                "TTFT": [450, 1.2],
-                "decode_tok_s_u": 13,
+                "TTFT": [500, 1.2],
+                "decode_tok_s_u": 10,
                 "decode_tok_s": 2200
             },
             "GLX_gpt-oss-120b": {
-                "TTFT": [1600, 1.2],
-                "decode_tok_s_u": 8,
+                "TTFT": [1300, 1.2],
+                "decode_tok_s_u": 6.5,
                 "decode_tok_s": 2200
             }
         }

@@ -4,14 +4,13 @@
 
 | Model                                                         | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |---------------------------------------------------------------|-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| [Qwen 3 32B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                       | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 109       | 22.1  | 30              | 707.2  | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
+| [Qwen 3 32B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                       | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 94       | 22.8  | 30              | 729.6  | [v0.65.0-rc7](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-rc7) | [59be953](https://github.com/tenstorrent/vllm/tree/59be953f2bbd21e227f9ef4b779f545f9c3bf599/tt_metal) |
 | [QwQ 32B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                       | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 133       | 25.2  | 30              | 806.4  | [v0.56.0-rc51](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc51) | [e2e0002](https://github.com/tenstorrent/vllm/tree/e2e0002ac7dcbc5793983c0f967474d4dcab21f8/tt_metal)      |
 | [DeepSeek R1 Distill Llama 3.3 70B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)       | 32    | [QuietBox  (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 159       | 15.9  | 20    | 508.8  | [v0.59.0-rc53](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc53) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal)      |
-| [Llama 3.1 70B (TP=32)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)        | 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53      | 72.5  | 80              | 2268.8  | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) | [1d799da](https://github.com/tenstorrent/vllm/tree/1d799da2ebc6a809d45a543debca89a92ed6a6d7/tt_metal) |
-| [Llama 3.1 70B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                 | 32    | [QuietBox  (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 159       | 15.9  | 20              | 508.8  | [v0.59.0-rc53](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc53) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal)      |
+| [Llama 3.3 70B (TP=32)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)        | 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53      | 72.5  | 80              | 2268.8  | [v0.65.0-rc7](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-rc7) | [59be953](https://github.com/tenstorrent/vllm/tree/59be953f2bbd21e227f9ef4b779f545f9c3bf599/tt_metal) |
+| [Llama 3.3 70B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                 | 32    | [QuietBox  (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 159       | 15.9  | 20              | 508.8  | [v0.59.0-rc53](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc53) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal)      |
 | [Llama 3.1 70B (TP=4)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                 | 32    | [QuietBox (Blackhole)](https://tenstorrent.com/hardware/tt-quietbox) | 188*       | 14.9*  |               | 476.5*  | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) | [1d799da](https://github.com/tenstorrent/vllm/tree/1d799da2ebc6a809d45a543debca89a92ed6a6d7/tt_metal)      |
 | [Llama 3.2 11B Vision (TP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)          | 16     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 714       | 18.1  | 17              | 289.6   | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015)  | [1d799da](https://github.com/tenstorrent/vllm/tree/1d799da2ebc6a809d45a543debca89a92ed6a6d7/tt_metal) |
-| [Llama 3.3 70B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy) | 32  | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 159 | 15.9 | 20 | 508.8 | [v0.59.0-rc53](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc53) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
 | [Qwen 2.5 7B (TP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)   | 32     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 109      | 22.1  | 30              | 707.2   | [v0.62.0-rc35](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc35) | [ced0161](https://github.com/tenstorrent/vllm/tree/ced0161dc223e6d8aca5f44a6c43d13070c3fba6/tt_metal) |
 | [Qwen 2.5 72B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)               | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 223       | 15.4  | 20              | 492.8  | [v0.62.0-rc25](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc25) | [e7c329b](https://github.com/tenstorrent/vllm/tree/e7c329b1664f8591ae8b4269bed9690726e52a24/tt_metal) |
 | [Falcon 7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/falcon7b)                 | 32    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 70        | 18.5  | 26              | 592.0  | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) |                                                                                                   |
@@ -28,7 +27,7 @@
 | [Mistral 7B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)                        | 32    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        |  99 | 28.7  | 23     | 918.4 | [v0.64.0-dev20251030](https://github.com/tenstorrent/tt-metal/tree/v0.64.0-dev20251030)    |  [0edd242](https://github.com/tenstorrent/vllm/tree/0edd242e0f91ca92cb95624f1acb1237fc9c2008/tt_metal) |
 | [Mixtral 8x7B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)       | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 122       | 24.9  | 33              | 796.8  | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) |                                                                                                   |
 
-> **Last Update:** Nov 3, 2025
+> **Last Update:** Dec 8, 2025
 >
 > **Notes:**
 >
@@ -44,8 +43,8 @@
 
 | Model                                                | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target t/s/u | t/s    | TT-Metalium Release                                                       |
 |------------------------------------------------------|-------|----------------------------------------------------------|-----------|-------|--------------|--------|---------------------------------------------------------------------------|
-| [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 232       | 58.1  | 45           | 58.1   | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) |
-| [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)  | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)        | 113       | 101.5  |            | 101.5   | [v0.64.0-dev20251030](https://github.com/tenstorrent/tt-metal/tree/v0.64.0-dev20251030) |
+| [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 163       | 105.0  | 45           | 105.0   | [v0.65.0-dev20251208](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-dev20251208) |
+| [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)  | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)        | 63       | 263.4  |            | 263.4   | [v0.65.0-dev20251208](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-dev20251208) |
 
 ## Diffusion Models
 | Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
@@ -75,50 +74,19 @@
 | [MobileNet-v2 (224x224)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mobilenetv2)           | 10    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 3,030   | 3,500      |  |
 | [MobileNet-v2 (224x224) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mobilenetv2)    | 20    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 5,280   | 7,000      |  |
 
-### Object Detection
-| Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
-|-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
-| [YOLOv4 (320x320)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 166     | 320        |             |
-| [YOLOv4 (320x320) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)        | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 254     | 640        |             |
-| [YOLOv4 (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 74      | 160        |             |
-| [YOLOv4 (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)        | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 123     | 320        |             |
-| [YOLOv5x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov5x)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 67      | 150        |             |
-| [YOLOv5x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov5x)      | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 126     | 300        |             |
-| [YOLOv6l (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov6l)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 103     | 200        |             |
-| [YOLOv6l (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov6l)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 181     | 400        |             |
-| [YOLOv8x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8x)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 66      | 100        |             |
-| [YOLOv8x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8x)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 124     | 200        |             |
-| [YOLOv8s (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 215     | 320        |             |
-| [YOLOv8s (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 368     | 640        |             |
-| [YOLOv8s_world (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s_world) | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 105     | 320        |             |
-| [YOLOv8s_world (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov8s_world) | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 189     | 640        |             |
-| [YOLOv9c (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)             | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 98      | 320        |             |
-| [YOLOv9c (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 173     | 640        |             |
-| [YOLOv10x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov10x)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 48      | 150        |             |
-| [YOLOv10x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov10x)    | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 91      | 300        |             |
-| [YOLOv11m (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11m)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 95      | 200        |             |
-| [YOLOv11m (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11m)    | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 157     | 400        |             |
-| [YOLOv11n (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11)            | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 234     | 500        |             |
-| [YOLOv11n (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11)     | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 372     | 1000       |             |
-| [YOLOv12x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 14      | 150        |             |
-| [YOLOv12x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)    | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 28      | 300        |             |
-
-
 ### Segmentation
 | Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [UNet - VGG19 (256x256)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vgg_unet)                  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 198     | 150        |             |
 | [UNet - VGG19 (256x256) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vgg_unet)           | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 318     | 300        |             |
-| [UNet - VGG19 (256x256)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vgg_unet)                 | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 320    | 300        |             |
+| [UNet - VGG19 (256x256)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vgg_unet)                 | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 320   | 300        |             |
 | [UNet - Vanilla (480x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vanilla_unet)                     | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 60      | 240        |             |
 | [UNet - Vanilla (480x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vanilla_unet)                     | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 119     | 480        |             |
 | [SegFormer Semantic Segmentation (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/segformer)       | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 132     | 360        |             |
 | [SegFormer Semantic Segmentation (512x512) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/segformer)| 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 248     | 720        |             |
-| [YOLOv9c (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)                                 | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 87      | 240        |             |
-| [YOLOv9c (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)                          | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 153     | 480        |             |
 | [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/ufld_v2)                      | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 365     | 600        |             |
 | [UFLD - v2 (320x800) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/ufld_v2)               | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 637     | 1200       |             |
-| [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/ufld_v2)                     | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 551   | 1200        |             |
+| [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/ufld_v2)                     | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 551   | 1200       |             |
 
 ## NLPs
 
@@ -140,7 +108,7 @@
 
 | Release | Release Date |
 |---------|--------------|
-| 0.65.0  | ETA Nov 19, 2025  |
+| 0.65.0  | ETA Dec 2025 |
 | [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 |
 | [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 |
 | [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |

@@ -34,14 +34,12 @@
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "ringbuffer_cache.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Program;
 class SystemMemoryManager;
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -119,7 +117,7 @@ public:
 
 private:
     uint32_t id_;
-    uint32_t size_B_;
+    uint32_t size_B_{0};
     uint32_t completion_queue_reader_core_ = 0;
     std::optional<uint32_t> tid_;
     std::shared_ptr<TraceDescriptor> trace_ctx_;

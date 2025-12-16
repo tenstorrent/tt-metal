@@ -406,6 +406,19 @@ void PrefetchKernel::GenerateDependentConfigs() {
     }
 }
 
+void PrefetchKernel::InitializeRuntimeArgsValues() {
+    // Initialize runtime args offsets
+    int current_offset = 0;
+    static_config_.offsetof_my_dev_id = current_offset++;
+    static_config_.offsetof_to_dev_id = current_offset++;
+    static_config_.offsetof_router_direction = current_offset++;
+    // Initialize runtime args
+    runtime_args_.resize(current_offset);
+    runtime_args_[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
+}
+
 void PrefetchKernel::CreateKernel() {
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
     auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -495,11 +508,8 @@ void PrefetchKernel::CreateKernel() {
 
         {"NUM_HOPS", std::to_string(dependent_config_.num_hops.value())},
 
-        {"MY_DEV_ID", std::to_string(dependent_config_.my_dev_id.value_or(0))},
         {"EW_DIM", std::to_string(dependent_config_.ew_dim.value_or(0))},
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
-        {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
-        {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
@@ -510,6 +520,12 @@ void PrefetchKernel::CreateKernel() {
             defines["FABRIC_2D"] = "1";
         }
     }
+
+    // Runtime args offsets
+    defines["OFFSETOF_MY_DEV_ID"] = std::to_string(static_config_.offsetof_my_dev_id.value_or(0));
+    defines["OFFSETOF_TO_DEV_ID"] = std::to_string(static_config_.offsetof_to_dev_id.value_or(0));
+    defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
+
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
