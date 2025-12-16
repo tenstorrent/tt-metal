@@ -1,0 +1,132 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <gtest/gtest.h>
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "command_queue_fixture.hpp"
+#include "impl/context/metal_context.hpp"
+
+#include <vector>
+
+namespace tt::tt_metal {
+
+// Test two cores: one locks and writes, another writes to the same region
+// Both kernels synchronize using semaphores at start and end to ensure
+// locks are held concurrently for the profiler to capture overlapping accesses
+TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
+    for (auto& mesh_device : devices_) {
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (grid_size.x < 2) {
+            GTEST_SKIP() << "Test requires at least 2 cores in x dimension";
+        }
+
+        const CoreCoord locker_core = {0, 0};
+        const CoreCoord writer_core = {1, 0};
+        Program program = CreateProgram();
+        distributed::MeshWorkload workload;
+
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        auto& mc = MetalContext::instance();
+        uint32_t unreserved_addr =
+            mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+
+        uint32_t locker_buffer_addr = unreserved_addr;
+        uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;  // Separate local buffer for writer
+        uint32_t num_elements = 8;
+
+        auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
+        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
+
+        // Create semaphores for handshaking between kernels
+        // Each core has its own semaphore that the other core will increment
+        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
+        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        // Locker kernel args:
+        // l1_buffer_addr, num_elements, my_sem_id, other_sem_id, other_noc_x, other_noc_y
+        std::vector<uint32_t> locker_args = {
+            locker_buffer_addr,
+            num_elements,
+            locker_sem_id,
+            writer_sem_id,
+            writer_virtual_core.x,
+            writer_virtual_core.y};
+
+        KernelHandle locker_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_test_kernel.cpp",
+            locker_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(program, locker_kernel, locker_core, locker_args);
+
+        // Writer kernel args:
+        // local_buffer_addr, num_elements, target_noc_x, target_noc_y, target_addr,
+        // my_sem_id, other_sem_id, other_noc_x, other_noc_y
+        std::vector<uint32_t> writer_args = {
+            writer_buffer_addr,
+            num_elements,
+            locker_virtual_core.x,
+            locker_virtual_core.y,
+            locker_buffer_addr,  // Target the locker's buffer
+            writer_sem_id,
+            locker_sem_id,
+            locker_virtual_core.x,
+            locker_virtual_core.y};
+
+        KernelHandle writer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_writer_kernel.cpp",
+            writer_core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        SetRuntimeArgs(program, writer_kernel, writer_core, writer_args);
+
+        workload.add_program(device_range, std::move(program));
+
+        // Use non-blocking mode - finish() will automatically poll and read profiler results
+        // to prevent deadlock when profiler buffers fill up and kernels block waiting for space
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        // Final profiler read after completion
+        ReadMeshDeviceProfilerResults(*mesh_device);
+
+        auto* device = mesh_device->get_devices()[0];
+        std::vector<uint32_t> final_data(num_elements, 0);
+        detail::ReadFromDeviceL1(device, locker_core, locker_buffer_addr, num_elements * sizeof(uint32_t), final_data);
+
+        bool has_locker_data = false;
+        bool has_writer_data = false;
+        for (uint32_t i = 0; i < num_elements; i++) {
+            if (final_data[i] == i) {
+                has_locker_data = true;
+            }
+            if (final_data[i] == 0x1000 + i) {
+                has_writer_data = true;
+            }
+        }
+
+        EXPECT_TRUE(has_locker_data || has_writer_data) << "Neither locker nor writer data found in buffer";
+
+        log_info(tt::LogTest, "TensixScopedLockConcurrentAccess passed on device {}", device->id());
+        log_info(tt::LogTest, "  Run with TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 to capture lock events");
+    }
+}
+
+}  // namespace tt::tt_metal

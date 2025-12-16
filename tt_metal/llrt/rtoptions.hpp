@@ -177,6 +177,7 @@ class RunTimeOptions {
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
+    bool profiler_block_on_full_buffer = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
 
     bool null_kernels = false;
@@ -508,6 +509,7 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    bool get_profiler_block_on_full_buffer() const { return profiler_block_on_full_buffer; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
