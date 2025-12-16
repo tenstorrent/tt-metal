@@ -4,9 +4,10 @@
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
+#define FLOAT32_REDUCTION true
 
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_binary.h"
 
 /**
  * @brief Compute kernel for distributed SUM reduction
@@ -56,7 +57,7 @@ void MAIN {
     // Input: cb_in0 [block_ht x block_wt tiles]
     // Output: cb_partial [block_ht tiles] - one reduced tile per row
 
-    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, cb_partial);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_partial);
     cb_wait_front(cb_scaler, 1);
     cb_reserve_back(cb_partial, block_ht);
 
@@ -66,7 +67,7 @@ void MAIN {
         // Reduce across width for this row
         for (uint32_t col = 0; col < num_reduce_tiles_per_row; ++col) {
             uint32_t tile_idx = row * block_wt + col;
-            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, tile_idx, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, tile_idx, scaler0, dst0);
         }
 
         tile_regs_commit();
@@ -86,10 +87,7 @@ void MAIN {
     // Input: cb_external [num_rows_per_worker * num_blocks tiles]
     // Output: cb_reduced [num_rows_per_worker tiles]
 
-    // Note: In LayerNorm, only "all-to-all workers" do this step
-    // For our simplified reduction, all cores participate
-
-    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_external, cb_scaler, cb_reduced);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_external, cb_scaler, cb_reduced);
     cb_reserve_back(cb_reduced, num_rows_per_worker);
 
     for (uint32_t row = 0; row < num_rows_per_worker; ++row) {
@@ -99,7 +97,7 @@ void MAIN {
         // Reduce across all cores' partials for this row
         for (uint32_t core = 0; core < num_blocks; ++core) {
             cb_wait_front(cb_external, 1);
-            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_external, cb_scaler, 0, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_external, cb_scaler, 0, scaler0, dst0);
             cb_pop_front(cb_external, 1);
         }
 

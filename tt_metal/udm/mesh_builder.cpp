@@ -337,6 +337,54 @@ public:
         fabric_chip_ids_str += "}";
         defines["FABRIC_CHIP_IDS"] = fabric_chip_ids_str;
 
+        // Worker core to NOC coordinate mapping
+        // This maps linearized worker core index (row-major) to packed NOC (x,y) coordinates
+        // The mapping is the same for all devices in the mesh
+        // Get any device to query the core mapping (all devices have the same mapping)
+        auto* device = mesh_device_->get_devices()[0];
+
+        // Compute total number of cores in grid
+        uint32_t num_cores = 1;
+        for (uint32_t i = 0; i < dims.grid_num_dims; ++i) {
+            num_cores *= dims.grid_dims[i];
+        }
+        defines["NUM_WORKER_CORES"] = std::to_string(num_cores);
+
+        // Build WORKER_CORE_NOC_X and WORKER_CORE_NOC_Y arrays
+        // For the accessor: bank_id = sum((coord[i] % grid.dim[i]) * grid_strides[i])
+        // With grid_strides computed row-major (last dim has stride 1):
+        //   For 2D with dims [height, width]: bank_id = y * width + x
+        // So to reverse: x = bank_id % width, y = bank_id / width
+        std::string noc_x_str = "{";
+        std::string noc_y_str = "{";
+
+        // Use dims.grid_dims which matches the accessor's linearization
+        // Row-major linearization: last dim varies fastest
+        // For worker cores, we map to 2D (x, y) where x is the last dim and y is all others fused
+        uint32_t x_dim = dims.grid_dims[dims.grid_num_dims - 1];  // Last dim = x
+
+        for (uint32_t idx = 0; idx < num_cores; ++idx) {
+            // Reverse the row-major linearization to get (x, y)
+            // x is the last dim, y is all other dims fused
+            uint32_t x = idx % x_dim;
+            uint32_t y = idx / x_dim;
+
+            // Get physical NOC coordinates from device
+            CoreCoord logical_core(x, y);
+            CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
+
+            if (idx > 0) {
+                noc_x_str += ", ";
+                noc_y_str += ", ";
+            }
+            noc_x_str += std::to_string(physical_core.x);
+            noc_y_str += std::to_string(physical_core.y);
+        }
+        noc_x_str += "}";
+        noc_y_str += "}";
+        defines["WORKER_CORE_NOC_X"] = noc_x_str;
+        defines["WORKER_CORE_NOC_Y"] = noc_y_str;
+
         return defines;
     }
 

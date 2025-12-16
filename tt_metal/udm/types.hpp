@@ -10,6 +10,7 @@
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/api/tt-metalium/kernel_types.hpp"
 #include "tt_metal/api/tt-metalium/circular_buffer_config.hpp"
+#include "tt_metal/api/tt-metalium/global_semaphore.hpp"
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/assert.hpp>
@@ -146,9 +147,22 @@ using MeshKernelHandle = std::unordered_map<uint32_t, tt::tt_metal::KernelHandle
 using MeshCBHandle = std::unordered_map<uint32_t, tt::tt_metal::CBHandle>;
 
 /**
- * @brief Handle for a mesh semaphore
- * Maps grid_id to the semaphore address on that grid
+ * @brief Handle for a mesh semaphore backed by GlobalSemaphore
+ * Contains the GlobalSemaphore object (to keep it alive) and provides address access
  */
-using MeshSemaphoreHandle = std::unordered_map<uint32_t, uint32_t>;
+struct MeshSemaphoreHandle {
+    tt::tt_metal::GlobalSemaphore semaphore;  // Keeps the semaphore alive
+    uint32_t address_;                        // The L1 address (same on all devices)
+
+    // Constructor
+    MeshSemaphoreHandle(tt::tt_metal::GlobalSemaphore sem) :
+        semaphore(std::move(sem)), address_(static_cast<uint32_t>(semaphore.address())) {}
+
+    // For compatibility with existing code that uses .at(grid_id)
+    uint32_t at(uint32_t /*grid_id*/) const { return address_; }
+
+    // Direct address access
+    uint32_t address() const { return address_; }
+};
 
 }  // namespace tt::tt_metal::experimental::udm
