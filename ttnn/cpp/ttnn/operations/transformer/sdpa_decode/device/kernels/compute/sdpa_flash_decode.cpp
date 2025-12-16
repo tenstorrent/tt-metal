@@ -362,9 +362,6 @@ void MAIN {
                     cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
-                // FIXME: doing this reduce in the previous sub_exp_block_bcast_cols_inplace function gives incorrect
-                // results, why?
-
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
