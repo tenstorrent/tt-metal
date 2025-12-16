@@ -269,27 +269,28 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         }
     }
 
-    // Create aggregated tensor that will be reused across warmup and trace
+    // Aggregate unit tensors first (this is a host-side view operation)
     Tensor aggregated_tensor;
     {
         ZoneScopedN("Aggregate");
         aggregated_tensor = aggregate(unit_tensors);
     }
 
-    // Run all_gather during warmup to:
+    // Tensors to be reused across warmup and trace
+    Tensor abs_output;
+    Tensor all_gathered_output;
+
+    // Run full flow during warmup to:
     // 1. Populate program cache
     // 2. Create semaphores (which involves writes)
-    // 3. Get the correctly-shaped output tensor for reuse
-    Tensor all_gathered_output;
+    // 3. Get the correctly-shaped output tensors for reuse in trace
     {
         ZoneScopedN("CacheWarmup");
 
-        // Run a trivial op on each unit tensor
+        // Run abs on the aggregated tensor (operates on parent mesh)
         {
-            ZoneScopedN("RunAbsOps");
-            for (const auto& unit_tensor : unit_tensors) {
-                ttnn::abs(unit_tensor);
-            }
+            ZoneScopedN("RunAbsOp");
+            abs_output = ttnn::abs(aggregated_tensor);
         }
 
         // Quiesce the parent mesh before all gather
@@ -301,7 +302,7 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         {
             ZoneScopedN("AllGather");
             // Use cluster_axis=1 (columns) for 2x4 mesh -> ring_size=4
-            all_gathered_output = ttnn::all_gather(aggregated_tensor, /*dim=*/0, /*cluster_axis=*/1);
+            all_gathered_output = ttnn::all_gather(abs_output, /*dim=*/0, /*cluster_axis=*/1);
         }
 
         // Quiesce parent mesh after all gather to ensure command queues are finished
@@ -325,11 +326,17 @@ TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
         uint8_t cq_id = mesh_device_->mesh_command_queue().id();
         trace_id = distributed::BeginTraceCapture(mesh_device_.get(), cq_id);
 
+        // Run abs on aggregated tensor with pre-allocated output
+        {
+            ZoneScopedN("RunAbsOp");
+            ttnn::abs(aggregated_tensor, std::nullopt, abs_output);
+        }
+
         {
             ZoneScopedN("AllGather");
             // Use same cluster_axis and pass pre-allocated output
             ttnn::all_gather(
-                aggregated_tensor,
+                abs_output,
                 /*dim=*/0,
                 /*cluster_axis=*/1,
                 /*subdevice_id=*/std::nullopt,
