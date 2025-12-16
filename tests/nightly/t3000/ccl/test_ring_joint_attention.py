@@ -275,7 +275,7 @@ def run_ring_joint_sdpa(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
                 ),
-            )[:1]
+            )
             # Slice out any tile-padding
             tt_out = tt_out[:, :, :seq_len, :]
             tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
@@ -283,10 +283,16 @@ def run_ring_joint_sdpa(
             logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
             passing = True
-            for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
-                out_pass, out_pcc = comp_pcc(gt, out, pcc_threshold)
+            out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
+            logger.debug(f"python vs pytorch: {out_pcc}")
+            logger.debug(f"mse: {((gt_out - tt_out) ** 2).mean()}")
+            passing = passing and out_pass
+
+            for joint_replica_id in range(tt_joint_out.shape[0]):
+                joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
+                out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
                 logger.debug(f"python vs pytorch: {out_pcc}")
-                logger.debug(f"mse: {((gt - out) ** 2).mean()}")
+                logger.debug(f"mse: {((gt_joint_out - joint_replica_out) ** 2).mean()}")
                 passing = passing and out_pass
 
             assert passing
