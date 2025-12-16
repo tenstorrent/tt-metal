@@ -126,16 +126,15 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
     shape[operation_attributes.dim] *= operation_attributes.ring_size;
-
-    // Need to determine output memory config - this should come from operation_attributes
-    // For now, using input memory config as fallback
-    MemoryConfig output_mem_config = input_tensor.memory_config();
-
     std::vector<ttnn::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
         output_specs.push_back(TensorSpec(
-            shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)));
+            shape,
+            TensorLayout(
+                input_tensor.dtype(),
+                input_tensor.tensor_spec().page_config(),
+                operation_attributes.output_mem_config)));
     }
     return output_specs;
 }
