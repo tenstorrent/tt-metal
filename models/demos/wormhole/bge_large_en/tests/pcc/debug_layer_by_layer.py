@@ -11,11 +11,11 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_encoder import TtnnBGEEncoder
 from models.demos.sentence_bert.reference.sentence_bert import BertEncoder
 from models.demos.wormhole.bge_large_en.ttnn.common import custom_preprocessor
-from tests.ttnn.utils_for_testing import comp_pcc
 
 
 def test_layer_by_layer(device):

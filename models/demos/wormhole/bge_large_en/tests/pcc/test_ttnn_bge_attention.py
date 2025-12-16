@@ -11,8 +11,8 @@ import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_attention import TtnnBGEAttention
 from models.demos.sentence_bert.reference.sentence_bert import BertAttention
+from models.demos.wormhole.bge_large_en.tests.pcc.utils import assert_with_pcc
 from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, custom_preprocessor
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
