@@ -18,8 +18,8 @@
 
 using namespace tt::tt_metal;
 
-constexpr size_t TRANSFER_INTERVAL_MS = 5000;  // 5 seconds between operations
-constexpr size_t NUM_OPERATIONS = 12;          // ~1 minute total
+constexpr size_t TRANSFER_INTERVAL_MS = 500;  // 500ms between operations (10x more frequent)
+constexpr size_t NUM_OPERATIONS = 120;        // ~1 minute total, continuous traffic
 
 // Simple fixture for fabric setup
 struct GentleFabricFixture : public MeshDeviceFixtureBase {
