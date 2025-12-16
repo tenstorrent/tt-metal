@@ -173,7 +173,7 @@ jobs:
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
-        timeout-minutes: 30
+        timeout-minutes: 130
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -185,8 +185,12 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+            -e DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            -v /mnt/MLPerf/tt_dnn-models/deepseek-ai:/mnt/MLPerf/tt_dnn-models/deepseek-ai:rw
+            -v /mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:rw
             --device /dev/tenstorrent
             --pid=host
             --hostname=mpirun-host
