@@ -27,6 +27,7 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -212,6 +213,10 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     if (mesh_device_->num_devices() == 1) {
         GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::N300) {
+        GTEST_SKIP() << "Skipping test for N300 board due to #34420";
     }
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;

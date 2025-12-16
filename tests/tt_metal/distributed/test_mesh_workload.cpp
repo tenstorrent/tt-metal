@@ -578,6 +578,10 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     if (mesh_device_->num_devices() == 1) {
         GTEST_SKIP() << "Skipping test for a unit-size mesh device";
     }
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type == tt::BoardType::N300) {
+        GTEST_SKIP() << "Skipping test for N300 board due to #34420";
+    }
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::Float16_b);
 
