@@ -103,7 +103,7 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  * | idst            | The index of the tile in DST register buffer to perform frac operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void frac_tile(uint32_t idst) { 
+ALWI void frac_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(_calculate_frac_, APPROX, , 8, idst, (int)VectorMode::RC));
 }
 
