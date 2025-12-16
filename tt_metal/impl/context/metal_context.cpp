@@ -541,7 +541,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
         cluster_->write_core(
             go_msg.data(),
             go_msg.size(),
-            {device_id, virtual_eth_core},
+            {static_cast<size_t>(device_id), virtual_eth_core},
             hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG));
     };
 
@@ -1459,7 +1459,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
             cluster_->write_core_immediate(
                 core_info.data(),
                 core_info.size(),
-                {device_id, worker_core},
+                {static_cast<size_t>(device_id), worker_core},
                 hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
             initialize_firmware(
                 device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
@@ -1500,7 +1500,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
         cluster_->write_core_immediate(
             core_info.data(),
             core_info.size(),
-            {device_id, virtual_core},
+            {static_cast<size_t>(device_id), virtual_core},
             hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
@@ -1524,7 +1524,7 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
         cluster_->write_core_immediate(
             core_info.data(),
             core_info.size(),
-            {device_id, virtual_core},
+            {static_cast<size_t>(device_id), virtual_core},
             hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
@@ -1608,7 +1608,8 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     DeviceAddr launch_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
 
-    cluster_->read_core(launch_msg.data(), launch_msg.size(), {device_id, virtual_core}, launch_addr);
+    cluster_->read_core(
+        launch_msg.data(), launch_msg.size(), {static_cast<size_t>(device_id), virtual_core}, launch_addr);
 
     launch_msg.view().kernel_config().exit_erisc_kernel() = 1;
     llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg.view(), go_msg.view(), false);

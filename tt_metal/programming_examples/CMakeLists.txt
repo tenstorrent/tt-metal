@@ -1,6 +1,10 @@
 # All programming example targets should link tt_stl
 link_libraries(TT::STL)
 
+# Suppress narrowing warnings for programming_examples (being cleaned up in tt_metal first)
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
+
 add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 

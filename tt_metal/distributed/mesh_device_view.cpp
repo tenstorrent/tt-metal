@@ -345,24 +345,24 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& 
 
     // Traverse the top row from left to right
     for (size_t col = 0; col <= end_col; ++col) {
-        boundary_coords.emplace_back(MeshCoordinate{0, col});
+        boundary_coords.emplace_back(MeshCoordinate{0, static_cast<uint32_t>(col)});
     }
 
     // Traverse the rightmost column from top+1 to bottom
     for (size_t row = 1; row <= end_row; ++row) {
-        boundary_coords.emplace_back(MeshCoordinate{row, end_col});
+        boundary_coords.emplace_back(MeshCoordinate{static_cast<uint32_t>(row), static_cast<uint32_t>(end_col)});
     }
 
     // Traverse the bottom row from right to left, if there is more than one row
     if (ring_rows > 1 and ring_cols > 1) {
         // Traverse the bottom row from right to left
         for (int col = static_cast<int>(end_col - 1); col >= 0; --col) {
-            boundary_coords.emplace_back(MeshCoordinate{end_row, static_cast<size_t>(col)});
+            boundary_coords.emplace_back(MeshCoordinate{static_cast<uint32_t>(end_row), static_cast<uint32_t>(col)});
         }
 
         // Traverse the leftmost column from bottom-1 to top+1
         for (int row = static_cast<int>(end_row - 1); row > 0; --row) {
-            boundary_coords.emplace_back(MeshCoordinate{static_cast<size_t>(row), 0});
+            boundary_coords.emplace_back(MeshCoordinate{static_cast<uint32_t>(row), 0});
         }
     }
 

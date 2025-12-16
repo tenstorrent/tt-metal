@@ -24,8 +24,8 @@ namespace tt::tt_metal::tools::mem_bench {
 
 std::vector<uint32_t> read_cores(tt::tt_metal::IDevice* device, const CoreRange& cores, uint32_t addr) {
     std::vector<uint32_t> data;
-    for (int xi = cores.start_coord.x; xi <= cores.end_coord.x; ++xi) {
-        for (int yi = cores.start_coord.y; yi <= cores.end_coord.y; ++yi) {
+    for (size_t xi = cores.start_coord.x; xi <= cores.end_coord.x; ++xi) {
+        for (size_t yi = cores.start_coord.y; yi <= cores.end_coord.y; ++yi) {
             std::vector<uint32_t> single_data;
             tt::tt_metal::detail::ReadFromDeviceL1(device, CoreCoord{xi, yi}, addr, sizeof(uint32_t), single_data);
             data.push_back(single_data[0]);
