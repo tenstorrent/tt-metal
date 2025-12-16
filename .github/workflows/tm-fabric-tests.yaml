@@ -1,8 +1,6 @@
 name: "(TM-Fabric) Fabric Tests"
 
 on:
-  push:
-    branches: ["mchiou/31319-create-consolidated-fabric-test-pipeline"]
   workflow_dispatch:
     inputs:
       run-wh-n300-fabric-tests:
