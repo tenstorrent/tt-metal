@@ -52,6 +52,9 @@ endif()
 # Once we update, we can change this
 include(ProcessorCount)
 ProcessorCount(numProcs)
+if(numProcs EQUAL 0)
+    set(numProcs 1)
+endif()
 include(ExternalProject)
 ExternalProject_Add(
     tracy_csv_tools
