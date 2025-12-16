@@ -768,10 +768,30 @@ Tensor create_tt_tensor_from_host_data(
     };
 
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
+        const bool can_construct_on_device = (
+            // Device is required
+            is_device_available &&
+            // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
+            // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
+            // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
+            // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
+            // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
+            tensor_spec.logical_shape().rank() <= 4 &&
+            // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
+            !tensor_spec.memory_config().is_sharded() &&
+            // on-device tiling operation expects 32x32 row. In some cases (`test_tiny_tiles_bfloat` test for example)
+            // the tile size is provided explicitly and does not match x32 pattern.
+            (((tensor_spec.tile().get_width() % tt::constants::TILE_WIDTH) == 0) &&
+             ((tensor_spec.tile().get_height() % tt::constants::TILE_HEIGHT) == 0)));
+
         const bool exec_on_device =
             can_exec_ops_on_device(tensor_spec.data_type()) && can_exec_ops_on_device(host_dtype);
-        // TODO: Check if data borrowable
-        if (exec_on_device && is_device_available) {
+
+        // const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
+        //     tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
+        //     tensor_spec.data_type() == convert_to_data_type<T>();
+
+        if (exec_on_device && can_construct_on_device) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_spec.logical_shape(), host_buffer.pin(), tensor_spec.tile());
         }
@@ -821,7 +841,7 @@ DataType create_strategy(ttnn::PyDType src_dtype, const TensorLayout& tensor_lay
             case ttnn::PyDType::UINT32: return DataType::UINT32;
             case ttnn::PyDType::UINT8: return DataType::UINT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
-            default: TT_THROW("Unsupported PyDType");
+            default: TT_THROW("Unsupported PyDType {}", type);
         }
     };
 
@@ -857,7 +877,14 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer, host_dtype, tensor_spec, pad_value.value_or(0.0f), device.has_value());
 
+    auto set_layout = [&](Layout target) {
+        if (output.layout() != target) {
+            output = ttnn::to_layout(output, target, std::nullopt);
+        }
+    };
+
     if (!device) {
+        set_layout(tensor_spec.layout());
         return output;
     }
 
@@ -874,12 +901,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
             cq_id);
     }
 
-    auto set_layout = [&](Layout target) {
-        if (output.layout() != target) {
-            output = ttnn::to_layout(output, target, std::nullopt, tensor_spec.memory_config());
-        }
-    };
-    output = output.to_device(device.value(), tensor_spec.memory_config(), cq_id);
+    output = output.to_device(device.value(), std::nullopt, cq_id);
     if (output.dtype() != tensor_spec.data_type()) {
         // Need to perform final data conversion on device, typecast requires TILE layout.
         set_layout(Layout::TILE);

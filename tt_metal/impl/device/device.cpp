@@ -658,6 +658,13 @@ void Device::clear_program_cache() {
     program_cache_.clear();
 }
 
+void Device::disable_program_cache() {
+    log_trace(tt::LogMetal, "Disabling program cache on device {}", this->id_);
+    if (this->program_cache_.is_enabled()) {
+        program_cache_.disable();
+    }
+}
+
 void Device::disable_and_clear_program_cache() {
     log_trace(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {

@@ -203,9 +203,11 @@ def slice_test(
     else:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
+    device.disable_program_cache()
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
+    device.enable_program_cache()
 
     tt_output_tensor = ttnn.slice(
         tt_input_tensor,
