@@ -409,12 +409,11 @@ private:
         bool wait_for_host_writes,
         BasePrefetcherTestFixture& fixture) {
         // 1. Add all commands to be uploaded into exec buff into a single vector
-        std::vector<uint32_t> exec_buf_data;
+        std::vector<uint8_t> exec_buf_data;
         for (uint32_t i = 0; i < num_iterations; i++) {
             for (const auto& cmd : commands_per_iteration) {
-                const uint32_t* src_ptr = reinterpret_cast<uint32_t*>(cmd.data());
-                const uint32_t* end_ptr =
-                    reinterpret_cast<uint32_t*>(cmd.data()) + (cmd.size_bytes() / sizeof(uint32_t));
+                const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(cmd.data());
+                const uint8_t* end_ptr = reinterpret_cast<uint8_t*>(cmd.data()) + (cmd.size_bytes());
                 exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
             }
         }
@@ -425,8 +424,8 @@ private:
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
         wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-        const uint32_t* wptr = reinterpret_cast<const uint32_t*>(wait_cmd.data());
-        const uint32_t* wend = wptr + (wait_cmd.size_bytes() / sizeof(uint32_t));
+        const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
+        const uint8_t* wend = wptr + (wait_cmd.size_bytes());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wend);
 
         // 2. Append exec_buf_end command (terminate the trace execution and switch back to issue queue)
@@ -434,9 +433,9 @@ private:
         exec_buf_end_calc.add_prefetch_exec_buf_end();
         DeviceCommand exec_terminate(exec_buf_end_calc.write_offset_bytes());
         exec_terminate.add_prefetch_exec_buf_end();
-        const uint32_t* src_ptr = reinterpret_cast<uint32_t*>(exec_terminate.data());
-        const uint32_t* end_ptr =
-            reinterpret_cast<uint32_t*>(exec_terminate.data()) + (exec_terminate.size_bytes() / sizeof(uint32_t));
+        const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
+        const uint8_t* end_ptr =
+            reinterpret_cast<const uint8_t*>(exec_terminate.data()) + (exec_terminate.size_bytes());
         exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
 
         // 3. Write exec buff data into DRAM
@@ -444,10 +443,10 @@ private:
         const uint32_t exec_buf_base_addr = fixture.DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
 
         // Pad data to full page alignment
-        size_t size_bytes = exec_buf_data.size() * sizeof(uint32_t);
+        size_t size_bytes = exec_buf_data.size();
         log_info(tt::LogTest, "Total exec buff bytes: {}", size_bytes);
         size_t padded_size_bytes = tt::align(size_bytes, page_size);
-        exec_buf_data.resize(padded_size_bytes / sizeof(uint32_t));
+        exec_buf_data.resize(padded_size_bytes);
         log_info(tt::LogTest, "Padded total exec buff bytes: {}", padded_size_bytes);
 
         uint32_t num_pages = padded_size_bytes / page_size;
@@ -459,12 +458,12 @@ private:
             uint32_t bank_offset = (page_idx / fixture.num_banks_) * page_size;
             uint32_t addr = exec_buf_base_addr + bank_offset;
 
-            std::vector<uint32_t> page_data(
-                exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + (page_size / sizeof(uint32_t)));
+            std::vector<uint8_t> page_data(
+                exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + (page_size));
 
             detail::WriteToDeviceDRAMChannel(device_, bank_id, addr, page_data);
 
-            data_idx += (page_size / sizeof(uint32_t));
+            data_idx += (page_size);
         }
 
         // Ensure DRAM writes are visible to device
@@ -1008,16 +1007,37 @@ protected:
 
     void SetUp() override {
         BasePrefetcherTestFixture::SetUp();
+        if (mesh_device_->num_devices() < 2) {
+            GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
+        }
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-        // Skip single-chips or on anything not wormhole
-        // Check if we are running in a configuration where we have a distinct MMIO and Remote device
-        // This test targets PREFETCH_H (MMIO) -> PREFETCH_D (Remote) -> DISPATCHER (Remote)
-        if (device_->arch() != tt::ARCH::WORMHOLE_B0 || mesh_device_->num_devices() == 1) {
-            GTEST_SKIP() << "Skipping RelayLinearHTest: Test only supported on WORMHOLE multi-chip";
+        // Identify the MMIO device in the mesh
+        for (auto* dev : mesh_device_->get_devices()) {
+            if (cluster.get_associated_mmio_device(dev->id()) == dev->id()) {
+                mmio_device_ = dev;
+                break;
+            }
         }
 
-        mmio_device_ = mesh_device_->get_devices()[0];
-        remote_device_ = mesh_device_->get_devices()[1];
+        if (!mmio_device_) {
+            GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
+        }
+
+        // Next, identify a remote device associated with the MMIO device
+        for (auto* dev : mesh_device_->get_devices()) {
+            if (dev != mmio_device_ && (cluster.get_associated_mmio_device(dev->id()) == mmio_device_->id())) {
+                remote_device_ = dev;
+                break;
+            }
+        }
+
+        // Skip if no suitable pair was found since this test
+        // targets PREFETCH_H (MMIO) -> PREFETCH_D (Remote) -> DISPATCHER (Remote)
+        if (!remote_device_) {
+            GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
+        }
+
         // Override the base class device_ to use remote device
         device_ = remote_device_;
         // We need access to remote chips issue queue to execute commands like
