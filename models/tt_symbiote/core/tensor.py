@@ -55,7 +55,7 @@ class TorchTTNNTensor(torch.Tensor):
                 print("Warning: wrapping meta tensor. This will fail if conversion to TTNN tensor is attempted.")
         output_shape = elem.size()
         strides = elem.stride()
-        output_dtype = elem.dtype
+        output_dtype = elem.dtype if kwargs.get("dtype") is None else kwargs.get("dtype")
         requires_grad = elem.requires_grad
         assert not isinstance(
             elem, TorchTTNNTensor
@@ -184,7 +184,7 @@ class TorchTTNNTensor(torch.Tensor):
     def to_torch(self):
         """Convert to PyTorch tensor."""
         if self.ttnn_tensor is not None and self.elem is None:
-            return ttnn.to_torch(self.ttnn_tensor)
+            return ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         if self.elem.device.type == "meta" and self.ttnn_tensor is not None:
             return ttnn.to_torch(self.ttnn_tensor)
