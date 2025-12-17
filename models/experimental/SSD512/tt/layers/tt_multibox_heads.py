@@ -22,8 +22,6 @@ def multibox_heads(
     loc_layers_config = []
     conf_layers_config = []
 
-    total_sources = len(vgg_source_indices) + len(extra_source_indices)
-
     layer_idx = 0
 
     # process VGG source layers
@@ -317,8 +315,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     bias = layer_with_weights.get("bias", None)
     config = layer_with_weights["config"]
     out_channels = layer_with_weights["out_channels"]
-
-    expected_in_channels = layer_with_weights.get("in_channels", config.get("in_channels", None))
 
     kernel_size = config["kernel_size"]
     stride = config["stride"]

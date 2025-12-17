@@ -30,9 +30,6 @@ class TtL2Norm:
         else:
             x_nchw_ttnn = x
 
-        batch_size, channels, height, width = x_nchw_ttnn.shape
-        tensor_size_estimate = batch_size * height * width * channels
-
         if memory_config is None:
             layer_memory_config = ttnn.L1_MEMORY_CONFIG
         else:

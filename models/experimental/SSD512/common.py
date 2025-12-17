@@ -22,13 +22,13 @@ def setup_seeds_and_deterministic(reset_seeds=True, seed=0):
 
     try:
         torch.use_deterministic_algorithms(True)
-    except:
+    except Exception:
         pass
 
     try:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-    except:
+    except Exception:
         pass
 
 

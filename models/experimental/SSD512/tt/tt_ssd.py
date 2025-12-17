@@ -578,7 +578,6 @@ def forward_extras(
             x = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
             current_h = output_height
             current_w = output_width
-            current_c = out_channels
 
             # Increment conv_count after each conv layer
             conv_count += 1
@@ -728,8 +727,6 @@ class SSD512Network:
         for idx, source in enumerate(processed_sources):
             source_h, source_w = source.shape[1], source.shape[2]
             source_channels = source.shape[3]
-            tensor_size_estimate = batch_size * source_h * source_w * source_channels
-            use_l1_for_this_layer = source_h <= 128 and source_w <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
             source_memory_config = ttnn.L1_MEMORY_CONFIG
 
             if idx < len(self.loc_config):

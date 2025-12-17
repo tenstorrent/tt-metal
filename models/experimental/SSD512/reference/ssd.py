@@ -189,10 +189,10 @@ mbox = {
 def build_ssd(phase, size=512, num_classes=21):
     if phase != "test" and phase != "train":
         logger.error("ERROR: Phase: " + phase + " not recognized")
-        return
+        return None
     if size not in [512]:
         logger.error("ERROR: specified size " + repr(size) + " is not supported. Currently only SSD512 are supported!")
-        return
+        return None
     base_, extras_, head_ = multibox(
         vgg(base[str(size)], 3), add_extras(extras[str(size)], 1024), mbox[str(size)], num_classes
     )
