@@ -24,7 +24,7 @@ K_VALUE = 32
 @pytest.mark.parametrize(
     "shape",
     [
-        [1, 32, 32, 64],
+        [1, 32, 8, 64],  # Note: (1, 32, 32, 64) is the padded shape
         [1, 1, 32, 64],
         [1, 1, 32, 256],
     ],
