@@ -7,15 +7,13 @@ import pytest
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    TimingCollector,
-)
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import TimingCollector
 
 
+# TODO: Factor out commonalities with sd35
 @pytest.mark.parametrize(
-    "width, height, num_inference_steps",
+    "image_w, image_h, num_inference_steps",
     [
         (1024, 1024, 50),
     ],
@@ -23,17 +21,11 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        # 8-chip t3k/loudbox config, uncomment when running on 8-chip systems
-        # note: this config is not valid on 6u (32-chip) systems with fabric enabled
-        # [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],
-        # t3k
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        # 6u
+        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        # "1x8tp1",
-        "2x4cfg0sp0tp1",
+        "2x4cfg1sp0tp1",
         "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
@@ -43,12 +35,11 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 40000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_qwenimage_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
-    width: int,
-    height: int,
+    image_w: int,
+    image_h: int,
     num_inference_steps: int,
     cfg: tuple[int, int],
     sp: tuple[int, int],
@@ -57,21 +48,16 @@ def test_qwenimage_pipeline_performance(
     vae_tp: tuple[int, int],
     topology: ttnn.Topology,
     num_links: int,
-    use_cache: bool,
     is_ci_env: bool,
     galaxy_type: str,
 ) -> None:
-    """performance test for qwenimage pipeline with detailed timing analysis."""
+    """Performance test for QwenImage pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
 
-    # process skips
-    if is_ci_env and use_cache:
-        pytest.skip("use_cache not necessary for performance test in CI. See pipeline test.")
-
-    # skip 4u
+    # Skip 4U.
     if galaxy_type == "4U":
-        # pipelines fail if a performance test is skipped without providing a benchmark output
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
         if is_ci_env:
             with benchmark_profiler("run", iteration=0):
                 pass
@@ -84,7 +70,7 @@ def test_qwenimage_pipeline_performance(
             )
         pytest.skip("4U is not supported for this test")
 
-    logger.info(f"  Image size: {width}x{height}")
+    logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
     pipeline = QwenImagePipeline.create_pipeline(
@@ -98,11 +84,11 @@ def test_qwenimage_pipeline_performance(
         use_torch_vae_decoder=False,
         num_links=num_links,
         topology=topology,
-        width=width,
-        height=height,
+        width=image_w,
+        height=image_h,
     )
 
-    # test prompts, diverse set for comprehensive performance testing
+    # Test prompts - diverse set for comprehensive performance testing
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee $2 per cup," with a neon light '
         'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
@@ -113,10 +99,10 @@ def test_qwenimage_pipeline_performance(
         'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語のはじまり" centered; author line "山本ひかり" below; tasteful serif typography, dramatic vignette illustration.',
     ]
 
-    # warmup run, not timed
+    # Warmup run (not timed)
     logger.info("Running warmup iteration...")
-    timer_warmup = TimingCollector()
-    pipeline.timing_collector = timer_warmup
+    timer = TimingCollector()
+    pipeline.timing_collector = timer
 
     images = pipeline(
         prompts=[prompts[0]],
@@ -126,17 +112,17 @@ def test_qwenimage_pipeline_performance(
         seed=0,
         traced=True,
     )
-    images[0].save(f"qwenimage_{width}_{height}_warmup.png")
+    images[0].save(f"qwenimage_{image_w}_{image_h}_warmup.png")
 
-    warmup_timing = timer_warmup.get_timing_data()
+    warmup_timing = timer.get_timing_data()
     logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
 
-    # performance measurement runs
+    # Performance measurement runs
     logger.info("Running performance measurement iterations...")
     all_timings = []
-    num_perf_runs = 4  # use 4 different prompts for performance testing
+    num_perf_runs = 4  # Use 4 different prompts for performance testing
 
-    # optional tracy profiling if available
+    # Optional Tracy profiling (if available)
     profiler = None
     try:
         from tracy import Profiler
@@ -151,11 +137,7 @@ def test_qwenimage_pipeline_performance(
         for i in range(num_perf_runs):
             logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-            # create timing collector for this run
-            timer = TimingCollector()
-            pipeline.timing_collector = timer
-
-            # run pipeline with different prompt
+            # Run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
                 images = pipeline(
@@ -163,12 +145,12 @@ def test_qwenimage_pipeline_performance(
                     negative_prompts=[None],
                     num_inference_steps=num_inference_steps,
                     cfg_scale=4.0,
-                    seed=i,
+                    seed=0,
                     traced=True,
                 )
-            images[0].save(f"qwenimage_{width}_{height}_perf_run{i}.png")
+            images[0].save(f"qwenimage_{image_w}_{image_h}_perf_run{i}.png")
 
-            # collect timing data
+            # Collect timing data
             timing_data = timer.get_timing_data()
             all_timings.append(timing_data)
             logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s")
@@ -178,29 +160,34 @@ def test_qwenimage_pipeline_performance(
             profiler.disable()
             logger.info("Tracy profiling disabled")
 
-    # calculate statistics
+    # Calculate statistics
     clip_times = [t.clip_encoding_time for t in all_timings]
     t5_times = [t.t5_encoding_time for t in all_timings]
     total_encoding_times = [t.total_encoding_time for t in all_timings]
     vae_times = [t.vae_decoding_time for t in all_timings]
     total_times = [t.total_time for t in all_timings]
 
-    # calculate per-step denoising times
+    # Calculate per-step denoising times
     all_denoising_steps = []
     for timing in all_timings:
         all_denoising_steps.extend(timing.denoising_step_times)
 
-    # report results
+    # Report results
     cfg_factor = cfg[0] if cfg[1] == 0 else cfg[1]
     sp_factor = sp[0] if sp[1] == 0 else sp[1]
     tp_factor = tp[0] if tp[1] == 0 else tp[1]
+    encoder_tp_factor = encoder_tp[0] if encoder_tp[1] == 0 else encoder_tp[1]
+    vae_tp_factor = vae_tp[0] if vae_tp[1] == 0 else vae_tp[1]
 
     print("\n" + "=" * 80)
     print("QWEN IMAGE PIPELINE PERFORMANCE RESULTS")
     print("=" * 80)
-    print(f"Image Size: {width}x{height}")
+    print(f"Model: QwenImage")
+    print(f"Image Size: {image_w}x{image_h}")
     print(f"Inference Steps: {num_inference_steps}")
-    print(f"Configuration: cfg={cfg_factor}, sp={sp_factor}, tp={tp_factor}")
+    print(
+        f"Configuration: cfg={cfg_factor}, sp={sp_factor}, tp={tp_factor}, encoder_tp={encoder_tp_factor}, vae_tp={vae_tp_factor}"
+    )
     print(f"Mesh Shape: {mesh_device.shape}")
     print(f"Topology: {topology}")
     print("-" * 80)
@@ -226,7 +213,7 @@ def test_qwenimage_pipeline_performance(
 
     print("-" * 80)
 
-    # additional metrics
+    # Additional metrics
     if total_times and all_denoising_steps:
         avg_total_time = statistics.mean(total_times)
         avg_step_time = statistics.mean(all_denoising_steps)
@@ -236,7 +223,7 @@ def test_qwenimage_pipeline_performance(
         print(f"Denoising throughput: {num_inference_steps / total_denoising_time:.2f} steps/second")
         print(f"Overall throughput: {1 / avg_total_time:.4f} images/second")
 
-        # breakdown percentages
+        # Breakdown percentages
         avg_encoding_time = statistics.mean(total_encoding_times)
         avg_vae_time = statistics.mean(vae_times)
 
@@ -245,35 +232,19 @@ def test_qwenimage_pipeline_performance(
         print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
         print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
 
-        # performance benchmarks
-        print(f"\nPerformance Analysis:")
-        if avg_total_time < 60:  # less than 1 minute for 1024x1024
-            print(f"  Excellent performance: {avg_total_time:.1f}s per image")
-        elif avg_total_time < 120:  # less than 2 minutes
-            print(f"  Good performance: {avg_total_time:.1f}s per image")
-        elif avg_total_time < 180:  # less than 3 minutes
-            print(f"  Acceptable performance: {avg_total_time:.1f}s per image")
-        else:
-            print(f"  Performance may need optimization: {avg_total_time:.1f}s per image")
-
-        # configuration notes
-        print(f"\nConfiguration Notes:")
-        print(f"  Parallel Efficiency: {cfg_factor}x CFG, {sp_factor}x SP, {tp_factor}x TP")
-        print(f"  Expected Speedup: ~{cfg_factor * max(sp_factor, tp_factor):.1f}x theoretical")
-
     print("=" * 80)
 
-    # validate that we got reasonable results
+    # Validate that we got reasonable results
     assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
     assert all(t.total_time > 0 for t in all_timings), "All runs should have positive total time"
     assert all(
         len(t.denoising_step_times) == num_inference_steps for t in all_timings
     ), f"All runs should have {num_inference_steps} denoising steps"
 
-    # clean up
+    # Clean up
     pipeline.timing_collector = None
 
-    # validate performance
+    # Validate performance
     measurements = {
         "clip_encoding_time": statistics.mean(clip_times),
         "t5_encoding_time": statistics.mean(t5_times),
@@ -282,8 +253,6 @@ def test_qwenimage_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-
-    # expected metrics, these will need to be updated based on actual performance measurements
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
             "clip_encoding_time": 0.2,
@@ -306,10 +275,8 @@ def test_qwenimage_pipeline_performance(
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
-        # in ci, dump a performance report
-        profiler_model_name = (
-            f"qwenimage_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
-        )
+        # In CI, dump a performance report
+        profiler_model_name = f"qwenimage_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
@@ -328,9 +295,7 @@ def test_qwenimage_pipeline_performance(
 
     assert pass_perf_check, "\n".join(assert_msgs)
 
-    # synchronize all devices
-    for device in mesh_device.get_devices():
-        ttnn.synchronize_device(device)
+    # Synchronize all devices
+    ttnn.synchronize_device(mesh_device)
 
     logger.info("Performance test completed successfully!")
-
