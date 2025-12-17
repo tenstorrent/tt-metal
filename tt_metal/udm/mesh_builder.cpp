@@ -35,10 +35,7 @@ public:
         // Create grids for each mesh coordinate
         create_grids();
         if (!grids_.empty()) {
-            log_debug(tt::LogOp, "  Created {} grids with shape: {}", grids_.size(), grid.shape());
-            for (auto grid : grids_) {
-                log_debug(tt::LogOp, "    Created grid at coord {}", grid.coord);
-            }
+            log_debug(tt::LogOp, "  Created {} grids with shape: {}", grids_.size(), grids_[0].shape());
         }
 
         // Build grid lookup maps
@@ -56,15 +53,6 @@ public:
         // Create gcores using flattened mesh
         create_gcores();
         log_debug(tt::LogOp, "  Created {} gcores total", gcores_.size());
-        for (auto gcore : gcores_) {
-            log_debug(
-                tt::LogOp,
-                "    Gcore: local_id={}, global_id={}, local_coord={}, global_coord={}",
-                gcore.local_id,
-                gcore.global_id,
-                gcore.local_coord,
-                gcore.global_coord);
-        }
 
         // Build lookup maps for gcores
         build_gcore_maps();
