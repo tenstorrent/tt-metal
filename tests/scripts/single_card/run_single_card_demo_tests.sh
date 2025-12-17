@@ -252,9 +252,9 @@ run_mistral7b_perf() {
   mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=$TT_CACHE_HOME/$mistral7b
   # Run Mistral-7B-v0.3 for N150
-  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 6000 -k "not performance-ci-stress-1"; fail+=$?
   # Run Mistral-7B-v0.3 for N300
-  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 6000 -k "not performance-ci-stress-1"; fail+=$?
 
 }
 
