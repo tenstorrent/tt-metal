@@ -328,7 +328,7 @@ def run_test_FalconCausalLM_end_to_end(
         logger.info("Falcon PCC Check Passed!")
     else:
         logger.warning("Falcon PCC Check Failed!")
-        if is_wormhole_b0():  # only assert for pcc on wormhole until grayskull pcc is fixed
+        if is_wormhole_b0():
             assert does_pass, f"PCC value is lower than {pcc}"
 
 
