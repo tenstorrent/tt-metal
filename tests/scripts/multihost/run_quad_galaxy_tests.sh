@@ -34,7 +34,7 @@ run_quad_galaxy_unit_tests() {
   fi
 }
 
-run_quad_galaxy_deepseekv3_tests() {
+run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     fail=0
 
     # Run dual galaxy tests on quad galaxy since this is the only available machine
@@ -55,8 +55,7 @@ run_quad_galaxy_deepseekv3_tests() {
     local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
     local MESH_DEVICE="DUAL"
 
-    # TODO: For now we just test a single module, we should add all of them here eventually
-    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass[run_test_forward_pass_mla2d-model.layers.0.self_attn-device_params0-decode-1-32]"
+    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
@@ -70,7 +69,7 @@ run_quad_galaxy_deepseekv3_tests() {
 
 run_quad_galaxy_tests() {
   run_quad_galaxy_unit_tests
-  run_quad_galaxy_deepseekv3_tests
+  run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
 }
 
 fail=0

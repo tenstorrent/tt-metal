@@ -7,52 +7,56 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    // in0/in1 common args
-    const uint32_t num_blocks = get_arg_val<uint32_t>(0);
-
-    // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(1);
-    const uint32_t bcast_B = get_arg_val<uint32_t>(2);
-    const uint32_t MtNt = get_arg_val<uint32_t>(3);  // if 0
-    const uint32_t KtNt = get_arg_val<uint32_t>(4);
-
+    // RUNTIME ARGS
+    // READER
+    uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(5);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(6);
-    const uint32_t in1_tensor_stride_w = get_arg_val<uint32_t>(7);
-    const uint32_t in1_tensor_stride_h = get_arg_val<uint32_t>(8);
-    const uint32_t in1_tensor_next_block_stride = get_arg_val<uint32_t>(9);
-
-    // in1 block args
-    const uint32_t in1_block_w = get_arg_val<uint32_t>(10);
-    const uint32_t in1_block_h = get_arg_val<uint32_t>(11);
-    const uint32_t in1_block_num_tiles = get_arg_val<uint32_t>(12);
+    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // batch args
+    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(13);
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(14);
-    const uint32_t out_tensor_stride_w = get_arg_val<uint32_t>(15);
-    const uint32_t out_tensor_stride_h = get_arg_val<uint32_t>(16);
-    const uint32_t out_tensor_next_subblock_stride_w = get_arg_val<uint32_t>(17);
-    const uint32_t out_tensor_next_subblock_stride_h = get_arg_val<uint32_t>(18);
-
-    // out subblock args
-    const uint32_t out_subblock_w = get_arg_val<uint32_t>(19);
-    const uint32_t out_subblock_h = get_arg_val<uint32_t>(20);
-    const uint32_t out_subblock_tile_count = get_arg_val<uint32_t>(21);
-    const uint32_t out_num_subblocks_w = get_arg_val<uint32_t>(22);
-    const uint32_t out_num_subblocks_h = get_arg_val<uint32_t>(23);
-
-    // Don't need batch; same as batch from READER args
+    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
+    // READER
+    // in1 tensor args
+    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
+    // in1 block args
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_block_h = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
+    // in0/in1 common args
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
+    // batch args
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(7);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(8);
+
+    // WRITER
+    // out tensor args
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(16);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(17);
+    // batch args
+    constexpr uint32_t MtNt = get_compile_time_arg_val(18);
+
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t one_tile = 1;
     // WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
 
-    constexpr auto in1_args = TensorAccessorArgs<0>();
+    constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
 #ifdef IN1_SHARDED
