@@ -1,4 +1,4 @@
-# Bug Report: [TT-Train] LayerNorm Backward Kernel Accumulation
+# Bug Report: [TT-Train] LayerNorm: Incorrect Accumulation for Large Feature Dimensions
 
 ## Summary
 
