@@ -218,36 +218,54 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t num_cores = worker_core_range_set.num_cores();
     uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
+    uint32_t subtoken_units_of_work = tt::div_up(aligned_input_page_size, subtoken_bytes_aligned);
+    uint32_t max_indices_pages_per_packet = tt::div_up(fabric_max_packet_size, aligned_indices_page_size);
 
-    // split tokens sends across cores, each core will process tokens_per_device tokens
+    // split each token of H=7168 (hidden size) into subtoken_units_of_work subtokens, and have each core send part of
+    // the token
     auto
         [num_tokens_cores,
          all_tokens_cores,
-         tokens_core_group_1,
-         tokens_core_group_2,
-         tokens_per_core_g1,
-         tokens_per_core_g2,
-         num_tokens_cores_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(worker_core_range_set, tokens_per_device);
+         subtoken_cores_group_1,
+         subtoken_cores_group_2,
+         subtoken_units_per_core_g1,
+         subtoken_units_per_core_g2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, subtoken_units_of_work);
 
-    uint32_t indices_pages_per_packet = tt::div_up(fabric_max_packet_size, aligned_indices_page_size);
+    auto
+        [num_indices_cores,
+         all_indices_cores,
+         indices_cores_group_1,
+         indices_cores_group_2,
+         indices_units_per_core_g1,
+         indices_units_per_core_g2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, num_indices_pages);
 
-    auto sender_core_grid = all_tokens_cores;
+    uint32_t max_subtoken_size =
+        std::max(subtoken_units_per_core_g1, subtoken_units_per_core_g2) * subtoken_bytes_aligned;
+
+    auto sender_core_grid = all_tokens_cores.merge(all_indices_cores);
 
     auto sender_cores = corerange_to_cores(sender_core_grid);
 
     // Create circular buffers
+
+    // Store subtokens of the input tensor in a circular buffer
     tt::tt_metal::create_cb(
-        input_tensor_cb_id, program, sender_core_grid, aligned_input_page_size, buffering_factor, input_data_format);
+        input_tensor_cb_id, program, sender_core_grid, max_subtoken_size, buffering_factor, input_data_format);
+
+    // Store entire indices tensor in a circular buffer
     tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
         sender_core_grid,
         aligned_indices_page_size,
-        2 * indices_pages_per_packet,
+        2 * max_indices_pages_per_packet,
         indices_data_format);
+
+    // Store entire mapping tensor in a circular buffer
     tt::tt_metal::create_cb(
         mapping_tensor_cb_id, program, sender_core_grid, aligned_mapping_page_size, mapping_pages, mapping_data_format);
+
+    // Store send preparation buffer in a circular buffer
     tt::tt_metal::create_cb(
         send_preparation_buffer_id,
         program,
@@ -255,6 +273,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tokens_per_device * sizeof(uint8_t),
         num_devices,
         tt::DataFormat::UInt8);
+
+    // Store packet header buffer in a circular buffer
     tt::tt_metal::create_cb(
         packet_header_cb_id,
         program,
@@ -353,53 +373,59 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args, writer_defines));
 
     std::vector<uint32_t> reader_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        mapping_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        (uint32_t)cross_device_semaphore.address(),
-        (uint32_t)init_semaphore.address(),
-        dte_tensor.buffer()->address(),
-        dte_scores_tensor.buffer()->address(),
-        ed_table_tensor.buffer()->address(),
-        0,  // token start idx 9
-        0,  // token end idx 10
+        input_tensor.buffer()->address(),            // 0
+        indices_tensor.buffer()->address(),          // 1
+        mapping_tensor.buffer()->address(),          // 2
+        output_tensor.buffer()->address(),           // 3
+        metadata_tensor.buffer()->address(),         // 4
+        (uint32_t)cross_device_semaphore.address(),  // 5
+        (uint32_t)init_semaphore.address(),          // 6
+        scores_tensor.buffer()->address(),           // 7
     };
 
+    uint32_t subtoken_offset_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t subtoken_size_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t indices_start_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t indices_end_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+
     uint32_t link_id = 0;
-    uint32_t token_start_idx = 0;
-    uint32_t token_end_idx = 0;
+    uint32_t subtoken_offset = 0;
+    uint32_t indices_start = 0;
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
-        std::vector<uint32_t> writer_runtime_args = {
-            input_tensor.buffer()->address(),
-            indices_tensor.buffer()->address(),
-            mapping_tensor.buffer()->address(),
-            output_tensor.buffer()->address(),
-            metadata_tensor.buffer()->address(),
-            (uint32_t)cross_device_semaphore.address(),
-            (uint32_t)init_semaphore.address(),
-            dte_tensor.buffer()->address(),
-            dte_scores_tensor.buffer()->address(),
-            ed_table_tensor.buffer()->address(),
-            0,  // token start idx 9
-            0,  // token end idx 10
-        };
+        std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
 
         if (tokens_core_group_1.contains(sender_cores.at(i))) {
-            reader_runtime_args[9] = token_start_idx;
-            reader_runtime_args[10] = std::min(token_start_idx + tokens_per_core_g1, tokens_per_device);
-            writer_runtime_args[9] = token_start_idx;
-            writer_runtime_args[10] = reader_runtime_args[10];
-            token_start_idx += tokens_per_core_g1;
-        } else if (tokens_core_group_2.contains(sender_cores.at(i))) {
-            reader_runtime_args[9] = token_start_idx;
-            reader_runtime_args[10] = std::min(token_start_idx + tokens_per_core_g2, tokens_per_device);
-            writer_runtime_args[9] = token_start_idx;
-            writer_runtime_args[10] = reader_runtime_args[10];
-            token_start_idx += tokens_per_core_g2;
-        } else {
-            continue;
+            reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
+            uint32_t subtoken_size = subtoken_units_per_core_g1 * subtoken_bytes_aligned;
+            if (subtoken_offset + subtoken_size > aligned_input_page_size) {
+                subtoken_size = aligned_input_page_size - subtoken_offset;
+            }
+            reader_runtime_args.at(subtoken_size_idx) = subtoken_size;
+            subtoken_offset += reader_runtime_args.at(subtoken_size_idx);
+        } else if (subtoken_cores_group_2.contains(sender_cores.at(i))) {
+            reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
+            uint32_t subtoken_size = subtoken_units_per_core_g2 * subtoken_bytes_aligned;
+            if (subtoken_offset + subtoken_size > aligned_input_page_size) {
+                subtoken_size = aligned_input_page_size - subtoken_offset;
+            }
+            reader_runtime_args.at(subtoken_size_idx) = subtoken_size;
+            subtoken_offset += reader_runtime_args.at(subtoken_size_idx);
+        }
+
+        if (indices_cores_group_1.contains(sender_cores.at(i))) {
+            reader_runtime_args.at(indices_start_idx) = indices_start;
+            reader_runtime_args.at(indices_end_idx) =
+                std::min(indices_start + indices_units_per_core_g1, num_indices_pages);
+            indices_start = reader_runtime_args.at(indices_end_idx);
+        } else if (indices_cores_group_2.contains(sender_cores.at(i))) {
+            reader_runtime_args.at(indices_start_idx) = indices_start;
+            reader_runtime_args.at(indices_end_idx) =
+                std::min(indices_start + indices_units_per_core_g2, num_indices_pages);
+            indices_start = reader_runtime_args.at(indices_end_idx);
         }
 
         for (const auto& neighbor_coordinate : neighbors) {

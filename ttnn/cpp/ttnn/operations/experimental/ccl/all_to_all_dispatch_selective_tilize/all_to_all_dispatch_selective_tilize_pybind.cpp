@@ -80,15 +80,13 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                     expert_mapping_tensor,
                     cluster_axis,
                     num_links,
-                    topology,
-                    output_concat_dim);
+                    topology);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
             py::arg("expert_scores_tensor").noconvert(),
             py::arg("expert_mapping_tensor").noconvert(),
             py::kw_only(),
-            py::arg("output_concat_dim") = 1,
             py::arg("cluster_axis") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("topology").noconvert() = std::nullopt});

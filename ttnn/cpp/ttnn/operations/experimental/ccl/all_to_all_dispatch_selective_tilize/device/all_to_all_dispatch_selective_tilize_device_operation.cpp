@@ -85,7 +85,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
             tensor_args.expert_indices_tensor.dtype(),
             tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
             dram_memory_config));
-
     auto scores_spec = TensorSpec(
         Shape(scores_shape),
         tt::tt_metal::TensorLayout(
@@ -117,11 +116,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology,
-    const CoreRangeSet& worker_core_range_set) {
+    tt::tt_fabric::Topology topology) {
     return {
         operation_attributes_t{
-            .worker_core_range_set = worker_core_range_set,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,

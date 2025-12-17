@@ -22,15 +22,11 @@ namespace ttnn::operations::experimental::ccl {
 
 struct AllToAllDispatchSelectiveTilizeDeviceOperation {
     struct operation_attributes_t {
-        const CoreRangeSet worker_core_range_set;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("worker_core_range_set", "axis", "num_links", "topology");
-        auto attribute_values() const {
-            return std::forward_as_tuple(worker_core_range_set, axis, num_links, topology);
-        };
+        static constexpr auto attribute_names = std::forward_as_tuple("axis", "num_links", "topology");
+        auto attribute_values() const { return std::forward_as_tuple(axis, num_links, topology); };
     };
     struct tensor_args_t {
         const Tensor input_tensor;

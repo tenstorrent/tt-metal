@@ -30,15 +30,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
 
     return ttnn::prim::all_to_all_dispatch_selective_tilize(
-        input_tensor,
-        expert_indices_tensor,
-        expert_scores_tensor,
-        expert_mapping_tensor,
-        axis,
-        num_links_,
-        topology_,
-        impl,
-        output_concat_dim_);
+        input_tensor, expert_indices_tensor, expert_scores_tensor, expert_mapping_tensor, axis, num_links_, topology_);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
