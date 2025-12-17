@@ -57,7 +57,9 @@ The original NIGHTLY test uses random uniform[-1,1] data which has mean≈0. Whe
 
 ### Native Build Reproduction (Verified)
 
-**This is the verified reproduction method.** Fresh clone and standalone tt-train build on physical machine:
+**This is the verified reproduction method.** Fresh clone and standalone tt-train build on physical machine.
+
+#### Step 1: Clone and Build tt-metal
 
 ```bash
 # 1. Fresh clone
@@ -78,15 +80,35 @@ sudo ./install_dependencies.sh
 source python_env/bin/activate
 ./build_metal.sh --debug --build-all --enable-ccache
 deactivate
+```
 
-# 5. Standalone tt-train build (RECOMMENDED for consistency)
+#### Step 2: Get Bug Reproduction Tests
+
+The bug reproduction tests are available in a fork branch. Fetch and apply them:
+
+```bash
+# Fetch the test code from the fork
+git remote add bug-report-fork https://github.com/ivoitovych/tt-metal.git
+git fetch bug-report-fork ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2
+
+# Cherry-pick the commit with bug reproduction tests
+git cherry-pick 16165972af  # "[tt-train] Add bug reproduction tests for LayerNorm backward accumulation bug"
+```
+
+**Alternative:** View the test source code directly at:
+https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp
+
+#### Step 3: Build and Run Tests
+
+```bash
+# Standalone tt-train build (RECOMMENDED for consistency)
 cd tt-train
 rm -rf build/
 cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache \
       -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -B build -GNinja
 cmake --build build --config Debug --clean-first
 
-# 6. Run bug reproduction tests (all should FAIL with max_diff ~1000)
+# Run bug reproduction tests (all should FAIL with max_diff ~1000)
 ./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.BugRepro_*"
 ```
 
@@ -151,7 +173,11 @@ docker run --rm \
 
 ## Bug Reproduction Tests Added
 
-Seven new tests added to `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`:
+Seven new tests added to `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`.
+
+**Source code:** https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp
+
+**Note:** These tests are in a fork branch, not the main tt-metal repository. See "Step 2: Get Bug Reproduction Tests" above for how to apply them.
 
 ### Deterministic Tests (Constant Inputs)
 - `BugRepro_Deterministic_256Tiles` - 8192 features (256 tiles)
@@ -248,17 +274,26 @@ Use circular buffer for accumulator persistence across loop iterations:
 
 ## Files
 
-**Repository Ownership:** All files listed below belong to the **tt-train** subproject within the tt-metal repository (`github.com/tenstorrent/tt-metal`). The `tt-train/` directory is NOT a git submodule or external dependency - it is a subdirectory within tt-metal, tracked directly in tt-metal's git history. The bug and all affected code are entirely within tt-train.
+**Repository Ownership:** All source files with the bug belong to the **tt-train** subproject within the tt-metal repository (`github.com/tenstorrent/tt-metal`). The `tt-train/` directory is NOT a git submodule or external dependency - it is a subdirectory within tt-metal, tracked directly in tt-metal's git history.
+
+### Files in Main tt-metal Repository (where the bug exists)
 
 | File | Path | Description |
 |------|------|-------------|
-| **Bug location** | `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp` | Compute kernel with accumulation bug |
-| **Device operation** | `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp` | TTNN operation registration |
-| **Program factory** | `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp` | Kernel program setup |
-| **High-level wrapper** | `tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp` | TTML operation entry point |
-| **Test file** | `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp` | Bug reproduction tests |
+| **Bug location** | [`tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp) | Compute kernel with accumulation bug |
+| **Device operation** | [`tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp) | TTNN operation registration |
+| **Program factory** | [`tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp) | Kernel program setup |
+| **High-level wrapper** | [`tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp) | TTML operation entry point |
 
-- **Branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2`
+### Files in Fork (bug reproduction tests)
+
+| File | URL | Description |
+|------|-----|-------------|
+| **Test file** | [tt-train/tests/ops/layernorm_bw_fused_op_test.cpp](https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp) | Bug reproduction tests (BugRepro_* tests) |
+| **This bug report** | [bug_report_layernorm_bw_nightly_failure.md](https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/bug_report_layernorm_bw_nightly_failure.md) | This document |
+
+- **Fork branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2`
+- **Fork URL:** https://github.com/ivoitovych/tt-metal/tree/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2
 
 ## Reporter
 
