@@ -359,7 +359,6 @@ private:
     std::unordered_set<FabricNodeId> get_requested_exit_nodes(
         MeshId my_mesh_id,
         MeshId neighbor_mesh_id,
-        const RequestedIntermeshConnections& requested_intermesh_connections,
         const RequestedIntermeshPorts& requested_intermesh_ports,
         const std::vector<uint64_t>& src_exit_node_chips);
 
@@ -386,6 +385,11 @@ private:
     // Single-Host Intermesh Connectivity Helper Function:
     // Generate intermesh connections for the local host.
     AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
+
+    // Validate that the intermesh connections requested in the MGD can be mapped to physical links.
+    void validate_requested_intermesh_connections(
+        const RequestedIntermeshConnections& requested_intermesh_connections,
+        const PortDescriptorTable& port_descriptors);
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
