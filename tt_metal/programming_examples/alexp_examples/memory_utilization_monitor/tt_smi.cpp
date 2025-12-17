@@ -661,12 +661,23 @@ void print_devices(const std::vector<DeviceInfo>& devices) {
             // Galaxy system: display as T<tray>:N<chip>
             snprintf(id_str, sizeof(id_str), "T%u:N%u", dev.tray_id, dev.chip_in_tray);
         } else {
-            // N300 or other boards: display as <board_hex>:<asic_location>[R]
-            uint32_t board_short = (dev.board_serial >> 12) & 0xFFFF;
-            if (dev.is_remote) {
-                snprintf(id_str, sizeof(id_str), "%04x:%dR", board_short, dev.asic_location);
+            // N300 or other boards: display true unique ASIC ID from chip
+            // The chip_id_composite is the 64-bit unique ASIC ID read from chip hardware
+            if (dev.chip_id_composite != 0) {
+                // Use the full unique ASIC ID from topology discovery
+                if (dev.is_remote) {
+                    snprintf(id_str, sizeof(id_str), "%llxR", (unsigned long long)dev.chip_id_composite);
+                } else {
+                    snprintf(id_str, sizeof(id_str), "%llx", (unsigned long long)dev.chip_id_composite);
+                }
             } else {
-                snprintf(id_str, sizeof(id_str), "%04x:%d", board_short, dev.asic_location);
+                // Fallback: use board_serial + location if chip_id_composite not available
+                uint32_t board_short = (dev.board_serial & 0xFFFFFFFF);
+                if (dev.is_remote) {
+                    snprintf(id_str, sizeof(id_str), "%x:%dR", board_short, dev.asic_location);
+                } else {
+                    snprintf(id_str, sizeof(id_str), "%x:%d", board_short, dev.asic_location);
+                }
             }
         }
 
@@ -808,13 +819,24 @@ void print_process_table(const std::vector<DeviceInfo>& devices) {
 
     for (const auto& dev : devices) {
         for (const auto& proc : dev.processes) {
-            // Show same ID format as main table
+            // Show same ID format as main table (use unique ASIC ID)
             char id_str[16];
-            uint32_t board_short = (dev.board_serial >> 12) & 0xFFFF;
-            if (dev.is_remote) {
-                snprintf(id_str, sizeof(id_str), "%04x:%dR", board_short, dev.asic_location);
+            if (dev.board_type == tt::BoardType::UBB && dev.tray_id > 0) {
+                snprintf(id_str, sizeof(id_str), "T%u:N%u", dev.tray_id, dev.chip_in_tray);
+            } else if (dev.chip_id_composite != 0) {
+                if (dev.is_remote) {
+                    snprintf(id_str, sizeof(id_str), "%llxR", (unsigned long long)dev.chip_id_composite);
+                } else {
+                    snprintf(id_str, sizeof(id_str), "%llx", (unsigned long long)dev.chip_id_composite);
+                }
             } else {
-                snprintf(id_str, sizeof(id_str), "%04x:%d", board_short, dev.asic_location);
+                // Fallback
+                uint32_t board_short = (dev.board_serial & 0xFFFFFFFF);
+                if (dev.is_remote) {
+                    snprintf(id_str, sizeof(id_str), "%x:%dR", board_short, dev.asic_location);
+                } else {
+                    snprintf(id_str, sizeof(id_str), "%x:%d", board_short, dev.asic_location);
+                }
             }
             std::cout << std::left << std::setw(12) << id_str;
             std::cout << std::setw(8) << proc.pid;
