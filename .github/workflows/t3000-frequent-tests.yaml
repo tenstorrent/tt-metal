@@ -11,7 +11,7 @@ on:
         options:
           - all
           - tteager
-          - ethernet
+          # - ethernet
           - trace stress
           - falcon40b
           - llama3.2-vision
@@ -42,7 +42,6 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-      tracy: true
   t3000-frequent-tests:
     needs: build-artifact
     secrets: inherit
