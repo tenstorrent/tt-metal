@@ -54,10 +54,10 @@ target_sources(
         llama_common.cpp
         composite_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
-        all_reduce_async/device/all_reduce_async_device_operation.cpp
-        all_reduce_async/device/all_reduce_async_program_factory.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
+        all_reduce_async/device/all_reduce_async_device_operation.cpp
+        all_reduce_async/device/all_reduce_async_program_factory.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -114,8 +114,6 @@ target_sources(
         deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

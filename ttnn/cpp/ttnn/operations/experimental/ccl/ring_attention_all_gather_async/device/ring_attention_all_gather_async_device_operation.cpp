@@ -170,15 +170,11 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
-    // Need to determine output_mem_config - this should be in operation_attributes
-    // For now, using input memory config as fallback
-    MemoryConfig output_mem_config = input_tensors[0].memory_config();
-
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsyncDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.ring_size,
-        output_mem_config,
+        operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.sub_device_id.has_value(),
         operation_attributes.sub_device_id.has_value()

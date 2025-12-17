@@ -478,7 +478,7 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    const auto& mesh_view = tensor_args.input_tensor[0].device()->get_view();
+    const auto& mesh_view = mesh_device->get_view();
     devices_to_use = (operation_attributes.cluster_axis.value() == 0)
                          ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                          : mesh_view.get_devices_on_row(mesh_coordinate[0]);
@@ -529,7 +529,7 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_mesh_workl
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
