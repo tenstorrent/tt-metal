@@ -12,23 +12,24 @@
 #include "tt_metal/udm/mesh_circular_buffer.hpp"
 
 namespace tt::tt_metal::experimental::udm_tests {
+namespace {
 
 /**
  * @brief Create UDM program that copies tensor from input to output
+ *
+ * @param input_mesh_tensor_builder Builder for input tensor (contains mesh tensor shape info)
+ * @param output_mesh_tensor_builder Builder for output tensor
  */
 tt::tt_metal::experimental::udm::MeshProgram create_program(
-    const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor) {
-    auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
-    auto output_mesh_tensor_builder = create_tensor_builder(output_tensor);
-
+    tt::tt_metal::experimental::udm::MeshTensorBuilder& input_mesh_tensor_builder,
+    tt::tt_metal::experimental::udm::MeshTensorBuilder& output_mesh_tensor_builder) {
+    // Use bfloat16 data format for circular buffer configuration
+    tt::DataFormat data_format = tt::DataFormat::Float16_b;
     // Use the mesh_builder from MeshTensorBuilder (they're identical since both created from same mesh_buffer)
     auto& mesh_builder = input_mesh_tensor_builder.mesh_builder();
 
     // Create MeshProgram
     auto program = tt::tt_metal::experimental::udm::CreateMeshProgram(mesh_builder);
-
-    // Log tensor shape info for debugging
-    log_tensor_shape_info(input_mesh_tensor_builder, input_tensor);
 
     // Map buffer to gcores using UDM API
     // Partition work on dimension 0 (rows) - each worker processes 1 row
@@ -53,8 +54,6 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     compile_time_args.insert(compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
 
     // Create mesh circular buffer for tile storage
-    // Get data format and compute tile size (following pattern from other ops)
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t tile_size = tt::tile_size(data_format);
     constexpr uint32_t cb_id = 0;
     tt::tt_metal::CircularBufferConfig cb_config =
@@ -122,8 +121,8 @@ inline void validate(
     }
 
     // Aggregate tensors and convert to vectors
-    auto expected_data = ttnn::distributed::aggregate_tensor(expected_tensor, *composer).to_vector<uint16_t>();
-    auto actual_data = ttnn::distributed::aggregate_tensor(actual_tensor, *composer).to_vector<uint16_t>();
+    auto expected_data = ttnn::distributed::aggregate_tensor(expected_tensor, *composer).to_vector<bfloat16>();
+    auto actual_data = ttnn::distributed::aggregate_tensor(actual_tensor, *composer).to_vector<bfloat16>();
 
     // Compare values
     uint32_t volume = expected_data.size();
@@ -134,7 +133,11 @@ inline void validate(
         if (expected_data[i] != actual_data[i]) {
             if (mismatches < max_print_mismatches) {
                 log_error(
-                    tt::LogTest, "Mismatch at index {}: expected={}, actual={}", i, expected_data[i], actual_data[i]);
+                    tt::LogTest,
+                    "Mismatch at index {}: expected={}, actual={}",
+                    i,
+                    static_cast<float>(expected_data[i]),
+                    static_cast<float>(actual_data[i]));
             }
             mismatches++;
         }
@@ -162,18 +165,24 @@ void run_udm_copy_test(
 
     switch (shard_strategy) {
         case ShardStrategy::WIDTH:
-            input_tensor = create_width_sharded_tensor(mesh_device, global_shape, local_shape);
-            output_tensor = create_width_sharded_tensor(mesh_device, global_shape, local_shape);
+            input_tensor = create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
+            output_tensor =
+                create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
             break;
         case ShardStrategy::BLOCK:
-            input_tensor = create_block_sharded_tensor(mesh_device, global_shape, local_shape);
-            output_tensor = create_block_sharded_tensor(mesh_device, global_shape, local_shape);
+            input_tensor = create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
+            output_tensor =
+                create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
             break;
         case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
     }
 
-    // Create program
-    auto program = create_program(input_tensor, output_tensor);
+    // Build tensor builders from tensors (extracts mesh tensor shape info)
+    auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
+    auto output_mesh_tensor_builder = create_tensor_builder(output_tensor);
+
+    // Create program using tensor builders (not raw tensors)
+    auto program = create_program(input_mesh_tensor_builder, output_mesh_tensor_builder);
 
     // Run program
     auto* tensor_mesh_device = input_tensor.device();
@@ -183,6 +192,8 @@ void run_udm_copy_test(
     // Validate output matches input
     validate(input_tensor, output_tensor, shard_strategy);
 }
+
+}  // namespace
 
 /**
  * @brief Test UDM program with width-sharded tensor
