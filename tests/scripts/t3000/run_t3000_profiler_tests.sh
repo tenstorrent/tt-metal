@@ -43,7 +43,11 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        if [[ -n "${NANOBIND}" ]]; then
+            python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        else
+            python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        fi
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -79,7 +83,11 @@ run_async_tracing_mid_run_dump_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        if [[ -n "${NANOBIND}" ]]; then
+            python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        else
+            python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        fi
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -90,7 +98,11 @@ run_async_tracing_mid_run_dump_T3000_test() {
         midRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/)
         mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv
 
-        python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+        if [[ -n "${NANOBIND}" ]]; then
+            python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]
+        else
+            python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+        fi
 
         nonMidRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v $midRunDumpRunDate)
         mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv
@@ -123,6 +135,20 @@ run_ccl_T3000_test() {
     fi
 }
 
+run_trace_only_resnet() {
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -p --device-trace-profiler -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+
+    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+    then
+        echo "No verification as test was skipped"
+    else
+        echo "Test ran successfully"
+    fi
+}
+
 run_profiling_test() {
     run_async_test
 
@@ -133,6 +159,8 @@ run_profiling_test() {
     run_async_tracing_mid_run_dump_T3000_test
 
     run_mid_run_data_dump
+
+    run_trace_only_resnet
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 

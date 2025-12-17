@@ -14,11 +14,17 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0, neares
 from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
     get_out_subblock_w,
     num_to_core_range_set,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import DecodersPrecision, HfAttentionWrapper, HfModelWrapper
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    HfAttentionWrapper,
+    HfDecoderWrapper,
+    HfModelWrapper,
+)
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 from models.tt_transformers.tt.model_config import determine_device_name, num_to_corerange
 
@@ -830,6 +836,8 @@ class ModelArgs(TTModelArgs):
                 )
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
+            if self.is_multimodal:
+                self.VISION_MAX_MM_SEQ = self.vision_chunk_ntok
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -871,19 +879,22 @@ class ModelArgs(TTModelArgs):
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = 8192
+        DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "gemma-3-4b": 4096
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
 
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_seq_len
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
@@ -909,7 +920,7 @@ class ModelArgs(TTModelArgs):
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
             # EXAMPLE: "gemma-3-4b": {
-            #     "N150": [128, 256, 512, 1024, 2048],
+            #     "N150": [128, 1024, 2048],
             # }
         }
 
@@ -919,12 +930,12 @@ class ModelArgs(TTModelArgs):
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # No supported sequence lengths found, return empty list
         return []
@@ -1096,6 +1107,49 @@ class ModelArgs(TTModelArgs):
 
         return state_dict
 
+    def create_tokenizer(self):
+        from transformers import AutoTokenizer
+
+        # Mapping of base model names to their known tokenizer paths
+        # These are the original models that have proper tokenizers
+        base_model_tokenizer_mapping = {
+            "gemma-3-4b-it": "google/gemma-3-4b-it",
+        }
+
+        logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
+        logger.info(f"Model name: {self.model_name}")
+        logger.info(f"Base model name: {self.base_model_name}")
+
+        try:
+            # Try to load tokenizer from the original model path
+            # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+
+            # Try to use base model tokenizer as fallback
+            fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+
+            if fallback_tokenizer_path:
+                logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                    )
+                    logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                except Exception as fallback_e:
+                    logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                    raise fallback_e
+            else:
+                logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                raise e
+
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer
+
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
@@ -1113,6 +1167,32 @@ class ModelArgs(TTModelArgs):
     def reference_rms_norm(self, i=0):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[i].self_attn.q_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_rms_norm_text(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) == dict:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
+    def reference_mlp(self):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
@@ -1230,6 +1310,19 @@ class ModelArgs(TTModelArgs):
             rotary_emb_local = model.model.rotary_emb_local
             wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
 
+        return wrapper
+
+    def reference_decoder_text(self, i=0):
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0]
+        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        if hasattr(model.model, "rotary_emb_local"):
+            rotary_emb_local = model.model.rotary_emb_local
+        else:
+            rotary_emb_local = None
+        wrapper = HfDecoderWrapper(
+            layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
+        )
         return wrapper
 
     def reference_attention(self, rope_embeddings="global"):

@@ -172,7 +172,7 @@ Tag generate_descriptor_exchange_tag(Rank peer_rank, std::optional<DistributedCo
     // exchanging the correct descriptors.
     static std::unordered_map<DistributedContextId, std::unordered_map<Rank, uint32_t>> exchange_tags;
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
-    return Tag{exchange_tags[unique_context_id][peer_rank]++};
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_rank]++)};
 }
 }  // namespace
 
@@ -206,7 +206,8 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     auto num_cores = all_cores_set.size();
     auto total_config_buffer_size = num_cores * config_buffer_size;
 
-    auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    auto shard_params =
+        ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {static_cast<uint32_t>(num_cores), 1});
 
     DeviceLocalBufferConfig buffer_specs = {
         .page_size = config_buffer_size,

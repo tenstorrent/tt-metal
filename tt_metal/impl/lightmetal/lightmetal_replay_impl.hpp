@@ -22,7 +22,7 @@ struct TraceDescriptor;
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct Command;
+class Command;
 struct ReplayTraceCommand;
 struct EnqueueTraceCommand;
 struct LoadTraceCommand;
@@ -121,7 +121,7 @@ public:
 private:
     // Workload related members
     LightMetalBinary binary_;
-    const flatbuffer::LightMetalBinary* fb_binary_;
+    const flatbuffer::LightMetalBinary* fb_binary_{nullptr};
     bool show_reads_ = false;
     bool disable_checking_ = false;
 
