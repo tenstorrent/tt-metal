@@ -16,21 +16,239 @@ jobs:
       version: 22.04
       skip-tt-train: false
 
-  tt-train-cpp-unit-tests:
+  tt-train-test-run-1:
     needs: build-artifact
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-group: [
-          {name: tt-train, cmd: "ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml"},
-          {name: ttnn-simple, cmd: "python -m pytest /work/tests/ttnn/unit_tests/test_tensor.py::test_tensor_creation_and_memory_config -v"},
-        ]
-    name: ${{ matrix.test-group.name }} wormhole_b0 N150
-    # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
-    runs-on: >-
-      tt-ubuntu-2204-N150-stable
+    name: tt-train Run 1 (First ccache population)
+    runs-on: tt-ubuntu-2204-N150-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+        TT_METAL_LOGGER_LEVEL: Debug
+        TT_METAL_LOGGER_TYPES: BuildKernels
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+
+      - name: Create ccache tmpdir
+        run: mkdir -p /tmp/ccache
+
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          enable-watcher: false
+
+      - name: Initial ccache configuration and stats
+        run: |
+          echo "=== RUN 1: Initial ccache configuration ==="
+          ccache --show-config | head -40
+          echo ""
+          echo "=== Redis Remote Storage Configuration ==="
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
+          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
+          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
+          echo ""
+          echo "=== Git commit info ==="
+          echo "Git commit: $(git rev-parse HEAD)"
+          echo "Git commit short: $(git rev-parse --short=10 HEAD)"
+          echo ""
+          ccache -z
+          ccache -s
+
+      - name: Clear kernel caches to force fresh compilation
+        run: |
+          echo "=== Clearing all kernel caches to force JIT compilation ==="
+          rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
+          rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+          echo "Kernel caches cleared"
+
+      - name: Run tt-train tests (First run)
+        timeout-minutes: 30
+        run: |
+          cd /work/build/tt-train
+          mkdir -p generated/test_reports
+          echo "=== Running tt-train tests (RUN 1) ==="
+          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml
+
+      - name: Analyze ccache and kernel cache locations (Run 1)
+        run: |
+          echo "=== RUN 1: ccache statistics after test ==="
+          ccache -s
+          echo ""
+          echo "=== Kernel cache locations ==="
+          echo "Checking ~/.cache/tt-metal-cache/:"
+          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
+          echo ""
+          echo "Checking /tmp/tt-metal-cache/:"
+          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in /tmp/tt-metal-cache/"
+          echo ""
+          echo "=== Disk usage of kernel caches ==="
+          du -sh ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ not found"
+          du -sh /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ not found"
+
+      - name: Upload Run 1 artifacts
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/build/tt-train/generated/test_reports/
+          prefix: "run1_test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07ASPTGJTS
+
+  tt-train-test-run-2:
+    needs: tt-train-test-run-1
+    name: tt-train Run 2 (Test ccache hits)
+    runs-on: tt-ubuntu-2204-N150-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+        TT_METAL_LOGGER_LEVEL: Debug
+        TT_METAL_LOGGER_TYPES: BuildKernels
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+
+      - name: Create ccache tmpdir
+        run: mkdir -p /tmp/ccache
+
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          enable-watcher: false
+
+      - name: Initial ccache stats (Run 2)
+        run: |
+          echo "=== RUN 2: ccache configuration ==="
+          ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
+          echo ""
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
+          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
+          echo ""
+          ccache -z
+          ccache -s
+
+      - name: Clear kernel caches (but keep ccache)
+        run: |
+          echo "=== Clearing kernel binaries to force recompilation (ccache should provide hits) ==="
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+          echo "Kernel binaries cleared, ccache intact"
+
+      - name: Run tt-train tests (Second run - expect ccache hits)
+        timeout-minutes: 30
+        run: |
+          cd /work/build/tt-train
+          mkdir -p generated/test_reports
+          echo "=== Running tt-train tests (RUN 2 - should hit ccache) ==="
+          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml
+
+      - name: Analyze ccache and kernel cache locations (Run 2)
+        run: |
+          echo "=== RUN 2: ccache statistics after test ==="
+          ccache -s
+          echo ""
+          echo "=== Kernel cache locations ==="
+          echo "Checking ~/.cache/tt-metal-cache/:"
+          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
+          echo ""
+          echo "Checking /tmp/tt-metal-cache/:"
+          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in /tmp/tt-metal-cache/"
+          echo ""
+          echo "=== Disk usage of kernel caches ==="
+          du -sh ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ not found"
+          du -sh /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ not found"
+
+      - name: Upload Run 2 artifacts
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/build/tt-train/generated/test_reports/
+          prefix: "run2_test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07ASPTGJTS
+
+  tt-train-test-run-3:
+    needs: tt-train-test-run-2
+    name: tt-train Run 3 (Verify ccache consistency)
+    runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
