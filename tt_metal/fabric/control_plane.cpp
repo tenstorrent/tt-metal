@@ -93,6 +93,61 @@ std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_positio
     return fixed_asic_position_pinnings;
 }
 
+// Generate fixed ASIC position pinnings for 6U split 2x8 topology to ensure QSFP links align with fabric mesh corner nodes.
+//
+// * o o o o o o o
+// o o o o o o o *
+std::vector<std::pair<AsicPosition, FabricNodeId>> get_6u_split_2x8_fixed_asic_position_pinnings(size_t board_size) {
+
+    // The physical pinning location changes based on the host rank
+    auto host_rank = *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank();
+
+    AsicPosition top_left_corner, bottom_right_corner;
+    if (host_rank == 0) {
+        top_left_corner = AsicPosition{1, 1};
+        bottom_right_corner = AsicPosition{2, 8};
+    } else {
+        top_left_corner = AsicPosition{3, 1};
+        bottom_right_corner = AsicPosition{4, 8};
+    }
+
+    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+    // Top left corner: index 0
+    fixed_asic_position_pinnings.push_back({top_left_corner, FabricNodeId(MeshId{0}, 0)});
+    // Bottom right corner: last device index
+    fixed_asic_position_pinnings.push_back({bottom_right_corner, FabricNodeId(MeshId{0}, board_size - 1)});
+    return fixed_asic_position_pinnings;
+}
+
+// Generate fixed ASIC position pinnings for 6U split 4x4 topology to ensure QSFP links align with fabric mesh corner nodes.
+//
+// * o o o
+// o o o o
+// o o o o
+// o o o *
+std::vector<std::pair<AsicPosition, FabricNodeId>> get_6u_split_4x4_fixed_asic_position_pinnings(size_t board_size) {
+
+    // The physical pinning location changes based on the host rank
+    auto host_rank = *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank();
+    AsicPosition top_left_corner, bottom_right_corner;
+    if (host_rank == 0) {
+        top_left_corner = AsicPosition{1, 1};
+        bottom_right_corner = AsicPosition{4, 1};
+    } else {
+        top_left_corner = AsicPosition{4, 1};
+        bottom_right_corner = AsicPosition{1, 1};
+    }
+
+    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+
+    // Top left corner: index 0
+    fixed_asic_position_pinnings.push_back({top_left_corner, FabricNodeId(MeshId{0}, 0)});
+    // Bottom right corner: last device index
+    fixed_asic_position_pinnings.push_back({bottom_right_corner, FabricNodeId(MeshId{0}, board_size - 1)});
+
+    return fixed_asic_position_pinnings;
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
