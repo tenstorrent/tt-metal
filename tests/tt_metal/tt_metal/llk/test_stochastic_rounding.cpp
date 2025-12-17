@@ -215,10 +215,6 @@ class StochasticRoundingSingleCardFixture : public UnitMeshCQFixture,
 
 TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingStatistical) {
     for (const auto& device_ : devices_) {
-        if (device_->arch() == tt::ARCH::GRAYSKULL) {
-            GTEST_SKIP() << "Stochastic rounding not supported on Grayskull";
-        }
-
         size_t num_tiles = std::get<0>(GetParam());
         float fractional_position = std::get<1>(GetParam());
 
