@@ -4,7 +4,7 @@
 
 import ttnn
 from models.demos.bge_large_en.runner.performant_runner_infra import BGEPerformanceRunnerInfra
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.demos.wormhole.bge_large_en.tests.pcc.utils import assert_with_pcc
 
 
 class BGEPerformantRunner:
