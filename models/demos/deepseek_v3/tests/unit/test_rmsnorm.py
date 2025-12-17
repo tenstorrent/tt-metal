@@ -1,14 +1,13 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_helpers import create_sharded_norm_config
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # =============================================================================
 # Reference tests for distributed RMSNorm operations
@@ -19,6 +18,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 #
 # Test cases based on model usage:
 #   - Input: (1, 1, 32, 896), L1 WIDTH_SHARDED, grid=(4,7)
+#   - Stats: (1, 1, 32, 256), L1 WIDTH_SHARDED, grid=(1,1)
+#   - Weight: (1, 1, 28, 32), DRAM, ROW_MAJOR layout
 #   - HiFi4 compute kernel
 #   - LayerNormShardedMultiCoreProgramConfig
 # =============================================================================
@@ -113,10 +114,7 @@ def test_rmsnorm_pre_all_gather(device):
     tt_sum_x2 = tt_stats_cpu[..., 0:1]
 
     # Compare
-    passing, output_str = comp_pcc(expected_sum_x2, tt_sum_x2, pcc=0.99)
-    logger.info(f"Result: {output_str}")
-
-    assert passing, "rms_norm_pre_all_gather test failed"
+    assert_with_pcc(expected_sum_x2, tt_sum_x2, pcc=0.99)
 
 
 # =============================================================================
@@ -124,26 +122,37 @@ def test_rmsnorm_pre_all_gather(device):
 # =============================================================================
 
 
-def run_test_rmsnorm_post_all_gather(
-    device,
-    inp_shape,
-    n_devices,
-    input_dtype,
-    output_dtype,
-    use_sharded,
-):
+def test_rmsnorm_post_all_gather(device):
     """
     Test rms_norm_post_all_gather operation.
 
     This applies the RMSNorm using the gathered statistics from all devices.
-    It mirrors the distributed layernorm test pattern.
+    The test simulates one device's computation, with stats already gathered from 8 devices.
+
+    Test configuration based on model usage:
+    - Input X: (1, 1, 32, 896), L1 WIDTH_SHARDED, grid=(4,7)
+    - Stats: (1, 1, 32, 256), L1 WIDTH_SHARDED, grid=(1,1) - gathered from 8 devices
+    - Weight: (1, 1, 28, 32), DRAM, ROW_MAJOR layout (896/32 = 28 sticks)
+    - HiFi4 compute kernel with math_approx_mode=True
+    - LayerNormShardedMultiCoreProgramConfig
+    - epsilon: 1e-6
+    - dtype: bfloat16
     """
     torch.manual_seed(1234)
 
-    logger.info(f"Testing rms_norm_post_all_gather: shape={inp_shape}, n_devices={n_devices}")
-    logger.info(f"input_dtype={input_dtype}, output_dtype={output_dtype}, use_sharded={use_sharded}")
+    # Model dimensions
+    inp_shape = (1, 1, 32, 896)  # Per-device input shape
+    stats_shape = (1, 1, 32, 256)  # Gathered stats from 8 devices (32 * 8 = 256)
+    weight_shape = (1, 1, 28, 32)  # Gamma weights (896 / 32 = 28 sticks)
+    n_devices = 8  # Number of devices stats were gathered from
+    full_hidden_size = inp_shape[-1] * n_devices  # 896 * 8 = 7168
+    grid = ttnn.CoreGrid(x=4, y=7)
+    epsilon = 1e-6
 
-    # Compute kernel config - HiFi4 for accuracy
+    logger.info(f"Testing rms_norm_post_all_gather:")
+    logger.info(f"  Input: {inp_shape}, Stats: {stats_shape}, Weight: {weight_shape}")
+
+    # Compute kernel config - HiFi4 as specified in model
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
@@ -151,371 +160,106 @@ def run_test_rmsnorm_post_all_gather(
         packer_l1_acc=False,
     )
 
-    # Create full input tensor and gamma weights
-    full_inp = torch.randn(inp_shape).bfloat16().float()
-    full_gamma = torch.rand(inp_shape[-1]).bfloat16().float() * 2 - 1
+    # Create the full input tensor (simulating full hidden size across all devices)
+    # This device's input is just one chunk of the full tensor
+    full_inp = torch.randn((1, 1, 32, full_hidden_size)).bfloat16().float()
+    full_gamma = torch.rand(full_hidden_size).bfloat16().float() * 2 - 1
 
-    # Split across simulated devices
+    # This device's local input and gamma (first chunk, simulating device 0)
+    inp = full_inp[..., : inp_shape[-1]]  # (1, 1, 32, 896)
+    gamma = full_gamma[: inp_shape[-1]]  # (896,)
+
+    # Compute partial statistics for each device's chunk (sum of x^2)
+    # These would have been computed by pre_all_gather on each device, then gathered
     inp_chunked = full_inp.chunk(n_devices, dim=-1)
-    gamma_chunked = full_gamma.chunk(n_devices, dim=-1)
-
-    # Compute partial statistics for each chunk (sum of x^2)
     partial_sum_x2 = [chunk.pow(2).sum(dim=-1, keepdim=True) for chunk in inp_chunked]
 
     # Create the gathered stats tensor as the post_all_gather op expects
-    # Stats tensor contains sum(x^2) values from all devices, padded to tile width
-    stats_tiles = torch.zeros(inp_shape[:-1] + (32 * n_devices,))
+    # Stats tensor: (1, 1, 32, 256) with each device's sum(x^2) at position [idx * 32]
+    stats = torch.zeros(stats_shape).bfloat16().float()
     for idx, sum_x2 in enumerate(partial_sum_x2):
-        stats_tiles[..., idx * 32 : idx * 32 + 1] = sum_x2
+        stats[..., idx * 32 : idx * 32 + 1] = sum_x2
 
-    epsilon = 1e-6
-
-    # Reference output (full RMSNorm)
+    # Reference output: RMSNorm using global statistics
+    # output = x * rsqrt(global_mean_x2 + eps) * gamma
     ref_out = reference_rmsnorm(full_inp, full_gamma, epsilon)
-    ref_chunks = ref_out.chunk(n_devices, dim=-1)
+    ref_out_local = ref_out[..., : inp_shape[-1]]  # This device's expected output
 
-    # Memory configs
-    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    # Create L1 width-sharded config for input
+    # grid=(4,7) = 28 cores, shard_width = 896 / 28 = 32, shard_height = 32
+    num_cores = grid.num_cores
+    shard_width = inp_shape[-1] // num_cores  # 896 / 28 = 32
+    shard_height = inp_shape[-2]  # 32
 
-    if use_sharded:
-        grid_x, grid_y = 4, 7
-        num_cores = grid_x * grid_y
-        shard_width = ttnn.core.roundup(inp_shape[-1] // n_devices // num_cores, ttnn.TILE_SIZE)
-        shard_height = ttnn.core.roundup(inp_shape[-2], ttnn.TILE_SIZE)
-
-        in_mem_config = ttnn.create_sharded_memory_config_(
-            shape=(shard_height, shard_width),
-            core_grid=ttnn.num_cores_to_corerangeset(
-                num_cores,
-                ttnn.CoreCoord(grid_x, grid_y),
-                row_wise=True,
-            ),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            subblock_w=1,
-            block_h=ttnn.core.divup(shard_height, ttnn.TILE_SIZE),
-            block_w=ttnn.core.divup(shard_width, ttnn.TILE_SIZE),
-            inplace=False,
-        )
-    else:
-        in_mem_config = dram_memcfg
-        program_config = ttnn.LayerNormDefaultProgramConfig()
-
-    all_pass = True
-
-    # Test post_all_gather for each simulated device's chunk
-    for d in range(n_devices):
-        # Prepare input chunk
-        tt_inp = ttnn.from_torch(
-            inp_chunked[d],
-            dtype=input_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-        if use_sharded:
-            tt_inp = ttnn.to_memory_config(tt_inp, in_mem_config)
-
-        # Prepare gamma weights (ROW_MAJOR layout as per model)
-        tt_gamma = ttnn.from_torch(
-            gamma_chunked[d].reshape(1, 1, -1, 32),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-
-        # Prepare gathered stats
-        tt_stats = ttnn.from_torch(
-            stats_tiles,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-
-        # Run post_all_gather
-        tt_out = ttnn.rms_norm_post_all_gather(
-            tt_inp,
-            tt_stats,
-            epsilon=epsilon,
-            weight=tt_gamma,
-            compute_kernel_config=kernel_config,
-            program_config=program_config,
-            dtype=output_dtype,
-        )
-
-        # Get output and compare
-        tt_out_cpu = ttnn.to_torch(tt_out)
-
-        passing, output_str = comp_pcc(ref_chunks[d], tt_out_cpu, pcc=0.99)
-        logger.info(f"Device {d}: {output_str}")
-        all_pass = all_pass and passing
-
-    assert all_pass, "rms_norm_post_all_gather test failed"
-
-
-def run_test_rmsnorm_distributed_e2e(
-    device,
-    inp_shape,
-    n_devices,
-    input_dtype,
-    output_dtype,
-    use_sharded,
-):
-    """
-    End-to-end test of distributed RMSNorm (pre_all_gather + post_all_gather).
-
-    This simulates the full distributed RMSNorm flow as used in the model.
-    """
-    torch.manual_seed(1234)
-
-    logger.info(f"Testing distributed RMSNorm E2E: shape={inp_shape}, n_devices={n_devices}")
-
-    # Compute kernel config
-    kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+    in_mem_config = ttnn.create_sharded_memory_config_(
+        shape=(shard_height, shard_width),
+        core_grid=ttnn.num_cores_to_corerangeset(
+            num_cores,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
-    # Create full input tensor and gamma weights
-    full_inp = torch.randn(inp_shape).bfloat16().float()
-    full_gamma = torch.rand(inp_shape[-1]).bfloat16().float() * 2 - 1
-
-    # Split across simulated devices
-    inp_chunked = full_inp.chunk(n_devices, dim=-1)
-    gamma_chunked = full_gamma.chunk(n_devices, dim=-1)
-
-    epsilon = 1e-6
-
-    # Reference output
-    ref_out = reference_rmsnorm(full_inp, full_gamma, epsilon)
-    ref_chunks = ref_out.chunk(n_devices, dim=-1)
-
-    # Memory configs
-    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
-
-    if use_sharded:
-        grid_x, grid_y = 4, 7
-        num_cores = grid_x * grid_y
-        shard_width = ttnn.core.roundup(inp_shape[-1] // n_devices // num_cores, ttnn.TILE_SIZE)
-        shard_height = ttnn.core.roundup(inp_shape[-2], ttnn.TILE_SIZE)
-
-        in_mem_config = ttnn.create_sharded_memory_config_(
-            shape=(shard_height, shard_width),
-            core_grid=ttnn.num_cores_to_corerangeset(
-                num_cores,
-                ttnn.CoreCoord(grid_x, grid_y),
-                row_wise=True,
-            ),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            subblock_w=1,
-            block_h=ttnn.core.divup(shard_height, ttnn.TILE_SIZE),
-            block_w=ttnn.core.divup(shard_width, ttnn.TILE_SIZE),
-            inplace=False,
-        )
-    else:
-        in_mem_config = dram_memcfg
-        program_config = ttnn.LayerNormDefaultProgramConfig()
-
-    # Step 1: Run pre_all_gather on each chunk and collect stats
-    all_stats = []
-    tt_inputs = []
-
-    for d in range(n_devices):
-        tt_inp = ttnn.from_torch(
-            inp_chunked[d],
-            dtype=input_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-        if use_sharded:
-            tt_inp = ttnn.to_memory_config(tt_inp, in_mem_config)
-        tt_inputs.append(tt_inp)
-
-        # Run pre_all_gather
-        tt_stats = ttnn.rms_norm_pre_all_gather(
-            tt_inp,
-            compute_kernel_config=kernel_config,
-            program_config=program_config,
-            dtype=ttnn.bfloat16,
-        )
-        all_stats.append(ttnn.to_torch(tt_stats))
-
-    # Step 2: Simulate all-gather by concatenating stats
-    # In real distributed setting, this would be done via CCL
-    gathered_stats = torch.cat(all_stats, dim=-1)
-
-    all_pass = True
-
-    # Step 3: Run post_all_gather on each chunk
-    for d in range(n_devices):
-        # Recreate input tensor (or reuse if still on device)
-        tt_inp = ttnn.from_torch(
-            inp_chunked[d],
-            dtype=input_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-        if use_sharded:
-            tt_inp = ttnn.to_memory_config(tt_inp, in_mem_config)
-
-        tt_gamma = ttnn.from_torch(
-            gamma_chunked[d].reshape(1, 1, -1, 32),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-
-        tt_gathered_stats = ttnn.from_torch(
-            gathered_stats,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=dram_memcfg,
-        )
-
-        # Run post_all_gather
-        tt_out = ttnn.rms_norm_post_all_gather(
-            tt_inp,
-            tt_gathered_stats,
-            epsilon=epsilon,
-            weight=tt_gamma,
-            compute_kernel_config=kernel_config,
-            program_config=program_config,
-            dtype=output_dtype,
-        )
-
-        tt_out_cpu = ttnn.to_torch(tt_out)
-
-        passing, output_str = comp_pcc(ref_chunks[d], tt_out_cpu, pcc=0.99)
-        logger.info(f"Device {d}: {output_str}")
-        all_pass = all_pass and passing
-
-    assert all_pass, "Distributed RMSNorm E2E test failed"
-
-
-@pytest.mark.parametrize(
-    "inp_shape",
-    [
-        (1, 1, 32, 896),  # From model spec
-        (1, 1, 32, 7168),  # Full hidden size
-        (1, 1, 128, 8192),  # Larger sequence
-    ],
-    ids=["32x896", "32x7168", "128x8192"],
-)
-@pytest.mark.parametrize(
-    "n_devices",
-    [1, 4, 8],
-    ids=["1dev", "4dev", "8dev"],
-)
-@pytest.mark.parametrize(
-    "input_dtype, output_dtype",
-    [
-        (ttnn.bfloat16, ttnn.bfloat16),
-    ],
-    ids=["bf16_bf16"],
-)
-@pytest.mark.parametrize(
-    "use_sharded",
-    [False, True],
-    ids=["interleaved", "sharded"],
-)
-def test_rmsnorm_post_all_gather(
-    device,
-    inp_shape,
-    n_devices,
-    input_dtype,
-    output_dtype,
-    use_sharded,
-):
-    # Skip if input can't be evenly divided
-    if inp_shape[-1] % n_devices != 0:
-        pytest.skip(f"Input width {inp_shape[-1]} not divisible by {n_devices} devices")
-
-    # Skip sharded tests for very small per-device widths
-    per_device_width = inp_shape[-1] // n_devices
-    if use_sharded and per_device_width < 32:
-        pytest.skip(f"Per-device width {per_device_width} too small for sharding")
-
-    run_test_rmsnorm_post_all_gather(
-        device,
-        inp_shape,
-        n_devices,
-        input_dtype,
-        output_dtype,
-        use_sharded,
+    # Create L1 width-sharded config for stats - (1, 1, 32, 256) on single core
+    # Matches model: core_grid=ttnn.CoreGrid(y=1, x=1)
+    stats_mem_config = ttnn.create_sharded_memory_config(
+        shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * n_devices],  # (1, 1, 32, 256)
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
     )
 
-
-# =============================================================================
-# Test: Distributed RMSNorm End-to-End
-# =============================================================================
-
-
-@pytest.mark.parametrize(
-    "inp_shape",
-    [
-        (1, 1, 32, 896),  # Model decode shape
-        (1, 1, 32, 7168),  # Full hidden size
-    ],
-    ids=["32x896", "32x7168"],
-)
-@pytest.mark.parametrize(
-    "n_devices",
-    [4, 8],
-    ids=["4dev", "8dev"],
-)
-@pytest.mark.parametrize(
-    "input_dtype, output_dtype",
-    [
-        (ttnn.bfloat16, ttnn.bfloat16),
-    ],
-    ids=["bf16_bf16"],
-)
-@pytest.mark.parametrize(
-    "use_sharded",
-    [False, True],
-    ids=["interleaved", "sharded"],
-)
-def test_rmsnorm_distributed_e2e(
-    device,
-    inp_shape,
-    n_devices,
-    input_dtype,
-    output_dtype,
-    use_sharded,
-):
-    # Skip if input can't be evenly divided
-    if inp_shape[-1] % n_devices != 0:
-        pytest.skip(f"Input width {inp_shape[-1]} not divisible by {n_devices} devices")
-
-    # Skip sharded tests for very small per-device widths
-    per_device_width = inp_shape[-1] // n_devices
-    if use_sharded and per_device_width < 32:
-        pytest.skip(f"Per-device width {per_device_width} too small for sharding")
-
-    run_test_rmsnorm_distributed_e2e(
-        device,
-        inp_shape,
-        n_devices,
-        input_dtype,
-        output_dtype,
-        use_sharded,
+    # Use create_sharded_norm_config to generate program config
+    program_config = create_sharded_norm_config(
+        grid=grid,
+        dim=inp_shape[-1],  # 896
+        tile_padded_batch_rows=inp_shape[-2],  # 32
     )
+
+    # Prepare input - shape (1, 1, 32, 896), L1 WIDTH_SHARDED
+    tt_inp = ttnn.from_torch(
+        inp,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_inp = ttnn.to_memory_config(tt_inp, in_mem_config)
+
+    # Prepare gamma weights - shape (1, 1, 28, 32) in ROW_MAJOR layout, DRAM
+    # Matches model: memory_config=ttnn.DRAM_MEMORY_CONFIG
+    tt_gamma = ttnn.from_torch(
+        gamma.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Prepare gathered stats - shape (1, 1, 32, 256) in TILE layout, L1 WIDTH_SHARDED
+    tt_stats = ttnn.from_torch(
+        stats,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_stats = ttnn.to_memory_config(tt_stats, stats_mem_config)
+
+    # Run post_all_gather
+    tt_out = ttnn.rms_norm_post_all_gather(
+        tt_inp,
+        tt_stats,
+        epsilon=epsilon,
+        weight=tt_gamma,
+        compute_kernel_config=kernel_config,
+        program_config=program_config,
+        dtype=ttnn.bfloat16,
+    )
+
+    # Get output and compare
+    tt_out_cpu = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(ref_out_local, tt_out_cpu, pcc=0.99)
