@@ -11,7 +11,7 @@
 #include <ttnn/types.hpp>
 
 #include <ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp>
-#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include <ttnn/operations/sliding_window/op_slicing/op_slicing.hpp>
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
