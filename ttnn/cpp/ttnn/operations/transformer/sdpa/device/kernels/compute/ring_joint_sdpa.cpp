@@ -11,7 +11,6 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
-#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -107,27 +106,14 @@ void MAIN {
         const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
         const uint32_t global_n_mask_chunk_id = global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-        // UNPACK(
-        //     DPRINT << "ring id: " << ring_id
-        //            << " ring iter needs global N mask: " << (uint32_t)ring_iter_needs_global_n_mask
-        //            << "with global N within ring iter: " << global_n_within_ring_iter
-        //            << "with global N mask chunk id: " << global_n_mask_chunk_id << ENDL());
-
         // LOCAL N MASK
         const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
         const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
-        // UNPACK(
-        //     DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
-        //            << "with local N mask chunk id: " << local_n_mask_chunk_id << ENDL());
 
         // JOINT L MASK
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
-        // UNPACK(
-        //     DPRINT << "ring id: " << ring_id
-        //            << " ring iter needs joint N mask: " << (uint32_t)ring_iter_needs_joint_n_mask
-        //            << "with joint N mask chunk id: " << joint_n_mask_chunk_id << ENDL());
 
         // Iterate over KV gathered on the ring
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
@@ -149,7 +135,6 @@ void MAIN {
 
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
-                    // DPRINT << "ring id: " << ring_id << " KV chunk is beyond logical N" << ENDL();
                     continue;
                 }
 
@@ -158,23 +143,10 @@ void MAIN {
                 bool should_mask = false;
                 if (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) {
                     should_mask = true;
-                    // UNPACK(
-                    //     DPRINT << "ring id: " << ring_id << "k chunk: " << k_chunk
-                    //            << " Compute using global N mask on : " << global_n_mask_chunk_id << ENDL());
                 } else if (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) {
                     should_mask = true;
-                    // UNPACK(
-                    //     DPRINT << "ring id: " << ring_id << "k chunk: " << k_chunk
-                    //            << " Compute using local N mask on : " << local_n_mask_chunk_id << ENDL());
                 } else if (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) {
                     should_mask = true;
-                    // UNPACK(
-                    //     DPRINT << "ring id: " << ring_id << "k chunk: " << k_chunk
-                    //            << " Compute using joint N mask on : " << joint_n_mask_chunk_id << ENDL());
-                }
-
-                if (should_mask) {
-                    // UNPACK(DPRINT << "ring id: " << ring_id << " Masking k_chunk: " << k_chunk << ENDL());
                 }
 
                 /* QK = Q_CHUNK @ K_CHUNK */
