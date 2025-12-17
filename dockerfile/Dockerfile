@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bc \
     libclang-17-dev \
     libclang-20-dev \
+    libclang-rt-20-dev \
     clang-tidy-17 \
     clang-tidy-20 \
     clang-20 \
