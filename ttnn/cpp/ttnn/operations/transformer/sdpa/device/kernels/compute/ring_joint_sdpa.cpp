@@ -87,40 +87,45 @@ void MAIN {
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        // If one of these KV chunks contains N as a global index, we need to generate that mask.
+        // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const bool global_n_needs_masking = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
-        const bool ring_iter_needs_global_n_mask = global_n_needs_masking &&
-                                                   (ring_iter_kv_start_tile <= global_n_tile_id) &&
-                                                   (ring_iter_kv_end_tile > global_n_tile_id);
-
-        const uint32_t global_n_mask_chunk_id = global_n_tile_id / Sk_chunk_t;
-
-        // otherwise if the local_padded_Nt does not divide by q_chunk_size, we need to generate a mask for that last
-        // chunk - if it is not beyond global N.
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        // Check if this ring iter has any real work to do on local N. If the iter's start KV chunk is beyond global N,
-        // all work will be skipped, so no mask should be generated.
+        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_needs_local_n_mask = local_n_needs_masking && ring_iter_processes_KV_chunks;
-
-        const uint32_t local_n_mask_chunk_id = (local_padded_Nt - 1) / Sk_chunk_t;
-
-        // If this iter processes the joint KV and the joint length L does not divide by q_chunk_size, we need to
-        // generate a mask for that last chunk.
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-
-        const uint32_t joint_n_mask_chunk_id = (Lt - 1) / Sk_chunk_t;
-
-        // Find out if there's any work to do on this ring iter.
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
         if (!ring_iter_does_work) {
-            DPRINT << "Ring iter does no work" << ENDL();
             continue;
         }
+
+        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
+        // Note the > and <=. This means there is real length of logical_n within this ring iter.
+        const bool global_n_is_within_ring_iter =
+            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
+        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
+        const uint32_t global_n_mask_chunk_id = global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+
+        UNPACK(
+            DPRINT << "ring id: " << ring_id
+                   << " ring iter needs global N mask: " << (uint32_t)ring_iter_needs_global_n_mask
+                   << "with global N within ring iter: " << global_n_within_ring_iter
+                   << "with global N mask chunk id: " << global_n_mask_chunk_id << ENDL());
+
+        // LOCAL N MASK
+        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
+        const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
+        UNPACK(
+            DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
+                   << "with local N mask chunk id: " << local_n_mask_chunk_id << ENDL());
+
+        // JOINT L MASK
+        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
+        const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        UNPACK(
+            DPRINT << "ring id: " << ring_id
+                   << " ring iter needs joint N mask: " << (uint32_t)ring_iter_needs_joint_n_mask
+                   << "with joint N mask chunk id: " << joint_n_mask_chunk_id << ENDL());
 
         // Iterate over KV gathered on the ring
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
@@ -149,14 +154,23 @@ void MAIN {
                 bool should_mask = false;
                 if (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) {
                     should_mask = true;
-                } else if (ring_iter_needs_local_n_mask && k_chunk == local_n_mask_chunk_id) {
+                    UNPACK(
+                        DPRINT << "ring id: " << ring_id << "k chunk: " << k_chunk
+                               << " Compute using global N mask on : " << global_n_mask_chunk_id << ENDL());
+                } else if (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) {
                     should_mask = true;
+                    UNPACK(
+                        DPRINT << "ring id: " << ring_id << "k chunk: " << k_chunk
+                               << " Compute using local N mask on : " << local_n_mask_chunk_id << ENDL());
                 } else if (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) {
                     should_mask = true;
+                    UNPACK(
+                        DPRINT << "ring id: " << ring_id << "k chunk: " << k_chunk
+                               << " Compute using joint N mask on : " << joint_n_mask_chunk_id << ENDL());
                 }
 
                 if (should_mask) {
-                    UNPACK(DPRINT << "ring id: " << ring_id << " Masking k_chunk: " << k_chunk << ENDL());
+                    // UNPACK(DPRINT << "ring id: " << ring_id << " Masking k_chunk: " << k_chunk << ENDL());
                 }
 
                 /* QK = Q_CHUNK @ K_CHUNK */

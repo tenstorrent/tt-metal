@@ -35,11 +35,6 @@ void kernel_main() {
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
-    // // Only one iteration of the ring will contain the masked portion of the spatial input.
-    // constexpr uint32_t N_mask_ring_id = mask_chunk_0 / N_k_num_chunks_local;
-    // // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
-    // constexpr uint32_t L_mask_ring_id = ring_size - 1;
-
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
@@ -84,33 +79,56 @@ void kernel_main() {
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        // If one of these KV chunks contains N as a global index, we need to generate that mask.
+        // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const bool global_n_needs_masking = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
-        const bool ring_iter_needs_global_n_mask = global_n_needs_masking &&
-                                                   (ring_iter_kv_start_tile <= global_n_tile_id) &&
-                                                   (ring_iter_kv_end_tile > global_n_tile_id);
-
-        // otherwise if the local_padded_Nt does not divide by q_chunk_size, we need to generate a mask for that last
-        // chunk - if it is not beyond global N.
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        // Check if this ring iter has any real work to do on local N. If the iter's start KV chunk is beyond global N,
-        // all work will be skipped, so no mask should be generated.
+        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_needs_local_n_mask = local_n_needs_masking && ring_iter_processes_KV_chunks;
-
-        // If this iter processes the joint KV and the joint length L does not divide by q_chunk_size, we need to
-        // generate a mask for that last chunk.
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-
-        // Find out if there's any work to do on this ring iter.
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
         if (!ring_iter_does_work) {
             continue;
         }
+
+        /**
+        We have 3 possible masks
+        - global N mask
+        - local N mask
+        - joint L mask
+
+        Global N mask:
+            - If the logical_n falls within this ring iter's KV range
+            - And logical_n length (within local_padded_N) does not divide by K chunk size
+
+        Local N mask
+            - If local_padded_N does not divide by K chunk size, the last chunk needs a mask
+
+        Joint L mask
+            - If joint length L does not divide by K chunk size, the last chunk needs a mask
+        */
+
+        // GLOBAL N MASK
+        // Find out if logical_n falls within this ring iter's KV range
+        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
+        // Note the > and <=. This means there is real length of logical_n within this ring iter.
+        const bool global_n_is_within_ring_iter =
+            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
+        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
+
+        DPRINT << "ring id: " << ring_id
+               << " ring iter needs global N mask: " << (uint32_t)ring_iter_needs_global_n_mask
+               << "with global N within ring iter: " << global_n_within_ring_iter << ENDL();
+
+        // LOCAL N MASK
+        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
+        DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
+               << ENDL();
+
+        // JOINT L MASK
+        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
+        DPRINT << "ring id: " << ring_id << " ring iter needs joint N mask: " << (uint32_t)ring_iter_needs_joint_n_mask
+               << ENDL();
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
@@ -120,40 +138,27 @@ void kernel_main() {
 
             if (ring_iter_needs_global_n_mask) {
                 DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
-                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_n);
-            } else if (ring_iter_needs_local_n_mask) {
-                DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
+                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_n_within_ring_iter);
+            } else if (local_n_needs_masking) {
+                // DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, local_padded_N);
             }
             if (ring_iter_needs_joint_n_mask) {
-                DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
+                // DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, L);
             }
-            // /*
-            // If `use_joint_mask`, then one or both of input tensors are padded.
-            // We already know that input tensors are padded up to Sk_chunk_t.
-            // Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
-            // we should generate the vertical mask.
-            // */
-            // if (ring_id == N_mask_ring_id) {
-            //     if (mask_chunk_0 != (uint32_t)(-1)) {
-            //         generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_N);
-            //     }
-            // }
-            // if (ring_id == L_mask_ring_id) {
-            //     if (mask_chunk_1 != (uint32_t)(-1)) {
-            //         generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_L);
-            //     }
-            // }
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;
+            uint32_t end_seq_tile;
             if (is_joint_q) {
                 const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
                 out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                end_seq_tile = Lt;
             } else {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                end_seq_tile = local_padded_Nt * (ring_id + 1);
             }
 
             // If not on the first iteration, read LSE input and previous output chunk.
@@ -175,7 +180,13 @@ void kernel_main() {
 
             if (ring_iter > 0) {
                 // Read previous output for this Q chunk
-                read_block(is_joint_q ? joint_out_generator : out_generator, out_slice, cb_prev_out, tile_bytes, false);
+                read_block(
+                    is_joint_q ? joint_out_generator : out_generator,
+                    out_slice,
+                    end_seq_tile,
+                    cb_prev_out,
+                    tile_bytes,
+                    false);
 
                 // Read previous LSE for this Q chunk
                 cb_reserve_back(cb_lse_in, Sq_chunk_t);
@@ -189,7 +200,7 @@ void kernel_main() {
                 cb_push_back(cb_lse_in, Sq_chunk_t);
             }
 
-            write_block(is_joint_q ? joint_out_generator : out_generator, out_slice, cb_out, tile_bytes);
+            write_block(is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
 
             cb_wait_front(cb_lse_out, Sq_chunk_t);
             uint32_t lse_addr = get_read_ptr(cb_lse_out);
