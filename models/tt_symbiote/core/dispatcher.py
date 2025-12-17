@@ -575,7 +575,48 @@ def handle_ge(func, args, kwargs):
         input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
 
-    res = TorchTTNNTensor(ttnn.ge(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    res = TorchTTNNTensor(ttnn.ge(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return res
+
+
+def handle_eq(func, args, kwargs):
+    """Handle equal operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    res = TorchTTNNTensor(ttnn.eq(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
+
     if deallocate_a:
         ttnn.deallocate(input_tensor1.ttnn_tensor)
     if deallocate_b:
@@ -605,6 +646,93 @@ def handle_select(func, args, kwargs):
     slice_step = [1] * len(input_shape)
     new_shape = [i for index, i in enumerate(input_shape) if index != dim]
     return TorchTTNNTensor(ttnn.reshape(ttnn.slice(input_tensor.to_ttnn, starts, ends, slice_step), new_shape))
+
+
+def handle_bernoulli_p(func, args, kwargs):
+    """Handle bernoulli.p operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    input_tensor_ttnn = input_tensor.to_ttnn
+    if len(args) > 1:
+        input_tensor_ttnn = ttnn.ones_like(input_tensor.to_ttnn) * args[1]
+    res = TorchTTNNTensor(ttnn.bernoulli(input_tensor_ttnn))
+    if len(args) > 1:
+        ttnn.deallocate(input_tensor_ttnn)
+    return res
+
+
+def handle_repeat(func, args, kwargs):
+    """Handle repeat operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    repeats = args[1]
+    return TorchTTNNTensor(ttnn.repeat(input_tensor.to_ttnn, repeats))
+
+
+def handle_where(func, args, kwargs):
+    """Handle where operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    condition = args[0]
+    deallocate_cond = False
+    device = None
+    if not isinstance(condition, TorchTTNNTensor):
+        if isinstance(condition, (int, float)):
+            condition = torch.tensor(condition)
+        condition = TorchTTNNTensor(condition)
+        deallocate_cond = True
+    else:
+        if condition.ttnn_tensor is None:
+            deallocate_cond = True
+        device = condition.to_ttnn.device() if device is None else device
+
+    input_tensor1 = args[1]
+    input_tensor2 = args[2]
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device() if device is None else device
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    if condition.to_ttnn.device() != input_tensor1.to_ttnn.device():
+        condition.ttnn_tensor = ttnn.to_device(condition.to_ttnn, device)
+
+    result = TorchTTNNTensor(ttnn.where(condition.to_ttnn, input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+
+    if deallocate_cond:
+        ttnn.deallocate(condition.ttnn_tensor)
+
+    return result
 
 
 # Mapping of ATen operations to TTNN handlers
@@ -639,6 +767,10 @@ func_to_ttnn_compatible = {
     "aten::sum.dim_IntList": handle_sum,
     "aten::ge.Scalar": handle_ge,
     "aten::select.int": handle_select,
+    "aten::bernoulli.p": handle_bernoulli_p,
+    "aten::repeat": handle_repeat,
+    "aten::eq.Scalar": handle_eq,
+    "aten::where.self": handle_where,
 }
 
 
