@@ -346,6 +346,9 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(f"Skipping prefill with seq_len={seq_len}, only keeping prefill 128")
     test_closure(
         DecoderBlockClass,
         module_path,

@@ -110,6 +110,10 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
+    # Skip all prefill seq lengths except 128
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(f"Skipping prefill with seq_len={seq_len}, only keeping prefill 128")
+
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 

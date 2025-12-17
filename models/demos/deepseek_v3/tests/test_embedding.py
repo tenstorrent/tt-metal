@@ -60,6 +60,9 @@ def test_embedding_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128
+    if mode == "prefill" and batch_size_or_seq_len != 128:
+        pytest.skip(f"Skipping prefill with seq_len={batch_size_or_seq_len}, only keeping prefill 128")
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
 

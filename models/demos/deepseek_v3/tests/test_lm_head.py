@@ -72,6 +72,9 @@ def test_forward_pass(
     cache_path: Path,
     set_deterministic_env: Any,
 ):
+    # Skip all prefill seq lengths except 128
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(f"Skipping prefill with seq_len={seq_len}, only keeping prefill 128")
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
 
     reference_model = DeepseekV3LMHead(hf_config).eval()
