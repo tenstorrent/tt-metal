@@ -122,6 +122,47 @@ jobs:
           echo "=== Detailed ccache stats with remote storage info ==="
           ccache -s | grep -E "(cache hit|cache miss|remote|local|files|size)" || ccache -s
           echo ""
+          echo "=== Redis Key Inspection ==="
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
+
+          if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
+            echo "Connecting to Redis at ${REDIS_HOST}:${REDIS_PORT}..."
+
+            # Install redis-cli if needed
+            if ! command -v redis-cli &> /dev/null; then
+              echo "Installing redis-cli..."
+              apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
+            fi
+
+            GIT_HASH=$(git rev-parse --short=10 HEAD)
+            echo "Git hash: $GIT_HASH"
+
+            # Count total keys in Redis
+            TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
+            echo "Total keys in Redis after Run 1: ${TOTAL_KEYS}"
+
+            # Sample some keys
+            if [ "$TOTAL_KEYS" -gt 0 ]; then
+              echo "Sample Redis keys (first 20):"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 20 2>/dev/null | head -20 || echo "Could not fetch keys"
+
+              # Check key structure
+              echo ""
+              echo "Inspecting key structure (first key):"
+              FIRST_KEY=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 1 2>/dev/null | head -1)
+              if [ -n "$FIRST_KEY" ]; then
+                echo "Key: $FIRST_KEY"
+                redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" TYPE "$FIRST_KEY" 2>/dev/null || true
+              fi
+            else
+              echo "⚠️  WARNING: Redis appears empty after Run 1 - ccache may not be writing to Redis!"
+            fi
+          else
+            echo "Redis credentials not available"
+          fi
+          echo ""
           echo "=== Kernel cache locations ==="
           echo "Checking ~/.cache/tt-metal-cache/:"
           find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
@@ -215,12 +256,36 @@ jobs:
           echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
           echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
           echo ""
-          echo "=== Verifying Redis is accessible ==="
-          ccache --show-config | grep -i redis || echo "Redis config not found"
+          echo "=== Redis Key Check Before Run 2 ==="
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
+
+          if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
+            # Install redis-cli if needed
+            if ! command -v redis-cli &> /dev/null; then
+              echo "Installing redis-cli..."
+              apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
+            fi
+
+            GIT_HASH=$(git rev-parse --short=10 HEAD)
+            echo "Git hash: $GIT_HASH"
+            TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
+            echo "Total keys in Redis before Run 2: ${TOTAL_KEYS}"
+
+            if [ "$TOTAL_KEYS" -gt 0 ]; then
+              echo "✅ Redis has ${TOTAL_KEYS} cached entries from Run 1"
+              echo "Sample keys (first 10):"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 10 2>/dev/null | head -10
+            else
+              echo "⚠️  WARNING: Redis appears empty - ccache may not have persisted from Run 1"
+              echo "This means Run 2 will NOT get cache hits!"
+            fi
+          fi
           echo ""
           echo "=== Zeroing ccache stats for Run 2 ==="
           ccache -z
-          echo "=== Initial stats (should show previous Redis activity if retained) ==="
+          echo "=== Initial stats ==="
           ccache -s
 
       - name: Clear kernel caches (but keep ccache)
@@ -249,10 +314,64 @@ jobs:
           echo "Looking for remote hits from Redis..."
           echo "$STATS" | grep -E "(hit|miss|remote)" || echo "$STATS"
           echo ""
-          echo "=== Expected behavior: High cache hit rate from Redis ==="
           CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
           CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
           TOTAL=$((CACHE_HITS + CACHE_MISS))
+
+          echo "=== Cache Hit Analysis ==="
+          if [ "$TOTAL" -gt 0 ]; then
+            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
+            echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS} hits / ${TOTAL} total)"
+
+            if [ "$CACHE_HITS" -eq 0 ]; then
+              echo "🔴 ZERO CACHE HITS - Investigating why..."
+              echo ""
+              echo "=== Debugging ccache configuration ==="
+              ccache --show-config | grep -E "(hash|sloppiness|compiler_check|debug|remote)" || ccache --show-config | head -40
+              echo ""
+              echo "=== Environment variables ==="
+              env | grep -E "(CCACHE|TT_METAL)" | sort
+              echo ""
+              echo "=== Checking Redis keys again ==="
+              REDIS_HOST="${{ vars.REDIS_HOST }}"
+              REDIS_PORT="${{ vars.REDIS_PORT }}"
+              REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
+
+              if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
+                if ! command -v redis-cli &> /dev/null; then
+                  apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
+                fi
+
+                TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
+                echo "Total keys in Redis after Run 2: ${TOTAL_KEYS}"
+
+                if [ "$TOTAL_KEYS" -gt 0 ]; then
+                  echo "Redis keys exist but ccache didn't hit them - possible reasons:"
+                  echo "  1. Build keys changed between runs (different compiler flags, defines, etc.)"
+                  echo "  2. ccache hash function includes something that varies (timestamps, paths, etc.)"
+                  echo "  3. ccache is not correctly configured to use Redis"
+                  echo ""
+                  echo "Sample keys from Redis:"
+                  redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 20 2>/dev/null | head -20
+                else
+                  echo "Redis is still empty - ccache is NOT writing to Redis at all!"
+                fi
+              fi
+            elif [ "$HIT_RATE" -gt 70 ]; then
+              echo "✅ Good cache hit rate from Redis!"
+            else
+              echo "⚠️  Lower than expected cache hit rate from Redis"
+            fi
+          else
+            echo "ℹ️  No cache activity detected"
+          fi
+          echo ""
+          echo "=== Kernel cache locations ==="
+          echo "Checking ~/.cache/tt-metal-cache/:"
+          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
+          echo ""
+          echo "Checking /tmp/tt-metal-cache/:"
+          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in /tmp/tt-metal-cache/"
           if [ "$TOTAL" -gt 0 ]; then
             HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
             echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS}/${TOTAL})"
