@@ -1390,6 +1390,33 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
             }
         }
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
+    } else if (is_multi_mesh()) {
+        // In multi-mesh tests, we can only send to adjacent meshes.
+        std::vector<MeshId> adjacent_mesh_ids = get_adjacent_mesh_ids();
+        for (auto mesh_id : adjacent_mesh_ids) {
+            log_info(tt::LogTest, "Adjacent mesh ID: {}", mesh_id);
+        }
+        const auto& local_nodes = device_info_provider_.get_local_node_ids();
+        MeshId local_mesh_id = local_nodes[0].mesh_id;
+
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+        for (const auto& pair : all_pairs) {
+            bool src_is_local = (pair.first.mesh_id == local_mesh_id);
+            bool dst_is_local = (pair.second.mesh_id == local_mesh_id);
+            bool dst_is_adjacent = std::find(adjacent_mesh_ids.begin(), adjacent_mesh_ids.end(), pair.second.mesh_id) !=
+                                   adjacent_mesh_ids.end();
+            if (src_is_local && (dst_is_local || dst_is_adjacent)) {
+                filtered_pairs.push_back(pair);
+            }
+        }
+
+        log_debug(
+            LogTest,
+            "Multi-mesh all_to_all: filtered {} pairs to {} pairs with adjacent mesh destinations",
+            all_pairs.size(),
+            filtered_pairs.size());
+
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else {
         add_senders_from_pairs(test, all_pairs, base_pattern);
     }
@@ -1838,6 +1865,37 @@ uint32_t TestConfigBuilder::get_random_in_range(uint32_t min, uint32_t max) {
     }
     std::uniform_int_distribution<uint32_t> distrib(min, max);
     return distrib(this->gen_);
+}
+
+bool TestConfigBuilder::is_multi_mesh() const { return device_info_provider_.get_global_node_ids().size() > 1; }
+
+std::vector<MeshId> TestConfigBuilder::get_adjacent_mesh_ids() const {
+    std::vector<MeshId> adjacent_mesh_ids;
+    const auto& local_nodes = device_info_provider_.get_local_node_ids();
+
+    if (local_nodes.empty()) {
+        return adjacent_mesh_ids;
+    }
+
+    MeshId local_mesh_id = local_nodes[0].mesh_id;
+
+    const std::vector<RoutingDirection> directions = {
+        RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
+    for (const auto& src_node : local_nodes) {
+        for (const auto& direction : directions) {
+            auto neighbor = route_manager_.get_neighbor_node_id_or_nullopt(src_node, direction);
+            if (neighbor.has_value() && neighbor->mesh_id != local_mesh_id) {
+                // Only add if not already in the list
+                if (std::find(adjacent_mesh_ids.begin(), adjacent_mesh_ids.end(), neighbor->mesh_id) ==
+                    adjacent_mesh_ids.end()) {
+                    adjacent_mesh_ids.push_back(neighbor->mesh_id);
+                }
+            }
+        }
+    }
+
+    return adjacent_mesh_ids;
 }
 
 // YamlTestConfigSerializer methods

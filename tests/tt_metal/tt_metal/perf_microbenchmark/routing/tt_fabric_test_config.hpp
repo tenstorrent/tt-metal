@@ -458,6 +458,10 @@ private:
 
     void resolve_missing_params(ParsedTestConfig& test);
 
+    // Multi-mesh helper methods
+    bool is_multi_mesh() const;
+    std::vector<MeshId> get_adjacent_mesh_ids() const;
+
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
     std::mt19937& gen_;
