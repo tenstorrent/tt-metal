@@ -67,6 +67,86 @@ def handle_mul(func, args, kwargs):
     return res
 
 
+def handle_sub(func, args, kwargs):
+    """Handle subtraction operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    res = TorchTTNNTensor(ttnn.subtract(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return res
+
+
+def handle_div(func, args, kwargs):
+    """Handle division operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    res = TorchTTNNTensor(ttnn.divide(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return res
+
+
 def handle_add(func, args, kwargs):
     """Handle addition operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -158,6 +238,8 @@ def handle_cat(func, args, kwargs):
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
             tensor.ttnn_tensor = ttnn.to_device(tensor.to_ttnn, device)
+        if tensor.ttnn_tensor.layout != ttnn.TILE_LAYOUT:
+            tensor.ttnn_tensor = ttnn.to_layout(tensor.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     res = TorchTTNNTensor(ttnn.concat([tensor.to_ttnn for tensor in tensors], dim))
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
@@ -382,19 +464,166 @@ def handle_relu(func, args, kwargs):
     return TorchTTNNTensor(ttnn.relu(input_tensor.to_ttnn))
 
 
+def handle_new_zeros(func, args, kwargs):
+    """Handle new_zeros operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(
+        ttnn.zeros(
+            args[1],
+            memory_config=input_tensor.to_ttnn.memory_config(),
+            device=input_tensor.to_ttnn.device(),
+            dtype=input_tensor.to_ttnn.dtype,
+        )
+    )
+
+
+def handle_sigmoid(func, args, kwargs):
+    """Handle Sigmoid activation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(ttnn.sigmoid(input_tensor.to_ttnn))
+
+
+def handle_squeeze(func, args, kwargs):
+    """Handle squeeze operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    dim = args[1]
+    return TorchTTNNTensor(ttnn.squeeze(input_tensor.to_ttnn, dim))
+
+
+def handle_stack(func, args, kwargs):
+    """Handle stack operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    tensors = args[0]
+    dim = args[1] if len(args) > 1 else 0
+    deallocate_tensors = []
+    device = None
+    for index, tensor in enumerate(tensors):
+        deallocate_tensor = False
+        if not isinstance(tensor, TorchTTNNTensor):
+            tensors[index] = TorchTTNNTensor(tensor)
+        if tensors[index].ttnn_tensor is None:
+            tensors[index].ttnn_tensor = tensors[index].to_ttnn
+            deallocate_tensor = True
+        deallocate_tensors.append(deallocate_tensor)
+        device = tensor.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    for index, tensor in enumerate(tensors):
+        if deallocate_tensors[index]:
+            tensor.ttnn_tensor = ttnn.to_device(tensor.to_ttnn, device)
+    res = TorchTTNNTensor(ttnn.stack([tensor.to_ttnn for tensor in tensors], dim))
+    for index, tensor in enumerate(tensors):
+        if deallocate_tensors[index]:
+            ttnn.deallocate(tensor.ttnn_tensor)
+
+    return res
+
+
+def handle_sum(func, args, kwargs):
+    """Handle sum operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    dim = args[1]
+    keepdim = args[2] if len(args) > 2 else False
+    return TorchTTNNTensor(ttnn.sum(input_tensor.to_ttnn, dim, keepdim=keepdim))
+
+
+def handle_ge(func, args, kwargs):
+    """Handle greater equal operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    res = TorchTTNNTensor(ttnn.ge(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return res
+
+
+def handle_select(func, args, kwargs):
+    """Handle select operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    dim = args[1]
+    index = args[2]
+    input_shape = list(input_tensor.shape)
+    if index < 0:
+        index = input_shape[dim] + index
+
+    starts = [0] * len(input_shape)
+    ends = list(input_shape)
+
+    starts[dim] = index
+    ends[dim] = index + 1
+
+    slice_step = [1] * len(input_shape)
+    new_shape = [i for index, i in enumerate(input_shape) if index != dim]
+    return TorchTTNNTensor(ttnn.reshape(ttnn.slice(input_tensor.to_ttnn, starts, ends, slice_step), new_shape))
+
+
 # Mapping of ATen operations to TTNN handlers
 func_to_ttnn_compatible = {
     "aten::view": handle_view,
     "aten::_unsafe_view": handle_view,
     "aten::transpose.int": handle_transpose,
     "aten::mul.Tensor": handle_mul,
+    "aten::sub.Tensor": handle_sub,
+    "aten::div.Tensor": handle_div,
     "aten::slice.Tensor": handle_slice,
     "aten::neg": handle_neg,
     "aten::cat": handle_cat,
     "aten::add.Tensor": handle_add,
     "aten::unsqueeze": handle_unsqueeze,
+    "aten::squeeze.dim": handle_squeeze,
     "aten::expand": handle_expand,
     "aten::mul.Scalar": handle_mul,
+    "aten::sub.Scalar": handle_sub,
     "aten::add.Scalar": handle_add,
     "aten::add_.Tensor": handle_add,
     "aten::bmm": handle_bmm,
@@ -404,6 +633,12 @@ func_to_ttnn_compatible = {
     "aten::rsqrt": handle_rsqrt,
     "aten::gelu": handle_gelu,
     "aten::relu": handle_relu,
+    "aten::new_zeros": handle_new_zeros,
+    "aten::sigmoid": handle_sigmoid,
+    "aten::stack": handle_stack,
+    "aten::sum.dim_IntList": handle_sum,
+    "aten::ge.Scalar": handle_ge,
+    "aten::select.int": handle_select,
 }
 
 

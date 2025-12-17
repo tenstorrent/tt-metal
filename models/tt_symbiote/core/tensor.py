@@ -134,10 +134,18 @@ class TorchTTNNTensor(torch.Tensor):
         return self.__mul__(other)
 
     def __sub__(self, other):
-        raise RuntimeError("Subtraction is not yet implemented for TTNN tensors.")
+        from models.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn, dispatch_to_ttnn
+
+        if can_dispatch_to_ttnn("aten::sub.Tensor", (self, other), {}):
+            return dispatch_to_ttnn("aten::sub.Tensor", (self, other), {})
+        return self.to_torch - other
 
     def __rsub__(self, other):
-        raise RuntimeError("Subtraction is not yet implemented for TTNN tensors.")
+        from models.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn, dispatch_to_ttnn
+
+        if can_dispatch_to_ttnn("aten::sub.Tensor", (other, self), {}):
+            return dispatch_to_ttnn("aten::sub.Tensor", (other, self), {})
+        return other - self.elem.to_torch
 
     def __add__(self, other):
         from models.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn, dispatch_to_ttnn
