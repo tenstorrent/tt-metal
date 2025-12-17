@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tests/tt_metal/udm/test_udm_utils.hpp"
+#include "tests/ttnn/unit_tests/gtests/udm/test_udm_utils.hpp"
 #include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
 
 #include "tt_metal/udm/mesh_kernel.hpp"
@@ -84,7 +84,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::experimental::udm::CreateMeshKernel(
             mesh_builder,
             program,
-            "tests/tt_metal/udm/kernels/dataflow_add.cpp",
+            "tests/ttnn/unit_tests/gtests/udm/kernels/dataflow_add.cpp",
             gcores_info.gcores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -98,7 +98,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::experimental::udm::CreateMeshKernel(
             mesh_builder,
             program,
-            "tests/tt_metal/udm/kernels/compute_add.cpp",
+            "tests/ttnn/unit_tests/gtests/udm/kernels/compute_add.cpp",
             gcores_info.gcores,
             tt::tt_metal::ComputeConfig{});
 
