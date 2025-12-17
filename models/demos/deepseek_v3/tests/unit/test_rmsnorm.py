@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_helpers import create_sharded_norm_config
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # =============================================================================
@@ -263,3 +264,74 @@ def test_rmsnorm_post_all_gather(device):
     tt_out_cpu = ttnn.to_torch(tt_out)
 
     assert_with_pcc(ref_out_local, tt_out_cpu, pcc=0.99)
+
+
+# =============================================================================
+# Test: Non-distributed RMSNorm (ttnn.rms_norm)
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "inp_shape, weight_shape",
+    [
+        ((1, 1, 32, 1536), (1, 1, 48, 32)),  # 1536 / 32 = 48 sticks
+        ((1, 1, 32, 512), (1, 1, 16, 32)),  # 512 / 32 = 16 sticks
+    ],
+    ids=["32x1536", "32x512"],
+)
+def test_rmsnorm(device, inp_shape, weight_shape):
+    """
+    Test non-distributed RMSNorm operation (ttnn.rms_norm).
+
+    Test configuration:
+    - Input: bfloat16, DRAM INTERLEAVED, TILE layout
+    - Weight: bfloat16, DRAM INTERLEAVED, ROW_MAJOR layout
+    - LoFi compute kernel (math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True)
+    - LayerNormDefaultProgramConfig
+    - epsilon: 1e-6
+    """
+    torch.manual_seed(1234)
+
+    epsilon = 1e-6
+
+    logger.info(f"Testing rms_norm: inp_shape={inp_shape}, weight_shape={weight_shape}")
+
+    # Create input and weight tensors
+    inp = torch.randn(inp_shape).bfloat16().float()
+    gamma = torch.rand(inp_shape[-1]).bfloat16().float() * 2 - 1
+
+    # Reference output
+    ref_out = reference_rmsnorm(inp, gamma, epsilon)
+
+    # Prepare input - DRAM INTERLEAVED, TILE layout
+    tt_inp = ttnn.from_torch(
+        inp,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Prepare gamma weights - DRAM INTERLEAVED, ROW_MAJOR layout
+    tt_gamma = ttnn.from_torch(
+        gamma.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Run rms_norm with LoFi compute kernel and default program config
+    tt_out = ttnn.rms_norm(
+        tt_inp,
+        epsilon=epsilon,
+        weight=tt_gamma,
+        compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+        program_config=ttnn.LayerNormDefaultProgramConfig(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Get output and compare
+    tt_out_cpu = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(ref_out, tt_out_cpu, pcc=0.99)
