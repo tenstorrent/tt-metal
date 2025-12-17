@@ -2511,11 +2511,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
                 return *exit_node.src_exit_node;
             });
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
-            my_mesh_id,
-            neighbor_mesh_id,
-            requested_intermesh_connections,
-            requested_intermesh_ports,
-            src_exit_node_chips);
+            my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
         port_descriptors[my_mesh_id][neighbor_mesh_id] = this->assign_logical_ports_to_exit_nodes(
             my_host,
             neighbor_host,
@@ -2526,44 +2522,58 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     return port_descriptors;
 }
 
+void ControlPlane::validate_requested_intermesh_connections(
+    const RequestedIntermeshConnections& requested_intermesh_connections, const PortDescriptorTable& port_descriptors) {
+    bool strict_binding = requested_intermesh_connections.empty();
+    if (strict_binding) {
+        return;
+    }
+    for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
+        auto src_mesh_id = MeshId(src_mesh);
+        for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
+            auto dst_mesh_id = MeshId(dst_mesh);
+            TT_FATAL(
+                num_channels <= port_descriptors.at(src_mesh_id).at(dst_mesh_id).size(),
+                "Requested {} channels between {} and {}, but only have {} physical links",
+                num_channels,
+                src_mesh,
+                dst_mesh,
+                port_descriptors.at(src_mesh_id).at(dst_mesh_id).size());
+        }
+    }
+}
+
 std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
     MeshId my_mesh_id,
     MeshId neighbor_mesh_id,
-    const RequestedIntermeshConnections& requested_intermesh_connections,
     const RequestedIntermeshPorts& requested_intermesh_ports,
     const std::vector<uint64_t>& src_exit_node_chips) {
     std::unordered_set<FabricNodeId> requested_exit_nodes;
+    const auto& local_coord_range = this->get_coord_range(my_mesh_id, MeshScope::LOCAL);
     if (!requested_intermesh_ports.empty()) {
         for (const auto& port : requested_intermesh_ports.at(*my_mesh_id).at(*neighbor_mesh_id)) {
             auto src_device = std::get<0>(port);
-            auto dst_device = std::get<1>(port);
-            auto num_chans = std::get<2>(port);
-            uint32_t num_physical_chans = 0;
+            auto requested_coordinate = this->mesh_graph_->chip_to_coordinate(my_mesh_id, src_device);
+            if (!local_coord_range.contains(requested_coordinate)) {
+                continue;
+            }
+            uint32_t num_physical_channels_found = 0;
+            uint32_t num_channels_requested = std::get<2>(port);
             for (const auto& src_exit_node_chip : src_exit_node_chips) {
                 if (this->get_fabric_node_id_from_asic_id(src_exit_node_chip) == FabricNodeId(my_mesh_id, src_device)) {
                     requested_exit_nodes.insert(FabricNodeId(my_mesh_id, src_device));
-                    num_physical_chans++;
+                    num_physical_channels_found++;
                 }
             }
             TT_FATAL(
-                num_physical_chans >= num_chans,
-                "Requested {} channels between {} and {}, on devices {} and {}, but only have {} physical channels",
-                num_chans,
+                num_physical_channels_found >= num_channels_requested,
+                "Requested {} channels between {} and {} on src FabricNodeId {}, but only have {} physical channels",
+                num_channels_requested,
                 *my_mesh_id,
                 *neighbor_mesh_id,
-                src_device,
-                dst_device,
-                num_physical_chans);
+                FabricNodeId(my_mesh_id, src_device),
+                num_physical_channels_found);
         }
-    } else {
-        std::size_t num_requested_chans = requested_intermesh_connections.at(*my_mesh_id).at(*neighbor_mesh_id);
-        TT_FATAL(
-            src_exit_node_chips.size() >= num_requested_chans,
-            "Requested {} channels between {} and {}, but only have {} physical links",
-            num_requested_chans,
-            *my_mesh_id,
-            *neighbor_mesh_id,
-            src_exit_node_chips.size());
     }
     return requested_exit_nodes;
 }
@@ -2691,6 +2701,8 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 
     bool strict_binding = !requested_intermesh_ports.empty();
     std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
+
+    validate_requested_intermesh_connections(requested_intermesh_connections, port_descriptors);
 
     for (const auto& [src_mesh, port_identifiers] : port_descriptors) {
         for (const auto& [dest_mesh, src_ports] : port_identifiers) {
