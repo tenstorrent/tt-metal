@@ -626,7 +626,7 @@ class Generator:
 
         return trace_tok_rm
 
-    def read_decode_output(self, tt_out, async_read=True):
+    def read_decode_output(self, tt_out, async_read=False):
         if not async_read:
             if isinstance(tt_out, tuple):
                 # Get logits and skip log-probs
