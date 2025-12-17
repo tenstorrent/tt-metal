@@ -51,7 +51,10 @@ Core
    ttnn.reallocate
    ttnn.to_memory_config
    ttnn.split_work_to_cores
-
+   ttnn.copy_device_to_host_tensor
+   ttnn.copy_host_to_device_tensor
+   ttnn.to_dtype
+   ttnn.typecast
 
 Tensor Creation
 ===============
@@ -72,6 +75,10 @@ Tensor Creation
    ttnn.full_like
    ttnn.rand
    ttnn.from_buffer
+   ttnn.bernoulli
+   ttnn.complex_tensor
+   ttnn.index_fill
+   ttnn.uniform
 
 Matrix Multiplication
 =====================
@@ -116,6 +123,8 @@ Pointwise Unary
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
+   ttnn.logical_left_shift
+   ttnn.logical_right_shift
    ttnn.cbrt
    ttnn.ceil
    ttnn.celu
@@ -150,6 +159,7 @@ Pointwise Unary
    ttnn.hardtanh
    ttnn.heaviside
    ttnn.i0
+   ttnn.i1
    ttnn.identity
    ttnn.isfinite
    ttnn.isinf
@@ -169,6 +179,7 @@ Pointwise Unary
    ttnn.logit
    ttnn.ltz
    ttnn.mish
+   ttnn.hardmish
    ttnn.multigammaln
    ttnn.neg
    ttnn.nez
@@ -195,6 +206,8 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.std_hw
+   ttnn.var_hw
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -305,12 +318,17 @@ Pointwise Binary
    :template: function.rst
 
    ttnn.add
+   ttnn.add_
    ttnn.addalpha
    ttnn.subalpha
    ttnn.multiply
+   ttnn.multiply_
    ttnn.subtract
+   ttnn.subtract_
    ttnn.div
    ttnn.div_no_nan
+   ttnn.divide
+   ttnn.divide_
    ttnn.floor_div
    ttnn.remainder
    ttnn.fmod
@@ -321,7 +339,9 @@ Pointwise Binary
    ttnn.logical_xor_
    ttnn.rpow
    ttnn.rsub
+   ttnn.rsub_
    ttnn.ldexp
+   ttnn.ldexp_
    ttnn.logical_and
    ttnn.logical_or
    ttnn.logical_xor
@@ -329,10 +349,13 @@ Pointwise Binary
    ttnn.bitwise_or
    ttnn.bitwise_xor
    ttnn.logaddexp
+   ttnn.logaddexp_
    ttnn.logaddexp2
+   ttnn.logaddexp2_
    ttnn.hypot
    ttnn.xlogy
    ttnn.squared_difference
+   ttnn.squared_difference_
    ttnn.gt
    ttnn.gt_
    ttnn.lt_
@@ -353,7 +376,10 @@ Pointwise Binary
    ttnn.pow
    ttnn.polyval
    ttnn.scatter
+   ttnn.scatter_add
    ttnn.atan2
+   ttnn.bias_gelu
+   ttnn.bias_gelu_
    ttnn.add_bw
    ttnn.assign_bw
    ttnn.atan2_bw
@@ -376,6 +402,7 @@ Pointwise Binary
    ttnn.rsub_bw
    ttnn.min_bw
    ttnn.max_bw
+   ttnn.prim.binary
 
 Pointwise Ternary
 =================
@@ -394,6 +421,18 @@ Pointwise Ternary
    ttnn.addcdiv_bw
    ttnn.where_bw
    ttnn.lerp_bw
+
+Quantization
+============
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.quantize
+   ttnn.requantize
+   ttnn.dequantize
 
 Losses
 ======
@@ -428,6 +467,7 @@ Reduction
    ttnn.cumsum
    ttnn.manual_seed
    ttnn.moe
+   ttnn.sampling
 
 Data Movement
 =============
@@ -454,6 +494,31 @@ Data Movement
    ttnn.indexed_fill
    ttnn.gather
    ttnn.sort
+   ttnn.assign
+   ttnn.bcast
+   ttnn.chunk
+   ttnn.copy
+   ttnn.expand
+   ttnn.fill_implicit_tile_padding
+   ttnn.fold
+   ttnn.interleaved_to_sharded
+   ttnn.interleaved_to_sharded_partial
+   ttnn.moe_expert_token_remap
+   ttnn.moe_routing_remap
+   ttnn.move
+   ttnn.reshape_on_device
+   ttnn.reshard
+   ttnn.roll
+   ttnn.sharded_to_interleaved
+   ttnn.sharded_to_interleaved_partial
+   ttnn.split
+   ttnn.squeeze
+   ttnn.stack
+   ttnn.tilize_with_zero_padding
+   ttnn.transpose
+   ttnn.unsqueeze
+   ttnn.unsqueeze_to_4D
+   ttnn.view
 
 Normalization
 =============
@@ -501,9 +566,18 @@ Transformer
    ttnn.transformer.concatenate_heads
    ttnn.transformer.attention_softmax
    ttnn.transformer.attention_softmax_
-   ttnn.experimental.rotary_embedding
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.chunked_flash_mla_prefill
+   ttnn.transformer.chunked_scaled_dot_product_attention
+   ttnn.transformer.flash_mla_prefill
+   ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.joint_scaled_dot_product_attention
+   ttnn.transformer.paged_flash_multi_latent_attention_decode
+   ttnn.transformer.paged_scaled_dot_product_attention_decode
+   ttnn.transformer.ring_distributed_scaled_dot_product_attention
+   ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.windowed_scaled_dot_product_attention
 
 CCL
 ===
@@ -516,6 +590,12 @@ CCL
    ttnn.all_gather
    ttnn.reduce_scatter
    ttnn.all_reduce
+   ttnn.broadcast
+   ttnn.all_to_all_combine
+   ttnn.all_to_all_dispatch
+   ttnn.mesh_partition
+   ttnn.point_to_point
+   ttnn.reduce_to_root
 
 Embedding
 =========
@@ -563,6 +643,19 @@ Pooling
    ttnn.global_avg_pool2d
    ttnn.max_pool2d
    ttnn.avg_pool2d
+   ttnn.adaptive_avg_pool2d
+   ttnn.adaptive_max_pool2d
+   ttnn.grid_sample
+
+Prefetcher
+==========
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.dram_prefetcher
 
 Vision
 ========
@@ -574,6 +667,16 @@ Vision
 
    ttnn.upsample
 
+Generic
+=======
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.generic_op
+
 KV Cache
 ========
 
@@ -584,6 +687,8 @@ KV Cache
 
    ttnn.kv_cache.fill_cache_for_user_
    ttnn.kv_cache.update_cache_for_token_
+   ttnn.fill_cache
+   ttnn.update_cache
 
 
 Model Conversion

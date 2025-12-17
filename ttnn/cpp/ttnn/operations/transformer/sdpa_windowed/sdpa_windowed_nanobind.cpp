@@ -38,6 +38,7 @@ void bind_sdpa_windowed(nb::module_& mod) {
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
 
         Example:
+
             # For a sequence with 3 windows of sizes 10, 15, and 20 tokens:
             cu_window_seqlens = [0, 10, 25, 45]
             output = ttnn.transformer.windowed_scaled_dot_product_attention(
