@@ -14,15 +14,14 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchSelectiveTilize::invoke(
+std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology,
-    const std::optional<uint32_t>& output_concat_dim) {
+    std::optional<tt::tt_fabric::Topology> topology) {
     auto* mesh_device = input_tensor.device();
 
     uint32_t num_links_ = num_links.value_or(::ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));

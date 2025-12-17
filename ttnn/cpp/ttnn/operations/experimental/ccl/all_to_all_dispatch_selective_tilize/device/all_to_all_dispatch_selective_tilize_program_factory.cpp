@@ -51,10 +51,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto* mesh_device = tensor_args.input_tensor.device();
 
+    // Default worker core range - single core for now
+    CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
     auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
     auto final_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
@@ -89,12 +92,12 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
-    auto scores_tensor = tensor_args.expert_scores_tensor;
+    auto input_scores_tensor = tensor_args.expert_scores_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
 
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
-    const auto& scores_tensor = tensor_return_value.at(2);
+    const auto& output_scores_tensor = tensor_return_value.at(2);
 
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
@@ -152,6 +155,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.dtype());
     auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
+    auto scores_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_scores_tensor.dtype());
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -163,6 +167,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t packet_header_cb_id = tt::CBIndex::c_3;
     // book-keeping buffer to avoid sending the same token multiple times
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
+    // full scores buffer
+    uint32_t scores_tensor_cb_id = tt::CBIndex::c_5;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
     log_debug(
@@ -214,7 +220,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    CoreCoord worker_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));  // exclusive end
+    // Default worker core range - single core for now
+    CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t num_cores = worker_core_range_set.num_cores();
     uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
@@ -237,7 +244,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
          indices_cores_group_1,
          indices_cores_group_2,
          indices_units_per_core_g1,
-         indices_units_per_core_g2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, num_indices_pages);
+         indices_units_per_core_g2] = tt::tt_metal::split_work_to_cores(worker_core_range_set, indices_pages);
 
     uint32_t max_subtoken_size =
         std::max(subtoken_units_per_core_g1, subtoken_units_per_core_g2) * subtoken_bytes_aligned;
@@ -260,6 +267,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         aligned_indices_page_size,
         2 * max_indices_pages_per_packet,
         indices_data_format);
+
+    // Store entire scores tensor in a circular buffer
+    tt::tt_metal::create_cb(
+        scores_tensor_cb_id,
+        program,
+        sender_core_grid,
+        aligned_indices_page_size,
+        2 * max_indices_pages_per_packet,  // scores tensor is the same size as the indices tensor
+        scores_data_format);
 
     // Store entire mapping tensor in a circular buffer
     tt::tt_metal::create_cb(
@@ -380,7 +396,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         metadata_tensor.buffer()->address(),         // 4
         (uint32_t)cross_device_semaphore.address(),  // 5
         (uint32_t)init_semaphore.address(),          // 6
-        scores_tensor.buffer()->address(),           // 7
+        input_scores_tensor.buffer()->address(),     // 7
+        output_scores_tensor.buffer()->address(),    // 8
     };
 
     uint32_t subtoken_offset_idx = reader_runtime_args.size();
@@ -398,7 +415,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
 
-        if (tokens_core_group_1.contains(sender_cores.at(i))) {
+        if (subtoken_cores_group_1.contains(sender_cores.at(i))) {
             reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
             uint32_t subtoken_size = subtoken_units_per_core_g1 * subtoken_bytes_aligned;
             if (subtoken_offset + subtoken_size > aligned_input_page_size) {
@@ -419,12 +436,12 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         if (indices_cores_group_1.contains(sender_cores.at(i))) {
             reader_runtime_args.at(indices_start_idx) = indices_start;
             reader_runtime_args.at(indices_end_idx) =
-                std::min(indices_start + indices_units_per_core_g1, num_indices_pages);
+                std::min(indices_start + indices_units_per_core_g1, indices_pages);
             indices_start = reader_runtime_args.at(indices_end_idx);
         } else if (indices_cores_group_2.contains(sender_cores.at(i))) {
             reader_runtime_args.at(indices_start_idx) = indices_start;
             reader_runtime_args.at(indices_end_idx) =
-                std::min(indices_start + indices_units_per_core_g2, num_indices_pages);
+                std::min(indices_start + indices_units_per_core_g2, indices_pages);
             indices_start = reader_runtime_args.at(indices_end_idx);
         }
 
@@ -465,13 +482,16 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
 
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
-        const auto& dte_tensor = tensor_return_value.at(2);
-        const auto& dte_scores_tensor = tensor_return_value.at(3);
-        const auto& ed_table_tensor = tensor_return_value.at(4);
+        const auto& output_scores_tensor = tensor_return_value.at(2);
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
+
+            // Update reader runtime args to match create_at layout:
+            // 0: input_tensor, 1: indices_tensor, 2: mapping_tensor, 3: output_tensor,
+            // 4: metadata_tensor, 5: cross_device_semaphore, 6: init_semaphore,
+            // 7: input_scores_tensor, 8: output_scores_tensor
             reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
@@ -479,9 +499,8 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
             reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             reader_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
-            reader_runtime_args.at(7) = dte_tensor.buffer()->address();
-            reader_runtime_args.at(8) = dte_scores_tensor.buffer()->address();
-            reader_runtime_args.at(9) = ed_table_tensor.buffer()->address();
+            reader_runtime_args.at(7) = tensor_args.expert_scores_tensor.buffer()->address();
+            reader_runtime_args.at(8) = output_scores_tensor.buffer()->address();
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
@@ -490,9 +509,8 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
-            writer_runtime_args.at(7) = dte_tensor.buffer()->address();
-            writer_runtime_args.at(8) = dte_scores_tensor.buffer()->address();
-            writer_runtime_args.at(9) = ed_table_tensor.buffer()->address();
+            writer_runtime_args.at(7) = tensor_args.expert_scores_tensor.buffer()->address();
+            writer_runtime_args.at(8) = output_scores_tensor.buffer()->address();
         }
     }
 }

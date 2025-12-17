@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations::experimental::ccl {
 
 struct ExecuteAllToAllDispatchSelectiveTilize {
-    static std::array<ttnn::Tensor, 2> invoke(
+    static std::array<ttnn::Tensor, 3> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_scores_tensor,

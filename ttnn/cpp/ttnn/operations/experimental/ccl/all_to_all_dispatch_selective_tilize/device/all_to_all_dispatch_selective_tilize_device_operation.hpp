@@ -35,9 +35,9 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const Tensor expert_mapping_tensor;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 5>;
+    using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
 
-    using tensor_return_value_t = std::array<Tensor, 5>;
+    using tensor_return_value_t = std::array<Tensor, 3>;
 
     struct AllToAllDispatchSelectiveTilizeSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -98,8 +98,7 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
         uint32_t num_links,
-        tt::tt_fabric::Topology topology,
-        const CoreRangeSet& worker_core_range_set);
+        tt::tt_fabric::Topology topology);
 };
 }  // namespace ttnn::operations::experimental::ccl
 
