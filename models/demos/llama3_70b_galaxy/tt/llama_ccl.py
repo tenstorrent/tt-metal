@@ -184,7 +184,7 @@ class TT_CCL:
         - SAMPLING_INDICES: (1, 1, 32, 256)
         - LOGPROBS_MAX_REDUCTION: (1, 8, 32, 1)
         - LOGPROBS_SUM_EXP_REDUCTION: (1, 8, 32, 1)
-        - LOGPROBS_LOGITS: (1, 8, 32, 1)
+        - LOGPROBS_LOGITS: (1, 8, 1, 32)
         - BINARY_MUL: (1, 1, 32, 3584)
 
         """
@@ -290,7 +290,7 @@ class TT_CCL:
         )
         persistent_buffers["LOGPROBS_SUM_EXP_REDUCTION"] = tt_buffer
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 8, 32, 1)),
+            torch.zeros((1, 8, 1, 32)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,

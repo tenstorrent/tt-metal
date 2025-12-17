@@ -262,7 +262,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            1,  # num layers
+            80,  # num layers
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
@@ -1022,6 +1022,8 @@ def test_demo_text(
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+
+                tt_out_tok, tt_log_probs = tt_out_tok[0], tt_out_tok[1]
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
