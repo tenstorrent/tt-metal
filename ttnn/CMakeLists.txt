@@ -110,7 +110,7 @@ target_sources(
         FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
-        ${INSPECTOR_RPC_CAPNP_SOURCES}
+        ${_INSPECTOR_RPC_CAPNP_SOURCES}
         ${TTNN_INSPECTOR_RPC_CAPNP_SOURCES}
         ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
         core/async_runtime.cpp
