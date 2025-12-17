@@ -23,9 +23,9 @@ void bind_sdpa_windowed(nb::module_& mod) {
         Qwen2.5-VL where attention is restricted to specific windows in the sequence.
 
         Args:
-            input_tensor_q (ttnn.Tensor): the query tensor.     [b x nqh x s x dh]
-            input_tensor_k (ttnn.Tensor): the key tensor.       [b x nkv x s x dh]
-            input_tensor_v (ttnn.Tensor): the value tensor.     [b x nkv x s x dh]
+            input_tensor_q (ttnn.Tensor): the query tensor. [b x nqh x s x dh]
+            input_tensor_k (ttnn.Tensor): the key tensor. [b x nkv x s x dh]
+            input_tensor_v (ttnn.Tensor): the value tensor. [b x nkv x s x dh]
             cu_window_seqlens (ttnn.Tensor): cumulative window sequence lengths that define attention boundaries. [window_count + 1]
 
         Keyword args:
@@ -39,11 +39,13 @@ void bind_sdpa_windowed(nb::module_& mod) {
 
         Example:
 
-            # For a sequence with 3 windows of sizes 10, 15, and 20 tokens:
-            cu_window_seqlens = [0, 10, 25, 45]
-            output = ttnn.transformer.windowed_scaled_dot_product_attention(
-                q, k, v, cu_window_seqlens
-            )
+            .. code-block:: python
+
+                # For a sequence with 3 windows of sizes 10, 15, and 20 tokens:
+                cu_window_seqlens = [0, 10, 25, 45]
+                output = ttnn.transformer.windowed_scaled_dot_product_attention(
+                    q, k, v, cu_window_seqlens
+                )
         )doc";
 
     using OperationType = decltype(ttnn::transformer::windowed_scaled_dot_product_attention);
