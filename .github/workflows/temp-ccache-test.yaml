@@ -80,11 +80,17 @@ jobs:
           echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
           echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
           echo ""
+          echo "=== Redis Connection Details ==="
+          ccache --show-config | grep -i redis || echo "No Redis config found"
+          ccache --show-config | grep -E "(remote_storage|remote_only|redis)" || true
+          echo ""
           echo "=== Git commit info ==="
           echo "Git commit: $(git rev-parse HEAD)"
           echo "Git commit short: $(git rev-parse --short=10 HEAD)"
           echo ""
+          echo "=== Zeroing ccache stats ==="
           ccache -z
+          echo "=== Initial ccache stats ==="
           ccache -s
 
       - name: Clear kernel caches to force fresh compilation
@@ -109,6 +115,13 @@ jobs:
           echo "=== RUN 1: ccache statistics after test ==="
           ccache -s
           echo ""
+          echo "=== Redis Remote Storage Stats ==="
+          echo "Remote storage is $(ccache --show-config | grep remote_storage | awk '{print $3}')"
+          echo "Remote only mode: ${CCACHE_REMOTE_ONLY:-not set}"
+          echo ""
+          echo "=== Detailed ccache stats with remote storage info ==="
+          ccache -s | grep -E "(cache hit|cache miss|remote|local|files|size)" || ccache -s
+          echo ""
           echo "=== Kernel cache locations ==="
           echo "Checking ~/.cache/tt-metal-cache/:"
           find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
@@ -119,6 +132,10 @@ jobs:
           echo "=== Disk usage of kernel caches ==="
           du -sh ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ not found"
           du -sh /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ not found"
+          echo ""
+          echo "=== Local ccache directory (should be minimal with REMOTE_ONLY) ==="
+          du -sh /github/home/.ccache 2>/dev/null || echo "/github/home/.ccache not found"
+          ls -la /github/home/.ccache 2>/dev/null | head -20 || echo "Cannot list /github/home/.ccache"
 
       - name: Upload Run 1 artifacts
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
@@ -193,10 +210,17 @@ jobs:
           echo "=== RUN 2: ccache configuration ==="
           ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
           echo ""
+          echo "=== Redis Remote Storage Configuration ==="
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
           echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
+          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
           echo ""
+          echo "=== Verifying Redis is accessible ==="
+          ccache --show-config | grep -i redis || echo "Redis config not found"
+          echo ""
+          echo "=== Zeroing ccache stats for Run 2 ==="
           ccache -z
+          echo "=== Initial stats (should show previous Redis activity if retained) ==="
           ccache -s
 
       - name: Clear kernel caches (but keep ccache)
@@ -220,6 +244,27 @@ jobs:
           echo "=== RUN 2: ccache statistics after test ==="
           ccache -s
           echo ""
+          echo "=== Redis Cache Hit Analysis ==="
+          STATS=$(ccache -s)
+          echo "Looking for remote hits from Redis..."
+          echo "$STATS" | grep -E "(hit|miss|remote)" || echo "$STATS"
+          echo ""
+          echo "=== Expected behavior: High cache hit rate from Redis ==="
+          CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
+          CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
+          TOTAL=$((CACHE_HITS + CACHE_MISS))
+          if [ "$TOTAL" -gt 0 ]; then
+            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
+            echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS}/${TOTAL})"
+            if [ "$HIT_RATE" -gt 70 ]; then
+              echo "✅ Good cache hit rate from Redis!"
+            else
+              echo "⚠️  Lower than expected cache hit rate from Redis"
+            fi
+          else
+            echo "⚠️  No cache activity detected"
+          fi
+          echo ""
           echo "=== Kernel cache locations ==="
           echo "Checking ~/.cache/tt-metal-cache/:"
           find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
@@ -230,6 +275,10 @@ jobs:
           echo "=== Disk usage of kernel caches ==="
           du -sh ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ not found"
           du -sh /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ not found"
+          echo ""
+          echo "=== Local ccache directory (should be minimal with REMOTE_ONLY) ==="
+          du -sh /github/home/.ccache 2>/dev/null || echo "/github/home/.ccache not found"
+          ls -la /github/home/.ccache 2>/dev/null | head -20 || echo "Cannot list /github/home/.ccache"
 
       - name: Upload Run 2 artifacts
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
@@ -298,7 +347,7 @@ jobs:
         run: |
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          echo "=== Initial ccache configuration ==="
+          echo "=== RUN 3: Initial ccache configuration ==="
           ccache --show-config | head -30
           echo ""
           echo "=== Redis Remote Storage Configuration ==="
@@ -306,11 +355,19 @@ jobs:
           echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
           echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
           echo ""
+          echo "=== Redis Connection Verification ==="
+          ccache --show-config | grep -E "(remote_storage|remote_only|redis)" || true
+          echo "Redis URL pattern check:"
+          echo "${CCACHE_REMOTE_STORAGE}" | grep -o "redis://" && echo "✅ Redis URL detected" || echo "⚠️  Redis URL not found"
+          echo ""
           echo "=== Git commit info ==="
           echo "Git commit: $(git rev-parse HEAD)"
           echo "Git commit short: $(git rev-parse --short=10 HEAD)"
           echo ""
+          echo "=== Zeroing ccache stats for Run 3 ==="
           ccache -z
+          echo "=== Current stats ==="
+          ccache -s
 
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
