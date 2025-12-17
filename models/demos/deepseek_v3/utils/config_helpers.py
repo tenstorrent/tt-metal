@@ -732,26 +732,50 @@ def _shard_device_impl(
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
     # NOTE: START OF THE WORKAROUND for issues #28715, #28805, #28806, #28807
+    def to_device(
+        weight,
+        device,
+        mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ):
+        """
+        The most performant path is to shard+to_device at the same time and then convert to the desired layout and dtype.
 
-    if (
-        memory_config != ttnn.DRAM_MEMORY_CONFIG
-    ):  # TODO: remove these workaround once issues #28715, #28805, #28806, #28807 are resolved and implement things properly
-        ttnn_tensor = ttnn.from_torch(
-            tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
-        )
-    else:
-        ttnn_tensor = ttnn.from_torch(
-            tensor,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        ttnn_tensor = ttnn.to_dtype(ttnn_tensor, dtype)
-        ttnn_tensor = ttnn_tensor.to(layout)
+        Unfortunately we have three paths here because to_layout does not support WIDTH_SHARDED tensors, and there is a bug with to_layout when the input dtype is float32.
+        """
+        if memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            # Have to use from_torch since to_layout does not support changing the memory config
+            ttnn_weight = ttnn.from_torch(
+                weight,
+                layout=layout,
+                memory_config=memory_config,
+                mesh_mapper=mesh_mapper,
+                device=mesh_device,
+                dtype=dtype,
+            )
+        elif weight.dtype == torch.float32 and dtype == ttnn.bfloat16:
+            # Handle an issue with to_memory_config for f32 -> bf16 where the dtype is ignore (#TBD)
+            ttnn_weight = ttnn.from_torch(weight, device=device, mesh_mapper=mesh_mapper, dtype=dtype)
+            ttnn_weight = ttnn.to_layout(ttnn_weight, dtype=dtype, layout=layout, memory_config=memory_config)
+        else:
+            # Go to device as DRAM interleaved before converting to the desired layout and dtype
+            # TODO: It is probably more performance to shard to desire memory config before converting to the desired layout and dtype
+            ttnn_weight = ttnn.from_torch(weight, device=device, mesh_mapper=mesh_mapper, dtype=None)
+            ttnn_weight = ttnn.to_layout(ttnn_weight, dtype=dtype, layout=layout, memory_config=memory_config)
 
-    assert memory_config == ttnn_tensor.memory_config()
-    assert dtype == ttnn_tensor.dtype
-    assert layout == ttnn_tensor.layout
+        return ttnn_weight
+
+    ttnn_tensor = to_device(
+        tensor, device=mesh_device, mesh_mapper=mesh_mapper, layout=layout, dtype=dtype, memory_config=memory_config
+    )
+
+    assert (
+        memory_config == ttnn_tensor.memory_config()
+    ), f"memory_config mismatch: {memory_config} != {ttnn_tensor.memory_config()}"
+    assert dtype == ttnn_tensor.dtype, f"dtype mismatch: {dtype} != {ttnn_tensor.dtype}"
+    assert layout == ttnn_tensor.layout, f"layout mismatch: {layout} != {ttnn_tensor.layout}"
 
     new_tensor_shape = list(ttnn_tensor.shape)
     if shard_dims[0] == shard_dims[1]:
