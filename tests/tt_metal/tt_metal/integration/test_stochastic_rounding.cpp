@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <cmath>
-#include <cstring>
 #include <gtest/gtest.h>
 #include <map>
 #include <vector>
@@ -26,8 +26,6 @@
 
 namespace tt::tt_metal {
 
-using std::map;
-using std::vector;
 using namespace tt::test_utils;
 
 namespace unit_tests::compute::stochastic_rounding {
@@ -52,8 +50,8 @@ bool run_stochastic_rounding_statistical_test(
     // float32 representing value between base_value and upper_bf16
     const float test_value = base_value + fractional_position * bf16_epsilon_at_one;
 
-    const size_t tile_byte_size_input = 4 * tt::constants::TILE_HW;   // Float32: 4 bytes per element
-    const size_t tile_byte_size_output = 2 * tt::constants::TILE_HW;  // BFloat16: 2 bytes per element
+    const size_t tile_byte_size_input = 4U * tt::constants::TILE_HW;   // Float32: 4 bytes per element
+    const size_t tile_byte_size_output = 2U * tt::constants::TILE_HW;  // BFloat16: 2 bytes per element
     const size_t input_byte_size = num_tiles * tile_byte_size_input;
     const size_t output_byte_size = num_tiles * tile_byte_size_output;
     const size_t num_elements = num_tiles * tt::constants::TILE_HW;
@@ -85,21 +83,21 @@ bool run_stochastic_rounding_statistical_test(
     uint32_t test_value_bits = std::bit_cast<uint32_t>(test_value);
     std::fill(packed_input.begin(), packed_input.end(), test_value_bits);
 
-    vector<uint32_t> compute_kernel_args = {
-        uint32_t(num_tiles),  // per_core_block_cnt
-        1                     // per_core_block_dim
+    std::vector<uint32_t> compute_kernel_args = {
+        static_cast<uint32_t>(num_tiles),  // per_core_block_cnt
+        1U                                 // per_core_block_dim
     };
 
-    vector<uint32_t> reader_rt_args = {
+    std::vector<uint32_t> reader_rt_args = {
         input_dram_byte_address,
         0,
-        uint32_t(num_tiles),
+        static_cast<uint32_t>(num_tiles),
     };
 
-    vector<uint32_t> writer_rt_args = {
+    std::vector<uint32_t> writer_rt_args = {
         output_dram_byte_address,
         0,
-        uint32_t(num_tiles),
+        static_cast<uint32_t>(num_tiles),
     };
 
     CoreRange core_range({0, 0}, {0, 0});
@@ -250,12 +248,12 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // Test different fractional positions with enough tiles for statistical significance
         // 32 tiles * 32 * 32 = 32768 elements, giving good statistical power
-        std::make_tuple(32, 0.25f),  // 25% should round up
-        std::make_tuple(32, 0.50f),  // 50% should round up
-        std::make_tuple(32, 0.75f),  // 75% should round up
+        std::make_tuple(32U, 0.25f),  // 25% should round up
+        std::make_tuple(32U, 0.50f),  // 50% should round up
+        std::make_tuple(32U, 0.75f),  // 75% should round up
         // Edge cases
-        std::make_tuple(32, 0.10f),  // 10% should round up
-        std::make_tuple(32, 0.90f)   // 90% should round up
+        std::make_tuple(32U, 0.10f),  // 10% should round up
+        std::make_tuple(32U, 0.90f)   // 90% should round up
         ));
 
 }  // namespace tt::tt_metal
