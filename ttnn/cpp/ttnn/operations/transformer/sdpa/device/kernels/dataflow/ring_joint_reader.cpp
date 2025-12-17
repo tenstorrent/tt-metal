@@ -204,13 +204,13 @@ void kernel_main() {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        end_seq_tile = local_padded_Nt;
+                        end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
                         // Gathered KV
                         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                        end_seq_tile = local_padded_Nt * (ring_id + 1);
+                        end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }
                 }
 
