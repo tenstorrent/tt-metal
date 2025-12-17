@@ -142,7 +142,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
+    auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -375,7 +375,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
+    auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
         program,
