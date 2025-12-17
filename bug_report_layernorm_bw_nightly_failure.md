@@ -110,20 +110,36 @@ dx FAILED: max_diff=1000, mean_diff=1004.21
 
 ## Test Results Summary
 
-### Fresh Main (84f83fcf55, Dec 17, 2025)
+### Fresh Main (8321610e95, Dec 17, 2025)
 
-**With proper container configuration (`-v /dev:/dev -v /sys:/sys`):**
+**Verified on fresh clone with standalone tt-train build:**
+
+```bash
+# Fresh clone and build
+rm -rf tt-metal
+git clone --recurse-submodules git@github.com:tenstorrent/tt-metal.git
+cd tt-metal && git lfs pull && git submodule foreach --recursive "git lfs pull"
+
+# Standalone tt-train build (recommended for consistency)
+cd tt-train && rm -rf build/
+cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -B build -GNinja
+cmake --build build --config Debug --clean-first
+
+# Run tests
+./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.BugRepro_*"
+```
 
 | Test | Result | Notes |
 |------|--------|-------|
-| NIGHTLY test (random data, atol=0.5) | **PASS** (5/5) | Bug masked by mean-zero data |
-| BugRepro_Deterministic_256Tiles | **FAIL** | max_diff=1000 |
-| BugRepro_Deterministic_128Tiles | **FAIL** | max_diff=995 |
-| BugRepro_Deterministic_DifferentValues | **FAIL** | max_diff=1000 |
-| BugRepro_Deterministic_8462Features | **FAIL** | max_diff=988 |
-| BugRepro_Deterministic_2048Features | **FAIL** | max_diff=1000 |
+| BugRepro_Deterministic_256Tiles | **FAIL** | max_diff=1000, mean_diff=1004.21 |
+| BugRepro_Deterministic_128Tiles | **FAIL** | max_diff=1000, mean_diff=994.62 |
+| BugRepro_Deterministic_DifferentValues | **FAIL** | max_diff=1000, mean_diff=1004.21 |
+| BugRepro_Deterministic_8462Features | **FAIL** | max_diff=988, mean_diff=1016.30 |
+| BugRepro_Deterministic_2048Features | **FAIL** | max_diff=1000, mean_diff=997.24 |
 | BugRepro_TightTolerance_8462Features | **FAIL** | |
 | BugRepro_TightTolerance_8192Features | **FAIL** | |
+| NIGHTLY test (random data, atol=0.5) | **PASS** | Bug masked by mean-zero data |
 
 **Key insight:** The NIGHTLY test passes, but the kernel is still mathematically incorrect. Deterministic tests prove this conclusively.
 
@@ -151,7 +167,7 @@ Seven new tests added to `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`:
 
 ### Affected Code Path
 
-- **File:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/layernorm_bw_kernel.cpp`
+- **File:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp`
 - **Function:** `compute_dy_gamma_sum()`
 - **Trigger:** Feature dimension doesn't fit in L1 (uses block-based path)
 - **Threshold:** Approximately >1024 features (depends on other buffer sizes)
@@ -159,13 +175,14 @@ Seven new tests added to `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`:
 ### Implementation Architecture
 
 ```
-ttml::ops::LayerNormBackwardOperation::invoke()
-  → ttnn::prim::ttml_layernorm_bw()
-    → LayerNormBackwardDeviceOperation
-      → layernorm_bw_kernel.cpp (BUGGY)
+ttml::metal::ops::layernorm_bw::LayerNormBackwardOperation::invoke()
+  → ttnn::prim::ttml_layernorm_bw()  [registered in tt-train via ttnn::register_operation]
+    → LayerNormBackwardDeviceOperation  [tt-train/sources/ttml/metal/ops/layernorm_bw/device/]
+      → LayerNormBackwardProgramFactory  [tt-train/sources/ttml/metal/ops/layernorm_bw/device/]
+        → layernorm_bw_kernel.cpp (BUGGY)  [tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/]
 ```
 
-This is **TTML-specific code**, not TTNN. The bug is entirely in tt-train.
+**Code ownership:** The kernel and device operation are implemented in **tt-train** (`tt-train/sources/ttml/`), but registered as a TTNN primitive (`ttnn::prim::ttml_layernorm_bw`) using TTNN's `ttnn::register_operation<>` infrastructure from tt-metal. The bug is in tt-train's kernel implementation.
 
 ### Two Code Paths
 
@@ -219,16 +236,19 @@ Use circular buffer for accumulator persistence across loop iterations:
 - **Device:** Wormhole n150 L (single card)
 - **OS:** Ubuntu 22.04.5 LTS
 - **Kernel:** 6.8.0-87-generic
-- **tt-metal:** Fresh main (84f83fcf55, Dec 17, 2025)
+- **tt-metal:** Fresh main (`8321610e95`, Dec 17, 2025)
+- **Build:** Standalone tt-train (`tt-train/build/`)
 - **Machine:** movsianikov-tt
 
 ## Files
 
-- **Bug location:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/layernorm_bw_kernel.cpp`
+- **Bug location:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp`
+- **Device operation:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp`
+- **Program factory:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp`
 - **Test file:** `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`
-- **Branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report`
+- **Branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2`
 
 ## Reporter
 
-- **Date:** 2025-12-16 (initial), 2025-12-17 (comprehensive update)
+- **Date:** 2025-12-16 (initial), 2025-12-17 (fresh main verification)
 - **Machine:** movsianikov-tt
