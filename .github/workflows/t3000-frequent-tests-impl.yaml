@@ -39,7 +39,7 @@ jobs:
                   "timeout": 30,
                   "owner_id": "U084B1CES7M" # Borys Bradel
               },
-              # {
+              # { GH #34582
               #     "name": "t3k ethernet tests",
               #     "model": "ethernet",
               #     "arch": "wormhole_b0",
