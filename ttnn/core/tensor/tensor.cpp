@@ -747,11 +747,6 @@ Tensor create_tt_tensor_from_host_data(
     float pad_value,
     bool is_device_available) {
     auto can_exec_ops_on_device = [](DataType type) {
-        // TODO: Reprocude the bug and create github issue
-        // bfloat16 to bfloat4b/bfloat8b conversions can zero half the tensor in some conditions.
-        // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
-        // TODO: can't create tile layout tensor on the device with custom tile shape
-
         switch (type) {
             case DataType::FLOAT32:
                 // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
@@ -766,6 +761,12 @@ Tensor create_tt_tensor_from_host_data(
                 return false;
             case DataType::UINT8:
                 // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
+                return false;
+            case DataType::BFLOAT4_B:
+            case DataType::BFLOAT8_B:
+                // TODO: Reproduce the bug and create github issue
+                // Conversion from bfloat16 to bfloat4_b or bfloat8_b loses precision.
+                // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
                 return false;
             default: return true;
         }
