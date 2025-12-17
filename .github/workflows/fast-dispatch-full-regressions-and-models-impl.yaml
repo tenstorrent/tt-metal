@@ -62,6 +62,7 @@ jobs:
             {"model":"vanilla_unet"},
             {"model":"efficientnetb0"},
             {"model":"vovnet"},
+            {"model":"ssd512"},
             {"model":"ufld_v2"},
             {"model":"ttt-mistral-7B-v0.3"},
             {"model":"stable_diffusion_xl_base","timeout":75},

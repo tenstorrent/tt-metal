@@ -6,7 +6,7 @@ import ttnn
 import gc
 from models.experimental.SSD512.reference.ssd import build_ssd
 from models.experimental.SSD512.reference.layers.functions.prior_box import PriorBox
-from models.experimental.SSD512.reference.data.config import voc
+from models.experimental.SSD512.reference.configs.config import voc
 
 
 def setup_seeds_and_deterministic(reset_seeds=True, seed=0):

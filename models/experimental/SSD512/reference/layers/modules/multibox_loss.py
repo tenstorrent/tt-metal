@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from models.experimental.SSD512.reference.data import coco as cfg
+from models.experimental.SSD512.reference.configs import coco as cfg
 from ..box_utils import match, log_sum_exp
 
 

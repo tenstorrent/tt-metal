@@ -15,7 +15,7 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from models.experimental.SSD512.reference.data.voc0712 import VOC_CLASSES
+from models.experimental.SSD512.reference.configs.voc import VOC_CLASSES
 from models.experimental.SSD512.common import (
     build_and_init_torch_model,
     build_and_load_ttnn_model,

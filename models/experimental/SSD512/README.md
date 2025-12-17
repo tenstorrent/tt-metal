@@ -23,22 +23,28 @@ The demo currently uses random weights for testing. To use trained weights:
 models/
 └── experimental/
     └── SSD512/
+        ├── common.py                     # Shared utilities
+        ├── README.md
         ├── resources/
         │   ├── sample_input/
         │   │   └── 000007.jpg
         │   └── sample_output/
         ├── reference/
         │   ├── ssd.py                    # TorchSSD (reference)
-        │   ├── data/
-        │   │   ├── voc0712.py
-        │   │   ├── config.py
-        │   │   └── scripts/
+        │   ├── configs/
+        │   │   ├── __init__.py
+        │   │   ├── config.py             # Config exports
+        │   │   ├── voc.py                # VOC dataset config & classes
+        │   │   └── coco.py               # COCO dataset config
         │   └── layers/
+        │       ├── __init__.py
         │       ├── box_utils.py
         │       ├── functions/
+        │       │   ├── __init__.py
         │       │   ├── detection.py
         │       │   └── prior_box.py
         │       └── modules/
+        │           ├── __init__.py
         │           ├── l2norm.py
         │           └── multibox_loss.py
         ├── tt/
@@ -53,16 +59,16 @@ models/
         │           └── prior_box.py
         ├── demo/
         │   └── demo.py                   # CLI demo
-        ├── tests/
-        │   ├── pcc/
-        │   │   ├── test_ssd.py           # end-to-end pytest
-        │   │   ├── test_vgg_backbone.py
-        │   │   ├── test_extras_backbone.py
-        │   │   ├── test_l2norm.py
-        │   │   └── test_multibox_heads.py
-        │   ├── perf/
-        │       └── test_device_perf_ssd.py
-        └── README.md
+        └── tests/
+            ├── pcc/
+            │   ├── test_ssd.py           # end-to-end pytest
+            │   ├── test_vgg_backbone.py
+            │   ├── test_extras_backbone.py
+            │   ├── test_l2norm.py
+            │   └── test_multibox_heads.py
+            └── perf/
+                ├── test_device_perf_ssd.py
+                └── test_e2e_performant.py
 ```
 
 ## Details

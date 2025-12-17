@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from models.experimental.SSD512.reference.layers import *
-from models.experimental.SSD512.reference.data import voc
+from models.experimental.SSD512.reference.configs import voc
 from loguru import logger
 import os
 
