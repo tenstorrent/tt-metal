@@ -168,6 +168,39 @@ Expected: true
 - The variation suggests the failures may be data-dependent (random test data each iteration)
 - Test duration: ~27 seconds (consistent with original)
 
+## Flakiness Analysis
+
+**Date:** 2025-12-16 15:50-16:10 UTC
+
+Extensive testing reveals the bug is **flaky** (intermittent):
+
+| Test Configuration | Runs | Passed | Failed | Pass Rate |
+|-------------------|------|--------|--------|-----------|
+| Isolation (single test) | 5 | 0 | 5 | 0% |
+| `LayerNormBackwardOpTest.*` (5 tests) | 5 | 0 | 5 | 0% |
+| `LayerNorm*OpTest.*` (12 tests, 3 suites) | 5 | 1 | 4 | 20% |
+
+**Key Findings:**
+1. **Consistently fails in isolation** - 0% pass rate when run alone
+2. **Consistently fails with immediate neighbors** - 0% pass rate with just backward tests
+3. **Occasionally passes with larger test group** - 20% pass rate when run with Forward+Backward+Composite tests
+4. **Failure count varies per run** - sometimes 1 failure (dx), sometimes 2-3 failures (dx, dgamma, dbeta)
+
+**Failure Pattern by Run (with neighbors):**
+- Run 1: 3 failures (dx, dgamma, dbeta)
+- Run 2: 2 failures
+- Run 3: **PASSED** (all 3 iterations passed)
+- Run 4: 3 failures
+- Run 5: 3 failures
+
+**Hypothesis Update:**
+The flakiness suggests the issue may be related to:
+1. Random test data generation (different seeds each run)
+2. Specific value ranges that trigger precision issues
+3. Possible memory/state effects from preceding tests (Forward tests may "warm up" something)
+
+The test uses `num_iterations = 3` (default), running the same parameters with different random data each iteration. When it passes, all 3 iterations pass; when it fails, 1-3 iterations fail.
+
 ## Reporter
 
 - **Date:** 2025-12-16
