@@ -365,7 +365,7 @@ void calculate_exponential_first_column(int scale_bf16) {
             val = val * sfpi::s2vFloat16b(scale_bf16);
             sfpi::vFloat result;  // = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
 
-            if constexpr (DST_ACCUM_MODE) {
+            if constexpr (!DST_ACCUM_MODE) {
                 result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
             } else {
                 result = ckernel::sfpu::_sfpu_exp_61f_(val);
