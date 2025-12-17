@@ -21,60 +21,26 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 40000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 37000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
-    ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
+    "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        # 8-chip t3k/loudbox config, uncomment when running on 8-chip systems
-        # note: this config is not valid on 6u (32-chip) systems with fabric enabled
-        # pytest.param(
-        #     (1, 8),  # mesh_device
-        #     (1, 0),  # cfg
-        #     (1, 0),  # sp
-        #     (8, 1),  # tp
-        #     (8, 1),  # encoder_tp
-        #     (8, 1),  # vae_tp
-        #     ttnn.Topology.Linear,
-        #     1,  # num_links
-        #     "1x8tp1",
-        #     id="1x8tp1",
-        # ),
-        # 6u (32-chip galaxy) config matching stable diffusion
-        pytest.param(
-            (4, 8),  # mesh_device
-            (2, 1),  # cfg parallel on axis 1
-            (4, 0),  # sequence parallel on axis 0
-            (4, 1),  # tensor parallel on axis 1
-            (4, 1),  # encoder_tp
-            (4, 1),  # vae_tp
-            ttnn.Topology.Linear,
-            4,  # num_links
-            "4x8cfg1sp0tp1",
-            id="4x8cfg1sp0tp1",
-        ),
-        # 8-chip t3k config with cfg, uncomment when running on 8-chip systems
-        # pytest.param(
-        #     (2, 4),  # mesh_device
-        #     (2, 0),  # cfg
-        #     (1, 0),  # sp
-        #     (4, 1),  # tp
-        #     (4, 1),  # encoder_tp
-        #     (4, 1),  # vae_tp
-        #     ttnn.Topology.Linear,
-        #     1,  # num_links
-        #     "2x4cfg0sp0tp1",
-        #     id="2x4cfg0sp0tp1",
-        # ),
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+    ],
+    ids=[
+        "2x4cfg0sp0tp1",
+        # "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        #pytest.param(True, id="encoder_cpu"),
+        # pytest.param(True, id="encoder_cpu"),
         pytest.param(False, id="encoder_device"),
     ],
 )
@@ -82,7 +48,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     "traced",
     [
         pytest.param(True, id="traced"),
-        #pytest.param(False, id="not_traced"),
+        # pytest.param(False, id="not_traced"),
     ],
 )
 def test_qwenimage_pipeline(
@@ -101,7 +67,6 @@ def test_qwenimage_pipeline(
     no_prompt: bool,
     use_torch_text_encoder: bool,
     traced: bool,
-    mesh_test_id: str,
 ) -> None:
     pipeline = QwenImagePipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -146,6 +111,10 @@ def test_qwenimage_pipeline(
         'Travel postcard collage, Kyoto landmarks; stamped welcome text "ようこそ京都"; handwritten note "また来ます" in pen; vintage grain, off-white paper.',
     ]
 
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
+    mesh_test_id = f"{mesh_device.shape[0]}x{mesh_device.shape[1]}cfg{cfg_axis}sp{sp_axis}tp{tp_axis}"
     filename_prefix = f"qwenimage_{width}_{height}_{mesh_test_id}"
     if use_torch_text_encoder:
         filename_prefix += "_encodercpu"

@@ -129,14 +129,16 @@ class QwenImagePipeline:
 
         self._torch_vae = AutoencoderKLQwenImage.from_pretrained(checkpoint_name, subfolder="vae")
         assert isinstance(self._torch_vae, AutoencoderKLQwenImage)
+        # Store VAE state dict for loading/reloading
+        self._vae_state_dict = self._torch_vae.state_dict()
 
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
 
         head_dim = torch_transformer.config.attention_head_dim
         num_heads = torch_transformer.config.num_attention_heads
-        self._num_channels_latents = 16  # TODO: correct?
+        self._num_channels_latents = 16
         self._patch_size = torch_transformer.config.patch_size
-        self._vae_scale_factor = 8  # TODO: correct?
+        self._vae_scale_factor = 8
 
         if num_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -202,25 +204,59 @@ class QwenImagePipeline:
 
         self._image_processor = VaeImageProcessor(vae_scale_factor=2 * self._vae_scale_factor)
 
-        with self.encoder_reshape(self.encoder_device):
-            if not use_torch_vae_decoder:
+        # Store VAE config for lazy loading
+        self._vae_config = {
+            "base_dim": self._torch_vae.config["base_dim"],
+            "z_dim": self._torch_vae.config["z_dim"],
+            "dim_mult": self._torch_vae.config["dim_mult"],
+            "num_res_blocks": self._torch_vae.config["num_res_blocks"],
+            "temperal_downsample": self._torch_vae.config["temperal_downsample"],
+        }
+        self._use_torch_vae_decoder = use_torch_vae_decoder
+
+        # For device encoder path: defer VAE loading until needed (after transformer is done)
+        # This avoids VAE competing with transformer for device memory
+        if use_torch_vae_decoder:
+            self._vae_decoder = None
+            self._vae_loaded = False
+        elif use_torch_text_encoder:
+            # Load VAE now only if using torch text encoder (no memory conflict)
+            with self.encoder_reshape(self.encoder_device):
                 logger.info("creating TT-NN VAE decoder...")
                 self._vae_decoder = QwenImageVaeDecoder(
-                    base_dim=self._torch_vae.config["base_dim"],
-                    z_dim=self._torch_vae.config["z_dim"],
-                    dim_mult=self._torch_vae.config["dim_mult"],
-                    num_res_blocks=self._torch_vae.config["num_res_blocks"],
-                    temperal_downsample=self._torch_vae.config["temperal_downsample"],
+                    base_dim=self._vae_config["base_dim"],
+                    z_dim=self._vae_config["z_dim"],
+                    dim_mult=self._vae_config["dim_mult"],
+                    num_res_blocks=self._vae_config["num_res_blocks"],
+                    temperal_downsample=self._vae_config["temperal_downsample"],
                     device=self.vae_device,
                     parallel_config=self._vae_parallel_config,
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
-                self._vae_decoder.load_torch_state_dict(self._torch_vae.state_dict())
-            else:
-                self._vae_decoder = None
+                self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
+                self._vae_loaded = True
 
-            if self.encoder_device is not None:
-                ttnn.synchronize_device(self.encoder_device)
+                if self.encoder_device is not None:
+                    ttnn.synchronize_device(self.encoder_device)
+        else:
+            # Device encoder path: create VAE structure but don't load weights yet
+            with self.encoder_reshape(self.encoder_device):
+                logger.info("creating TT-NN VAE decoder (deferring weight loading)...")
+                self._vae_decoder = QwenImageVaeDecoder(
+                    base_dim=self._vae_config["base_dim"],
+                    z_dim=self._vae_config["z_dim"],
+                    dim_mult=self._vae_config["dim_mult"],
+                    num_res_blocks=self._vae_config["num_res_blocks"],
+                    temperal_downsample=self._vae_config["temperal_downsample"],
+                    device=self.vae_device,
+                    parallel_config=self._vae_parallel_config,
+                    ccl_manager=self._ccl_managers[self.vae_submesh_idx],
+                )
+                # Don't load weights - will be loaded lazily when needed
+                self._vae_loaded = False
+
+                if self.encoder_device is not None:
+                    ttnn.synchronize_device(self.encoder_device)
 
         self._traces = None
 
@@ -274,6 +310,27 @@ class QwenImagePipeline:
         for submesh_device in self._submesh_devices:
             ttnn.synchronize_device(submesh_device)
         self._transformers_loaded = False
+
+    def _deallocate_vae(self) -> None:
+        """Deallocate VAE decoder weights from device to free memory."""
+        if self._use_torch_vae_decoder or not self._vae_loaded:
+            return
+
+        logger.info("deallocating VAE decoder weights to free memory...")
+        self._vae_decoder.deallocate_weights()
+        ttnn.synchronize_device(self.vae_device)
+        self._vae_loaded = False
+
+    def _reload_vae(self) -> None:
+        """Load or reload VAE decoder weights to device."""
+        if self._use_torch_vae_decoder or self._vae_loaded:
+            return
+
+        with self.encoder_reshape(self.vae_device):
+            logger.info("loading VAE decoder weights to device...")
+            self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
+            ttnn.synchronize_device(self.vae_device)
+        self._vae_loaded = True
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
@@ -424,7 +481,8 @@ class QwenImagePipeline:
                     )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
-            # For device encoder: deallocate encoder weights and load transformers
+            # For device encoder: deallocate encoder weights, then load transformers
+            # (VAE weights were never loaded, so no need to deallocate)
             if not self._use_torch_text_encoder and not self._transformers_loaded:
                 self._text_encoder.deallocate_encoder_weights()
                 self._load_transformers()
@@ -601,9 +659,10 @@ class QwenImagePipeline:
                     with torch.no_grad():
                         decoded_output = self._torch_vae.decode(torch_latents).sample[:, :, 0]
                 else:
-                    # Deallocate transformer weights to free memory for VAE decoder
+                    # Deallocate transformer weights and reload VAE decoder to free memory for VAE decoding
                     if not self._use_torch_text_encoder:
                         self._deallocate_transformers()
+                        self._reload_vae()
 
                     with self.encoder_reshape(self.encoder_device):
                         tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
