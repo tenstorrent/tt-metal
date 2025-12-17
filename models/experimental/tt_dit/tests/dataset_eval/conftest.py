@@ -9,8 +9,6 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
 from ...pipelines.mochi.pipeline_mochi import MochiPipeline
 from ...pipelines.wan.pipeline_wan import WanPipeline
 
-# with open(os.path.join(os.path.dirname(__file__), "eval_targets.json"), "r") as f:
-#    targets_setup = json.load(f)
 targets_setup = {
     "stable-diffusion-3.5-large": {
         "hf_id": "stabilityai/stable-diffusion-3.5-large",

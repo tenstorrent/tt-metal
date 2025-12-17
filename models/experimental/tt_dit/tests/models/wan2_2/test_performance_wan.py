@@ -104,7 +104,6 @@ def test_pipeline_performance(
         """A Roman general standing on a battlefield at dawn, torn red cape blowing in the wind, distant soldiers forming ranks, painterly brushwork in the style of Caravaggio, chiaroscuro lighting, epic composition""",
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
-    negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81
     num_inference_steps = 40
@@ -128,7 +127,6 @@ def test_pipeline_performance(
         with torch.no_grad():
             result = pipeline(
                 prompt=prompts[0],
-                negative_prompt=negative_prompt,
                 height=height,
                 width=width,
                 num_frames=num_frames,
