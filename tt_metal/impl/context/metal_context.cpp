@@ -451,7 +451,8 @@ void MetalContext::destroy_instance() {
     if (!g_instance) {
         return;
     }
-    if (g_instance->device_manager() && g_instance->device_manager()->is_initialized() && !g_instance->device_manager()->get_all_active_devices().empty()) {
+    if (g_instance->device_manager() && g_instance->device_manager()->is_initialized() &&
+        !g_instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
     delete g_instance;
@@ -610,7 +611,6 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return distributed_context_;
 }
-
 
 MetalContext::~MetalContext() {
     teardown();
