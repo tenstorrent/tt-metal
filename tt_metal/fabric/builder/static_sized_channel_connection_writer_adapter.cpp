@@ -210,15 +210,24 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg
     }
 
     // 2D routing: dense pack based on mask (get mask internally)
+    // CRITICAL: Must iterate through compact_idx in order, not push_back order,
+    // to match the order used when packing addresses!
     uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
     uint32_t noc_y_packed = 0;
     uint32_t dense_idx = 0;
 
-    for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
-        size_t compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+    // Iterate through compact indices in order to match address packing order
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
         if (mask & (1 << compact_idx)) {
-            noc_y_packed |= (noc_xy.y << (dense_idx * 8));
-            dense_idx++;
+            // Find the connection with this compact_idx
+            for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+                size_t conn_compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+                if (conn_compact_idx == compact_idx) {
+                    noc_y_packed |= (noc_xy.y << (dense_idx * 8));
+                    dense_idx++;
+                    break;
+                }
+            }
         }
     }
     return noc_y_packed;
@@ -234,15 +243,24 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
     }
 
     // 2D routing: dense pack based on mask (get mask internally)
+    // CRITICAL: Must iterate through compact_idx in order, not push_back order,
+    // to match the order used when packing addresses!
     uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
     uint32_t noc_x_packed = 0;
     uint32_t dense_idx = 0;
 
-    for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
-        size_t compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+    // Iterate through compact indices in order to match address packing order
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
         if (mask & (1 << compact_idx)) {
-            noc_x_packed |= (noc_xy.x << (dense_idx * 8));
-            dense_idx++;
+            // Find the connection with this compact_idx
+            for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+                size_t conn_compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+                if (conn_compact_idx == compact_idx) {
+                    noc_x_packed |= (noc_xy.x << (dense_idx * 8));
+                    dense_idx++;
+                    break;
+                }
+            }
         }
     }
     return noc_x_packed;
