@@ -4,8 +4,6 @@
 
 import pytest
 import ttnn
-from loguru import logger
-
 from models.experimental.mobileNetV3.tests.pcc.test_mobilenetv3 import MobilenetV3TestInfra
 
 
