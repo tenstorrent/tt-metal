@@ -488,7 +488,7 @@ class Generator:
                     kv_cache=kv_cache,
                 )
 
-                if chunk_start == last_chunk_start:
+                if chunk_start_relative == last_chunk_start:
                     return tt_logits
                 else:
                     del tt_logits
