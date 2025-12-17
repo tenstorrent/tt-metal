@@ -6,7 +6,7 @@ import torch
 import pytest
 import random
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_int,
     compare_pcc,

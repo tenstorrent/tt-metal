@@ -4,6 +4,7 @@
 
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,24 +12,64 @@
 
 namespace tt::tt_fabric {
 
-FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
-    // Create default router config
-    router_config_ = create_edm_config();
+void FabricBuilderContext::compute_max_channel_counts() {
+    // Create channel mappings for all router types that exist in this fabric
+    const auto topology = fabric_context_.get_fabric_topology();
 
-    // Create router config with mux extension for all directions
+    std::vector<FabricRouterChannelMapping> possible_mappings;
+
+    // Always have MESH routers
+    possible_mappings.emplace_back(
+        topology,
+        false,  // no tensix
+        RouterVariant::MESH,
+        intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr);
+
+    // If Z routers exist in this fabric, add Z_ROUTER mapping
+    if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
+        possible_mappings.emplace_back(
+            topology,
+            false,  // no tensix
+            RouterVariant::Z_ROUTER,
+            &intermesh_vc_config_);
+    }
+
+    // Compute max channel counts across all router types in this fabric
+    max_sender_channels_per_vc_.fill(0);
+    max_receiver_channels_per_vc_.fill(0);
+
+    for (const auto& mapping : possible_mappings) {
+        uint32_t num_vcs = mapping.get_num_virtual_channels();
+        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+            max_sender_channels_per_vc_[vc] = std::max(
+                max_sender_channels_per_vc_[vc],
+                static_cast<std::size_t>(mapping.get_num_sender_channels_for_vc(vc)));
+            max_receiver_channels_per_vc_[vc] = std::max(
+                max_receiver_channels_per_vc_[vc],
+                static_cast<std::size_t>(1u));  // Always 1 receiver per VC
+        }
+    }
+}
+
+FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
+    this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+
+    // Compute max channel counts for this fabric instance
+    compute_max_channel_counts();
+
+    // Create configs using computed max
+    router_config_ = create_edm_config();
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
         router_with_mux_config_[direction] =
             create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
     }
 
-    // Initialize tensix config later after routing tables are configured
     tensix_config_ = nullptr;
 
     // Initialize per-device build state
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
     if (num_devices_ != 4 && num_pcie_devices == 4) {
-        // Add dispatch devices for multi-host setups
         num_devices_ += num_pcie_devices;
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
@@ -42,10 +83,12 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         .direction = direction,
     };
 
-    const auto channel_buffer_size_bytes = fabric_context_.get_fabric_channel_buffer_size_bytes();
-    const auto topology = fabric_context_.get_fabric_topology();
-
-    return std::make_unique<FabricEriscDatamoverConfig>(channel_buffer_size_bytes, topology, edm_options);
+    return std::make_unique<FabricEriscDatamoverConfig>(
+        fabric_context_.get_fabric_channel_buffer_size_bytes(),
+        fabric_context_.get_fabric_topology(),
+        edm_options,
+        max_sender_channels_per_vc_,      // Max for this fabric instance
+        max_receiver_channels_per_vc_);   // Max for this fabric instance
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(
@@ -142,5 +185,66 @@ void FabricBuilderContext::initialize_tensix_config() {
         tensix_config_ = std::make_unique<FabricTensixDatamoverConfig>();
     }
 }
+
+IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // Check if multiple meshes exist
+    const auto& mesh_ids = mesh_graph.get_mesh_ids();
+    constexpr size_t single_mesh_count = 1;
+    if (mesh_ids.size() <= single_mesh_count) {
+        return IntermeshVCConfig::disabled();
+    }
+
+    // Check if intermesh connections exist (use inter_mesh_connectivity which has actual parsed connections)
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+
+    // Count total intermesh connections across all meshes
+    size_t total_intermesh_connections = 0;
+    for (const auto& mesh_connections : inter_mesh_connectivity) {
+        for (const auto& chip_connections : mesh_connections) {
+            total_intermesh_connections += chip_connections.size();
+        }
+    }
+
+    if (total_intermesh_connections == 0) {
+        return IntermeshVCConfig::disabled();
+    }
+
+    // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
+    bool has_z_routers = false;
+    for (const auto& mesh_connections : inter_mesh_connectivity) {
+        for (const auto& chip_connections : mesh_connections) {
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    has_z_routers = true;
+                    break;
+                }
+            }
+            if (has_z_routers) {
+                break;
+            }
+        }
+        if (has_z_routers) {
+            break;
+        }
+    }
+
+    // Default to FULL_MESH when intermesh exists
+    // TODO: Implement detection logic for:
+    //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
+    //   - FULL_MESH_WITH_PASS_THROUGH: Check if any mesh forwards traffic between other meshes
+    constexpr bool needs_mesh_pass_through = false;
+
+    auto config =
+        needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through() : IntermeshVCConfig::full_mesh();
+
+    // Set router type based on detection
+    config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
+
+    return config;
+}
+
 
 }  // namespace tt::tt_fabric

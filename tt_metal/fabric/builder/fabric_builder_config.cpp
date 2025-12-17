@@ -18,31 +18,6 @@ uint32_t get_receiver_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_receiver_channels_2d : builder_config::num_receiver_channels_1d;
 }
 
-std::array<uint32_t, 2> get_sender_channel_count_per_vc(const Topology topology) {
-    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
-    if (is_2D_routing) {
-        // 2D routing: VC0 has 4 sender channels (0-3), VC1 has 3 sender channels (4-6)
-        // Channel 7 is reserved for future Z-axis routing
-        // Total = 7 channels
-        return {4, 3};
-    } else {
-        // 1D routing: All sender channels are allocated to VC0
-        return {get_num_used_sender_channel_count(topology), 0};
-    }
-}
-
-std::array<uint32_t, 2> get_receiver_channel_count_per_vc(const Topology topology) {
-    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
-    if (is_2D_routing) {
-        // 2D routing: VC0 has 1 receiver, VC1 has 1 receiver
-        // Total = 2 receivers
-        return {1, 1};
-    } else {
-        // 1D routing: VC0 has 1 receiver, VC1 has 0
-        return {builder_config::num_receiver_channels_1d, 0};
-    }
-}
-
 uint32_t get_num_used_sender_channel_count(const Topology topology) {
     switch (topology) {
         case Topology::NeighborExchange: return builder_config::num_sender_channels_1d_neighbor_exchange;
