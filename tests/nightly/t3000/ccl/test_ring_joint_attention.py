@@ -64,7 +64,8 @@ def run_ring_joint_sdpa(
     submesh,
     b,
     nh,
-    seq_len,
+    base_seq_len,
+    padded_seq_len,
     joint_seq_len,
     d,
     q_chunk_size,
@@ -107,7 +108,7 @@ def run_ring_joint_sdpa(
     kv_shard_dims[up_axis] = 1  # UP shards on heads dim1
 
     # Create persistent output buffers
-    ag_output_shape = (b, nh, seq_len, d)
+    ag_output_shape = (b, nh, padded_seq_len, d)
 
     persistent_output_buffers = [
         [
@@ -138,9 +139,13 @@ def run_ring_joint_sdpa(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, seq_len, d)
-    K = fa_rand(b, nh, seq_len, d)
-    V = fa_rand(b, nh, seq_len, d)
+    Q = fa_rand(b, nh, base_seq_len, d)
+    K = fa_rand(b, nh, base_seq_len, d)
+    V = fa_rand(b, nh, base_seq_len, d)
+
+    padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
+    padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
+    padded_V = torch.cat([V, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
 
     joint_Q = fa_rand(b, nh, joint_seq_len, d)
     joint_K = fa_rand(b, nh, joint_seq_len, d)
@@ -150,6 +155,9 @@ def run_ring_joint_sdpa(
     logger.debug(f"Q: {Q.shape}")
     logger.debug(f"K: {K.shape}")
     logger.debug(f"V: {V.shape}")
+    logger.debug(f"padded_Q: {padded_Q.shape}")
+    logger.debug(f"padded_K: {padded_K.shape}")
+    logger.debug(f"padded_V: {padded_V.shape}")
 
     sdpa_input_shard_dims = [None, None]
     sdpa_input_shard_dims[rp_axis] = 2  # sequence dim
@@ -160,21 +168,21 @@ def run_ring_joint_sdpa(
     sdpa_joint_shard_dims[up_axis] = 1  # head dim
 
     tt_Q = ttnn.from_torch(
-        Q,
+        padded_Q,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_K = ttnn.from_torch(
-        K,
+        padded_K,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_V = ttnn.from_torch(
-        V,
+        padded_V,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
@@ -220,7 +228,7 @@ def run_ring_joint_sdpa(
                 persistent_output_buffer_k=persistent_output_buffers[i][0],
                 persistent_output_buffer_v=persistent_output_buffers[i][1],
                 joint_strategy="rear",
-                logical_n=seq_len,
+                logical_n=base_seq_len,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 dim=2,
@@ -257,8 +265,8 @@ def run_ring_joint_sdpa(
         pt_K = torch.cat([K, joint_K], dim=2)
         pt_V = torch.cat([V, joint_V], dim=2)
         gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
-        gt_out = gt[:, :, :seq_len, :]
-        gt_joint_out = gt[:, :, seq_len:, :]
+        gt_out = gt[:, :, :base_seq_len, :]
+        gt_joint_out = gt[:, :, base_seq_len:, :]
 
         for i in range(n_iters):
             tt_out = ttnn.to_torch(
@@ -277,7 +285,7 @@ def run_ring_joint_sdpa(
                 ),
             )
             # Slice out any tile-padding
-            tt_out = tt_out[:, :, :seq_len, :]
+            tt_out = tt_out[:, :, :base_seq_len, :]
             tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
             logger.debug(f"tt_out: {tt_out.shape}")
             logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
@@ -289,13 +297,14 @@ def run_ring_joint_sdpa(
             print(f"mse: {((gt_out - tt_out) ** 2).mean()}")
             passing = passing and out_pass
 
-            print("prompt")
-            for joint_replica_id in range(tt_joint_out.shape[0]):
-                joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
-                out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
-                print(f"{out_pcc}")
-                print(f"mse: {((gt_joint_out - joint_replica_out) ** 2).mean()}")
-                passing = passing and out_pass
+            if joint_seq_len > 0:
+                print("prompt")
+                for joint_replica_id in range(tt_joint_out.shape[0]):
+                    joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
+                    out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
+                    print(f"{out_pcc}")
+                    print(f"mse: {((gt_joint_out - joint_replica_out) ** 2).mean()}")
+                    passing = passing and out_pass
 
             assert passing
 
