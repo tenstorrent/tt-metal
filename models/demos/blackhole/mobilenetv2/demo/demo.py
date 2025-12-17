@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import profiler, run_for_blackhole
-from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE_BH, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
@@ -59,7 +59,7 @@ def run_mobilenetv2_imagenet_demo(
             batch=batch_size,
             input_height=resolution[0],
             input_width=resolution[1],
-            pad_channels=16,
+            pad_channels=32,
             mesh_mapper=inputs_mesh_mapper,
         )
 
@@ -70,7 +70,7 @@ def run_mobilenetv2_imagenet_demo(
             f"Auto-selected persistent DRAM tensor memory config: shape={host_input_tensor.shape}, shard_shape={input_dram_mem_config.shard_spec.shape}, grid={input_dram_mem_config.shard_spec.grid}"
         )
 
-        input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
+        input_l1_core_grid = ttnn.CoreGrid(x=12, y=8)
         assert (
             host_input_tensor.shape[-2] % input_l1_core_grid.num_cores == 0
         ), "Expecting even sharding on L1 input tensor"
@@ -102,7 +102,7 @@ def run_mobilenetv2_imagenet_demo(
         for iter in tqdm(range(iterations), desc="Preparing images"):
             inputs, labels = get_batch(data_loader, resolution[0])
             ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
-            ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
+            ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 32 - ttnn_input.shape[-1]), value=0)
             ttnn_input = ttnn.from_torch(
                 ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
             )
@@ -162,7 +162,7 @@ def run_mobilenetv2_imagenet_demo(
 )
 @pytest.mark.parametrize(
     "batch_size",
-    ((MOBILENETV2_BATCH_SIZE),),
+    ((MOBILENETV2_BATCH_SIZE_BH),),
 )
 @pytest.mark.parametrize(
     "iterations, act_dtype, weight_dtype",
@@ -184,7 +184,7 @@ def test_mobilenetv2_imagenet_demo(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device",
-    ((MOBILENETV2_BATCH_SIZE),),
+    ((MOBILENETV2_BATCH_SIZE_BH),),
 )
 @pytest.mark.parametrize(
     "iterations, act_dtype, weight_dtype",
