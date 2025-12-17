@@ -1123,7 +1123,7 @@ public:
                         HalProcessorIdentifier{
                             kg_transfer_info.core_type,
                             kg_transfer_info.processor_class,
-                            kg_transfer_info.processor_ids[kernel_idx]});
+                            static_cast<int>(kg_transfer_info.processor_ids[kernel_idx])});
                     // Difference between prefetch total relayed pages and dispatch write linear
                     if (not using_prefetcher_cache) {
                         uint32_t relayed_bytes =
@@ -1207,7 +1207,7 @@ public:
                             HalProcessorIdentifier{
                                 kg_transfer_info.core_type,
                                 kg_transfer_info.processor_class,
-                                kg_transfer_info.processor_ids[kernel_idx]});
+                                static_cast<int>(kg_transfer_info.processor_ids[kernel_idx])});
                         kernel_config_buffer_offset += write_length;
 
                         if (not using_prefetcher_cache) {
@@ -1347,7 +1347,7 @@ public:
                     .noc_xy_addr = transfer_set.first.first,
                     .addr = start,
                     .length_minus1 = (uint16_t)(size - 1),
-                    .num_mcast_dests = transfer_set.first.second,
+                    .num_mcast_dests = static_cast<uint8_t>(transfer_set.first.second),
                     .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
 
                 // Modify the start addresses to be relative to the dispatch buffer.
@@ -1422,7 +1422,9 @@ public:
                     } else {
                         // rt_args_data points into the command stream. Setup a copy from that other location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
-                            transfer.rta_data->rt_args_data, data_collection_location[j], transfer.data.size()});
+                            transfer.rta_data->rt_args_data,
+                            data_collection_location[j],
+                            static_cast<uint32_t>(transfer.data.size())});
                     }
                 }
                 j++;
@@ -2406,7 +2408,7 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
 
     return TraceNode{
         program.shared_from_this(),
-        program.get_runtime_id(),
+        static_cast<uint32_t>(program.get_runtime_id()),
         sub_device_ids[0],
         std::move(rta_data),
         std::move(all_cb_configs_payloads)};
