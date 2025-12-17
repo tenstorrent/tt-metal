@@ -30,8 +30,8 @@ model_input_ids = ["wan_14b_720p", "wan_14b_480p", "wan_5b_720p", "mochi", "flux
     model_input_shapes,
     ids=model_input_ids,
 )
-@pytest.mark.parametrize("q_chunk_size", [64, 128, 256], ids=["q64", "q128", "q256"])
-@pytest.mark.parametrize("k_chunk_size", [128, 256, 512], ids=["k128", "k256", "k512"])
+@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256], ids=["q32", "q64", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256], ids=["k32", "k64", "k128", "k256"])
 @pytest.mark.parametrize(
     "n_iters, trace_enabled, skip_check", [(1, False, False), (10, True, True)], ids=["no_trace", "yes_trace"]
 )
