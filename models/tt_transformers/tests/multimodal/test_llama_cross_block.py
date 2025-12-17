@@ -12,24 +12,10 @@ from transformers.models.mllama.modeling_mllama import MllamaCrossAttentionDecod
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-
-
-def load_partial_weights(weights_path, layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(
-        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-    )
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if layer_prefix in key:
-            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
-            key_name = key[len(layer_prefix) :]
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
 
 
 @pytest.mark.parametrize(
@@ -90,7 +76,9 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     layer_idx = config.text_config.cross_attention_layers[0]
     reference_model = MllamaCrossAttentionDecoderLayer(config.text_config, layer_idx=layer_idx)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.")
+    partial_state_dict = load_partial_weights(
+        AutoModelForVision2Seq, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}."
+    )
     reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
