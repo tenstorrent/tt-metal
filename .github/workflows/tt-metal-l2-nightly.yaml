@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,bos,eltwise,matmul,experimental,docs_examples,misc)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,bos,eltwise,matmul,experimental,docs_examples,misc,moreh,fused,data_movement,transformers)'
         required: false
         type: string
         default: ''
