@@ -11,6 +11,7 @@
 #include <ttnn/types.hpp>
 
 #include <ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp>
+#include <ttnn/operations/sliding_window/op_slicing/op_slicing.hpp>
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
@@ -42,6 +43,19 @@ struct ConvTranspose2dDimensions {
     static constexpr std::array<uint32_t, 2> CONV2D_STRIDE = {1, 1};
     static constexpr std::array<uint32_t, 4> CONV2D_PADDING = {0, 0, 0, 0};
 };
+
+// Enum to represent the execution path for conv2d operations
+enum class ConvT2dExecutionPath {
+    L1,   // Execute conv2d using L1 memory
+    DRAM  // Execute conv2d using DRAM slicing
+};
+
+// Helper function to determine which conv2d execution path to take based on
+// slice configuration and input tensor properties
+ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
+    const tt::tt_metal::StorageType& storage_type,
+    const MemoryConfig& memory_config,
+    const std::optional<const op_slicing::Op2DSliceConfig>& slice_config);
 
 // Helper function to compute all transposed conv2d dimension transformations
 // This consolidates the logic that was previously duplicated across multiple files

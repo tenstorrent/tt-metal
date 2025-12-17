@@ -52,6 +52,28 @@ struct ConvTranpose2dOperation {
         bool return_weights_and_bias = false);
 };
 
+std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    Layout input_layout,
+    DataType input_dtype,
+    DataType conv_output_dtype,
+    Tensor& weight_tensor,
+    std::optional<std::reference_wrapper<Tensor>> bias_tensor,
+    const conv2d::Conv2dConfig& conv_config_,
+    const DeviceComputeKernelConfig& compute_config,
+    MeshDevice* device,
+    bool mirror_kernel);
+
 }  // namespace ttnn::operations::conv::conv_transpose2d
 namespace ttnn {
 constexpr auto conv_transpose2d =
