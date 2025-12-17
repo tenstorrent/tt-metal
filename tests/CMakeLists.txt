@@ -1,4 +1,3 @@
-# force merge gate to run
 enable_testing()
 include(GoogleTest)
 
