@@ -53,9 +53,7 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace {
 kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
@@ -283,6 +281,8 @@ std::set<experimental::ProgramAnalysisData> translateProgramsPerfResults(
             program_analysis_data.program_analyses_results[results_config.analysis_name] =
                 program_perf_results.analysis_results[i];
         }
+        program_analysis_data.core_count = program_perf_results.program_meta_data.num_fw_cores;
+        program_analysis_data.num_available_cores = program_perf_results.program_meta_data.num_available_worker_cores;
         programs_analyses_data.insert(program_analysis_data);
     }
     return programs_analyses_data;
@@ -491,7 +491,8 @@ auto coalesceFabricEvents(
                 // if local noc write is to a fabric mux (i.e. worker core), add marker for fabric mux
                 // if it is to a fabric router (i.e. active ethernet core), do nothing
                 auto local_noc_write = std::get<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents());
-                CoreCoord local_noc_write_dst_virt = {local_noc_write.dst_x, local_noc_write.dst_y};
+                CoreCoord local_noc_write_dst_virt = {
+                    static_cast<size_t>(local_noc_write.dst_x), static_cast<size_t>(local_noc_write.dst_y)};
                 const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, local_noc_write_dst_virt);
                 if (core_type == HalProgrammableCoreType::TENSIX) {
                     // disable linting here; slicing is __intended__
@@ -669,20 +670,21 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     } else if (local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST) {
                         auto phys_start_coord = translateNocCoordinatesToNoc0(
                             device_marker.chip_id,
-                            {local_noc_event.dst_x, local_noc_event.dst_y},
+                            {static_cast<size_t>(local_noc_event.dst_x), static_cast<size_t>(local_noc_event.dst_y)},
                             local_noc_event.noc_type);
                         data["mcast_start_x"] = phys_start_coord.x;
                         data["mcast_start_y"] = phys_start_coord.y;
                         auto phys_end_coord = translateNocCoordinatesToNoc0(
                             device_marker.chip_id,
-                            {local_noc_event.mcast_end_dst_x, local_noc_event.mcast_end_dst_y},
+                            {static_cast<size_t>(local_noc_event.mcast_end_dst_x),
+                             static_cast<size_t>(local_noc_event.mcast_end_dst_y)},
                             local_noc_event.noc_type);
                         data["mcast_end_x"] = phys_end_coord.x;
                         data["mcast_end_y"] = phys_end_coord.y;
                     } else {
                         auto phys_coord = translateNocCoordinatesToNoc0(
                             device_marker.chip_id,
-                            {local_noc_event.dst_x, local_noc_event.dst_y},
+                            {static_cast<size_t>(local_noc_event.dst_x), static_cast<size_t>(local_noc_event.dst_y)},
                             local_noc_event.noc_type);
                         data["dx"] = phys_coord.x;
                         data["dy"] = phys_coord.y;
@@ -770,7 +772,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // mux core location is derived from the local noc write event
                     auto mux_phys_coord = translateNocCoordinatesToNoc0(
                         local_noc_write_marker.chip_id,
-                        {local_noc_write_event.dst_x, local_noc_write_event.dst_y},
+                        {static_cast<size_t>(local_noc_write_event.dst_x),
+                         static_cast<size_t>(local_noc_write_event.dst_y)},
                         local_noc_write_event.noc_type);
 
                     auto fabric_mux_marker = fabric_event_markers.fabric_mux_marker.value();
@@ -783,7 +786,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
 
                     auto eth_router_phys_coord = translateNocCoordinatesToNoc0(
                         fabric_mux_marker.chip_id,
-                        {fabric_mux_event.dst_x, fabric_mux_event.dst_y},
+                        {static_cast<size_t>(fabric_mux_event.dst_x), static_cast<size_t>(fabric_mux_event.dst_y)},
                         fabric_mux_event.noc_type);
                     auto eth_chan_opt =
                         routing_lookup.getRouterEthCoreToChannelLookup(device_id, eth_router_phys_coord);
@@ -807,7 +810,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // router eth core location is derived from the local noc write event
                     auto eth_router_phys_coord = translateNocCoordinatesToNoc0(
                         local_noc_write_marker.chip_id,
-                        {local_noc_write_event.dst_x, local_noc_write_event.dst_y},
+                        {static_cast<size_t>(local_noc_write_event.dst_x),
+                         static_cast<size_t>(local_noc_write_event.dst_y)},
                         local_noc_write_event.noc_type);
                     auto eth_chan_opt =
                         routing_lookup.getRouterEthCoreToChannelLookup(device_id, eth_router_phys_coord);
@@ -836,7 +840,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         std::get<EMD::FabricNoCEvent>(EMD(fabric_write_marker.data).getContents());
                     auto phys_coord = translateNocCoordinatesToNoc0(
                         fabric_write_marker.chip_id,
-                        {fabric_write_event.dst_x, fabric_write_event.dst_y},
+                        {static_cast<size_t>(fabric_write_event.dst_x), static_cast<size_t>(fabric_write_event.dst_y)},
                         fabric_write_event.dst_noc_type);
                     fabric_event_json["dst"] = {
                         {{"dx", phys_coord.x},
@@ -853,7 +857,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                             std::get<EMD::FabricNoCScatterEvent>(EMD(fabric_scatter_write_marker.data).getContents());
                         auto phys_coord = translateNocCoordinatesToNoc0(
                             fabric_scatter_write_marker.chip_id,
-                            {fabric_scatter_write.dst_x, fabric_scatter_write.dst_y},
+                            {static_cast<size_t>(fabric_scatter_write.dst_x),
+                             static_cast<size_t>(fabric_scatter_write.dst_y)},
                             fabric_scatter_write.dst_noc_type);
                         fabric_event_json["dst"].push_back({
                             {"dx", phys_coord.x},
@@ -2120,7 +2125,8 @@ void DeviceProfiler::updateTracyContexts(
     // Tracy contexts must be updated in order of their first timestamps
     for (const auto& marker_ref : device_markers_vec) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
-        auto device_core_it = device_cores_to_update.find({marker.chip_id, {marker.core_x, marker.core_y}});
+        auto device_core_it =
+            device_cores_to_update.find({static_cast<ChipId>(marker.chip_id), {marker.core_x, marker.core_y}});
         if (device_core_it != device_cores_to_update.end()) {
             updateTracyContext(*device_core_it);
             device_cores_to_update.erase(device_core_it);
@@ -2222,9 +2228,7 @@ void DeviceProfiler::destroyTracyContexts() {
 
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic pop

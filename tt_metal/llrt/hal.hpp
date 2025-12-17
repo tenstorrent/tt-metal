@@ -36,9 +36,7 @@
 
 enum class AddressableCoreType : uint8_t;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
 struct HalProcessorIdentifier {
@@ -84,7 +82,7 @@ public:
 };
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
-static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 8;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -255,6 +253,8 @@ public:
     virtual std::string common_flags(const Params& params) const = 0;
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
+    // Returns a string of linker flags to be added to linker command line.
+    virtual std::string linker_flags(const Params& params) const = 0;
     // Returns true if firmware should be linked into the kernel as an object.
     virtual bool firmware_is_kernel_object(const Params& params) const = 0;
     // Returns the target name for the build.
@@ -714,8 +714,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
     }
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {

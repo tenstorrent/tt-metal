@@ -294,6 +294,22 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
         src_row = get_mesh_coords(mesh_shape, src_row_idx)
         dst_row = get_mesh_coords(mesh_shape, dst_row_idx)
 
+        old_memory_config = x.memory_config()
+        old_tensor = x
+        if not old_memory_config.interleaved:  # TODO: Remove this once point2point supports sharded tensors
+            target_memory_config = (
+                ttnn.L1_MEMORY_CONFIG
+                if old_memory_config.buffer_type == ttnn.BufferType.L1
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
+            x = ttnn.to_memory_config(
+                x,
+                target_memory_config,
+            )
+        else:
+            old_memory_config = None
+            old_tensor = None
+
         for src_coord, dst_coord in zip(src_row, dst_row):
             ttnn.point_to_point(
                 x,
@@ -302,6 +318,14 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                 output_tensor=x,
                 topology=topology,
             )
+
+        if old_memory_config is not None:  # TODO: Remove this once point2point supports sharded tensors
+            reconfig_tensor = ttnn.to_memory_config(x, old_memory_config)
+            ttnn.deallocate(x)
+
+            ttnn.copy(reconfig_tensor, old_tensor)
+            ttnn.deallocate(reconfig_tensor)
+            return old_tensor
 
         return x
 

@@ -61,9 +61,7 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace detail {
 
@@ -468,7 +466,7 @@ void setSyncInfo(
                 childSyncInfo.second *= syncInfo.first;
                 childSyncInfo.second += syncInfo.second;
                 childSyncInfo.first *= syncInfo.first;
-                setSyncInfo(child_device.first, childSyncInfo, root_sync_info, deviceDeviceSyncInfo, parentInfo);
+                setSyncInfo(child_device.first, childSyncInfo, root_sync_info, deviceDeviceSyncInfo, parentInfoNew);
             }
         }
         detail::setShift(device_id, syncInfo.second, syncInfo.first, root_sync_info);
@@ -1101,9 +1099,7 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 
 }  // namespace experimental
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic pop

@@ -7,12 +7,12 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 import os
 
-import time
 import ttnn
 import numpy as np
 import torch
 from transformers import T5EncoderModel, T5TokenizerFast
 from loguru import logger
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from diffusers.models import AutoencoderKLMochi
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
@@ -291,9 +291,6 @@ class MochiPipeline(DiffusionPipeline):
 
         # Update tokenizer max length
         self.tokenizer_max_length = self.tokenizer.model_max_length if self.tokenizer is not None else 256
-
-        # Record time information for different steps.
-        self.timing_data = None
 
         # Register components for pipeline
         self.register_modules(
@@ -575,10 +572,9 @@ class MochiPipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ):
-        self.timing_data = {"text_encoder": 0, "denoising": 0, "vae": 0, "total": 0}
-        pipeline_start_time = time.time()
-
         height = height or self.default_height
         width = width or self.default_width
 
@@ -609,7 +605,8 @@ class MochiPipeline(DiffusionPipeline):
 
         device = "cpu"
         # 3. Prepare text embeddings
-        text_encoder_start_time = time.time()
+        if profiler:
+            profiler.start("encoder", profiler_iteration)
         (
             prompt_embeds,
             prompt_attention_mask,
@@ -627,7 +624,8 @@ class MochiPipeline(DiffusionPipeline):
             max_sequence_length=max_sequence_length,
             device=device,
         )
-        self.timing_data["text_encoder"] = time.time() - text_encoder_start_time
+        if profiler:
+            profiler.end("encoder", profiler_iteration)
 
         print(f"prompt_embeds.shape: {prompt_embeds.shape}")
         print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
@@ -717,7 +715,8 @@ class MochiPipeline(DiffusionPipeline):
         self._num_timesteps = len(timesteps)
 
         # 6. Denoising loop
-        denoising_start_time = time.time()
+        if profiler:
+            profiler.start("denoising", profiler_iteration)
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
@@ -782,7 +781,8 @@ class MochiPipeline(DiffusionPipeline):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-        self.timing_data["denoising"] = time.time() - denoising_start_time
+        if profiler:
+            profiler.end("denoising", profiler_iteration)
 
         self._current_timestep = None
 
@@ -813,9 +813,11 @@ class MochiPipeline(DiffusionPipeline):
             if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
                 self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
 
-            vae_start_time = time.time()
+            if profiler:
+                profiler.start("vae", profiler_iteration)
             video = self.vae.decode(latents, return_dict=False)[0]
-            self.timing_data["vae"] = time.time() - vae_start_time
+            if profiler:
+                profiler.end("vae", profiler_iteration)
 
             # Reshape the device mesh back to the DiT mesh shape:
             if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
@@ -826,7 +828,4 @@ class MochiPipeline(DiffusionPipeline):
         if not return_dict:
             return (video,)
 
-        pipeline_output = MochiPipelineOutput(frames=video)
-        self.timing_data["total"] = time.time() - pipeline_start_time
-
-        return pipeline_output
+        return MochiPipelineOutput(frames=video)

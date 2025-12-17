@@ -56,7 +56,38 @@ enum EDMStatus : uint32_t {
     READY_FOR_TRAFFIC = 0xA3B3C3D3,
 
     // EDM exiting
-    TERMINATED = 0xA4B4C4D4
+    TERMINATED = 0xA4B4C4D4,
+
+    // Fabric Initialization Postcodes
+    // Initialization started
+    INITIALIZATION_STARTED = 0xB0C0D0E0,
+
+    // TXQ initialized
+    TXQ_INITIALIZED = 0xB1C1D1E1,
+
+    // Stream registers initialized
+    STREAM_REG_INITIALIZED = 0xB2C2D2E2,
+
+    // Started setting up downstream EDMs
+    DOWNSTREAM_EDM_SETUP_STARTED = 0xB3C3D3E3,
+
+    // EDM VC0 setup complete
+    EDM_VCS_SETUP_COMPLETE = 0xB4C4D4E4,
+
+    // Worker interfaces initialized
+    WORKER_INTERFACES_INITIALIZED = 0xB6C6D6E6,
+
+    // Ethernet handshake complete
+    ETHERNET_HANDSHAKE_COMPLETE = 0xB7C7D7E7,
+
+    // VCs opened
+    VCS_OPENED = 0xB8C8D8E8,
+
+    // Routing table initialized
+    ROUTING_TABLE_INITIALIZED = 0xB9C9D9E9,
+
+    // Initialization complete
+    INITIALIZATION_COMPLETE = 0xBACADAEA
 };
 
 // 3 bits
@@ -129,6 +160,32 @@ struct NocUnicastScatterCommandHeader {
         idx = 0;
         for (auto size : chunk_sizes) {
             this->chunk_size[idx++] = size;
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+            this->chunk_size[idx++] = 0;
+        }
+    }
+
+    // Requires: addresses[num_addresses], chunk_sizes[num_addresses - 1].
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+    NocUnicastScatterCommandHeader(
+        const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) :
+        chunk_count(num_addresses) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(num_addresses > 0 && num_addresses <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+#endif
+
+        uint8_t idx = 0;
+        for (; idx < num_addresses; idx++) {
+            this->noc_address[idx] = addresses[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS) {
+            this->noc_address[idx++] = 0;
+        }
+
+        idx = 0;
+        for (; idx < num_addresses - 1; idx++) {
+            this->chunk_size[idx] = chunk_sizes[idx];
         }
         while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
             this->chunk_size[idx++] = 0;
@@ -233,6 +290,11 @@ static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 b
 // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 template <typename Derived>
 struct PacketHeaderBase {
+private:
+    PacketHeaderBase() = default;
+    friend Derived;
+
+public:
     NocCommandFields command_fields;  // size = 40B due to scatter metadata
     uint16_t payload_size_bytes;
     // TODO: trim this down noc_send_type 2 bits (4 values):
@@ -784,7 +846,8 @@ static_assert(
 
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
-    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE)) != 0))
 // 1D routing with UDM is not supported
 static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
 

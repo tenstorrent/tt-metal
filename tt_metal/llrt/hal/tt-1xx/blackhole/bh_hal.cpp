@@ -66,9 +66,7 @@ static constexpr float EPS_BH = 1.19209e-7f;
 static constexpr float NAN_BH = 7.0040e+19;
 static constexpr float INF_BH = 1.7014e+38;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 private:
@@ -76,6 +74,8 @@ private:
 
 public:
     HalJitBuildQueryBlackHole(bool enable_2_erisc_mode) : enable_2_erisc_mode_(enable_2_erisc_mode) {}
+
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
@@ -439,5 +439,4 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
