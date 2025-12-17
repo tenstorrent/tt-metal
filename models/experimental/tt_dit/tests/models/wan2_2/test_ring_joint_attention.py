@@ -103,6 +103,7 @@ def test_ring_joint_sdpa(
         submesh,
         b,
         nh,
+        base_seq_len,
         padded_seq_len,
         joint_seq_len,
         d,
@@ -172,3 +173,137 @@ def test_ring_joint_sdpa_perf_table(mesh_device_shape, rp_axis, rp_factor, up_ax
         k_chunk = attrs.split("k_chunk_size=")[1].split(";")[0]
         new_seqlen = get_padded_vision_seq_len(int(model_input_shape[2]), max(int(q_chunk), int(k_chunk)), rp_factor)
         print(f"| {model_input_shape} | {new_seqlen} | {q_chunk}, {k_chunk} | {duration / 1e6:.3f} |")
+
+
+model_input_shapes = [
+    # original smoke cases
+    (1, 24, 4096, 512, 128),  # padded-divisible spatial, joint > 0
+    (1, 38, 4096, 333, 64),  # many heads, smaller head dim, uneven joint
+    (1, 24, 4224, 128, 128),  # N not divisible by chunk, moderate joint
+    (1, 2, 3072, 0, 128),  # small head count, no joint
+    (1, 2, 4000, 2, 128),  # tiny joint, near-multiple-of-chunk
+    # additional stress cases
+    (1, 24, 8192, 0, 128),  # long sequence, no joint
+    (1, 24, 8200, 64, 128),  # long, non-multiple N, small joint
+    (1, 16, 1024, 256, 128),  # mid length, significant joint
+    (1, 16, 1056, 128, 64),  # mid length, smaller head dim
+    (1, 8, 2048, 0, 256),  # wider head dim
+    (1, 8, 2176, 128, 128),  # mid length, non-multiple, modest joint
+    (1, 4, 512, 64, 128),  # short length with joint
+    (1, 4, 4096, 128, 128),
+    (1, 2, 256, 16, 64),  # minimal heads/dim
+]
+
+model_input_ids = [
+    "wan_14b_720p",
+    "wan_14b_480p",
+    "wan_5b_720p",
+    "mochi",
+    "flux",
+    "long_no_joint",
+    "long_unaligned_joint",
+    "mid_joint",
+    "mid_small_d",
+    "wide_d",
+    "mid_unaligned_joint",
+    "short_joint",
+    "batch2",
+    "tiny_head",
+]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "b, nh, base_seq_len, joint_seq_len, d",
+    model_input_shapes,
+    ids=model_input_ids,
+)
+@pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256], ids=["q32", "q64", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256], ids=["k32", "k64", "k128", "k256"])
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [
+        (1, False, False),
+    ],
+    ids=["no_trace"],
+)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(2, 4)],
+    ids=["2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [1, 4, 0, 2],
+    ],
+    ids=[
+        "4rpx2up",
+    ],
+)
+def test_ring_joint_sdpa_shapes(
+    mesh_device,
+    b,
+    nh,
+    base_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    all_gather_topology,
+    skip_check,
+    reset_seeds,
+):
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        0.999,
+    )
