@@ -145,11 +145,12 @@ class Transformer(LightweightModule):
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
-        logits = ttnn.slice(
-            logits,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
+        start = ttnn.from_torch(torch.tensor([0, 0, get_last_token, 0], dtype=torch.int32), device=self.mesh_device)
+        end = ttnn.from_torch(
+            torch.tensor([1, 1, get_last_token + 32, logits.shape[-1]], dtype=torch.int32), device=self.mesh_device
         )
+        logits = ttnn.slice(logits, start, end, slice_dim=2, num_devices=logits.shape[-2] // 32)
+
         logits = self.norm(logits, mode="prefill")
         if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
