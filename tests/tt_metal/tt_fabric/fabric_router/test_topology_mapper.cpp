@@ -741,6 +741,125 @@ TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
         TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins_missing), std::exception);
 }
 
+TEST_F(TopologyMapperTest, MeshSpecificPinningsHonorsFixedAsicPosition) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    // Local mesh binding for single-host
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Create mesh-specific pinnings for mesh 0
+    auto pinned_asic = AsicPosition{1, 1};
+    auto pinned_asic2 = AsicPosition{1, 5};
+
+    std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> mesh_specific_pinnings;
+    mesh_specific_pinnings[MeshId{0}] = {
+        {pinned_asic, FabricNodeId(MeshId{0}, 0)},
+        {pinned_asic2, FabricNodeId(MeshId{0}, 1)},
+    };
+
+    // Create TopologyMapper with mesh-specific pinnings
+    TopologyMapper topology_mapper_with_mesh_pins(
+        mesh_graph, *physical_system_descriptor_, local_mesh_binding, mesh_specific_pinnings);
+
+    // Verify that the pinnings are honored
+    std::vector<tt::tt_metal::AsicID> potential_mapped_asics;
+    std::vector<tt::tt_metal::AsicID> potential_mapped_asics2;
+    for (const auto& [asic_id, _] : physical_system_descriptor_->get_asic_descriptors()) {
+        auto tray = physical_system_descriptor_->get_tray_id(asic_id);
+        auto loc = physical_system_descriptor_->get_asic_location(asic_id);
+        if (tray == pinned_asic.first && loc == pinned_asic.second) {
+            potential_mapped_asics.push_back(asic_id);
+        }
+        if (tray == pinned_asic2.first && loc == pinned_asic2.second) {
+            potential_mapped_asics2.push_back(asic_id);
+        }
+    }
+
+    // Verify that the mapping for FabricNodeId(0,0) resolves to the pinned ASIC
+    auto mapped_asic_for_node0 =
+        topology_mapper_with_mesh_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto mapped_asic_for_node1 =
+        topology_mapper_with_mesh_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    EXPECT_TRUE(contains(potential_mapped_asics, mapped_asic_for_node0))
+        << "Mesh-specific pinning for node 0 should be honored";
+    EXPECT_TRUE(contains(potential_mapped_asics2, mapped_asic_for_node1))
+        << "Mesh-specific pinning for node 1 should be honored";
+}
+
+TEST_F(TopologyMapperTest, CombinedMeshSpecificAndGlobalPinnings) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    // Local mesh binding for single-host
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Create mesh-specific pinnings for mesh 0
+    auto mesh_specific_pinned_asic = AsicPosition{1, 1};
+    std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> mesh_specific_pinnings;
+    mesh_specific_pinnings[MeshId{0}] = {
+        {mesh_specific_pinned_asic, FabricNodeId(MeshId{0}, 0)},
+    };
+
+    // Create global pinnings for the same mesh
+    auto global_pinned_asic = AsicPosition{1, 5};
+    std::vector<std::pair<AsicPosition, FabricNodeId>> global_pinnings = {
+        {global_pinned_asic, FabricNodeId(MeshId{0}, 1)},
+    };
+
+    // Create TopologyMapper with both mesh-specific and global pinnings
+    TopologyMapper topology_mapper_combined(
+        mesh_graph, *physical_system_descriptor_, local_mesh_binding, global_pinnings, mesh_specific_pinnings);
+
+    // Verify that both types of pinnings are honored
+    std::vector<tt::tt_metal::AsicID> potential_mesh_specific_asics;
+    std::vector<tt::tt_metal::AsicID> potential_global_asics;
+    for (const auto& [asic_id, _] : physical_system_descriptor_->get_asic_descriptors()) {
+        auto tray = physical_system_descriptor_->get_tray_id(asic_id);
+        auto loc = physical_system_descriptor_->get_asic_location(asic_id);
+        if (tray == mesh_specific_pinned_asic.first && loc == mesh_specific_pinned_asic.second) {
+            potential_mesh_specific_asics.push_back(asic_id);
+        }
+        if (tray == global_pinned_asic.first && loc == global_pinned_asic.second) {
+            potential_global_asics.push_back(asic_id);
+        }
+    }
+
+    // Verify that mesh-specific pinning is honored
+    auto mapped_asic_for_node0 = topology_mapper_combined.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    EXPECT_TRUE(contains(potential_mesh_specific_asics, mapped_asic_for_node0))
+        << "Mesh-specific pinning should be honored for node 0";
+
+    // Verify that global pinning is also honored
+    auto mapped_asic_for_node1 = topology_mapper_combined.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    EXPECT_TRUE(contains(potential_global_asics, mapped_asic_for_node1))
+        << "Global pinning should be honored for node 1";
+
+    // Verify that both pinnings are combined (both should be present)
+    EXPECT_NE(mapped_asic_for_node0, mapped_asic_for_node1)
+        << "Different nodes should map to different ASICs when both pinnings are used";
+}
+
 // Parameterized test fixture for testing TopologyMapper with custom mappings
 class T3kTopologyMapperWithCustomMappingFixture
     : public TopologyMapperTest,

@@ -185,7 +185,8 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}) {
+    fixed_asic_position_pinnings_({}),
+    fixed_asic_position_pinnings_by_mesh_({}) {
     // Initialize containers; population will occur during build_mapping
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
@@ -204,7 +205,47 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_(fixed_asic_position_pinnings) {
+    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
+    fixed_asic_position_pinnings_by_mesh_({}) {
+    mesh_host_ranks_.clear();
+    mesh_host_rank_coord_ranges_.clear();
+    mesh_host_rank_to_mpi_rank_.clear();
+    build_asic_physical_chip_id_mappings();
+    initialize_chip_topology_mapping_map();
+    build_mapping();
+}
+
+// Constructor with mesh-specific pinnings
+TopologyMapper::TopologyMapper(
+    const MeshGraph& mesh_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const LocalMeshBinding& local_mesh_binding,
+    const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>& fixed_asic_position_pinnings_by_mesh) :
+    mesh_graph_(mesh_graph),
+    physical_system_descriptor_(physical_system_descriptor),
+    local_mesh_binding_(local_mesh_binding),
+    fixed_asic_position_pinnings_({}),
+    fixed_asic_position_pinnings_by_mesh_(fixed_asic_position_pinnings_by_mesh) {
+    mesh_host_ranks_.clear();
+    mesh_host_rank_coord_ranges_.clear();
+    mesh_host_rank_to_mpi_rank_.clear();
+    build_asic_physical_chip_id_mappings();
+    initialize_chip_topology_mapping_map();
+    build_mapping();
+}
+
+// Constructor with both global and mesh-specific pinnings (combined)
+TopologyMapper::TopologyMapper(
+    const MeshGraph& mesh_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const LocalMeshBinding& local_mesh_binding,
+    const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings,
+    const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>& fixed_asic_position_pinnings_by_mesh) :
+    mesh_graph_(mesh_graph),
+    physical_system_descriptor_(physical_system_descriptor),
+    local_mesh_binding_(local_mesh_binding),
+    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
+    fixed_asic_position_pinnings_by_mesh_(fixed_asic_position_pinnings_by_mesh) {
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
     mesh_host_rank_to_mpi_rank_.clear();
@@ -222,7 +263,8 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}) {
+    fixed_asic_position_pinnings_({}),
+    fixed_asic_position_pinnings_by_mesh_({}) {
     log_debug(
         tt::LogFabric,
         "TopologyMapper: Building mapping directly from provided logical to physical chip mapping (skipping "
@@ -624,7 +666,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
     config.strict_mode = !mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
 
-    // Build pinning constraints if any
+    // Build pinning constraints if any - combine mesh-specific pinnings and global pinnings
+    // First, add mesh-specific pinnings for this mesh
+    auto mesh_pinnings_it = fixed_asic_position_pinnings_by_mesh_.find(mesh_id);
+    if (mesh_pinnings_it != fixed_asic_position_pinnings_by_mesh_.end()) {
+        for (const auto& [pos, fabric_node] : mesh_pinnings_it->second) {
+            config.pinnings.emplace_back(pos, fabric_node);
+        }
+    }
+    // Then, add global pinnings filtered by mesh_id
     for (const auto& [pos, fabric_node] : fixed_asic_position_pinnings_) {
         if (fabric_node.mesh_id == mesh_id) {
             config.pinnings.emplace_back(pos, fabric_node);

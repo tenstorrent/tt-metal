@@ -87,6 +87,26 @@ public:
         const LocalMeshBinding& local_mesh_binding,
         const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
 
+    // Construct a TopologyMapper with mesh-specific fixed ASIC-position pinnings.
+    // These pins must reference devices on the current host; if infeasible, construction will throw with details.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>&
+            fixed_asic_position_pinnings_by_mesh);
+
+    // Construct a TopologyMapper with both global and mesh-specific fixed ASIC-position pinnings.
+    // Both types of pinnings will be combined. These pins must reference devices on the current host;
+    // if infeasible, construction will throw with details.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings,
+        const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>&
+            fixed_asic_position_pinnings_by_mesh);
+
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
     TopologyMapper(
@@ -368,6 +388,7 @@ private:
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
     const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
+    const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> fixed_asic_position_pinnings_by_mesh_;
     bool generate_mapping_locally_ = false;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
