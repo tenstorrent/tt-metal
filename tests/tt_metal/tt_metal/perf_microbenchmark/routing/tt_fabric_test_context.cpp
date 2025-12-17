@@ -126,7 +126,7 @@ void TestContext::initialize_code_profiling_results_csv_file() {
 
     // Output directory already set in initialize_bandwidth_results_csv_file()
     std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
     code_profiling_csv_file_path_ = output_path / code_profiling_results_oss.str();
 
     // Create detailed CSV file with header
@@ -157,7 +157,7 @@ void TestContext::dump_code_profiling_results_to_csv(const TestConfig& config) {
     const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
     std::string ftype_str = fetch_pattern_ftype(first_pattern);
     std::string ntype_str = fetch_pattern_ntype(first_pattern);
-    uint32_t packet_size = fetch_pattern_packet_size(first_pattern);
+    // uint32_t packet_size = fetch_pattern_packet_size(first_pattern);
 
     // Open CSV file in append mode
     std::ofstream code_profiling_csv_stream(code_profiling_csv_file_path_, std::ios::out | std::ios::app);
@@ -169,22 +169,22 @@ void TestContext::dump_code_profiling_results_to_csv(const TestConfig& config) {
         return;
     }
 
-    // Write data rows (header already written in initialize_code_profiling_results_csv_file)
-    for (const auto& entry : code_profiling_entries_) {
-        std::string coord_str = convert_coord_to_string(entry.coord);
-        code_profiling_csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
-                                  << enchantum::to_string(config.fabric_setup.topology) << ","
-                                  << config.fabric_setup.num_links << "," << packet_size << ","
-                                  << config.iteration_number << ",";
-        code_profiling_csv_stream << "\"" << coord_str << "\"," << entry.eth_channel << ","
-                                  << convert_code_profiling_timer_type_to_str(entry.timer_type) << ","
-                                  << entry.total_cycles << "," << entry.num_instances << "," << std::fixed
-                                  << std::setprecision(6) << entry.avg_cycles_per_instance << "\n";
-    }
+    // // Write data rows (header already written in initialize_code_profiling_results_csv_file)
+    // for (const auto& entry : code_profiling_entries_) {
+    //     std::string coord_str = convert_coord_to_string(entry.coord);
+    //     code_profiling_csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
+    //                               << enchantum::to_string(config.fabric_setup.topology) << ","
+    //                               << config.fabric_setup.num_links << "," << packet_size << ","
+    //                               << config.iteration_number << ",";
+    //     code_profiling_csv_stream << "\"" << coord_str << "\"," << entry.eth_channel << ","
+    //                               << convert_code_profiling_timer_type_to_str(entry.timer_type) << ","
+    //                               << entry.total_cycles << "," << entry.num_instances << "," << std::fixed
+    //                               << std::setprecision(6) << entry.avg_cycles_per_instance << "\n";
+    // }
 
-    code_profiling_csv_stream.close();
+    // code_profiling_csv_stream.close();
 
-    log_info(tt::LogTest, "Code Profiling results appended to CSV file: {}", code_profiling_csv_file_path_.string());
+    // log_info(tt::LogTest, "Code Profiling results appended to CSV file: {}", code_profiling_csv_file_path_.string());
 }
 
 void TestContext::process_telemetry_for_golden() {

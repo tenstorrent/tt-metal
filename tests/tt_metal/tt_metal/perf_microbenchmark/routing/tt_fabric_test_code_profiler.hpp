@@ -11,6 +11,10 @@
 #include "tt_fabric_telemetry.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
 
+// Helper functions for code profiling
+using tt::tt_fabric::convert_code_profiling_timer_type_to_str;
+using tt::tt_fabric::convert_to_code_profiling_timer_type;
+
 // Manages fabric code profiling lifecycle (readback, clearing, reporting).
 class CodeProfiler {
 public:

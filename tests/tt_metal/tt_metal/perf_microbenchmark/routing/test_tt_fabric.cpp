@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
     if (has_latency_tests) {
         test_context.initialize_latency_results_csv_file();
     }
-    
+
     // Set code profiling enabled based on rtoptions
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     bool code_profiling_enabled = rtoptions.fabric_code_profiling_enabled();
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
             test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 
             // TODO: Check to see if code profiling can be enabled even without benchmark mode (Issue #32036)
-            if (!test_config.benchmark_mode) {
+            if (test_config.performance_test_mode == PerformanceTestMode::NONE) {
                 if (code_profiling_enabled) {
                     log_warning(
                         tt::LogTest,
