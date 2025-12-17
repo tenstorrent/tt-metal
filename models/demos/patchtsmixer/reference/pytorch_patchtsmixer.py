@@ -102,3 +102,256 @@ class PatchTSMixerMLP(nn.Module):
         x = self.drop(torch.nn.functional.gelu(self.fc1(x)))
         x = self.drop(self.fc2(x))
         return x
+
+
+class PatchTSMixerChannelFeatureMixerBlock(nn.Module):
+    """
+    this module mixes the features in the channel dimension.
+    """
+
+    def __init__(
+        self, num_channels, d_model, norm_type="LayerNorm", expansion=2, dropout=0.1, gated_attn=False, eps=1e-5
+    ):
+        super().__init__()
+        self.norm = PatchTSMixerNormLayer(d_model, norm_type=norm_type, eps=eps)
+        self.gated_attn = gated_attn
+        self.mlp = PatchTSMixerMLP(
+            in_features=num_channels, out_features=num_channels, expansion=expansion, dropout=dropout
+        )
+        if gated_attn:
+            self.gate = PatchTSMixerGatedAttention(d_model=num_channels)
+
+    def forward(self, x):
+        # x: (B, C, N_p, D)
+        residual = x
+        x = self.norm(x)  # (B, C, N_p, D)
+        x = x.permute(0, 3, 2, 1)  # (B, D, N_p, C)
+
+        if self.gated_attn:
+            x = self.gate(x)  # gate over channels
+
+        x = self.mlp(x)  # mix over channels
+        x = x.permute(0, 3, 2, 1)  # (B, C, N_p, D)
+        return x + residual
+
+
+class FeatureMixerBlock(nn.Module):
+    """
+    Module that mixes the hidden feature dimension d_model for each patch.
+    """
+
+    def __init__(
+        self, d_model: int, expansion: int = 2, dropout: float = 0.1, use_gated_attn: bool = False, eps: float = 1e-5
+    ):
+        super().__init__()
+        self.norm = PatchTSMixerNormLayer(d_model=d_model, eps=eps)
+        self.mlp = PatchTSMixerMLP(
+            in_features=d_model,
+            out_features=d_model,
+            expansion=expansion,
+            dropout=dropout,
+        )
+        self.use_gated_attn = use_gated_attn
+        if use_gated_attn:
+            self.gate = PatchTSMixerGatedAttention(d_model=d_model)
+
+    def forward(self, hidden):
+        """
+
+        :hidden: (B, N_p, D)
+        :returns: (B, N_p, D)
+        """
+        residual = hidden
+
+        # Normalize over feature dimension D
+        hidden = self.norm(hidden)
+
+        # MLP over the last dim (D)
+        hidden = self.mlp(hidden)
+
+        # Optional gated attention over features
+        if self.use_gated_attn:
+            hidden = self.gate(hidden)
+
+        return hidden + residual
+
+
+class PatchMixerBlock(nn.Module):
+    def __init__(
+        self,
+        num_patches: int,
+        d_model: int,
+        expansion: int = 2,
+        dropout: float = 0.1,
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+        self.norm = PatchTSMixerNormLayer(d_model=d_model, eps=eps)
+        self.mlp = PatchTSMixerMLP(
+            in_features=num_patches,
+            out_features=num_patches,
+            expansion=expansion,
+            dropout=dropout,
+        )
+        self.use_gated_attn = use_gated_attn
+        if use_gated_attn:
+            self.gate = PatchTSMixerGatedAttention(d_model=num_patches)
+
+    def forward(self, x):
+        """
+
+        :x: (B, C, N_p, D)
+        :Returns: (B, C, N_p, D)
+        """
+        residual = x  # (B, C, N_p, D)
+
+        # Normalize over the last dim D
+        x = self.norm(x)  # (B, C, N_p, D)
+
+        # We want to mix along the patch dimension N_p, so move it the last axis
+        x = x.transpose(2, 3)
+
+        # MLP over patches (last dim = N_p)
+        x = self.mlp(x)  # (B, C, D, N_p)
+
+        # Optional gated attention over patches
+        if self.use_gated_attn:
+            x = self.gate(x)  # (B, C, D, N_p)
+
+        # Put patches back as axis 2: (B, C, D, N_p) -> (B, C, N_p, D)
+        x = x.transpose(2, 3)
+
+        # Residual connection
+        return x + residual
+
+
+class PatchTSMixerLayer(nn.Module):
+    """
+    the PatchTSMixer layer that does all three kinds of mixing.
+    """
+
+    def __init__(
+        self,
+        num_patches: int,
+        d_model: int,
+        num_channels: int,
+        mode: str = "common_channel",  # or "mix_channel"
+        expansion: int = 2,
+        dropout: float = 0.1,
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+        self.mode = mode
+
+        if mode == "mix_channel":
+            self.channel_mixer = PatchTSMixerChannelFeatureMixerBlock(
+                num_channels=num_channels,
+                d_model=num_channels,
+                expansion=expansion,
+                dropout=dropout,
+                use_gated_attn=use_gated_attn,
+                eps=eps,
+            )
+        self.patch_mixer = PatchMixerBlock(
+            num_patches=num_patches,
+            d_model=d_model,
+            expansion=expansion,
+            dropout=dropout,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+
+        self.feature_mixer = FeatureMixerBlock(
+            d_model=d_model,
+            expansion=expansion,
+            dropout=dropout,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+
+    def forward(self, hidden):
+        """
+        hidden: (B, C, N_p, D)
+        """
+        if self.mode == "mix_channel":
+            hidden = self.channel_mixer(hidden)
+        hidden = self.patch_mixer(hidden)
+        hidden = self.feature_mixer(hidden)
+        return hidden
+
+
+class PatchTSMixerBlock(nn.Module):
+    """
+    Simplified backbone: a stack of SimplePatchTSMixerLayer modules.
+
+    Each layer:
+      - (optionally) mixes channels
+      - mixes patches (time)
+      - mixes features (d_model)
+
+    Expected input: hidden of shape (B, C, N_p, D)
+    """
+
+    def __init__(self, num_layers: int, layer_kwargs: dict):
+        """
+        Args:
+           num_layers: how many mixer layers to stack.
+           layer_kwargs: kwargs passed to each SimplePatchTSMixerLayer, e.g.:
+               {
+                   "num_patches": 64,
+                   "d_model": 16,
+                   "num_channels": 7,
+                   "mode": "common_channel",
+                   "expansion": 2,
+                   "dropout": 0.1,
+                   "use_gated_attn": False,
+                   "eps": 1e-5,
+               }
+        """
+        super().__init__()
+        self.layers = nn.ModuleList([PatchTSMixerLayer(**layer_kwargs) for _ in range(num_layers)])
+
+    def forward(self, hidden: torch.Tensor, output_hidden_states: bool = False):
+        """
+         Args:
+            hidden: (B, C, N_p, D)
+            output_hidden_states: if True, also return list of layer outputs.
+
+        Returns:
+            embedding: final output (B, C, N_p, D)
+            all_hidden_states: list of intermediate outputs (or None)
+        """
+        all_hidden_states = [] if output_hidden_states else None
+        embedding = hidden
+
+        for layer in self.layers:
+            embedding = layer(embedding)
+            if output_hidden_states:
+                all_hidden_states.append(embedding)
+
+        return embedding, all_hidden_states
+
+
+class PatchTSMixerForecastHead(nn.Module):
+    """
+    Simple forecasting head:
+        Input: (B, C, N_p, D)
+        Output: (B, prediction_length, C)
+    """
+
+    def __init__(self, num_patches: int, d_model: int, prediction_length: int, head_dropout: float = 0.1):
+        super().__init__()
+        self.prediction_length = prediction_length
+        self.dropout = nn.Dropout(head_dropout)
+        self.flatten = nn.Flatten(start_dim=-2)  # flatten (N_p, D) -> (N_p*D)
+        self.proj = nn.Linear(num_patches * d_model, prediction_length)
+
+    def forward(self, hidden_features: torch.Tensor) -> torch.Tensor:
+        # hidden_features: (B, C, N_p, D)
+        x = self.flatten(hidden_features)  # (B, C, N_p*D)
+        x = self.dropout(x)
+        x = self.proj(x)  # (B, C, H)
+        x = x.transpose(-1, -2)  # (B, H, C) to match HF convention.
+        return x
