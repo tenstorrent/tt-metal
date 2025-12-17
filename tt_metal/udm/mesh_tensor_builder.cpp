@@ -116,21 +116,25 @@ private:
         }
     }
 
-    // Helper: Expand replicated tensor dimensions by inserting new replica dims
-    // in mesh dimension order (by iterating in reverse)
+    // Helper: Expand replicated tensor dimensions by multiplying existing tensor dims
+    // Rule:
+    // - Replicate on last mesh dim → multiply last tensor dim
+    // - Replicate on non-last mesh dim → multiply first tensor dim
     void expand_replicated_tensor_dims(std::array<uint32_t, MAX_RANK>& mesh_tensor_shape, uint32_t& rank) const {
-        for (int mesh_dim = static_cast<int>(shard_dims_.size()) - 1; mesh_dim >= 0; --mesh_dim) {
+        uint32_t num_mesh_dims = shard_dims_.size();
+        for (size_t mesh_dim = 0; mesh_dim < num_mesh_dims; ++mesh_dim) {
             if (!shard_dims_[mesh_dim].has_value()) {
-                // Only add replica dimension if mesh extent > 1
-                // (no need to add dimension of size 1 for trivial replication)
-                if (distribution_shape_[mesh_dim] > 1) {
-                    // Shift existing dims right and insert replica at position 0
-                    for (int i = rank - 1; i >= 0; --i) {
-                        mesh_tensor_shape[i + 1] = mesh_tensor_shape[i];
-                    }
-                    mesh_tensor_shape[0] = distribution_shape_[mesh_dim];
-                    rank++;
+                // This is a replicated mesh dim - determine which tensor dim to multiply
+                int tensor_dim;
+                if (mesh_dim == num_mesh_dims - 1) {
+                    // Last mesh dim → multiply last tensor dim
+                    tensor_dim = rank - 1;
+                } else {
+                    // Non-last mesh dim → multiply first tensor dim
+                    tensor_dim = 0;
                 }
+                log_info(tt::LogTest, "mesh_dim {} distribution_shape_ {}", mesh_dim, distribution_shape_[mesh_dim]);
+                mesh_tensor_shape[tensor_dim] *= distribution_shape_[mesh_dim];
             }
         }
     }
@@ -162,12 +166,12 @@ private:
             tensor_shape_in_pages_[i] = tensor_shape_in_pages[i];
         }
 
-        // Apply distribution sharding to get global mesh tensor shape
+        // Apply distribution sharding and replication to get global mesh tensor shape
         auto [reconstructed_shape, reconstructed_rank] = reconstruct_mesh_tensor_shape(tensor_shape_in_pages);
         mesh_tensor_shape_in_pages_ = reconstructed_shape;
         mesh_tensor_rank_ = reconstructed_rank;
 
-        // Adjust tensor_shape_in_pages to match mesh_tensor_rank by prepending 1s for replication dims
+        // Adjust tensor_shape_in_pages to match mesh_tensor_rank
         adjust_shape_ranks(tensor_shape_in_pages_, local_rank, mesh_tensor_shape_in_pages_, mesh_tensor_rank_, 1);
 
         // Compute strides
