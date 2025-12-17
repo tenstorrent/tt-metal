@@ -113,6 +113,35 @@ auto matmul_program_config = nb::class_<MatmulProgramConfigPlaceholder>(mod, "Ma
 C++20 added modules to the standard. Regardless of availability, please avoid naming your `nb::module_ module` to avoid
 keyword clashes. Prefer names such as `mod`, `m`, `module_<NAME>`, etc.
 
+#### Nanobind enum map entries in python uses `_member_map_` instead of `__entries`
+
+Error message:
+```
+ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+/usr/lib/python3.10/enum.py:437: in __getattr__
+    raise AttributeError(name) from None
+```
+
+Patch:
+```py
+def get_types_from_binding_framework():
+    if hasattr(ttnn.DataType, "__entries"):
+        # pybind
+        ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+    elif hasattr(ttnn.DataType, "_member_map_"):
+        # nanobind
+        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+    else:
+        raise Exception(
+            "test_rand.py: ttnn.DataType has unexpected way of holding values. Not matching pybind/nanobind."
+        )
+
+    return ALL_TYPES
+
+ALL_TYPES = get_types_from_binding_framework()
+```
+
+---
 
 # Pybind11 to Nanobind Migration Guide
 
