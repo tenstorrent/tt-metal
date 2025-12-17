@@ -159,8 +159,10 @@ constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = get_compile_time_arg_val(MAIN_CT_ARG
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr bool z_router_enabled = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
+constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
+constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 13);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 12;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 14;
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 

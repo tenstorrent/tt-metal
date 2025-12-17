@@ -102,46 +102,54 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     if (is_2D_routing) {
         // For 2D: Use fixed slot count based on VC (kernel expects fixed-size arrays)
         // VC0: 3 slots (mesh directions)
-        // VC1: 3 slots (XY intermesh) or 4 slots (Z intermesh) - determined by actual connections
-        size_t num_downstream_edms;
-        if (vc_idx == 0) {
-            num_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
-        } else {
-            // VC1: Use fixed count based on 2D routing (3 for XY, 4 for Z intermesh)
-            num_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
-        }
+        // Get the connection mask to determine which compact indices are valid
+        uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
 
         // Pack connection mask (bit mask indicating which slots are valid)
-        args_out.push_back(this->downstream_edms_connected_by_vc_mask.at(vc_idx));
+        args_out.push_back(mask);
 
-        // Pack buffer base addresses (one per compact index)
-        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
-            uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
-            args_out.push_back(buffer_addr);
+        // Dense pack: iterate through mask bits and pack only valid compact indices
+        // For example, if mask=0x5 (binary 101), we pack compact indices 0 and 2 into args[0] and args[1]
+
+        // Pack buffer base addresses (dense packed based on mask)
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+            if (mask & (1 << compact_idx)) {
+                uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
+                args_out.push_back(buffer_addr);
+            }
         }
 
-        // Pack NOC X and Y (already compacted properly)
+        // Dense pack NOC X and Y (methods get mask internally)
         args_out.push_back(this->pack_downstream_noc_x_rt_arg(vc_idx));
         args_out.push_back(this->pack_downstream_noc_y_rt_arg(vc_idx));
 
-        // Pack worker registration addresses (connection handshake addresses)
-        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
-            args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
+        // Pack worker registration addresses (dense packed based on mask)
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+            if (mask & (1 << compact_idx)) {
+                args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
+            }
         }
 
-        // Pack worker location info addresses
-        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
-            args_out.push_back(this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
+        // Pack worker location info addresses (dense packed based on mask)
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+            if (mask & (1 << compact_idx)) {
+                args_out.push_back(
+                    this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
+            }
         }
 
-        // Pack buffer index semaphore addresses
-        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
-            args_out.push_back(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
+        // Pack buffer index semaphore addresses (dense packed based on mask)
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+            if (mask & (1 << compact_idx)) {
+                args_out.push_back(
+                    this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
+            }
         }
     } else {
         // For 1D: single downstream connection (only VC0 supported)
         TT_FATAL(vc_idx == 0, "VC1 is not supported for 1D routing");
-        bool has_connection = this->downstream_edms_connected_by_vc_mask.at(vc_idx) != 0;
+        uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+        bool has_connection = mask != 0;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
@@ -193,12 +201,51 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
 }
 
 uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const {
-    return encode_noc_ord_for_2d(
-        this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.y; });
+    if (!is_2D_routing) {
+        // 1D routing: single downstream connection
+        if (downstream_edms_connected_by_vc[vc_idx].empty()) {
+            return 0;
+        }
+        return downstream_edms_connected_by_vc[vc_idx].front().second.y;
+    }
+
+    // 2D routing: dense pack based on mask (get mask internally)
+    uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+    uint32_t noc_y_packed = 0;
+    uint32_t dense_idx = 0;
+
+    for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+        size_t compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+        if (mask & (1 << compact_idx)) {
+            noc_y_packed |= (noc_xy.y << (dense_idx * 8));
+            dense_idx++;
+        }
+    }
+    return noc_y_packed;
 }
+
 uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const {
-    return encode_noc_ord_for_2d(
-        this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.x; });
+    if (!is_2D_routing) {
+        // 1D routing: single downstream connection
+        if (downstream_edms_connected_by_vc[vc_idx].empty()) {
+            return 0;
+        }
+        return downstream_edms_connected_by_vc[vc_idx].front().second.x;
+    }
+
+    // 2D routing: dense pack based on mask (get mask internally)
+    uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+    uint32_t noc_x_packed = 0;
+    uint32_t dense_idx = 0;
+
+    for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+        size_t compact_idx = get_receiver_channel_compact_index(my_direction, direction);
+        if (mask & (1 << compact_idx)) {
+            noc_x_packed |= (noc_xy.x << (dense_idx * 8));
+            dense_idx++;
+        }
+    }
+    return noc_x_packed;
 }
 /*
  * For 2D fabric, downstream noc x/y coords are packed into uint32_t, one per byte
