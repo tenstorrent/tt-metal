@@ -431,7 +431,13 @@ void calculate_exponential_first_column(int scale_bf16) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
-            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::vFloat result;
+            if constexpr (!DST_ACCUM_MODE) {
+                result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
+            } else {
+                result = ckernel::sfpu::_sfpu_exp_61f_(val);
+            }
+
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
