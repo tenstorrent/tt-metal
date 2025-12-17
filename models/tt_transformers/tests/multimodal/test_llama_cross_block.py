@@ -31,18 +31,18 @@ from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossA
     ],
     indirect=True,
 )
-# @pytest.mark.parametrize(
-#     "batch",
-#     (1, 2),
-#     ids=[
-#         "batch_1",
-#         "batch_2",
-#     ],
-# )
 @pytest.mark.parametrize(
     "batch",
-    (1,),
+    (1, 2),
+    ids=[
+        "batch_1",
+        "batch_2",
+    ],
 )
+# @pytest.mark.parametrize(
+#     "batch",
+#     (1,),
+# )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
