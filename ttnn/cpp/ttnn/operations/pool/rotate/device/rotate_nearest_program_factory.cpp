@@ -5,6 +5,7 @@
 #include "rotate_device_operation.hpp"
 #include "kernels/fixed_point_q16.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include "tt-metalium/tensor_accessor_args.hpp"
@@ -12,6 +13,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -21,11 +23,12 @@ namespace ttnn::operations::rotate {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Constants for nearest interpolation (much simpler than bilinear)
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
-// Helper to convert float to bfloat16 representation (nearest-specific)
+
+// Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
 static uint16_t nearest_float_to_bfloat16(float value) {
-    return static_cast<uint16_t>(std::bit_cast<uint32_t>(value) >> 16);
+    bfloat16 bf16_value(value);
+    return std::bit_cast<uint16_t>(bf16_value);
 }
 
 RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOperation::NearestProgramFactory::create(
@@ -84,24 +87,39 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     // Get logical cores for setting runtime args
     std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    // Calculate stick sizes (aligned to 32 bytes)
+    // Calculate stick sizes (aligned to DRAM for efficient reads)
     const uint32_t element_size = input_tensor.element_size();
     const uint32_t input_stick_nbytes = input_channels * element_size;
+    const uint32_t aligned_input_stick_nbytes =
+        tt::round_up(input_stick_nbytes, tt::tt_metal::hal::get_dram_alignment());
     const uint32_t output_stick_nbytes = input_channels * element_size;
+    const uint32_t aligned_output_stick_nbytes =
+        tt::round_up(output_stick_nbytes, tt::tt_metal::hal::get_dram_alignment());
+
+    // Calculate max CB pages based on available L1 memory
+    const uint32_t available_l1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t l1_for_cb = available_l1 / NEAREST_BUFFERING_FACTOR;
+    const uint32_t max_cb_pages_from_l1 = l1_for_cb / aligned_input_stick_nbytes;
+
+    // Determine actual number of CB pages: min of (max work per core, L1 capacity), at least MIN_CB_PAGES
+    const uint32_t max_sticks_per_core = std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+    uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
+    num_cb_pages = num_cb_pages * NEAREST_BUFFERING_FACTOR;
 
     // CB_0: Output CB for communication between reader and writer
-    const uint32_t output_cb_page_size = output_stick_nbytes;
+    const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
-        tt::CBIndex::c_0, program, all_cores, output_cb_page_size, NEAREST_BUFFERING_FACTOR, output_cb_data_format);
+        tt::CBIndex::c_0, program, all_cores, output_cb_page_size, num_cb_pages, output_cb_data_format);
 
     // Reader compile-time arguments (RISCV_0)
     std::vector<uint32_t> reader_compile_time_args = {
-        output_cb_index,     // ct_arg[0]: output_cb_index
-        input_stick_nbytes,  // ct_arg[1]: input_stick_nbytes
-        input_batch,         // ct_arg[2]: input_batch
-        input_height,        // ct_arg[3]: input_height
-        input_width,         // ct_arg[4]: input_width
-        input_channels,      // ct_arg[5]: input_channels
+        output_cb_index,             // ct_arg[0]: output_cb_index
+        aligned_input_stick_nbytes,  // ct_arg[1]: aligned_input_stick_nbytes (for DRAM reads)
+        input_batch,                 // ct_arg[2]: input_batch
+        input_height,                // ct_arg[3]: input_height
+        input_width,                 // ct_arg[4]: input_width
+        input_channels,              // ct_arg[5]: input_channels
     };
 
     // Append tensor accessor args for input tensor
@@ -109,8 +127,8 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
 
     // Writer compile-time arguments (RISCV_1)
     std::vector<uint32_t> writer_compile_time_args = {
-        output_cb_index,      // ct_arg[0]: output_cb_index
-        output_stick_nbytes,  // ct_arg[1]: output_stick_nbytes
+        output_cb_index,              // ct_arg[0]: output_cb_index
+        aligned_output_stick_nbytes,  // ct_arg[1]: aligned_output_stick_nbytes
     };
 
     // Append tensor accessor args for output tensor
@@ -124,7 +142,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
             .compile_args = reader_compile_time_args});
 
     // Create writer kernel (RISCV_1)
@@ -135,7 +153,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
             .compile_args = writer_compile_time_args});
 
     // Set runtime arguments for each core
