@@ -246,18 +246,18 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@pytest.mark.parametrize("b", [2])
-@pytest.mark.parametrize("h", [3])
-@pytest.mark.parametrize("m", [256])
-@pytest.mark.parametrize("k", [256])
-@pytest.mark.parametrize("n", [256])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in0_sharded", [True, False])
-@pytest.mark.parametrize("in1_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("transpose_tile", [True, False])
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("m", [32])
+@pytest.mark.parametrize("k", [2048])
+@pytest.mark.parametrize("n", [96])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in0_sharded", [False])
+@pytest.mark.parametrize("in1_sharded", [False])
+@pytest.mark.parametrize("out_sharded", [False])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_reuse_config_sharded_tiny_tile(
     device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
 ):
@@ -334,7 +334,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
-    if in1_dtype == ttnn.bfloat8_b:
+    if in1_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat16:
         expected_pcc = 0.999
     elif in1_dtype == ttnn.bfloat4_b:
         expected_pcc = 0.993

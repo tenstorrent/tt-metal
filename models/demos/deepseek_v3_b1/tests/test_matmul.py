@@ -20,19 +20,22 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
 
 
-@pytest.mark.parametrize(
-    "M, K, N",
-    [
-        (1, 7168, 32),  # Single core: 1x7K x 7Kx32 -> 1x32
-    ],
-)
+# @pytest.mark.parametrize(
+#     "M, K, N",
+#     [
+#         (32, 7168, 32),  # Single core: 1x7K x 7Kx32 -> 1x32
+#     ],
+# )
+@pytest.mark.parametrize("M", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("K", [7168])
+@pytest.mark.parametrize("N", [32])
 def test_matmul_single_core(device, M, K, N):
     """Test single-core matmul operation with fully sharded inputs"""
 
     # Tile dimensions
-    a_tile = ttnn.Tile([1, 32])  # Tiny tile height for A and output
+    a_tile = ttnn.Tile([M, 32])  # Tiny tile height for A and output
     b_tile = ttnn.Tile([32, 32])  # Standard tile for B
-    out_tile = ttnn.Tile([1, 32])  # Tiny tile height for output
+    out_tile = ttnn.Tile([M, 32])  # Tiny tile height for output
 
     # Single core
     core = ttnn.CoreCoord(0, 0)

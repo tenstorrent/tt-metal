@@ -7,6 +7,9 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+#include "debug/dprint.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 /**
  * Simplified matmul compute kernel for single output tile per core.
  *
@@ -40,32 +43,35 @@ void MAIN {
     // Wait for all input tiles (both from sharded tensors in L1)
     cb_wait_front(in0_cb, num_tiles_k);
     cb_wait_front(in1_cb, num_tiles_k);
+    {
+        DeviceZoneScopedN("MATMUL_SINGLE_TILE");
 
-    // Reserve output
-    cb_reserve_back(out_cb, 1);
+        // Reserve output
+        cb_reserve_back(out_cb, 1);
 
-    // Accumulate across K dimension
-    tile_regs_acquire();
+        // Accumulate across K dimension
+        tile_regs_acquire();
 
-    for (uint32_t k = 0; k < num_tiles_k; k++) {
-        // Compute matmul for this k tile
-        // in0 tile index: k (from sharded input)
-        // in1 tile index: k (from sharded weights)
-        // dst index: 0 (single output tile, accumulating)
-        matmul_tiles(in0_cb, in1_cb, k, k, 0, false);
+        for (uint32_t k = 0; k < num_tiles_k; k++) {
+            // Compute matmul for this k tile
+            // in0 tile index: k (from sharded input)
+            // in1 tile index: k (from sharded weights)
+            // dst index: 0 (single output tile, accumulating)
+            matmul_tiles(in0_cb, in1_cb, k, k, 0);
+        }
+
+        tile_regs_commit();
+
+        // Pop inputs
+        cb_pop_front(in0_cb, num_tiles_k);
+        cb_pop_front(in1_cb, num_tiles_k);
+
+        // Pack output
+        tile_regs_wait();
+        pack_tile(0, out_cb);
+        tile_regs_release();
+
+        cb_push_back(out_cb, 1);
     }
-
-    tile_regs_commit();
-
-    // Pop inputs
-    cb_pop_front(in0_cb, num_tiles_k);
-    cb_pop_front(in1_cb, num_tiles_k);
-
-    // Pack output
-    tile_regs_wait();
-    pack_tile(0, out_cb);
-    tile_regs_release();
-
-    cb_push_back(out_cb, 1);
 }
 }  // namespace NAMESPACE
