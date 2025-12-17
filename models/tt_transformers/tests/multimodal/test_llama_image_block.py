@@ -5,49 +5,22 @@ import os
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from transformers import AutoConfig, AutoModelForVision2Seq
 from transformers.models.mllama.modeling_mllama import MllamaVisionEncoderLayer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tests.multimodal.utils import (
+    contract_num_tokens_from_mult8,
+    expand_num_tokens_to_mult8,
+    load_partial_weights,
+)
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import build_encoder_attention_mask
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
-
-
-def load_partial_weights(weights_path, layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(
-        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-    )
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if layer_prefix in key:
-            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
-            key_name = key[len(layer_prefix) :]
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
-
-
-def expand_num_tokens_to_mult8(tensor):
-    num_padding_patches = (8 - (tensor.shape[-2] % 8)) % 8
-    # Compute padding tuple for pad function
-    padding = (0, 0, 0, num_padding_patches)  # (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
-    # Pad the tensor
-    tensor = F.pad(tensor, padding, mode="constant", value=0)
-    slice_index = -num_padding_patches if num_padding_patches > 0 else 0
-    return tensor, slice_index
-
-
-def contract_num_tokens_from_mult8(tensor, slice_index):
-    if slice_index == 0:
-        return tensor
-    return tensor[:, :, :slice_index, :]
 
 
 @pytest.mark.parametrize(
@@ -92,7 +65,7 @@ def test_block_inference(batch, num_chunks, mesh_device, gated, reset_seeds, ens
     config.vision_config._attn_implementation = "sdpa"
     reference_model = MllamaVisionEncoderLayer(config.vision_config, is_gated=gated)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(model_repo_name, hf_layer_prefix)
+    partial_state_dict = load_partial_weights(AutoModelForVision2Seq, model_repo_name, hf_layer_prefix)
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)
