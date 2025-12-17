@@ -263,19 +263,31 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
     return result;
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool legacy = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val);
 
-// is_fp32_dest_acc_en == false
+// is_fp32_dest_acc_en == false, legacy == false
 template <>
-sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false>(sfpi::vFloat val) {
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false, false>(sfpi::vFloat val) {
     return _sfpu_exp_21f_<false>(val);
 }
 
-// is_fp32_dest_acc_en == true
+// is_fp32_dest_acc_en == false, legacy == true
 template <>
-sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false, true>(sfpi::vFloat val) {
+    return _sfpu_exp_21f_<false>(val);
+}
+
+// is_fp32_dest_acc_en == true, legacy == false
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true, false>(sfpi::vFloat val) {
     return _sfpu_exp_f32_accurate_(val);
+}
+
+// is_fp32_dest_acc_en == true, legacy == true
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true, true>(sfpi::vFloat val) {
+    return _sfpu_exp_61f_(val);
 }
 
 template <
@@ -284,7 +296,8 @@ template <
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false>
+    bool SKIP_POSITIVE_CHECK = false,
+    bool LEGACY = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
@@ -295,7 +308,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             if constexpr (SCALE_EN) {
                 val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
             }
-            sfpi::vFloat result = _sfpu_exp_improved_<is_fp32_dest_acc_en>(val);
+            sfpi::vFloat result = _sfpu_exp_improved_<is_fp32_dest_acc_en, LEGACY>(val);
             sfpi::dst_reg[0] = result;
 
             sfpi::dst_reg++;
@@ -303,7 +316,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000, bool LEGACY = false>
 void exp_init() {
     _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
 }

@@ -16,7 +16,8 @@ template <
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     bool SKIP_POSITIVE_CHECK = false,
-    int ITERATIONS = 8>
+    int ITERATIONS = 8,
+    bool LEGACY = false>
 inline void llk_math_eltwise_unary_sfpu_exponential(
     uint dst_index,
     int vector_mode = (int)VectorMode::RC,
@@ -28,16 +29,17 @@ inline void llk_math_eltwise_unary_sfpu_exponential(
             is_fp32_dest_acc_en,
             SCALE_EN,
             ITERATIONS,
-            SKIP_POSITIVE_CHECK>,
+            SKIP_POSITIVE_CHECK,
+            LEGACY>,
         dst_index,
         vector_mode,
         param0);
 }
 
-template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = p_sfpu::kCONST_1_FP16B>
+template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = p_sfpu::kCONST_1_FP16B, bool LEGACY = false>
 inline void llk_math_eltwise_unary_sfpu_exponential_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, APPROXIMATE>(
-        sfpu::exp_init<APPROXIMATE, FAST_APPROX, scale>);
+        sfpu::exp_init<APPROXIMATE, FAST_APPROX, scale, LEGACY>);
 }
 
 }  // namespace ckernel

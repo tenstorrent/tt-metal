@@ -18,9 +18,9 @@ namespace ckernel {
  * true.
  *
  */
-template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000>
+template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000, bool legacy = false>
 ALWI void exp_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_exponential_init<approx, fast_and_approx, scale>()));
+    MATH((llk_math_eltwise_unary_sfpu_exponential_init<approx, fast_and_approx, scale, legacy>()));
 }
 
 // clang-format off
@@ -39,6 +39,7 @@ ALWI void exp_tile_init() {
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
  * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
+ * | legacy                  | Use legacy implementation (_sfpu_exp_61f_) for fp32 accumulation | bool     | true, false      | false   |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
@@ -52,7 +53,8 @@ template <
     bool fast_and_approx = true,
     bool scale_en = false,
     bool skip_positive_check = false,
-    int iterations = 8>
+    int iterations = 8,
+    bool legacy = false>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH((llk_math_eltwise_unary_sfpu_exponential<
           approx,
@@ -60,7 +62,8 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
           DST_ACCUM_MODE,
           scale_en,
           skip_positive_check,
-          iterations>(idst, vector_mode, scale)));
+          iterations,
+          legacy>(idst, vector_mode, scale)));
 }
 
 }  // namespace ckernel
