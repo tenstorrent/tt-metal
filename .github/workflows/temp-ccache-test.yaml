@@ -110,6 +110,28 @@ jobs:
           echo "=== Running tt-train tests (RUN 1) ==="
           ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml
 
+      - name: Analyze ccache debug logs (Run 1)
+        run: |
+          echo "=== RUN 1: Analyzing ccache debug log ==="
+          if [ -f /tmp/ccache_run1.log ]; then
+            echo "Log file size: $(wc -l /tmp/ccache_run1.log | awk '{print $1}') lines"
+            echo ""
+            echo "=== Sample cache operations (first 30 lines) ==="
+            head -30 /tmp/ccache_run1.log
+            echo ""
+            echo "=== Checking for cache key patterns ==="
+            grep -E "(Hash|Result key|Storing|Writing)" /tmp/ccache_run1.log | head -20 || echo "No hash patterns found"
+            echo ""
+            echo "=== Checking for remote storage operations ==="
+            grep -iE "(redis|remote)" /tmp/ccache_run1.log | head -20 || echo "No remote storage operations logged"
+            echo ""
+            echo "=== Checking for any errors ==="
+            grep -iE "(error|failed|warning)" /tmp/ccache_run1.log | head -10 || echo "No errors found"
+          else
+            echo "⚠️  WARNING: ccache debug log not found at /tmp/ccache_run1.log"
+            echo "CCACHE_DEBUG and CCACHE_LOGFILE may not be working"
+          fi
+
       - name: Analyze ccache and kernel cache locations (Run 1)
         run: |
           echo "=== RUN 1: ccache statistics after test ==="
@@ -207,6 +229,8 @@ jobs:
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        CCACHE_DEBUG: "true"
+        CCACHE_LOGFILE: /tmp/ccache_run2.log
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
         TT_METAL_LOGGER_LEVEL: Debug
         TT_METAL_LOGGER_TYPES: BuildKernels
@@ -303,6 +327,37 @@ jobs:
           mkdir -p generated/test_reports
           echo "=== Running tt-train tests (RUN 2 - should hit ccache) ==="
           ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml
+
+      - name: Analyze ccache debug logs (Run 2)
+        run: |
+          echo "=== RUN 2: Analyzing ccache debug log ==="
+          if [ -f /tmp/ccache_run2.log ]; then
+            echo "Log file size: $(wc -l /tmp/ccache_run2.log | awk '{print $1}') lines"
+            echo ""
+            echo "=== Sample cache MISS operations (first 30 lines) ==="
+            head -30 /tmp/ccache_run2.log
+            echo ""
+            echo "=== Looking for cache key lookups ==="
+            grep -E "(Hash|Result key|Looking for|GET)" /tmp/ccache_run2.log | head -30 || echo "No lookup patterns found"
+            echo ""
+            echo "=== Checking why cache missed ==="
+            grep -iE "(miss|not found|no entry)" /tmp/ccache_run2.log | head -20 || echo "No miss reasons found"
+            echo ""
+            echo "=== Checking for remote storage operations ==="
+            grep -iE "(redis|remote)" /tmp/ccache_run2.log | head -20 || echo "No remote storage operations logged"
+            echo ""
+            echo "=== KEY DIFFERENCE ANALYSIS ==="
+            echo "This will help identify why Run 1 keys don't match Run 2 lookups"
+            echo "Comparing hash patterns between runs..."
+            if [ -f /tmp/ccache_run1.log ]; then
+              echo "Run 1 sample hashes:"
+              grep -oE "[0-9a-f]{32,64}" /tmp/ccache_run1.log 2>/dev/null | head -5 || echo "No hashes found in Run 1"
+              echo "Run 2 sample hashes:"
+              grep -oE "[0-9a-f]{32,64}" /tmp/ccache_run2.log 2>/dev/null | head -5 || echo "No hashes found in Run 2"
+            fi
+          else
+            echo "⚠️  WARNING: ccache debug log not found at /tmp/ccache_run2.log"
+          fi
 
       - name: Analyze ccache and kernel cache locations (Run 2)
         run: |
@@ -406,6 +461,15 @@ jobs:
         with:
           path: /work/build/tt-train/generated/test_reports/
           prefix: "run2_test_reports_"
+
+      - name: Upload ccache debug logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ccache-debug-logs-${{ github.run_id }}
+          path: |
+            /tmp/ccache_run2.log
+          retention-days: 7
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
