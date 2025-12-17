@@ -13,12 +13,196 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
+#include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
 
 namespace detail {
+
+struct Dims {
+    Dims(const Shape& shape, const std::array<uint32_t, 2>& tile_shape) :
+        w(tt::div_up(shape[-1], tile_shape[1])),
+        h(tt::div_up(shape[-2], tile_shape[0])),
+        c(w * h),
+        total(shape[-3] * c) {}
+
+    const uint32_t w;
+    const uint32_t h;
+    const uint32_t c;
+    const uint32_t total;
+};
+
+std::tuple<uint32_t, uint32_t, uint32_t> page_index_to_tensor_idxs(
+    const uint32_t& page_index, const std::array<uint32_t, 2>& tile_shape, const Dims& tile_dims) {
+    const uint32_t c = page_index / tile_dims.c;
+
+    const uint32_t hw_tile_offset = page_index % tile_dims.c;
+    const uint32_t h_tile = hw_tile_offset / tile_dims.w;
+    const uint32_t w_tile = hw_tile_offset % tile_dims.w;
+
+    return std::make_tuple(c, h_tile * tile_shape[0], w_tile * tile_shape[1]);
+}
+
+inline auto idxs_to_reshaped_idxs(
+    const uint32_t c1, const uint32_t h1, const uint32_t w1, const Shape& shape1, const Shape& shape2) {
+    const uint32_t flat_offset = (c1 * shape1[-2] * shape1[-1]) + (h1 * shape1[-1]) + w1;
+
+    const uint32_t c2 = flat_offset / (shape2[-2] * shape2[-1]);
+    const uint32_t hw2 = flat_offset % (shape2[-2] * shape2[-1]);
+
+    const uint32_t h2 = hw2 / shape2[-1];
+    const uint32_t w2 = hw2 % shape2[-1];
+
+    return std::make_tuple(c2, h2, w2);
+}
+
+uint32_t tensor_idxs_to_page_idx(
+    const uint32_t c,
+    const uint32_t h,
+    const uint32_t w,
+    const Shape& shape,
+    const std::array<uint32_t, 2>& tile_shape,
+    const Dims& tile_dims) {
+    return (c * tile_dims.c) + (h / tile_shape[0] * tile_dims.w) + (w / tile_shape[1]);
+}
+
+uint32_t tensor_idxs_to_faced_tile_offset(
+    const uint32_t h,
+    const uint32_t w,
+    const std::array<uint32_t, 2>& tile_shape,
+    const std::array<uint32_t, 2>& face_shape) {
+    const uint32_t face_dim_w = tile_shape[1] / face_shape[1];
+
+    const uint32_t intra_tile_h = h % tile_shape[0];
+    const uint32_t intra_tile_w = w % tile_shape[1];
+
+    const uint32_t hf = intra_tile_h / face_shape[0];
+    const uint32_t wf = intra_tile_w / face_shape[1];
+    const uint32_t intra_face_h = intra_tile_h % face_shape[0];
+    const uint32_t intra_face_w = intra_tile_w % face_shape[1];
+
+    const uint32_t faceoffset = (hf * face_dim_w) + wf;
+
+    return (faceoffset * (face_shape[0] * face_shape[1])) + (intra_face_h * face_shape[1]) + intra_face_w;
+}
+
+struct TileIterator {
+    TileIterator(
+        const uint32_t& in_start_h, const uint32_t& in_start_w, const uint32_t& in_end_h, const uint32_t& in_end_w) :
+        start_h(in_start_h), start_w(in_start_w), tile_end_h(in_end_h - 1), tile_end_w(in_end_w - 1) {};
+
+    bool next() {
+        if (first) {
+            first = false;
+            return true;
+        }
+        if (tile_idx_w < tile_end_w) {
+            ++tile_idx_w;
+            return true;
+        } else if (tile_idx_h < tile_end_h) {
+            tile_idx_w = 0;
+            ++tile_idx_h;
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    auto operator*() { return std::make_tuple(this->h(), this->w()); }
+
+    uint32_t size() { return (tile_end_h + 1) * (tile_end_w + 1); }
+
+protected:
+    const uint32_t& start_h;
+    const uint32_t& start_w;
+    uint32_t tile_idx_h{0};
+    uint32_t tile_idx_w{0};
+    const uint32_t tile_end_h;
+    const uint32_t tile_end_w;
+    bool first{true};
+
+    uint32_t h() { return start_h + tile_idx_h; }
+
+    uint32_t w() { return start_w + tile_idx_w; }
+};
+
+std::vector<SegmentMapData> reshape_map_output_page(
+    const uint32_t output_page_index,
+    const Shape& input_shape,
+    const Shape& output_shape,
+    const Dims& tile_dims_input,
+    const Dims& tile_dims_output,
+    const std::array<uint32_t, 2>& tile_shape,
+    const std::array<uint32_t, 2>& face_shape) {
+    TT_ASSERT(input_shape.rank() == 3);
+    TT_ASSERT(output_shape.rank() == 3);
+
+    std::map<uint32_t, std::vector<SegmentMapData>> map_data;
+
+    const auto [co_0, ho_0, wo_0] = page_index_to_tensor_idxs(output_page_index, tile_shape, tile_dims_output);
+    const uint32_t ho_sz = std::min(output_shape[-2] - ho_0, tile_shape[0]);
+    const uint32_t wo_sz = std::min(output_shape[-1] - wo_0, tile_shape[1]);
+
+    TT_ASSERT(co_0 < output_shape[0]);
+
+    TileIterator output_tile_iterator(ho_0, wo_0, ho_sz, wo_sz);
+
+    uint32_t prev_offset_i{}, prev_offset_o{}, prev_page_idx_i{};
+
+    // TODO there are properties of the mapping we could take advantage of to avoid some computation.
+    while (output_tile_iterator.next()) {
+        const auto [ho, wo] = *output_tile_iterator;
+        const auto offset_o = tensor_idxs_to_faced_tile_offset(ho, wo, tile_shape, face_shape);
+
+        TT_ASSERT(ho < output_shape[1], "{} {}", ho, output_shape[1]);
+        TT_ASSERT(wo < output_shape[2], "{} {}", wo, output_shape[2]);
+        TT_ASSERT(offset_o < tile_shape[0] * tile_shape[1]);
+
+        const auto [ci, hi, wi] = idxs_to_reshaped_idxs(co_0, ho, wo, output_shape, input_shape);
+        const auto page_idx_i = tensor_idxs_to_page_idx(ci, hi, wi, input_shape, tile_shape, tile_dims_input);
+        const auto offset_i = tensor_idxs_to_faced_tile_offset(hi, wi, tile_shape, face_shape);
+
+        TT_ASSERT(ci < input_shape[0]);
+        TT_ASSERT(hi < input_shape[1], "hi: {} input_shape[1]: {} ", hi, input_shape[1]);
+        TT_ASSERT(wi < input_shape[2], "wi: {} input_shape[2]: {} ", wi, input_shape[2]);
+        TT_ASSERT(offset_i < tile_shape[0] * tile_shape[1]);
+
+        if (map_data.count(page_idx_i)) {
+            if (page_idx_i == prev_page_idx_i && offset_i - prev_offset_i == 1 && offset_o - prev_offset_o == 1) {
+                ++map_data[page_idx_i].back().num_elements;
+            } else {
+                map_data[page_idx_i].emplace_back(page_idx_i, offset_i, offset_o, 1);
+            }
+        } else {
+            map_data[page_idx_i].emplace_back(page_idx_i, offset_i, offset_o, 1);
+        }
+
+        prev_offset_o = offset_o;
+        prev_offset_i = offset_i;
+        prev_page_idx_i = page_idx_i;
+    }
+
+    auto total_num_elements = std::accumulate(map_data.begin(), map_data.end(), 0, [](auto acc, auto& v) {
+        return acc + std::accumulate(
+                         v.second.begin(), v.second.end(), 0, [](auto acc2, auto& d) { return acc2 + d.num_elements; });
+    });
+
+    TT_ASSERT(output_tile_iterator.size() == total_num_elements);
+
+    // flatten map
+    uint32_t max_input_segments_page = std::max_element(map_data.begin(), map_data.end(), [](auto& a, auto& b) {
+                                           return a.second.size() < b.second.size();
+                                       })->second.size();
+
+    std::vector<SegmentMapData> flat_map_data(max_input_segments_page * map_data.size());
+    auto it = flat_map_data.begin();
+    for (const auto& m : map_data) {
+        std::copy(m.second.begin(), m.second.end(), it);
+
+        it += max_input_segments_page;
+    }
+    return flat_map_data;
+}
 
 Tensor compute_reshape_mapping_host_tensor(
     const uint32_t num_input_pages,
