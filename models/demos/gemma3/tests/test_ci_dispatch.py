@@ -37,13 +37,13 @@ def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
         # "models/demos/gemma3/tests/test_vision_rmsnorm.py",
         "models/demos/gemma3/tests/test_vision_transformer_block.py",
         "models/demos/gemma3/tests/test_vision_transformer.py",
-        "models/tt_transformers/tests/test_embedding.py",
-        "models/tt_transformers/tests/test_rms_norm.py",
-        "models/tt_transformers/tests/test_mlp.py",
-        "models/tt_transformers/tests/test_attention.py",
-        "models/tt_transformers/tests/test_attention_prefill.py",
-        "models/tt_transformers/tests/test_decoder.py",
-        "models/tt_transformers/tests/test_decoder_prefill.py",
+        "models/demos/gemma3/tests/test_embedding.py",
+        "models/demos/gemma3/tests/test_rms_norm.py",
+        "models/demos/gemma3/tests/test_mlp.py",
+        "models/demos/gemma3/tests/test_attention.py",
+        "models/demos/gemma3/tests/test_attention_prefill.py",
+        "models/demos/gemma3/tests/test_decoder.py",
+        "models/demos/gemma3/tests/test_decoder_prefill.py",
     ]
 
     # Pass the exit code of pytest to proper keep track of failures during runtime

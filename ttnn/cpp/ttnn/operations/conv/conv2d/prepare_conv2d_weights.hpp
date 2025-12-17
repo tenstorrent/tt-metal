@@ -5,10 +5,10 @@
 #pragma once
 #include <optional>
 #include <string>
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <ttnn/operations/conv/conv2d/conv2d_utils.hpp>
+#include <ttnn/tensor/types.hpp>
+#include <ttnn/types.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
 namespace ttnn::operations::sliding_window {
 struct ParallelConfig;
