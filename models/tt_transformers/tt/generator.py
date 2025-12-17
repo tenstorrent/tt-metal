@@ -439,8 +439,12 @@ class Generator:
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    # get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    last_token_tile_start=ttnn.from_torch(
+                        torch.tensor([0, 0, (last_token_idx // 32) * 32, 0], dtype=torch.int32),
+                        device=self.self.model[model_id].mesh_device,
+                    ),
                     **kwargs,
                 )
 
@@ -467,8 +471,11 @@ class Generator:
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
+                last_token_tile_start=ttnn.from_torch(
+                    torch.tensor([0, 0, (last_token_idx // 32) * 32, 0], dtype=torch.int32),
+                    device=self.model[model_id].mesh_device,
+                ),
             )
             return tt_logits
 
@@ -796,9 +803,13 @@ class Generator:
             vision_tokens,
             page_table=tt_page_table,
             kv_cache=kv_cache,
-            get_last_token=(last_token_idx // 32) * 32,
+            # get_last_token=(last_token_idx // 32) * 32,
             cross_page_table=tt_cross_page_table,
             text_only_inference=text_only_inference,
+            last_token_tile_start=ttnn.from_torch(
+                torch.tensor([0, 0, (last_token_idx // 32) * 32, 0], dtype=torch.int32),
+                device=self.self.model[model_id].mesh_device,
+            ),
         )
 
         del tt_page_table

@@ -386,8 +386,8 @@ class Transformer(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        get_last_token=-1,
         kv_cache=None,
+        last_token_tile_start=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -403,8 +403,8 @@ class Transformer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
-            get_last_token=get_last_token,
             kv_cache=kv_cache,
+            last_token_tile_start=last_token_tile_start,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -488,8 +488,8 @@ class Transformer(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        get_last_token=-1,
         kv_cache=None,
+        last_token_tile_start=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -514,12 +514,13 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
-        if mode == "prefill" and get_last_token == -1:
-            return x
-
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-        if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+        if last_token_tile_start is not None:
+            offset = ttnn.from_torch(
+                torch.tensor([x.shape[0], x.shape[1], 32, x.shape[3]], dtype=torch.int32), device=self.mesh_device
+            )
+            last_token_tile_end = ttnn.add(last_token_tile_start, offset)
+            x = ttnn.slice(x, last_token_tile_start, last_token_tile_end, slice_dim=2, num_devices=x.shape[2] // 32)
 
         # Output norm
         x = self.norm(x, mode=mode)
