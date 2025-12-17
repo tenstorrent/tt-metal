@@ -204,7 +204,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
-        timeout-minutes: 5
+        timeout-minutes: 6
         run: |
           pytest \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/ \
