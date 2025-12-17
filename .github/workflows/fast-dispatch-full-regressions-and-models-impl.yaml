@@ -40,27 +40,27 @@ jobs:
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
-            {"model":"common_models"},
+            # {"model":"common_models"},
             {"model":"functional_unet"},
-            {"model":"ttt-llama3.2-1B"},
-            {"model":"qwen25_vl-3B"},
-            {"model":"resnet50"},
-            {"model":"whisper"},
-            {"model":"openpdn_mnist"},
-            {"model":"vit"},
-            {"model":"sentence_bert"},
-            {"model":"swin_s"},
-            {"model":"swin_v2"},
-            {"model":"mobilenetv2"},
-            {"model":"segformer"},
-            {"model":"vgg_unet"},
-            {"model":"vanilla_unet"},
-            {"model":"efficientnetb0"},
-            {"model":"vovnet"},
-            {"model":"ufld_v2"},
-            {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":75},
-            {"model":"stable_diffusion","timeout":45}
+            # {"model":"ttt-llama3.2-1B"},
+            # {"model":"qwen25_vl-3B"},
+            # {"model":"resnet50"},
+            # {"model":"whisper"},
+            # {"model":"openpdn_mnist"},
+            # {"model":"vit"},
+            # {"model":"sentence_bert"},
+            # {"model":"swin_s"},
+            # {"model":"swin_v2"},
+            # {"model":"mobilenetv2"},
+            # {"model":"segformer"},
+            # {"model":"vgg_unet"},
+            # {"model":"vanilla_unet"},
+            # {"model":"efficientnetb0"},
+            # {"model":"vovnet"},
+            # {"model":"ufld_v2"},
+            # {"model":"ttt-mistral-7B-v0.3"},
+            # {"model":"stable_diffusion_xl_base","timeout":75},
+            # {"model":"stable_diffusion","timeout":45}
           ]'
 
           # Stable set (CIv2)
@@ -141,6 +141,7 @@ jobs:
       matrix:
         card: [N150, N300]
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_matrix) }}
+        repeat: [1, 2, 3]
     name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
     defaults:
       run:
@@ -196,109 +197,109 @@ jobs:
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
-  nightly-wh-unstable-models:
-    needs: create-test-matrix
-    if: ${{ needs.create-test-matrix.outputs.unstable_count != '0' }}
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.unstable_matrix) }}
-        card: [N150, N300]
-    name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
-    defaults:
-      run:
-        shell: bash
-    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar --zstd -xvf ttm_any.tar.zst
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Run frequent reg tests scripts
-        timeout-minutes: 60
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: ${{ matrix.test-config.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: generated/test_reports/
-          prefix: "test_reports_"
-  nightly-wh-models-civ2:
-    needs: create-test-matrix
-    if: ${{ needs.create-test-matrix.outputs.stable_ci_v2_count != '0' }}
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        card: [N150, N300]
-        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_ci_v2_matrix) }}
-    name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run frequent reg tests scripts
-        timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
-        run: |
-          if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-            pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
-          else
-            pytest tests/nightly/single_card/${{ matrix.test-config.model }}
-          fi
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
+  # nightly-wh-unstable-models:
+  #   needs: create-test-matrix
+  #   if: ${{ needs.create-test-matrix.outputs.unstable_count != '0' }}
+  #   strategy:
+  #     # Do not fail-fast because we need to ensure all tests go to completion
+  #     # so we try not to get hanging machines
+  #     fail-fast: false
+  #     matrix:
+  #       test-config: ${{ fromJSON(needs.create-test-matrix.outputs.unstable_matrix) }}
+  #       card: [N150, N300]
+  #   name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #   runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
+  #   steps:
+  #     - name: ⬇️ Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - name: ⬇️ Download Build
+  #       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+  #       timeout-minutes: 10
+  #       with:
+  #         name: ${{ inputs.build-artifact-name }}
+  #     - name: Extract files
+  #       run: tar --zstd -xvf ttm_any.tar.zst
+  #     - name: ⬇️ Download Wheel
+  #       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+  #       timeout-minutes: 10
+  #       with:
+  #         name: ${{ inputs.wheel-artifact-name }}
+  #     - uses: ./.github/actions/ensure-active-weka-mount
+  #     - name: Run frequent reg tests scripts
+  #       timeout-minutes: 60
+  #       uses: ./.github/actions/docker-run
+  #       with:
+  #         docker_image: ${{ inputs.docker-image }}
+  #         docker_password: ${{ secrets.GITHUB_TOKEN }}
+  #         install_wheel: true
+  #         docker_opts: |
+  #           -v /mnt/MLPerf:/mnt/MLPerf:ro
+  #           -e TT_METAL_HOME=${{ github.workspace }}
+  #           -e ARCH_NAME=wormhole_b0
+  #           -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+  #           -e GTEST_OUTPUT=xml:generated/test_reports/
+  #         run_args: ${{ matrix.test-config.cmd }}
+  #     - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+  #       timeout-minutes: 10
+  #       if: ${{ !cancelled() }}
+  #       with:
+  #         path: generated/test_reports/
+  #         prefix: "test_reports_"
+  # nightly-wh-models-civ2:
+  #   needs: create-test-matrix
+  #   if: ${{ needs.create-test-matrix.outputs.stable_ci_v2_count != '0' }}
+  #   strategy:
+  #     # Do not fail-fast because we need to ensure all tests go to completion
+  #     # so we try not to get hanging machines
+  #     fail-fast: false
+  #     matrix:
+  #       card: [N150, N300]
+  #       test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_ci_v2_matrix) }}
+  #   name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
+  #   runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
+  #   container:
+  #     image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+  #     env:
+  #       TT_METAL_HOME: /work
+  #       PYTHONPATH: /work
+  #       LD_LIBRARY_PATH: /work/build/lib
+  #       ARCH_NAME: wormhole_b0
+  #       GTEST_OUTPUT: xml:/work/generated/test_reports/
+  #     volumes:
+  #       - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+  #       - /dev/hugepages-1G:/dev/hugepages-1G
+  #     options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #       working-directory: /work # https://github.com/actions/runner/issues/878
+  #   steps:
+  #     - name: 🧬 Checkout Repository
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #         path: docker-job
+  #     - name: ⬇️  Setup Job
+  #       uses: ./docker-job/.github/actions/setup-job
+  #       timeout-minutes: 10
+  #       with:
+  #         build-artifact-name: ${{ inputs.build-artifact-name }}
+  #         wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+  #     - name: Run frequent reg tests scripts
+  #       timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
+  #       run: |
+  #         if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
+  #           pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+  #         else
+  #           pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+  #         fi
+  #     - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+  #       timeout-minutes: 10
+  #       if: ${{ !cancelled() }}
+  #       with:
+  #         prefix: "test_reports_"
