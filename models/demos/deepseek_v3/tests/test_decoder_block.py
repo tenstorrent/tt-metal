@@ -346,9 +346,12 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Skip all prefill seq lengths except 128
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(f"Skipping prefill with seq_len={seq_len}, only keeping prefill 128")
+    # Known issue: MoE sparse_matmul OOM for long sequence lengths.
+    if mode == "prefill" and seq_len > 32768:
+        pytest.skip(
+            f"Known issue: DeepSeek-V3 MoE sparse_matmul OOM for prefill seq_len={seq_len} (>32768); "
+            "see https://github.com/tenstorrent/tt-metal/issues/34309"
+        )
     test_closure(
         DecoderBlockClass,
         module_path,
