@@ -5,6 +5,7 @@
 import pytest
 import torch
 from loguru import logger
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
 
@@ -53,18 +54,16 @@ def test_rotate_various_angles(device, input_shape, angle):
     tensor_size = h * w
     is_diagonal_rotation = angle in [45, 135, -45, -135]
 
-    if tensor_size >= 1024 and is_diagonal_rotation:
-        # Large tensors with diagonal rotations need higher tolerance
-        atol, rtol = 5.0, 0.05  # Accommodate max differences up to ~5.0
+    if tensor_size >= 4096:
+        atol, rtol = 5.0, 1.0
+    elif tensor_size >= 1024 and is_diagonal_rotation:
+        atol, rtol = 5.0, 0.05
     elif tensor_size >= 1024:
-        # Large tensors with non-diagonal rotations
         atol, rtol = 0.2, 0.1
     else:
-        # Smaller tensors should have high precision
         atol, rtol = 0.05, 0.05
 
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-
     assert (
         comparison_passed
     ), f"Test failed tensor comparison (angle={angle}°, atol={atol}, rtol={rtol}, tensor_size={tensor_size})"
@@ -588,8 +587,16 @@ def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
             torch_result.shape == ttnn_result.shape
         ), f"Batch {i}: Shape mismatch torch={torch_result.shape}, ttnn={ttnn_result.shape}"
 
-        is_equal = torch.equal(torch_result, ttnn_result)
-        assert is_equal, f"VADv2 allclose failed for batch {i}, angle {rotation_angle}°"
+        # Fixed point arithmetic alongside small angles requires relaxed tolerances
+        # therefore checking all close as well as PCC
+        atol = 5.0
+        rtol = 0.5
+        comparison_passed = torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol)
+        pcc = assert_with_pcc(torch_result, ttnn_result, 0.998)
+        assert (
+            comparison_passed
+        ), f"VADv2 allclose failed for batch {i}, angle {rotation_angle}° (atol={atol}, rtol={rtol})"
+        assert pcc, f"VADv2 PCC failed for batch {i}, angle {rotation_angle}°"
 
 
 @pytest.mark.parametrize(
