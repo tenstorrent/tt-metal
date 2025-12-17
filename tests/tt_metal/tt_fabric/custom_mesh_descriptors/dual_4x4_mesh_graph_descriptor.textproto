@@ -26,7 +26,22 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 12 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
-    channels { count: 1 policy: STRICT }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 13 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 14 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 15 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
+    channels { count: 2 policy: STRICT }
   }
 }
 

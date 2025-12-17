@@ -24,14 +24,14 @@ graph_descriptors {
   # For 8x2 mesh: connect rightmost column of M0 to leftmost column of M1
   # M0 D6 (row 0, col 6) <-> M1 D0 (row 0, col 0)
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 8 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
-    channels { count: 1 }
+    channels { count: 2 }
   }
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 15 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 7 } }
-    channels { count: 1 }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 13 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 14 } }
+    channels { count: 2 }
   }
 }
 
