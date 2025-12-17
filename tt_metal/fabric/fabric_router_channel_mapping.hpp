@@ -99,12 +99,7 @@ public:
      */
     Topology get_topology() const { return topology_; }
 
-    /**
-     * Get the channel spec for this router
-     */
-    const MeshChannelSpec& get_spec() const { return spec_; }
-
-    std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
+    std::vector<InternalSenderChannelMapping> get_all_sender_mappings(const MeshChannelSpec& spec) const;
 
     /**
      * Check if this is a Z router
@@ -113,16 +108,15 @@ public:
 
 private:
     Topology topology_;
-    MeshChannelSpec spec_;
     bool downstream_is_tensix_builder_;
     RouterVariant variant_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
 
-    void initialize_mappings();
+    void initialize_mappings(const MeshChannelSpec& spec);
     void initialize_vc0_mappings();
-    void initialize_vc1_mappings();
+    void initialize_vc1_mappings(const MeshChannelSpec& spec);
 };
 
 }  // namespace tt::tt_fabric

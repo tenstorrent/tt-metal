@@ -205,19 +205,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
 
     std::vector<FabricRiscConfig> risc_configs;
-    // ----------- Sender Channels
-    // NOTE: Per-sender-channel addresses are now accessed via:
-    //   config.get_l1_layout().get_sender_channel_addresses(ch).buffer_index
-    //   config.get_l1_layout().get_sender_channel_addresses(ch).conn_info
-    //   config.get_l1_layout().get_sender_channel_addresses(ch).flow_control_sem
-    //   config.get_l1_layout().get_sender_channel_addresses(ch).terminate_conn
-    //   config.get_l1_layout().get_sender_channel_addresses(ch).connection_sem
-    //   config.get_l1_layout().get_sender_channel_addresses(ch).buffer_index_sem
-
-    // ----------- Receiver Channels
-    // NOTE: Per-receiver-downstream addresses are now accessed via:
-    //   config.get_l1_layout().get_receiver_downstream_addresses(idx).flow_control_sem
-    //   config.get_l1_layout().get_receiver_downstream_addresses(idx).teardown_sem
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
@@ -244,10 +231,6 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t channel_buffer_size_bytes = 0;
 
-    std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
-    std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;

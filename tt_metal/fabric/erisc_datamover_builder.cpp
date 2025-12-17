@@ -268,26 +268,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     noc_config_(RouterNocConfig::create_for_default(
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
         requires_forced_assignment_to_noc1())) {
-    // Extract channel counts from spec
-    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        this->num_used_sender_channels_per_vc[vc] = channel_spec_.sender_channels_per_vc[vc];
-        this->num_used_receiver_channels_per_vc[vc] = channel_spec_.receiver_channels_per_vc[vc];
-        log_debug(
-            tt::LogFabric,
-            "  VC{}: {} senders, {} receivers",
-            vc,
-            this->num_used_sender_channels_per_vc[vc],
-            this->num_used_receiver_channels_per_vc[vc]);
-    }
-
-    // Set total counts for backward compatibility
-    this->num_used_sender_channels = std::accumulate(
-        this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
-    this->num_used_receiver_channels = std::accumulate(
-        this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
-
     // num_fwd_paths = total sender channels - 1 (worker channel)
-    this->num_fwd_paths = this->num_used_sender_channels - 1;
+    this->num_fwd_paths = channel_spec_.get_total_sender_channels() - 1;
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -314,7 +296,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // Remote counter bases (multi-TXQ mode)
     const auto& counter_bases = l1_layout_.get(L1Block::REMOTE_COUNTER_BASES);
     if (counter_bases.size > 0) {
-        size_t num_words_per_counter = tt::align(sizeof(uint32_t) * this->num_used_sender_channels, field_size);
+        size_t num_words_per_counter =
+            tt::align(sizeof(uint32_t) * channel_spec_.get_total_sender_channels(), field_size);
         this->router_buffer_clear_size_words = num_words_per_counter;
         this->to_sender_channel_remote_ack_counters_base_addr = counter_bases.start_address;
         this->to_sender_channel_remote_completion_counters_base_addr =
@@ -329,7 +312,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // and l1_layout_.get_receiver_downstream_addresses(idx).
 
     // Validation: sender addresses must be aligned
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    for (uint32_t i = 0; i < channel_spec_.get_total_sender_channels(); i++) {
         auto addrs = l1_layout_.get_sender_channel_addresses(i);
         TT_FATAL(
             (addrs.buffer_index % eth_word_l1_alignment == 0),
@@ -358,11 +341,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
     // Verify buffer index addresses are unique
     std::unordered_set<size_t> buffer_index_addrs;
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    for (uint32_t i = 0; i < channel_spec_.get_total_sender_channels(); i++) {
         buffer_index_addrs.insert(l1_layout_.get_sender_channel_addresses(i).buffer_index);
     }
     TT_FATAL(
-        buffer_index_addrs.size() == this->num_used_sender_channels,
+        buffer_index_addrs.size() == channel_spec_.get_total_sender_channels(),
         "FabricEriscDatamoverConfig sender channel buffer index addresses are not unique");
 
     const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
@@ -386,9 +369,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // Create allocators (same as before)
     auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
-        this->num_used_sender_channels, this->num_used_receiver_channels);
+        channel_spec_.get_total_sender_channels(), channel_spec_.get_total_receiver_channels());
     auto remote_channels_recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
-        0, this->num_used_receiver_channels);
+        0, channel_spec_.get_total_receiver_channels());
 
     // Create the single static pool allocator with per-VC channel distribution
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
@@ -610,14 +593,17 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
     // Validate injection flags vector size matches the number of sender channels
     TT_FATAL(
-        sender_channel_is_traffic_injection_channel_array.size() == config.num_used_sender_channels,
-        "Internal error: injection_flags vector size {} does not match num_used_sender_channels {}",
+        sender_channel_is_traffic_injection_channel_array.size() ==
+            config.get_channel_spec().get_total_sender_channels(),
+        "Internal error: injection_flags vector size {} does not match total sender channels {}",
         sender_channel_is_traffic_injection_channel_array.size(),
-        config.num_used_sender_channels);
+        config.get_channel_spec().get_total_sender_channels());
 
     // Initialize per-RISC channel servicing flags
-    const auto& sender_counts = actual_sender_channels_per_vc.value_or(this->config.num_used_sender_channels_per_vc);
-    const auto& receiver_counts = actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
+    const auto& sender_counts =
+        actual_sender_channels_per_vc.value_or(config.get_channel_spec().sender_channels_per_vc);
+    const auto& receiver_counts =
+        actual_receiver_channels_per_vc.value_or(config.get_channel_spec().receiver_channels_per_vc);
 
     bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
                                                 tt::tt_fabric::FabricTensixConfig::MUX);
@@ -800,8 +786,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // This allows host to write Fabric kernels to remote chips over ethernet, when ERISC cores already running fabric
     // are waiting for the handshake to complete.
     const size_t default_handshake_context_switch_timeout = 4096;
-    size_t num_sender_channels = config.num_used_sender_channels;
-    size_t num_receiver_channels = config.num_used_receiver_channels;
+    size_t num_sender_channels = config.get_channel_spec().get_total_sender_channels();
+    size_t num_receiver_channels = config.get_channel_spec().get_total_receiver_channels();
 
     auto dispatch_core_type =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
@@ -886,7 +872,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Determine NUM_VCS: 2 if VC1 runtime args are being passed, otherwise 1
     // VC1 runtime args are passed when VC1 is configured (both inter-mesh and intra-mesh have VC1)
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
+    bool needs_vc1 = config.get_channel_spec().receiver_channels_per_vc[1] > 0;
 
     // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
@@ -1074,7 +1060,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     // Pack VC1 runtime args if VC1 is configured
     // Both inter-mesh and intra-mesh routers have VC1 in multi-mesh topologies
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
+    bool needs_vc1 = config.get_channel_spec().receiver_channels_per_vc[1] > 0;
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
     }
@@ -1123,8 +1109,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         device->id(),
         config.channel_buffer_size_bytes,
         (int)config.topology,
-        config.num_used_sender_channels,
-        config.num_used_receiver_channels);
+        config.get_channel_spec().get_total_sender_channels(),
+        config.get_channel_spec().get_total_receiver_channels());
     return FabricEriscDatamoverBuilder::build(
         device,
         program,
@@ -1179,8 +1165,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         local_fabric_node_id.chip_id,
         ethernet_core.x,
         ethernet_core.y,
-        config.num_used_sender_channels,
-        config.num_used_receiver_channels,
+        config.get_channel_spec().get_total_sender_channels(),
+        config.get_channel_spec().get_total_receiver_channels(),
         *config.channel_allocator,
         *remote_multi_pool_allocator->get_pool(0));
 

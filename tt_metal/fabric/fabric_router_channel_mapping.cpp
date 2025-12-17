@@ -12,13 +12,13 @@ namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
     Topology topology, const MeshChannelSpec& spec, bool downstream_is_tensix_builder, RouterVariant variant) :
-    topology_(topology), spec_(spec), downstream_is_tensix_builder_(downstream_is_tensix_builder), variant_(variant) {
-    initialize_mappings();
+    topology_(topology), downstream_is_tensix_builder_(downstream_is_tensix_builder), variant_(variant) {
+    initialize_mappings(spec);
 }
 
-void FabricRouterChannelMapping::initialize_mappings() {
+void FabricRouterChannelMapping::initialize_mappings(const MeshChannelSpec& spec) {
     initialize_vc0_mappings();
-    initialize_vc1_mappings();
+    initialize_vc1_mappings(spec);
 }
 
 void FabricRouterChannelMapping::initialize_vc0_mappings() {
@@ -56,7 +56,7 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
     receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] = InternalReceiverChannelMapping{BuilderType::ERISC, 0};
 }
 
-void FabricRouterChannelMapping::initialize_vc1_mappings() {
+void FabricRouterChannelMapping::initialize_vc1_mappings(const MeshChannelSpec& spec) {
     const bool is_2d = is_2D_topology(topology_);
     if (!is_2d) {
         // VC1 (intermesh) only exists for 2D topologies and Z routers
@@ -65,16 +65,16 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
 
     if (is_z_router()) {
         // Z routers exist only for intermesh connectivity
-        TT_FATAL(spec_.has_vc(1), "Z router requires VC1 for Z traffic");
+        TT_FATAL(spec.has_vc(1), "Z router requires VC1 for Z traffic");
         TT_FATAL(
-            spec_.sender_channels_z_router_per_vc[0] == builder_config::num_sender_channels_z_router_vc0,
+            spec.sender_channels_z_router_per_vc[0] == builder_config::num_sender_channels_z_router_vc0,
             "Z router VC0 sender channel count mismatch: spec has {}, expected {}",
-            spec_.sender_channels_z_router_per_vc[0],
+            spec.sender_channels_z_router_per_vc[0],
             builder_config::num_sender_channels_z_router_vc0);
         TT_FATAL(
-            spec_.sender_channels_z_router_per_vc[1] == builder_config::num_sender_channels_z_router_vc1,
+            spec.sender_channels_z_router_per_vc[1] == builder_config::num_sender_channels_z_router_vc1,
             "Z router VC1 sender channel count mismatch: spec has {}, expected {}",
-            spec_.sender_channels_z_router_per_vc[1],
+            spec.sender_channels_z_router_per_vc[1],
             builder_config::num_sender_channels_z_router_vc1);
 
         // Z Router VC1 layout:
@@ -84,7 +84,7 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
         constexpr uint32_t z_router_vc1_base_sender_channel = builder_config::num_sender_channels_z_router_vc0;
         constexpr uint32_t z_router_vc1_receiver_channel = 1;
 
-        for (uint32_t i = 0; i < spec_.sender_channels_z_router_per_vc[1]; ++i) {
+        for (uint32_t i = 0; i < spec.sender_channels_z_router_per_vc[1]; ++i) {
             sender_channel_map_[LogicalSenderChannelKey{1, i}] =
                 InternalSenderChannelMapping{BuilderType::ERISC, z_router_vc1_base_sender_channel + i};
         }
@@ -93,12 +93,12 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
             InternalReceiverChannelMapping{BuilderType::ERISC, z_router_vc1_receiver_channel};
     } else {
         // Standard mesh router VC1: create if spec has VC1
-        if (spec_.has_vc(1)) {
+        if (spec.has_vc(1)) {
             constexpr uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
 
             // Create sender channels from spec
-            for (uint32_t i = 0; i < spec_.sender_channels_per_vc[1]; ++i) {
+            for (uint32_t i = 0; i < spec.sender_channels_per_vc[1]; ++i) {
                 sender_channel_map_[LogicalSenderChannelKey{1, i}] =
                     InternalSenderChannelMapping{BuilderType::ERISC, mesh_vc1_base_sender_channel + i};
             }
@@ -133,12 +133,13 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
     return it->second;
 }
 
-std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings() const {
+std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings(
+    const MeshChannelSpec& spec) const {
     std::vector<InternalSenderChannelMapping> result;
 
     // Iterate through VCs in order and flatten
-    for (uint32_t vc = 0; vc < spec_.num_vcs; ++vc) {
-        for (uint32_t ch_idx = 0; ch_idx < spec_.sender_channels_per_vc[vc]; ++ch_idx) {
+    for (uint32_t vc = 0; vc < spec.num_vcs; ++vc) {
+        for (uint32_t ch_idx = 0; ch_idx < spec.sender_channels_per_vc[vc]; ++ch_idx) {
             result.push_back(get_sender_mapping(vc, ch_idx));
         }
     }

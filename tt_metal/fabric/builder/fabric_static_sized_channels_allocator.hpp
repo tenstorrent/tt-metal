@@ -82,11 +82,6 @@ public:
         return num_used_receiver_channels_per_vc[vc_id];
     }
 
-    /**
-     * Get the channel spec for this allocator
-     */
-    const MeshChannelSpec& get_spec() const { return spec_; }
-
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
         return get_sender_channel_number_of_slots(0, channel_id);
@@ -133,7 +128,6 @@ private:
             builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
 
     // Configuration parameters
-    MeshChannelSpec spec_;
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};
     size_t channel_buffer_size_bytes = 0;

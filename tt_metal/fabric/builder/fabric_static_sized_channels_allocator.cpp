@@ -68,14 +68,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     size_t available_channel_buffering_space,
     const std::vector<MemoryRegion>& memory_regions) :
     FabricChannelAllocator(topology, options, memory_regions),
-    spec_(spec),
     channel_buffer_size_bytes(channel_buffer_size_bytes),
     available_channel_buffering_space(available_channel_buffering_space) {
-    // Extract channel counts from spec
+    // Extract channel counts from spec (only needed during construction)
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        if (vc < spec_.num_vcs) {
-            num_used_sender_channels_per_vc[vc] = spec_.sender_channels_per_vc[vc];
-            num_used_receiver_channels_per_vc[vc] = spec_.receiver_channels_per_vc[vc];
+        if (vc < spec.num_vcs) {
+            num_used_sender_channels_per_vc[vc] = spec.sender_channels_per_vc[vc];
+            num_used_receiver_channels_per_vc[vc] = spec.receiver_channels_per_vc[vc];
         }
     }
 
@@ -102,7 +101,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
-        spec_.topology,
+        spec.topology,
         options,
         num_sender_buffer_slots_per_vc,
         num_remote_sender_buffer_slots_per_vc,
