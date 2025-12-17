@@ -6,11 +6,22 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <tt-metalium/work_split.hpp>
 
 namespace {
 
+/**
+ * @brief Computes the output shape of a sparse matmul operation given two input tensors.
+ *
+ * The output shape for a sparse matmul is the same as for a dense matmul, but allows for
+ * batching on both input tensors.
+ * The final output shape as batched dimensions from input B first (inner), then input A (outer).
+ * @param input_tensor_a First input tensor
+ * @param input_tensor_b Second input tensor
+ * @return Shape of the resulting tensor after sparse matmul
+ */
 ttnn::Shape compute_sparse_matmul_output_shape(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
@@ -58,69 +69,73 @@ SparseMatmulDeviceOperation::program_factory_t SparseMatmulDeviceOperation::sele
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace matmul::utilities;
     const auto& input_tensor_a = tensor_args.input_tensors.at(0);
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
 
-    const auto& ashape = input_tensor_a.padded_shape();
-    const auto& bshape = input_tensor_b.padded_shape();
-    auto in0_tile = input_tensor_a.tensor_spec().tile();
-    auto in1_tile = input_tensor_b.tensor_spec().tile();
-    auto in0_tile_shape = in0_tile.get_tile_shape();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
+    const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
+    const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose=*/false);
+    auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
+    auto in1_tile = get_matmul_tile(input_tensor_b, /*transpose=*/false);
 
     TT_FATAL(
-        ashape[-1] == bshape[-2],
+        a_shape_padded[-1] == b_shape_padded[-2],
         "Dimension K (A.shape[-1] {}) and B.shape[-2] ({}) must match for A and B",
-        ashape[-1],
-        bshape[-2]);
+        a_shape_padded[-1],
+        b_shape_padded[-2]);
     TT_FATAL(
-        ashape[-2] % in0_tile_shape[0] == 0,
-        "ashape[-2] (A's rows: {}) must be divisible by in0_tile_shape[0] (A's tile height: {}) for tilization. "
-        "ashape: {}, in0_tile_shape: {}",
-        ashape[-2],
-        in0_tile_shape[0],
-        ashape,
-        in0_tile_shape);
+        a_shape_padded[-2] % in0_tile.get_height() == 0,
+        "a_shape_padded[-2] (A's rows: {}) must be divisible by in0_tile.get_height() (A's tile height: {}) for "
+        "tilization. "
+        "a_shape_padded: {}, in0_tile: {}",
+        a_shape_padded[-2],
+        in0_tile.get_height(),
+        a_shape_padded,
+        in0_tile);
     TT_FATAL(
-        ashape[-1] % in0_tile_shape[1] == 0,
-        "ashape[-1] (A's cols: {}) must be divisible by in0_tile_shape[1] (A's tile width: {}) for tilization. ashape: "
-        "{}, in0_tile_shape: {}",
-        ashape[-1],
-        in0_tile_shape[1],
-        ashape,
-        in0_tile_shape);
+        a_shape_padded[-1] % in0_tile.get_width() == 0,
+        "a_shape_padded[-1] (A's cols: {}) must be divisible by in0_tile.get_width() (A's tile width: {}) for "
+        "tilization. "
+        "a_shape_padded: "
+        "{}, in0_tile: {}",
+        a_shape_padded[-1],
+        in0_tile.get_width(),
+        a_shape_padded,
+        in0_tile);
     TT_FATAL(
-        bshape[-2] % in1_tile_shape[0] == 0,
-        "bshape[-2] (B's rows: {}) must be divisible by in1_tile_shape[0] (B's tile height: {}) for tilization. "
-        "bshape: {}, in1_tile_shape: {}",
-        bshape[-2],
-        in1_tile_shape[0],
-        bshape,
-        in1_tile_shape);
+        b_shape_padded[-2] % in1_tile.get_height() == 0,
+        "b_shape_padded[-2] (B's rows: {}) must be divisible by in1_tile.get_height() (B's tile height: {}) for "
+        "tilization. "
+        "b_shape_padded: {}, in1_tile_shape: {}",
+        b_shape_padded[-2],
+        in1_tile.get_height(),
+        b_shape_padded,
+        in1_tile);
     TT_FATAL(
-        bshape[-1] % in1_tile_shape[1] == 0,
-        "bshape[-1] (B's cols: {}) must be divisible by in1_tile_shape[1] (B's tile width: {}) for tilization. bshape: "
-        "{}, in1_tile_shape: {}",
-        bshape[-1],
-        in1_tile_shape[1],
-        bshape,
-        in1_tile_shape);
+        b_shape_padded[-1] % in1_tile.get_width() == 0,
+        "b_shape_padded[-1] (B's cols: {}) must be divisible by in1_tile_shape[1] (B's tile width: {}) for tilization. "
+        "b_shape_padded: "
+        "{}, in1_tile: {}",
+        b_shape_padded[-1],
+        in1_tile.get_width(),
+        b_shape_padded,
+        in1_tile);
     TT_FATAL(
         operation_attributes.nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", operation_attributes.nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length_A = 1;
-    if (ashape.rank() > 2) {
-        for (int i = 0; i < ashape.rank() - 2; ++i) {
-            batch_length_A *= ashape[i];
+    if (a_shape_padded.rank() > 2) {
+        for (int i = 0; i < a_shape_padded.rank() - 2; ++i) {
+            batch_length_A *= a_shape_padded[i];
         }
     }
 
     uint32_t batch_length_B = 1;
-    if (bshape.rank() > 2) {
-        for (int i = 0; i < bshape.rank() - 2; ++i) {
-            batch_length_B *= bshape[i];
+    if (b_shape_padded.rank() > 2) {
+        for (int i = 0; i < b_shape_padded.rank() - 2; ++i) {
+            batch_length_B *= b_shape_padded[i];
         }
     }
 
@@ -149,6 +164,7 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace matmul::utilities;
     TT_FATAL(
         tensor_args.optional_output_tensors.size() <= 1,
         "None or One Optional output tensor can be passed when accessing it "
@@ -170,8 +186,8 @@ spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
     const auto output_dtype = operation_attributes.output_dtype.has_value() ? operation_attributes.output_dtype.value()
                                                                             : input_tensor_a.dtype();
 
-    auto in0_tile = input_tensor_a.tensor_spec().tile();
-    auto in1_tile = input_tensor_b.tensor_spec().tile();
+    auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
+    auto in1_tile = get_matmul_tile(input_tensor_b, /*transpose=*/false);
 
     tt::tt_metal::Tile output_tile = matmul::utilities::get_output_tile(
         operation_attributes.output_mem_config,

@@ -35,9 +35,9 @@ class CoreMagicValues:
 
     def __init__(self, fw_elf):
         # Read CoreMagicNumber enum values from firmware
-        self.worker = fw_elf.enumerators["CoreMagicNumber::WORKER"].value
-        self.active_eth = fw_elf.enumerators["CoreMagicNumber::ACTIVE_ETH"].value
-        self.idle_eth = fw_elf.enumerators["CoreMagicNumber::IDLE_ETH"].value
+        self.worker = fw_elf.get_enum_value("CoreMagicNumber::WORKER")
+        self.active_eth = fw_elf.get_enum_value("CoreMagicNumber::ACTIVE_ETH")
+        self.idle_eth = fw_elf.get_enum_value("CoreMagicNumber::IDLE_ETH")
 
         self.magic_to_name = {
             self.worker: "WORKER",

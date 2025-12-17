@@ -15,6 +15,8 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t in0_block_w,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
     uint32_t interm_single_tile_size,
     uint32_t bias_single_tile_size) {
     // Circular Buffer sizes:
@@ -30,12 +32,16 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = in0_single_tile_size;
-    auto* in0_buffer = input_tensor_a.buffer();
-    auto in0_tile = input_tensor_a.tensor_spec().tile();
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (input_tensor_a.is_sharded()) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+        auto* in0_buffer = input_tensor_a.buffer();
+        const auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
+        if (transpose_a) {
+            // An intermediate CB (c_10) of same size is needed to hold the transposed data
+            in0_shard_width_in_tiles *= 2;
+        }
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
 
@@ -97,9 +103,10 @@ std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
     return std::get<ttnn::operations::unary::UnaryWithParam>(act);
 }
 
-ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    const auto& input_shape_a = input_tensor_a.logical_shape();
-    const auto& input_shape_b = input_tensor_b.logical_shape();
+ttnn::Shape compute_matmul_output_shape(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b) {
+    const auto& input_shape_a = get_matmul_tensor_logical_shape(input_tensor_a, transpose_a);
+    const auto& input_shape_b = get_matmul_tensor_logical_shape(input_tensor_b, transpose_b);
 
     const auto a_rank = input_shape_a.rank();
     const auto b_rank = input_shape_b.rank();
@@ -157,8 +164,6 @@ tt::tt_metal::Tile get_output_tile(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const tt::tt_metal::Tile>& optional_output_tensor_tile) {
     using namespace tt;
-    auto in0_tile_shape = in0_tile.get_tile_shape();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
     if (output_tile.has_value() or optional_output_tensor_tile.has_value()) {
         TT_FATAL(
             !(optional_output_tensor_tile.has_value() && output_tile.has_value()),
@@ -168,8 +173,8 @@ tt::tt_metal::Tile get_output_tile(
             output_tile.has_value() ? output_tile.value() : optional_output_tensor_tile.value();
         const auto& out_tile_shape = override_output_tile.get_tile_shape();
 
-        const uint32_t in0_tile_h = in0_tile_shape[0];
-        const uint32_t in1_tile_w = in1_tile_shape[1];
+        const uint32_t in0_tile_h = in0_tile.get_height();
+        const uint32_t in1_tile_w = in1_tile.get_width();
 
         TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
         TT_FATAL(
@@ -200,8 +205,26 @@ tt::tt_metal::Tile get_output_tile(
 
         return override_output_tile;
     } else {
-        return tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+        return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
     }
+}
+
+tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
+    auto curr_tile = input_tensor.tensor_spec().tile();
+    if (!transpose) {
+        return curr_tile;
+    }
+
+    // If the tile is already transposed and we are asked to transpose it again,
+    // the result should be the original orientation (double-transpose cancels out).
+    // Therefore, we negate the transpose flag.
+    const auto transpose_was_set = curr_tile.get_transpose_of_faces();
+    TT_FATAL(
+        (!transpose_was_set) || curr_tile.get_transpose_within_face(),
+        "The tile spec must have both transpose_within_face {} and transpose_of_faces {} set or neither set",
+        curr_tile.get_transpose_within_face(),
+        curr_tile.get_transpose_of_faces());
+    return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
 }
 
 }  // namespace ttnn::operations::matmul::utilities

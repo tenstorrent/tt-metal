@@ -21,6 +21,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     tt::tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     using namespace tt;
+    using namespace matmul::utilities;
 
     // from create_mesh-workload
     auto matmul_attributes = ttnn::operations::matmul::operation_attributes_t{
@@ -42,6 +43,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto chosen_program_config = get_program_config(
         tensor_args.input_tensors.at(0),
         tensor_args.input_tensors.at(1),
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         /*bias_single_tile_size=*/0,
         matmul_attributes);
 
@@ -63,15 +66,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto nnz = operation_attributes.nnz;
     auto is_input_a_sparse = operation_attributes.is_input_a_sparse;
 
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
-    const auto in0_tile = a.tensor_spec().tile();
-    const auto in1_tile = b.tensor_spec().tile();
-
+    const auto& ashape = get_matmul_tensor_padded_shape(a, /*transpose=*/false);
+    const auto& bshape = get_matmul_tensor_padded_shape(b, /*transpose=*/false);
+    const auto in0_tile = get_matmul_tile(a, /*transpose=*/false);
+    const auto in1_tile = get_matmul_tile(b, /*transpose=*/false);
     // cannot use the output tensor tile directly as that might be changed by user override
-    const auto in0_tile_shape = in0_tile.get_tile_shape();
-    const auto in1_tile_shape = in1_tile.get_tile_shape();
-    const auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+    const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
     const auto in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -112,9 +112,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         batchA = get_batch_size(ashape);
     }
 
-    const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
-    const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
-    const uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+    const auto Mt = get_M_dim(ashape, in0_tile, /*fuse_batch=*/false);
+    const auto Kt = get_K_dim(ashape, in0_tile);
+    const auto Nt = get_N_dim(bshape, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
@@ -242,15 +242,30 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, /*transpose=*/false);
+    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+
+    // We don't support transpose for this program configuration. However, we retain the logic here
+    // to keep the code consistent with the other program configurations.
+    const auto transpose_a = false;
+    const auto transpose_b = false;
+    const auto in0_tensor_stride_w = transpose_a ? Mt : 1;
+    const auto in0_tensor_stride_h = transpose_a ? 1 : Kt;
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? Kt : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : Nt;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     in0_sender_compile_time_args = {
         // in0 tensor args
-        (std::uint32_t)1,                 // in0_tensor_stride_w
-        (std::uint32_t)Kt,                // in0_tensor_stride_h
-        (std::uint32_t)in0_block_w,       // in0_tensor_next_block_stride
-        (std::uint32_t)Kt * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+        (std::uint32_t)in0_tensor_stride_w,
+        (std::uint32_t)in0_tensor_stride_h,
+        (std::uint32_t)in0_tensor_next_block_stride,
+        (std::uint32_t)in0_tensor_next_h_dim_block_stride,
         // in0 block args
         (std::uint32_t)in0_block_w,          // in0_block_w
         (std::uint32_t)in0_block_h,          // in0_block_h
@@ -286,10 +301,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
-        (std::uint32_t)1,                 // in1_tensor_stride_w
-        (std::uint32_t)Nt,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * Nt,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,       // in1_tensor_next_w_dim_block_stride
+        (std::uint32_t)in1_tensor_stride_w,
+        (std::uint32_t)in1_tensor_stride_h,
+        (std::uint32_t)in1_tensor_next_block_stride,
+        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
         // in1 block args
         (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,                // in1_block_h
@@ -472,8 +487,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         num_batch_compute,       // batch_nnz
         out_block_tiles,         // out_block_num_tiles
 
-        false,            // untilize_out
-        !nnz.has_value()  // get_batch_from_reader
+        false,             // untilize_out
+        !nnz.has_value(),  // get_batch_from_reader
+        false,             // in0_transpose_tile
     };
 
     // Create compute kernel

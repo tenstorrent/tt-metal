@@ -20,6 +20,8 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    bool transpose_a,
+    bool transpose_b,
     uint32_t bias_single_tile_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const CoreCoord& compute_with_storage_grid_size,
@@ -29,6 +31,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
     uint32_t bias_single_tile_size,
     const matmul::operation_attributes_t& attributes);
 
