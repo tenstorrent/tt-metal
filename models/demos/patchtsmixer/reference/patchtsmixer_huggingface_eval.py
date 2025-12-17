@@ -1,9 +1,9 @@
 import os
-import numpy as np
-import torch
-import pandas as pd
 
-from transformers import PatchTSMixerConfig, PatchTSMixerForPrediction, set_seed
+import numpy as np
+import pandas as pd
+import torch
+from transformers import PatchTSMixerForPrediction, set_seed
 from tsfm_public.toolkit.dataset import ForecastDFDataset
 from tsfm_public.toolkit.time_series_preprocessor import TimeSeriesPreprocessor
 from tsfm_public.toolkit.util import select_by_index
@@ -62,7 +62,6 @@ time_series_processor = TimeSeriesPreprocessor(
 )
 time_series_processor.train(train_data)
 
-# Optional but recommended: pass timestamp_column
 test_dataset = ForecastDFDataset(
     time_series_processor.preprocess(test_data),
     id_columns=id_columns,
@@ -83,7 +82,7 @@ model.eval()
 batch_size = 4  # something small
 samples = [test_dataset[i] for i in range(batch_size)]
 
-past_values = torch.stack([s["past_values"] for s in samples], dim=0)    # (B, L, C)
+past_values = torch.stack([s["past_values"] for s in samples], dim=0)  # (B, L, C)
 future_values = torch.stack([s["future_values"] for s in samples], dim=0)  # (B, H, C)
 
 past_values = past_values.to(device)

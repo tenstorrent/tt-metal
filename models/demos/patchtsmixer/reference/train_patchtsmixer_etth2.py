@@ -1,19 +1,16 @@
 #!/usr/bin/env python
 import os
 
-import numpy as np
 import pandas as pd
 import torch
-
 from transformers import (
+    EarlyStoppingCallback,
     PatchTSMixerConfig,
     PatchTSMixerForPrediction,
     Trainer,
     TrainingArguments,
-    EarlyStoppingCallback,
     set_seed,
 )
-
 from tsfm_public.toolkit.dataset import ForecastDFDataset
 from tsfm_public.toolkit.time_series_preprocessor import TimeSeriesPreprocessor
 from tsfm_public.toolkit.util import select_by_index
@@ -30,14 +27,12 @@ def main():
     # Hyperparameters (kept small to be CPU-friendly)
     context_length = 512
     forecast_horizon = 96
-    batch_size = 32              # reduce if RAM is tight
-    num_workers = 4              # adjust to your CPU
-    num_train_epochs = 4         # keep small for quick training
+    batch_size = 64  # match PyTorch implementation
+    num_workers = 4  # adjust to your CPU
+    num_train_epochs = 10  # match PyTorch implementation
 
     dataset = "ETTh2"
-    dataset_path = (
-        f"https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/{dataset}.csv"
-    )
+    dataset_path = f"https://raw.githubusercontent.com/zhouhaoyi/ETDataset/main/ETT-small/{dataset}.csv"
     timestamp_column = "date"
     id_columns = []
     forecast_columns = ["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]
@@ -77,9 +72,7 @@ def main():
         end_index=test_end_index,
     )
 
-    print(f"Train samples: {len(train_data)}, "
-          f"Valid samples: {len(valid_data)}, "
-          f"Test samples: {len(test_data)}")
+    print(f"Train samples: {len(train_data)}, " f"Valid samples: {len(valid_data)}, " f"Test samples: {len(test_data)}")
 
     # --------------------------------------------------------
     # 2. TimeSeriesPreprocessor and ForecastDFDataset
@@ -134,13 +127,14 @@ def main():
         patch_length=patch_length,
         num_input_channels=len(forecast_columns),
         patch_stride=patch_length,
-        d_model=16,          # small hidden dim
-        num_layers=4,        # fewer layers than blog (8) to speed up
+        d_model=16,  # small hidden dim
+        num_layers=4,  # fewer layers than blog (8) to speed up
         expansion_factor=2,
         dropout=0.1,
         head_dropout=0.1,
         mode="common_channel",  # channel-independent mode (simpler)
         scaling="std",
+        gated_attn=False,  # disable gated attention to match PyTorch impl
     )
     model = PatchTSMixerForPrediction(config).to(device)
     print(model)
@@ -160,7 +154,7 @@ def main():
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         dataloader_num_workers=num_workers,
-        report_to="none",      # turn off TB for simplicity
+        report_to="none",  # turn off TB for simplicity
         save_strategy="epoch",
         logging_strategy="epoch",
         save_total_limit=2,

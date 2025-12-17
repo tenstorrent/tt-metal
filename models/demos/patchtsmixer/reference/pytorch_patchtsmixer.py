@@ -52,7 +52,6 @@ class PatchTSMixerPositionalEncoding(nn.Module):
                 pos = torch.arange(0, num_patches).unsqueeze(1)
                 div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0)))
                 pe = torch.zeros(num_patches, d_model)
-                div_term = torch.zeros(num_patches, d_model)
                 pe[:, 0::2] = torch.sin(pos * div_term)
                 pe[:, 1::2] = torch.cos(pos * div_term)
                 pe = (pe - pe.mean()) / (pe.std() * 10)
@@ -71,7 +70,7 @@ class PatchTSMixerNormLayer(nn.Module):
     """
 
     def __init__(self, d_model, norm_type="LayerNorm", eps=1e-5):
-        super().__init()
+        super().__init__()
         self.norm_type = norm_type.lower()
         if "batch" in self.norm_type:
             self.norm = nn.BatchNorm1d(d_model, eps=eps)
@@ -355,3 +354,169 @@ class PatchTSMixerForecastHead(nn.Module):
         x = self.proj(x)  # (B, C, H)
         x = x.transpose(-1, -2)  # (B, H, C) to match HF convention.
         return x
+
+
+class PatchTSMixerPatchify(nn.Module):
+    """
+    Patchify input (B, L, C) into Output (B, C, N_patches, patch_length)
+    """
+
+    def __init__(self, context_length, patch_length, patch_stride):
+        super().__init__()
+        self.context_length = context_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+
+        # number of patches
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # compute where patching should start if misaligned.
+        new_len = patch_length + patch_stride * (self.num_patches - 1)
+        self.sequence_start = context_length - new_len
+
+    def forward(self, x):
+        """
+        x: (B, L, C)
+        """
+        B, L, C = x.shape
+
+        if L != self.context_length:
+            raise ValueError(f"Expected sequence length {self.context_length}, got {L}")
+
+        # crop left side if needed
+        x = x[:, self.sequence_start :, :]  # (B, new_len, C)
+
+        # unfold along time dimension
+        patches = x.unfold(dimension=1, size=self.patch_length, step=self.patch_stride)
+
+        # shapes:
+        # x: (B, new_len, C)
+        # patches: (B, N_patches, C, patch_length)
+
+        # transpose dims to match HF: (B, C, N_patches, patch_length)
+        patches = patches.transpose(1, 2)
+
+        return patches
+
+
+class PatchTSMixerEmbedding(nn.Module):
+    def __init__(self, context_length, patch_length, patch_stride, d_model):
+        super().__init__()
+
+        # patchify HF-style
+        self.patchify = PatchTSMixerPatchify(
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+        )
+
+        # linear projection: patch_length -> d_model
+        self.proj = nn.Linear(patch_length, d_model)
+
+    def forward(self, x):
+        """
+        x: (B, C, L)
+        HF expects (B, L, C) so adjust
+        """
+        x = x.transpose(1, 2)
+        patches = self.patchify(x)  # (B, C, N_p, patch_len)
+
+        # project last dimension
+        patches = self.proj(patches)  # (B, C, N_p, d_model)
+
+        return patches
+
+
+class PatchTSMixerModelForForecasting(nn.Module):
+    """
+    Minimal PatchTSMixer-style forecasting model.
+
+    Expects past_values of shape (B, L, C) and returns predictions of shape (B, H, C),
+    where:
+        B = batchs_size
+        L = context_length
+        C = num_input_channels (variables)
+        H = prediction_length
+    """
+
+    def __init__(
+        self,
+        context_length: int,
+        prediction_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        mode: str = "common_channel",  # or "mix_channel"
+        expansion: int = 2,
+        dropout: float = 0.1,
+        use_gated_attn: bool = False,
+        head_dropout: float = 0.1,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+
+        # 1) Patchify + linear projection to d_model
+        self.patch_embed = PatchTSMixerEmbedding(
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        # number of patches must match what HF uses
+        num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # 2) Positional encoding over patches
+        self.pos_enc = PatchTSMixerPositionalEncoding(
+            num_patches=num_patches,
+            d_model=d_model,
+            use_pe=True,
+            pe_type="sincos",
+        )
+
+        # 3) Mixer stack (time + feature [+ channel] mixing)
+        layer_kwargs = dict(
+            num_patches=num_patches,
+            d_model=d_model,
+            num_channels=num_channels,
+            mode=mode,
+            expansion=expansion,
+            dropout=dropout,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+        self.mixer_block = PatchTSMixerBlock(
+            num_layers=num_layers,
+            layer_kwargs=layer_kwargs,
+        )
+
+        # 4) forecasting head (B, C, N_p, D) -> (B, H, C)
+        self.head = PatchTSMixerForecastHead(
+            num_patches=num_patches,
+            d_model=d_model,
+            prediction_length=prediction_length,
+            head_dropout=head_dropout,
+        )
+
+    def forward(self, past_values):
+        """
+        past values: (B, L, C) from ForecastDFDataset batch
+        returns: (B, H, C)
+        """
+        # (B, L, C) -> (B, C, L)
+        x = past_values.transpose(1, 2)
+
+        # 1) patchify & embed: (B, C, L) -> (B, C, N_p, D)
+        x = self.patch_embed(x)
+
+        # 2) positional encoding
+        x = self.pos_enc(x)
+
+        # 3) mixer stack: (B, C, N_p, D) -> (B, C, N_p, D)
+        x, _ = self.mixer_block(x, output_hidden_states=False)
+
+        # 4) head: (B, C, N_p, D) -> (B, H, C)
+        preds = self.head(x)
+        return preds
