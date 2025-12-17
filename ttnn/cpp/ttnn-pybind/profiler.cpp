@@ -141,6 +141,8 @@ void ProfilerModule(py::module& m_profiler) {
         R"doc(
         Get performance results for all programs that were read in the most recent call to `ttnn.ReadDeviceProfiler()`.
         Returns a dictionary mapping chip IDs to lists of ProgramAnalysisData objects. The list contains only the latest entry for each program.
+        TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, and TT_METAL_PROFILER_CPP_POST_PROCESS=1 environment variables must be set.
+        Returns an empty dictionary if the environment variables are not set.
     )doc");
 
     m_profiler.def(
@@ -149,6 +151,8 @@ void ProfilerModule(py::module& m_profiler) {
         R"doc(
         Get performance results for all programs that have been read so far across all calls to `ttnn.ReadDeviceProfiler()`.
         Returns a dictionary mapping chip IDs to lists of ProgramAnalysisData objects. The list contains all entries for each program.
+        TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, and TT_METAL_PROFILER_CPP_POST_PROCESS=1 environment variables must be set.
+        Returns an empty dictionary if the environment variables are not set.
     )doc");
 }
 
