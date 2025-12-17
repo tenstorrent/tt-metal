@@ -183,9 +183,6 @@ def test_tt_mochi_pipeline(
         model_name="genmo/mochi-1-preview",
     )
 
-    # Use a generator for deterministic results.
-    generator = torch.Generator("cpu").manual_seed(0)
-
     # Define test prompt (same as the diffusers test)
     prompt = "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze."
 
@@ -199,7 +196,7 @@ def test_tt_mochi_pipeline(
         num_frames=168,  # Reduced for faster testing
         height=480,  # Reduced resolution for faster testing
         width=848,  # Reduced resolution for faster testing
-        generator=generator,
+        seed=0,  # Make deterministic
     ).frames[0]
 
     # Validate output

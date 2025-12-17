@@ -4,7 +4,6 @@
 
 import statistics
 import pytest
-import torch
 import ttnn
 from loguru import logger
 from models.common.utility_functions import is_blackhole
@@ -91,9 +90,6 @@ def test_mochi_pipeline_performance(
 
     tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name)
 
-    # Use a generator for deterministic results.
-    generator = torch.Generator("cpu").manual_seed(0)
-
     # Test prompts
     prompts = [
         """A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.""",
@@ -114,7 +110,7 @@ def test_mochi_pipeline_performance(
             num_frames=num_frames,
             height=image_h,
             width=image_w,
-            generator=generator,
+            seed=0,  # Make deterministic
         ).frames[0]
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -167,7 +163,7 @@ def test_mochi_pipeline_performance(
                     num_frames=num_frames,
                     height=image_h,
                     width=image_w,
-                    generator=generator,
+                    seed=0,  # Make deterministic
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                 ).frames[0]
