@@ -261,8 +261,8 @@ from ttnn.profiler import (
     stop_tracy_zone,
     tracy_message,
     tracy_frame,
-    GetLatestProgramsPerfData,
-    GetAllProgramsPerfData,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
 )
 
 # TODO: remove this after the distributed module is fully integrated
