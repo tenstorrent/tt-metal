@@ -7,9 +7,9 @@
 # This file should be sourced by installation scripts
 
 # tt-exalens configuration
-export EXALENS_VERSION="0.1.251201+dev.a71ca0e-cp310-cp310-linux_x86_64"
-export EXALENS_TAG="${EXALENS_VERSION%%+*}"
-export EXALENS_WHEEL="ttexalens-${EXALENS_VERSION}.whl"
+export EXALENS_VERSION="0.1.6-cp310-cp310-linux_x86_64"
+export EXALENS_TAG="v${EXALENS_VERSION%%-*}"
+export EXALENS_WHEEL="tt_exalens-${EXALENS_VERSION}.whl"
 export EXALENS_URL="https://github.com/tenstorrent/tt-exalens/releases/download/${EXALENS_TAG}/${EXALENS_WHEEL}"
 
 # tt-smi configuration
