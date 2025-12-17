@@ -200,7 +200,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ASan
-      version: 22.04
+      version: 24.04
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
