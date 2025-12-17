@@ -738,8 +738,12 @@ namespace {
 
 Tensor create_tt_tensor_from_host_data(
     HostBuffer& host_buffer,
-    DataType host_dtype,
-    const TensorSpec& tensor_spec,
+    DataType src_dtype,
+    DataType dst_dtype,
+    Layout layout,
+    const ttnn::Shape& tensor_shape,
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& optional_tile,
     float pad_value,
     bool is_device_available) {
     auto can_exec_ops_on_device = [](DataType type) {
@@ -776,36 +780,39 @@ Tensor create_tt_tensor_from_host_data(
             // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
             // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
             // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-            tensor_spec.logical_shape().rank() <= 4 &&
+            tensor_shape.rank() <= 4 &&
             // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
-            !tensor_spec.memory_config().is_sharded() &&
+            !memory_config.is_sharded() &&
             // on-device tiling operation expects 32x32 row. In some cases (`test_tiny_tiles_bfloat` test for example)
             // the tile size is provided explicitly and does not match x32 pattern.
-            (((tensor_spec.tile().get_width() % tt::constants::TILE_WIDTH) == 0) &&
-             ((tensor_spec.tile().get_height() % tt::constants::TILE_HEIGHT) == 0)));
+            (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
+             ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
 
-        const bool exec_on_device =
-            can_exec_ops_on_device(tensor_spec.data_type()) && can_exec_ops_on_device(host_dtype);
+        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
 
         // const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
         //     tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
         //     tensor_spec.data_type() == convert_to_data_type<T>();
 
+        const Layout host_construct_layout =
+            src_dtype == DataType::BFLOAT8_B || src_dtype == DataType::BFLOAT4_B ? Layout::TILE : layout;
+
         if (exec_on_device && can_construct_on_device) {
             return Tensor::from_borrowed_data(
-                host_buffer.view_as<T>(), tensor_spec.logical_shape(), host_buffer.pin(), tensor_spec.tile());
+                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
         // TODO: T=float but dtype can be bfloat8_b or bfloat4_b
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
-            tensor_spec,
+            TensorSpec(
+                tensor_shape, TensorLayout(dst_dtype, PageConfig(host_construct_layout, optional_tile), memory_config)),
             nullptr,
             std::nullopt,
             static_cast<T>(pad_value));
     };
 
-    switch (host_dtype) {
+    switch (src_dtype) {
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
             // TODO: used to be float, need to connect directly with the logic from create_strategy
@@ -820,7 +827,7 @@ Tensor create_tt_tensor_from_host_data(
     }
 }
 
-DataType create_strategy(ttnn::PyDType src_dtype, const TensorLayout& tensor_layout) {
+DataType create_strategy(ttnn::PyDType src_dtype, const DataType& dst_dtype) {
     auto is_pytype_borrowable = [](ttnn::PyDType type) {
         switch (type) {
             case ttnn::PyDType::UINT64:
@@ -845,7 +852,6 @@ DataType create_strategy(ttnn::PyDType src_dtype, const TensorLayout& tensor_lay
         }
     };
 
-    auto dst_dtype = tensor_layout.get_data_type();
     if (!is_pytype_borrowable(src_dtype)) {
         if ((dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)) {
             return DataType::BFLOAT16;
@@ -859,7 +865,11 @@ DataType create_strategy(ttnn::PyDType src_dtype, const TensorLayout& tensor_lay
 
 // TODO: Add namepsace for tensor conversion
 Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
-    const TensorSpec& tensor_spec,
+    const ttnn::Shape& tensor_shape,
+    DataType dst_dtype,
+    Layout layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
     ttnn::PyDType src_dtype,
     const std::function<HostBuffer(DataType)>& get_host_data,
     std::optional<tt::tt_metal::distributed::MeshDevice*> device,
@@ -867,15 +877,27 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<float> pad_value) {
     ZoneScoped;
+
+    // Construct TensorSpec from individual arguments
+    TensorSpec tensor_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(layout, optional_tile), memory_config));
+
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor", tensor_spec, device, cq_id, mesh_mapper, pad_value);
 
     // TODO: exist scope for GraphTracker::instance().track_function_end(output);
 
-    auto host_dtype = create_strategy(src_dtype, tensor_spec.tensor_layout());
+    auto host_dtype = create_strategy(src_dtype, dst_dtype);
     auto host_buffer = get_host_data(host_dtype);
     Tensor output = create_tt_tensor_from_host_data(
-        host_buffer, host_dtype, tensor_spec, pad_value.value_or(0.0f), device.has_value());
+        host_buffer,
+        host_dtype,
+        dst_dtype,
+        layout,
+        tensor_shape,
+        memory_config,
+        optional_tile,
+        pad_value.value_or(0.0f),
+        device.has_value());
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
@@ -884,7 +906,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     };
 
     if (!device) {
-        set_layout(tensor_spec.layout());
+        set_layout(layout);
         return output;
     }
 
@@ -908,6 +930,6 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         output = ttnn::typecast(output, tensor_spec.data_type());
     }
 
-    set_layout(tensor_spec.layout());
+    set_layout(layout);
     return output;
 }

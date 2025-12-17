@@ -351,7 +351,11 @@ void write_tensor(
 Tensor set_tensor_id(const Tensor& tensor);
 
 Tensor convert_python_tensor_to_tt_tensor(
-    const TensorSpec& tensor_spec,
+    const ttnn::Shape& tensor_shape,
+    DataType dst_dtype,
+    Layout layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
     ttnn::PyDType src_data_type,
     const std::function<HostBuffer(DataType)>& get_host_tensor,
     std::optional<tt::tt_metal::distributed::MeshDevice*> device,

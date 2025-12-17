@@ -799,11 +799,12 @@ void pytensor_module(py::module& m_tensor) {
                     (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
-                TensorSpec tensor_spec(
-                    ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape"))),
-                    TensorLayout(dst_dtype, PageConfig(layout_, tile), mem_config.value_or(MemoryConfig())));
                 return tt::tt_metal::convert_python_tensor_to_tt_tensor(
-                    tensor_spec,
+                    ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape"))),
+                    dst_dtype,
+                    layout_,
+                    tile,
+                    mem_config.value_or(MemoryConfig()),
                     src_dtype,
                     [&](DataType dtype) -> HostBuffer {
                         return CMAKE_UNIQUE_NAMESPACE::convert_py_tensor_to_host_buffer(py_tensor, dtype);
