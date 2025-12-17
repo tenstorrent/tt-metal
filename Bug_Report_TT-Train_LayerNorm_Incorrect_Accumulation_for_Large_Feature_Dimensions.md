@@ -46,6 +46,8 @@ For deterministic inputs (dy=1.0, gamma=1.0, x=0.5) with 8192 features:
 
 ### 1. Steps (exact commands)
 
+#### Native Build (Recommended)
+
 ```bash
 # 1. Fresh clone
 cd ~/tt
@@ -78,6 +80,34 @@ cmake --build build --config Debug --clean-first
 
 # 7. Run bug reproduction tests (all should FAIL)
 ./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.BugRepro_*"
+```
+
+#### Container Reproduction (If Using Docker)
+
+When running in Docker containers, **proper device mounts are required**:
+
+```bash
+# CORRECT - Full device access (tests work correctly)
+docker run --rm \
+    --device=/dev/tenstorrent:/dev/tenstorrent \
+    -v /dev:/dev \
+    -v /sys:/sys \
+    -v /dev/hugepages:/dev/hugepages \
+    <image> <command>
+
+# INCORRECT - Minimal mounts (tests fail for wrong reasons)
+docker run --rm \
+    --device=/dev/tenstorrent:/dev/tenstorrent \
+    <image> <command>
+```
+
+**Without `-v /dev:/dev -v /sys:/sys`, tests fail due to container misconfiguration, not the kernel bug.**
+
+#### Original NIGHTLY Test (May Pass Due to Random Data)
+
+```bash
+# This test uses random data and may pass (bug is masked)
+./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit"
 ```
 
 ### 2. Input data / link or description
@@ -153,6 +183,22 @@ P2
 
 ---
 
+## Historical Investigation Notes
+
+### Why Deterministic Tests Were Created
+
+Initial investigation (Dec 16, 2025) showed the NIGHTLY test appeared flaky (0-20% pass rate). Further analysis revealed:
+
+1. **Random data masks the bug:** The NIGHTLY test uses random uniform[-1,1] data with mean~0. Even with ~99% of tiles lost, the sum of mean-zero data is still ~0, often passing loose tolerance checks.
+
+2. **Container misconfiguration:** Missing `/dev` and `/sys` mounts in Docker caused test failures for unrelated reasons, confusing the flakiness analysis.
+
+3. **Solution:** Deterministic tests with constant positive values (dy=1.0, gamma=1.0, x=0.5) definitively expose the bug - expected sum ~8192 vs actual ~64.
+
+This explains why the NIGHTLY test passes on properly configured systems while the kernel is still mathematically incorrect.
+
+---
+
 ## Additional Technical Details
 
 ### Affected Code Path
@@ -161,6 +207,18 @@ P2
 - **Function:** `compute_dy_gamma_sum()`
 - **Trigger:** Feature dimension doesn't fit in L1 (uses block-based path)
 - **Threshold:** Approximately >1024 features (depends on other buffer sizes)
+
+### Implementation Architecture
+
+```
+ttml::metal::ops::layernorm_bw::LayerNormBackwardOperation::invoke()
+  → ttnn::prim::ttml_layernorm_bw()  [registered in tt-train via ttnn::register_operation]
+    → LayerNormBackwardDeviceOperation  [tt-train/sources/ttml/metal/ops/layernorm_bw/device/]
+      → LayerNormBackwardProgramFactory  [tt-train/sources/ttml/metal/ops/layernorm_bw/device/]
+        → layernorm_bw_kernel.cpp (BUGGY)  [tt-train/.../kernels/compute/]
+```
+
+**Code ownership:** The kernel and device operation are implemented in **tt-train** (`tt-train/sources/ttml/`), but registered as a TTNN primitive (`ttnn::prim::ttml_layernorm_bw`) using TTNN's `ttnn::register_operation<>` infrastructure from tt-metal.
 
 ### Two Code Paths
 
@@ -195,13 +253,14 @@ Use circular buffer for accumulator persistence across loop iterations:
 
 ### Files
 
-All source files belong to the **tt-train** subproject within the tt-metal repository.
+All source files belong to the **tt-train** subproject within the tt-metal repository (`github.com/tenstorrent/tt-metal`). The `tt-train/` directory is NOT a git submodule or external dependency - it is a subdirectory within tt-metal, tracked directly in tt-metal's git history.
 
 | File | Description |
 |------|-------------|
 | [`layernorm_bw_kernel.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp) | Compute kernel with accumulation bug |
 | [`layernorm_bw_device_operation.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp) | TTNN operation registration |
 | [`layernorm_bw_program_factory.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp) | Kernel program setup |
+| [`layernorm_bw.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp) | High-level TTML operation wrapper |
 
 ### Bug Report Branch
 
