@@ -7,7 +7,6 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
-#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -79,7 +78,6 @@ void kernel_main() {
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        // First, find out if this ring iter processes any KV chunks.
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
@@ -115,45 +113,28 @@ void kernel_main() {
         const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
 
-        // DPRINT << "ring id: " << ring_id
-        //        << " ring iter needs global N mask: " << (uint32_t)ring_iter_needs_global_n_mask
-        //        << "with global N within ring iter: " << global_n_within_ring_iter << ENDL();
-
         // LOCAL N MASK
         const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
         // If global N is in the ring iter, it supersedes the local N mask.
         const bool ring_iter_needs_local_n_mask = local_n_needs_masking && !global_n_is_within_ring_iter;
-        // DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
-        //        << ENDL();
 
         // JOINT L MASK
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-        // DPRINT << "ring id: " << ring_id << " ring iter needs joint N mask: " <<
-        // (uint32_t)ring_iter_needs_joint_n_mask
-        //        << ENDL();
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
-            DPRINT << "ring id: " << ring_id << " Processing Q chunk: " << global_q_chunk << ENDL();
 
             if (ring_iter_needs_global_n_mask) {
-                DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_n_within_ring_iter);
-                DPRINT << "ring id: " << ring_id << " Generated global N mask at index " << global_n_within_ring_iter
-                       << ENDL();
             } else if (ring_iter_needs_local_n_mask) {
-                DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, local_padded_N);
-                DPRINT << "ring id: " << ring_id << " Generated local N mask at index " << local_padded_N << ENDL();
             }
             if (ring_iter_needs_joint_n_mask) {
-                DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, L);
-                DPRINT << "ring id: " << ring_id << " Generated joint N mask at index " << L << ENDL();
             }
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
@@ -188,7 +169,6 @@ void kernel_main() {
 
             if (ring_iter > 0) {
                 // Read previous output for this Q chunk
-                DPRINT << "ring id: " << ring_id << " Reading previous output for Q chunk" << ENDL();
                 read_block(
                     is_joint_q ? joint_out_generator : out_generator,
                     out_slice,
@@ -196,9 +176,7 @@ void kernel_main() {
                     cb_prev_out,
                     tile_bytes,
                     false);
-                DPRINT << "ring id: " << ring_id << " Read previous output for Q chunk" << ENDL();
                 // Read previous LSE for this Q chunk
-                DPRINT << "ring id: " << ring_id << " Reading previous LSE for Q chunk" << ENDL();
                 cb_reserve_back(cb_lse_in, Sq_chunk_t);
                 uint32_t lse_addr = get_write_ptr(cb_lse_in);
 
@@ -208,7 +186,6 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_lse_in, Sq_chunk_t);
-                DPRINT << "ring id: " << ring_id << " Read previous LSE for Q chunk" << ENDL();
             }
 
             write_block(is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
