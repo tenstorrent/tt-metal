@@ -1,3 +1,15 @@
+### TL;DR
+
+- **Bug**: LayerNorm backward accumulation overwrites instead of accumulates in block-based path (large feature dims > L1 fit, e.g., >1024).
+- **Impact**: ~99% data loss; incorrect gradients risk silent training failures (P2 severity).
+- **HW**: Wormhole n150 L.
+- **Repro**: `./build/tests/ttml_tests --gtest_filter=LayerNormBackwardOpTest.BugRepro_*` — all 7 tests FAIL with max_diff ~1000.
+- **Expected/Actual**: Sum ≈8192 vs. ≈64 for deterministic inputs.
+- **Fix Direction**: Accumulate per tile or use TTNN reduce pattern.
+- **Buggy code**: [layernorm_bw_kernel.cpp L129-133, L283-287](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp#L129-L133)
+
+---
+
 ### Component / Area
 
 tt-train, kernels, ops
@@ -10,7 +22,11 @@ Bad Outputs
 
 The TTML LayerNorm backward kernel (`layernorm_bw_kernel.cpp`) has a critical accumulation bug in `compute_dy_gamma_sum()` that causes ~99% of data to be lost when processing tensors with large feature dimensions that don't fit in L1 cache.
 
-**Root cause:** In the block-based code path, each loop iteration OVERWRITES `sum_register` instead of accumulating:
+**Root cause:** In the block-based code path, each loop iteration OVERWRITES `sum_register` instead of accumulating.
+
+**Buggy code locations** (GitHub permalinks):
+- [L129-133](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp#L129-L133) — non-block path
+- [L283-287](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp#L283-L287) — block-based path
 
 ```cpp
 // BUGGY: Each iteration OVERWRITES sum_register instead of accumulating
@@ -46,7 +62,25 @@ For deterministic inputs (dy=1.0, gamma=1.0, x=0.5) with 8192 features:
 
 ### 1. Steps (exact commands)
 
-#### Native Build (Recommended)
+#### Fastest Repro (For Existing Builds)
+
+If tt-metal is already cloned and tt-train built on commit `8321610e95` or later:
+
+```bash
+# 1. Fetch and cherry-pick bug reproduction tests
+git fetch origin ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3
+git cherry-pick 16165972af
+
+# 2. Rebuild tt-train
+cd tt-train && cmake --build build
+
+# 3. Run tests (all should FAIL with max_diff ~1000)
+./build/tests/ttml_tests --gtest_filter=LayerNormBackwardOpTest.BugRepro_*
+```
+
+For fresh clones, see full steps below.
+
+#### Native Build (Recommended) — Full Steps
 
 ```bash
 # 1. Fresh clone
@@ -261,6 +295,12 @@ All source files belong to the **tt-train** subproject within the tt-metal repos
 | [`layernorm_bw_device_operation.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp) | TTNN operation registration |
 | [`layernorm_bw_program_factory.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp) | Kernel program setup |
 | [`layernorm_bw.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp) | High-level TTML operation wrapper |
+
+### Acceptance Criteria
+
+- [ ] All `LayerNormBackwardOpTest.BugRepro_*` tests PASS on Wormhole n150 L
+- [ ] Original NIGHTLY test (`NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit`) still PASSES (no regression)
+- [ ] No performance regression >5% on affected code paths (optional benchmark)
 
 ### Bug Report Branch
 
