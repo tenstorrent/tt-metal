@@ -596,6 +596,7 @@ CCL
    ttnn.mesh_partition
    ttnn.point_to_point
    ttnn.reduce_to_root
+   ttnn.all_broadcast
 
 Embedding
 =========
