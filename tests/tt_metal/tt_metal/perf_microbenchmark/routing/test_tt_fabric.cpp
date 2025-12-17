@@ -17,6 +17,10 @@
 #include <memory>
 
 #include "tt_fabric_test_context.hpp"
+#include "tt_fabric_test_constants.hpp"
+
+using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;
+using tt::tt_fabric::fabric_tests::OUTPUT_DIR;
 
 const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
     {Topology::NeighborExchange, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
@@ -129,12 +133,13 @@ int main(int argc, char** argv) {
     bool dump_built_tests = cmdline_parser.dump_built_tests();
     if (dump_built_tests) {
         std::filesystem::path dump_file_dir =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            std::string(OUTPUT_DIR);
         if (!std::filesystem::exists(dump_file_dir)) {
             std::filesystem::create_directory(dump_file_dir);
         }
 
-        std::string dump_file = cmdline_parser.get_built_tests_dump_file_name(default_built_tests_dump_file);
+        std::string dump_file = cmdline_parser.get_built_tests_dump_file_name(DEFAULT_BUILT_TESTS_DUMP_FILE);
         std::filesystem::path dump_file_path = dump_file_dir / dump_file;
         output_stream.open(dump_file_path, std::ios::out | std::ios::trunc);
 
