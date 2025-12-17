@@ -268,17 +268,14 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
         std::set<ttnn::MeshCoordinate> tensor_coords_set(tensor_coords_vector.begin(), tensor_coords_vector.end());
 
         for (const auto& mesh_coord : mesh_coords_set) {
-            if (tensor_coords_set.find(mesh_coord) == tensor_coords_set.end()) {
-                TT_FATAL(
-                    false,
-                    "paged_fill_cache: mesh_coord ({}, {}) is in mesh_coords but not found in tensor_coords. "
-                    "This would result in no program being created for this coordinate, causing potential hang. "
-                    "mesh_coords size: {}, tensor_coords size: {}",
-                    mesh_coord[0],
-                    mesh_coord[1],
-                    mesh_coords_set.size(),
-                    tensor_coords_set.size());
-            }
+            TT_FATAL(
+                tensor_coords_set.find(mesh_coord) != tensor_coords_set.end(),
+                "Mesh coordinate ({}, {}) is in mesh_coords but not found in tensor_coords. "
+                "mesh_coords size: {}, tensor_coords size: {}",
+                mesh_coord[0],
+                mesh_coord[1],
+                mesh_coords_set.size(),
+                tensor_coords_set.size());
         }
         for (const auto& mesh_coord : mesh_coords_set) {
             const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
