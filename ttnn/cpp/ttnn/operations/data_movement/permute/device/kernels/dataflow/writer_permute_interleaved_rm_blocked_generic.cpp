@@ -150,7 +150,7 @@ void kernel_main() {
             }
 
             // Compute the NoC address for the output
-            uint64_t dst_noc_addr = get_noc_addr(dest_linear_idx, s0, x_offset);
+            uint64_t dst_noc_addr = s0.get_noc_addr(dest_linear_idx, x_offset);
 
             // Compute the L1 address from which to write (offset by W-block pages)
             uint32_t l1_addr = transposed_buffer_read_addr + (w - w_start) * output_cb_page_size;

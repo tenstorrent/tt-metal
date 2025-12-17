@@ -39,11 +39,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -74,8 +72,8 @@ struct SingleCoreBinaryConfig {
     size_t input_dram_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
-    std::string binary_op = "";
+    CoreCoord core;
+    std::string binary_op;
     bool acc_to_dest = false;
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;

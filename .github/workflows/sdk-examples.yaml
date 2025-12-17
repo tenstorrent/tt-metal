@@ -41,7 +41,14 @@ jobs:
           set -euo pipefail
           apt update
           DEBIAN_FRONTEND=noninteractive TZ=UTC apt install -y -q libprotobuf-dev # this is being installed for testing dependency conflicts with protobuf
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb
+
+          if [ "${{ inputs.product }}" == "tt-metalium" ]; then
+            apt install -y ./pkgs/tt-metalium-examples_*.deb
+          fi
+          if [ "${{ inputs.product }}" == "tt-nn" ]; then
+            apt install -y ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb ./pkgs/tt-nn-examples_*.deb
+          fi
 
       - name: Run examples
         id: test

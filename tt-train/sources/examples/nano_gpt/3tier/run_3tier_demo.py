@@ -33,7 +33,7 @@ HOSTS = [
 DEFAULT_MESH_IDS = [0, 0, 0, 0, 0]
 # If config contains "socket_type: fabric", override MESH_IDS with this:
 FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
-MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
+MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.textproto"
 
 
 # --------------------------
@@ -50,7 +50,13 @@ def run(cmd, dry=False, check=True, capture=False):
         print(f"DRY RUN: {printable}")
         return ""
     if capture:
-        return subprocess.run(cmd, check=check, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout
+        return subprocess.run(
+            cmd,
+            check=check,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ).stdout
     else:
         return subprocess.run(cmd, check=check)
 
@@ -95,7 +101,9 @@ def verify_local_files(
             print(f"✓ Found: {mesh_desc}")
 
     if missing:
-        print(f"ERROR: {missing} required files are missing or invalid", file=sys.stderr)
+        print(
+            f"ERROR: {missing} required files are missing or invalid", file=sys.stderr
+        )
         print(f"Build directory: {bin_dir}", file=sys.stderr)
         print(f"Config directory: {cfg_dir}", file=sys.stderr)
         print("\nTo build the missing binaries, try:", file=sys.stderr)
@@ -156,13 +164,24 @@ def copy_to_remote_hosts(
             )
         except subprocess.CalledProcessError as e:
             print(f"   ERROR: SSH connection failed to {host}", file=sys.stderr)
-            print("   Check: 1) Host reachable, 2) SSH keys set up, 3) User exists", file=sys.stderr)
+            print(
+                "   Check: 1) Host reachable, 2) SSH keys set up, 3) User exists",
+                file=sys.stderr,
+            )
             continue
 
         # mkdirs
         mesh_desc_dir = mesh_desc_path.parent
         run(
-            ["ssh", f"{ssh_user}@{host}", "mkdir", "-p", str(bin_dir), str(cfg_dir), str(mesh_desc_dir)],
+            [
+                "ssh",
+                f"{ssh_user}@{host}",
+                "mkdir",
+                "-p",
+                str(bin_dir),
+                str(cfg_dir),
+                str(mesh_desc_dir),
+            ],
             dry=dry,
             check=True,
         )
@@ -178,15 +197,36 @@ def copy_to_remote_hosts(
                 print(f"   ERROR: Failed to copy {b} to {host}", file=sys.stderr)
 
         # copy config
-        run(["scp", *SCP_OPTS, str(cfg_dir / config_name), f"{ssh_user}@{host}:{cfg_dir}/"], dry=dry, check=True)
+        run(
+            [
+                "scp",
+                *SCP_OPTS,
+                str(cfg_dir / config_name),
+                f"{ssh_user}@{host}:{cfg_dir}/",
+            ],
+            dry=dry,
+            check=True,
+        )
 
         # copy mesh descriptor if using fabric
         if use_fabric:
             try:
-                run(["scp", *SCP_OPTS, str(mesh_desc_path), f"{ssh_user}@{host}:{mesh_desc_path}"], dry=dry, check=True)
+                run(
+                    [
+                        "scp",
+                        *SCP_OPTS,
+                        str(mesh_desc_path),
+                        f"{ssh_user}@{host}:{mesh_desc_path}",
+                    ],
+                    dry=dry,
+                    check=True,
+                )
                 print(f"   ✓ mesh descriptor copied successfully")
             except subprocess.CalledProcessError as e:
-                print(f"   ERROR: Failed to copy mesh descriptor to {host}", file=sys.stderr)
+                print(
+                    f"   ERROR: Failed to copy mesh descriptor to {host}",
+                    file=sys.stderr,
+                )
 
     print("✔ Remote copy step done.")
 
@@ -259,7 +299,9 @@ def write_appfile(
         xflags += ["-x", f"TT_MESH_ID={m['tt_mesh_id']}"]
 
         # One app context per rank
-        line = " ".join(["-np", "1", "-host", m["host"], *xflags] + [shlex.quote(a) for a in args])
+        line = " ".join(
+            ["-np", "1", "-host", m["host"], *xflags] + [shlex.quote(a) for a in args]
+        )
         lines.append(line)
 
     fpath.write_text("\n".join(lines) + "\n")
@@ -273,23 +315,55 @@ def main():
             "Per-rank TT_MESH_ID is precomputed into an Open MPI appfile."
         )
     )
-    parser.add_argument("-m", "--metal-home", default=DEFAULT_METAL_HOME, help="TT_METAL_HOME")
-    parser.add_argument("-c", "--config", default=DEFAULT_CONFIG, help="Config filename")
-    parser.add_argument("-n", "--dry-run", action="store_true", help="Dry run (print commands only)")
-    parser.add_argument("--hosts", nargs="*", default=HOSTS, help="Host list (MPI rank order)")
-    parser.add_argument("--mesh-ids", nargs="*", type=int, default=DEFAULT_MESH_IDS, help="MESH_IDs per global rank")
-    parser.add_argument("--ssh-user", default=SSH_USER, help="SSH username for remote copy")
-    parser.add_argument("--skip-copy", action="store_true", help="Skip remote copy step")
-    parser.add_argument("--workers", type=int, default=None, help="Number of worker ranks")
-    parser.add_argument("--aggregators", type=int, default=1, help="Number of aggregator ranks (3-tier mode)")
-    parser.add_argument("--optimizers", type=int, default=1, help="Number of optimizer ranks (3-tier mode)")
+    parser.add_argument(
+        "-m", "--metal-home", default=DEFAULT_METAL_HOME, help="TT_METAL_HOME"
+    )
+    parser.add_argument(
+        "-c", "--config", default=DEFAULT_CONFIG, help="Config filename"
+    )
+    parser.add_argument(
+        "-n", "--dry-run", action="store_true", help="Dry run (print commands only)"
+    )
+    parser.add_argument(
+        "--hosts", nargs="*", default=HOSTS, help="Host list (MPI rank order)"
+    )
+    parser.add_argument(
+        "--mesh-ids",
+        nargs="*",
+        type=int,
+        default=DEFAULT_MESH_IDS,
+        help="MESH_IDs per global rank",
+    )
+    parser.add_argument(
+        "--ssh-user", default=SSH_USER, help="SSH username for remote copy"
+    )
+    parser.add_argument(
+        "--skip-copy", action="store_true", help="Skip remote copy step"
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None, help="Number of worker ranks"
+    )
+    parser.add_argument(
+        "--aggregators",
+        type=int,
+        default=1,
+        help="Number of aggregator ranks (3-tier mode)",
+    )
+    parser.add_argument(
+        "--optimizers",
+        type=int,
+        default=1,
+        help="Number of optimizer ranks (3-tier mode)",
+    )
     parser.add_argument(
         "--pp-only",
         action="store_true",
         help="Pipeline-parallel mode: launch only worker ranks (no aggregator or optimizer)",
     )
     parser.add_argument(
-        "remainder", nargs=argparse.REMAINDER, help="Use '-- <args>' to forward extra args to all ranks"
+        "remainder",
+        nargs=argparse.REMAINDER,
+        help="Use '-- <args>' to forward extra args to all ranks",
     )
 
     args = parser.parse_args()
@@ -298,7 +372,11 @@ def main():
     extra_args = []
     if args.remainder:
         # argparse keeps the "--" as first token if present
-        extra_args = args.remainder[1:] if args.remainder and args.remainder[0] == "--" else args.remainder
+        extra_args = (
+            args.remainder[1:]
+            if args.remainder and args.remainder[0] == "--"
+            else args.remainder
+        )
         if extra_args:
             print("Additional arguments to forward to workers:", " ".join(extra_args))
         else:
@@ -315,7 +393,9 @@ def main():
     # Verify files including mesh descriptor if using fabric
     mesh_desc_rel_path = MESH_GRAPH_DESC_REL if use_fabric else None
     required_binaries = ("nano_gpt",) if args.pp_only else BINARIES
-    bin_dir, cfg_dir = verify_local_files(metal_home, args.config, mesh_desc_rel_path, required_binaries)
+    bin_dir, cfg_dir = verify_local_files(
+        metal_home, args.config, mesh_desc_rel_path, required_binaries
+    )
     cfg_path = cfg_dir / args.config
 
     num_hosts = len(args.hosts)
@@ -389,7 +469,15 @@ def main():
 
         write_hostfile(args.hosts, hostfile)
         write_appfile(
-            mapping, metal_home, cfg_dir, args.config, bin_dir, use_fabric, mesh_graph_desc_path, extra_args, appfile
+            mapping,
+            metal_home,
+            cfg_dir,
+            args.config,
+            bin_dir,
+            use_fabric,
+            mesh_graph_desc_path,
+            extra_args,
+            appfile,
         )
 
         # print content of app file
@@ -397,10 +485,20 @@ def main():
             print("Content of app file:")
             print(f.read())
 
-        mpi_cmd = ["mpirun", "--hostfile", str(hostfile), "--app", str(appfile), "--tag-output"]
+        mpi_cmd = [
+            "mpirun",
+            "--hostfile",
+            str(hostfile),
+            "--app",
+            str(appfile),
+            "--tag-output",
+        ]
 
         if args.pp_only:
-            print("Launching MPI pipeline-parallel run with " f"{worker_count} workers (no aggregator/optimizer)...")
+            print(
+                "Launching MPI pipeline-parallel run with "
+                f"{worker_count} workers (no aggregator/optimizer)..."
+            )
         else:
             print(
                 "Launching MPI 3-tier demo with "

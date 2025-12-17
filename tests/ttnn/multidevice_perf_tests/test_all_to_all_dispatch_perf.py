@@ -33,9 +33,9 @@ def test_all_to_all_dispatch_perf(
 
     subdir = "moe_perf"
     if arch_type == "6U":
-        file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py"
+        file = f"pytest tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py"
     elif arch_type == "T3K":
-        file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py"
+        file = f"pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py"
     else:
         raise ValueError(f"Invalid arch_type: {arch_type}")
 

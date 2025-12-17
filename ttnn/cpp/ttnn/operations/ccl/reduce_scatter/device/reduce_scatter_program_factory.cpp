@@ -5,15 +5,24 @@
 #include "reduce_scatter_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+
+// Import functions from the new namespace
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    build_line_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
@@ -26,7 +35,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
@@ -70,7 +79,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
@@ -128,11 +137,12 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         std::nullopt,  // use num buffers per channel decision making tree
         first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
 
-    return {
-        std::move(program),
-        {.multidevice_semaphores = multidevice_semaphores,
-         .barrier_semaphore = barrier_semaphore,
-         .program_artifacts = reduce_scatter_program_artifacts}};
+    shared_variables_t shared_vars{
+        .multidevice_semaphores = multidevice_semaphores,
+        .barrier_semaphore = barrier_semaphore,
+        .program_artifacts = reduce_scatter_program_artifacts};
+
+    return {std::move(program), std::move(shared_vars)};
 }
 
 void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_arguments(
@@ -153,8 +163,8 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         update_runtime_arguments(
             program,
-            shared_variables.program_artifacts.reader_kernel_ids,
-            shared_variables.program_artifacts.writer_kernel_ids,
+            shared_variables.program_artifacts.reader_kernel_id,
+            shared_variables.program_artifacts.writer_kernel_id,
             shared_variables.program_artifacts.all_cores,
             operation_attributes.num_links,
             shared_variables.program_artifacts.num_directions_per_link,

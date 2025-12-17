@@ -748,4 +748,4 @@ inline void dbg_instrn_buf_clear_override_en() {
 }
 
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
-inline void wzeromem(uint32_t start, uint32_t len) { wzerorange((uint32_t*)start, (uint32_t*)(start + len)); }
+inline void wzeromem(uintptr_t start, uint32_t len) { wzerorange((uint32_t*)start, (uint32_t*)(start + len)); }

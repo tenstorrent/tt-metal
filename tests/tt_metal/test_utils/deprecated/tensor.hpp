@@ -11,16 +11,14 @@
 
 using SHAPE = std::array<std::uint32_t, 4>;
 
-namespace tt {
-
-namespace deprecated {
+namespace tt::deprecated {
 
 enum class Initialize { ZEROS = 0, ONES = 1, INCREMENT = 2, RANDOM = 3 };
 
 template <class T>
 class Tensor {
 public:
-    Tensor(std::vector<T>& values, std::array<uint32_t, 4>& shape) : shape(shape), values(values) {
+    Tensor(std::vector<T>& values, std::array<uint32_t, 4>& shape) : values(values), shape(shape) {
         this->strides = {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
     }
     Tensor(std::array<uint32_t, 4>& shape) : shape(shape) {
@@ -203,6 +201,6 @@ Tensor<T> pad(Tensor<T>& input, std::array<std::array<uint32_t, 2>, 4> pad_size,
     return Tensor<T>(out, out_shape);
 }
 
-}  // end namespace deprecated
+}  // namespace tt::deprecated
 
-}  // end namespace tt
+// end namespace tt

@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <ostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -27,7 +29,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 enum class UnpackToDestMode : uint8_t;
 
@@ -41,7 +43,9 @@ namespace {
 
 void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (const string& s : prolog) out << s;
+    for (const string& s : prolog) {
+        out << s;
+    }
     out << src;
 }
 
@@ -85,11 +89,8 @@ void jit_build_genfiles_triscs_src(
     string math_base = out_dir + "chlkc_math";
     string pack_base = out_dir + "chlkc_pack";
     string unpack_cpp = unpack_base + ".cpp";
-    string unpack_llk_args_h = unpack_base + "_llk_args.h";
     string math_cpp = math_base + ".cpp";
-    string math_llk_args_h = math_base + "_llk_args.h";
     string pack_cpp = pack_base + ".cpp";
-    string pack_llk_args_h = pack_base + "_llk_args.h";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
@@ -125,7 +126,7 @@ void jit_build_genfiles_triscs_src(
 namespace {
 
 std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
-    std::string formats_string = "";
+    std::string formats_string;
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
     }
@@ -299,7 +300,7 @@ void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH a
 }
 
 std::string array_to_string(const uint32_t arr[]) {
-    std::string formats_string = "";
+    std::string formats_string;
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         formats_string += to_string((int)arr[i]) + ",";
     }

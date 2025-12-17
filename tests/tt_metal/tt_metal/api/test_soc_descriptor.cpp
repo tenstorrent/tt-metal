@@ -20,6 +20,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/arch.hpp>
+#include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -32,7 +34,7 @@ std::unordered_set<int> get_harvested_rows(ChipId device_id) {
     std::unordered_set<int> harvested_rows;
     int row_coordinate = 0;
     int tmp = harvested_rows_mask;
-    std::string delim = "";
+    std::string delim;
     std::string harvested_row_str;
     while (tmp) {
         if (tmp & 1) {

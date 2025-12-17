@@ -34,7 +34,7 @@ def get_stream_reg_address(stream_id: int, reg_name: str, arch: str) -> int:
     indices are architecture-specific.
 
     Args:
-        stream_id: Stream ID (typically 0-31, fabric uses 12-21)
+        stream_id: Stream ID (typically 0-31)
         reg_name: Register name (BUF_SPACE_AVAILABLE, BUF_SIZE, BUF_SPACE_UPDATE)
         arch: Architecture string (wormhole, blackhole)
 

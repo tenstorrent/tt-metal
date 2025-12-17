@@ -36,8 +36,7 @@
 #include <utility>
 #include <tt_stl/span.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class CircularBufferConfig;
 class IDevice;
@@ -280,6 +279,9 @@ public:
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
+    // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
+    void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
+
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
@@ -296,13 +298,13 @@ private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
 
     // The buffer that holds the kernel/binaries/etc for this program
     std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;
     ProgramTransferInfo program_transfer_info;
 
-    bool finalized_;
+    bool finalized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -337,7 +339,7 @@ private:
     };
     uint32_t programmable_core_count_;
     uint64_t id;  // Need to make non-const due to move constructor
-    uint64_t runtime_id;
+    uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
@@ -355,8 +357,8 @@ private:
 
     std::vector<Semaphore> semaphores_;
 
-    std::unordered_set<uint32_t> compiled_;
-    bool local_circular_buffer_allocation_needed_;
+    std::unordered_set<uint64_t> compiled_;
+    bool local_circular_buffer_allocation_needed_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
@@ -407,5 +409,4 @@ private:
 };
 
 }  // namespace detail
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

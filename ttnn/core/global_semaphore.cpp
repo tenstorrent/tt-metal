@@ -4,6 +4,7 @@
 
 #include "ttnn/global_semaphore.hpp"
 
+#include <algorithm>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt_stl/span.hpp>
@@ -18,7 +19,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     const std::vector<IDevice*>& devices, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     MultiDeviceGlobalSemaphore multi_device_global_semaphore(devices.size());
     auto& global_semaphores = multi_device_global_semaphore.global_semaphores;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         global_semaphores.push_back(create_global_semaphore(device, cores, initial_value, buffer_type));
     }
     return multi_device_global_semaphore;
@@ -31,7 +32,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
     uint32_t attempts,
     bool search_max) {
     MultiDeviceGlobalSemaphore multi_device_global_semaphore(devices.size());
-    for (auto device : devices) {
+    for (auto* device : devices) {
         multi_device_global_semaphore.global_semaphores.push_back(
             create_global_semaphore(device, cores, initial_value, buffer_type));
     }
@@ -52,13 +53,9 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
                 i,
                 get_global_semaphore_address(global_semaphores[i]));
             if (search_max) {
-                if (get_global_semaphore_address(global_semaphores[i]) > target_addr) {
-                    target_addr = get_global_semaphore_address(global_semaphores[i]);
-                }
+                target_addr = std::max(get_global_semaphore_address(global_semaphores[i]), target_addr);
             } else {
-                if (get_global_semaphore_address(global_semaphores[i]) < target_addr) {
-                    target_addr = get_global_semaphore_address(global_semaphores[i]);
-                }
+                target_addr = std::min(get_global_semaphore_address(global_semaphores[i]), target_addr);
             }
         };
         log_debug(tt::LogTTNN, "chkpt 2, target_addr: {}", target_addr);

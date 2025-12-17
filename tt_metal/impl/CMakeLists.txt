@@ -3,8 +3,9 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
@@ -35,6 +36,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
@@ -51,6 +54,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp
@@ -151,6 +155,9 @@ endif()
 
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(impl)
 
 target_link_libraries(
     impl

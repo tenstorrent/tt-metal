@@ -8,7 +8,7 @@ ResNet Tests for Panoptic DeepLab using real weights from model_final_bd324a.pkl
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
@@ -23,6 +23,11 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
     preprocess_nchw_input_tensor,
+)
+from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    check_ttnn_output,
+    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_20_cores,
 )
 
 
@@ -101,8 +106,9 @@ def create_panoptic_models(device, weights_path):
 def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_generator):
     """Test ResNet stem layer PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -117,6 +123,8 @@ def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_g
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, C, height, width, dtype=torch.bfloat16)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
@@ -144,8 +152,9 @@ def test_resnet_layer_pcc(
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
 
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -211,17 +220,48 @@ def test_resnet_layer_pcc(
     assert pcc_passed, f"ResNet {layer_name} PCC test failed: {pcc_message}"
 
 
+@pytest.mark.parametrize(
+    "pcc_values, skip_check",
+    [
+        (
+            {
+                "res2": {"pcc": 0.998, "abs_err": 0.1, "rel_err": 0.3},
+                "res3": {"pcc": 0.997, "abs_err": 0.04, "rel_err": 0.6},
+                "res4": {"pcc": 0.9965, "abs_err": 0.02, "rel_err": 0.3},
+                "res5": {"pcc": 0.9945, "abs_err": 0.01, "rel_err": 0.6},
+            },
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            {
+                "res2": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
+                "res3": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.6},
+                "res4": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
+                "res5": {"pcc": 0.992, "abs_err": 0.5, "rel_err": 0.7},
+            },
+            skip_if_not_blackhole_130_cores,
+        ),
+    ],
+    ids=["20_cores", "130_cores"],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "height,width",
     [(512, 1024)],
 )
-def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_location_generator):
+def test_resnet_full_pcc(
+    device, pcc_values, skip_check, batch_size, height, width, reset_seeds, model_location_generator
+):
     """Test full ResNet PCC between PyTorch and TTNN implementations."""
+
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -233,6 +273,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
@@ -241,24 +283,29 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
         torch_outputs = pytorch_model.backbone(torch_input)
 
     failed_layers = []
-    # Set layer-specific PCC thresholds based on test failures
-    layer_pcc_thresholds = {
-        "res2": 0.998,
-        "res3": 0.997,
-        "res4": 0.997,
-        "res5": 0.995,
-    }
 
     for layer_name in ["res2", "res3", "res4", "res5"]:
         torch_output = torch_outputs[layer_name]
         ttnn_output = ttnn_outputs[layer_name]
-        ttnn_output_torch = ttnn.to_torch(ttnn_output).permute(0, 3, 1, 2).reshape(torch_output.shape)
 
-        pcc_threshold = layer_pcc_thresholds[layer_name]
-        pcc_passed, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, pcc_threshold)
-        logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
+        # Extract PCC thresholds from parameters
+        layer_vals = pcc_values[layer_name]
+        pcc_threshold = layer_vals["pcc"]
+        exp_abs_err = layer_vals["abs_err"]
+        exp_rel_err = layer_vals["rel_err"]
 
-        if not pcc_passed:
+        passed = check_ttnn_output(
+            layer_name,
+            torch_output,
+            ttnn_output,
+            to_channel_first=True,
+            output_shape=torch_output.shape,
+            exp_pcc=pcc_threshold,
+            exp_abs_err=exp_abs_err,
+            exp_rel_err=exp_rel_err,
+        )
+
+        if not passed:
             failed_layers.append(layer_name)
 
-    assert len(failed_layers) == 0, f"ResNet full PCC test failed for layers: {failed_layers}"
+    assert len(failed_layers) == 0, f"ResNet full PCC and tolerance tests failed for layers: {failed_layers}"

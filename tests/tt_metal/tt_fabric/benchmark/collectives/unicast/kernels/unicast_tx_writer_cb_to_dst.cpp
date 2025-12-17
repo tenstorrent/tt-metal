@@ -59,9 +59,6 @@ void kernel_main() {
     // supported in this path (see guard below). This API will change soon. The future 2D
     // interface will mirror the 1D style. See linear/api.h for the reference shape.
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
-#endif
     (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
 
     sender.open<true>();
@@ -100,7 +97,7 @@ void kernel_main() {
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
     (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1));
 
     sender.wait_for_empty_write_slot();
     sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));

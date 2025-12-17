@@ -23,6 +23,16 @@ on:
         required: false
         type: boolean
         default: false
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
       gtest_filter:
         required: false
         default: "*"
@@ -64,17 +74,24 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true

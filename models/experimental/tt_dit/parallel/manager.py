@@ -131,7 +131,7 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis):
+    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -145,7 +145,7 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
-        cache_key = ("ag", tuple(shape), dim, mesh_axis)
+        cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -156,7 +156,13 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                output_buffer = ttnn.from_torch(
+                    torch.empty(output_buffer_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -237,19 +243,78 @@ class CCLManager:
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
 
-    def all_gather_persistent_buffer(self, tensor, dim, mesh_axis):
+    def all_gather_persistent_buffer(
+        self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
+    ) -> ttnn.Tensor:
         """
         Helper function to all-gather a tensor with a persistent output buffer.
         """
-        return ttnn.experimental.all_gather_async(
+        if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
+            return tensor
+
+        rank = len(tensor.shape)
+        if dim < 0:
+            dim += rank
+
+        # all_gather_async currently supports tensors of rank 4 only
+        if rank < 4:
+            shape = [1] * (4 - rank) + list(tensor.shape)
+            tensor = ttnn.reshape(tensor, shape)
+            dim += 4 - rank
+
+        params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+
+        tensor = ttnn.experimental.all_gather_async(
             tensor,
-            persistent_output_buffer=self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            persistent_output_buffer=self.get_ag_ping_pong_buffer(
+                tensor.shape, dim, mesh_axis, dtype=tensor.get_dtype()
+            ),
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             topology=self.topology,
             cluster_axis=mesh_axis,
+            **params,
         )
+
+        if rank < 4:
+            shape = list(tensor.shape)[4 - rank :]
+            tensor = ttnn.reshape(tensor, shape)
+
+        return tensor
+
+    def reduce_scatter_persistent_buffer(
+        self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
+    ) -> ttnn.Tensor:
+        if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
+            return tensor
+
+        rank = len(tensor.shape)
+        if dim < 0:
+            dim += rank
+
+        if rank < 4:
+            shape = [1] * (4 - rank) + list(tensor.shape)
+            tensor = ttnn.reshape(tensor, shape)
+            dim += 4 - rank
+
+        tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            dim=dim,
+            multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
+            num_links=self.num_links,
+            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            topology=self.topology,
+            cluster_axis=mesh_axis,
+            **self.get_rs_hyperparams(tensor.shape),
+        )
+
+        if rank < 4:
+            shape = list(tensor.shape)[4 - rank :]
+            tensor = ttnn.reshape(tensor, shape)
+
+        return tensor
 
     def get_ag_hyperparams(self, shape):
         if shape[2] > 512:

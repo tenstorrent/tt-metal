@@ -27,11 +27,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -89,7 +87,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Check results
     for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
@@ -119,7 +117,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
 }
 
 TEST(DispatchStress, TensixRunManyTimes) {
-    auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     // Skip fast dispatch until it's supported for remote device.
     if (!slow_dispatch) {
         GTEST_SKIP();

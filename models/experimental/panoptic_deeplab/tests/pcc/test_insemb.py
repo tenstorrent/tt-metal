@@ -14,21 +14,49 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    check_ttnn_output,
+    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_20_cores,
+)
 
 
+@pytest.mark.parametrize(
+    "pcc_values, skip_check",
+    [
+        (
+            {
+                "center": {"pcc": 0.887, "abs_err": 0.09, "rel_err": 27.5},
+                "offset": {"pcc": 0.742, "abs_err": 6.8, "rel_err": 5.0},
+            },
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            {
+                "center": {"pcc": 0.887, "abs_err": 0.09, "rel_err": 27.5},
+                "offset": {"pcc": 0.741, "abs_err": 6.8, "rel_err": 5.0},
+            },
+            skip_if_not_blackhole_130_cores,
+        ),
+    ],
+    ids=["20_cores", "130_cores"],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_insemb(device, model_location_generator):
+def test_ttnn_insemb(device, pcc_values, skip_check, model_location_generator):
     """Test instance embedding head using the full model with real weights."""
 
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -119,28 +147,36 @@ def test_ttnn_insemb(device, model_location_generator):
     logger.info("Running TTNN instance embedding head test...")
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model.instance_head(ttnn_features)
 
-    # Handle center output - slice back to original channels if padding was applied
-    ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
-    center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
-    if center_original_channels is not None:
-        logger.info(
-            f"Slicing center output from {ttnn_center_out_torch.shape[1]} to {center_original_channels} channels in torch"
+    # Extract PCC thresholds from parameters
+    center_vals = pcc_values["center"]
+    offset_vals = pcc_values["offset"]
+
+    all_passed = []
+    all_passed.append(
+        check_ttnn_output(
+            "Center",
+            torch_center_out,
+            ttnn_center_out_tt,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=center_vals["pcc"],
+            exp_abs_err=center_vals["abs_err"],
+            exp_rel_err=center_vals["rel_err"],
         )
-        ttnn_center_out_torch = ttnn_center_out_torch[:, :center_original_channels, :, :]
-
-    passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.98)
-    logger.info(f"Center PCC: {msg_center}")
-    assert passed_center, f"Center PCC test failed: {msg_center}"
-
-    # Handle offset output - slice back to original channels if padding was applied
-    ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
-    offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
-    if offset_original_channels is not None:
-        logger.info(
-            f"Slicing offset output from {ttnn_offset_out_torch.shape[1]} to {offset_original_channels} channels in torch"
+    )
+    all_passed.append(
+        check_ttnn_output(
+            "Offset",
+            torch_offset_out,
+            ttnn_offset_out_tt,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=offset_vals["pcc"],
+            exp_abs_err=offset_vals["abs_err"],
+            exp_rel_err=offset_vals["rel_err"],
         )
-        ttnn_offset_out_torch = ttnn_offset_out_torch[:, :offset_original_channels, :, :]
+    )
 
-    passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.96)
-    logger.info(f"Offset PCC: {msg_offset}")
-    assert passed_offset, f"Offset PCC test failed: {msg_offset}"
+    # Fail test based on PCC results
+    assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
+    logger.info("All PCC and tolerance tests passed!")

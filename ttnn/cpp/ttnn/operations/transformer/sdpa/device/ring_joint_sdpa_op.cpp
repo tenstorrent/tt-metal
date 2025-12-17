@@ -76,13 +76,14 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
     const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
-    for (auto& tensor : sdpa_input_tensors) {
+    for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
-            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
-            "Inputs to Joint SDPA must be BF16 or BF8");
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
+                tensor.dtype() == DataType::BFLOAT4_B,
+            "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
@@ -149,6 +150,15 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         "{}, global sequence length: {}",
         this->logical_n,
         N_global);
+
+    TT_FATAL(
+        (N_global - this->logical_n) < N_local,
+        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
+        "sequence length. Got delta: {}, local sequence length: {} "
+        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
+        "reduce the ring size or reduce padding by reducing the chunk size.",
+        N_global - this->logical_n,
+        N_local);
 
     TT_FATAL(
         joint_k_shape[2] == L && joint_v_shape[2] == L,
@@ -221,18 +231,18 @@ std::uint32_t RingJointScaledDotProductAttention::get_k_chunk_size() const {
 
 std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input = input_tensors.at(0);
-    auto& joint_input = input_tensors.at(3);
+    const auto& input = input_tensors.at(0);
+    const auto& joint_input = input_tensors.at(3);
     auto lse_shape = input.logical_shape();
     lse_shape[3] = 1;
     lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
 
     return {
-        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
-            joint_input.logical_shape(),
-            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(lse_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
+            input.logical_shape(), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
+        TensorSpec(
+            joint_input.logical_shape(), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config)),
+        TensorSpec(lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::MeshWorkloadWithCallbacks RingJointScaledDotProductAttention::create_mesh_workload(
@@ -264,7 +274,7 @@ tt::tt_metal::operation::Hash RingJointScaledDotProductAttention::compute_progra
 operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
@@ -292,14 +302,14 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         }
     }
 
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
-    auto& joint_tensor_q = input_tensors.at(3);
-    auto& joint_tensor_k = input_tensors.at(4);
-    auto& joint_tensor_v = input_tensors.at(5);
-    auto& persistent_output_buffer_k = input_tensors.at(6);
-    auto& persistent_output_buffer_v = input_tensors.at(7);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = input_tensors.at(2);
+    const auto& joint_tensor_q = input_tensors.at(3);
+    const auto& joint_tensor_k = input_tensors.at(4);
+    const auto& joint_tensor_v = input_tensors.at(5);
+    const auto& persistent_output_buffer_k = input_tensors.at(6);
+    const auto& persistent_output_buffer_v = input_tensors.at(7);
     auto& output_tensor = output_tensors.at(0);
     auto& joint_output_tensor = output_tensors.at(1);
     auto& lse_output_tensor = output_tensors.at(2);
@@ -336,6 +346,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto ring_joint_sdpa_program = detail::ring_joint_sdpa(
         program,
         input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
         persistent_output_buffer_k,
         persistent_output_buffer_v,
         joint_tensor_q,
@@ -395,17 +407,17 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
                                      const std::vector<Tensor>& input_tensors,
                                      const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                      const std::vector<Tensor>& output_tensors) {
-        auto& input_tensor_q = input_tensors.at(0);
-        auto& input_tensor_k = input_tensors.at(1);
-        auto& input_tensor_v = input_tensors.at(2);
-        auto& joint_tensor_q = input_tensors.at(3);
-        auto& joint_tensor_k = input_tensors.at(4);
-        auto& joint_tensor_v = input_tensors.at(5);
-        auto& persistent_output_buffer_k = input_tensors.at(6);
-        auto& persistent_output_buffer_v = input_tensors.at(7);
-        auto& output_tensor = output_tensors.at(0);
-        auto& joint_output_tensor = output_tensors.at(1);
-        auto& lse_output_tensor = output_tensors.at(2);
+        const auto& input_tensor_q = input_tensors.at(0);
+        const auto& input_tensor_k = input_tensors.at(1);
+        const auto& input_tensor_v = input_tensors.at(2);
+        const auto& joint_tensor_q = input_tensors.at(3);
+        const auto& joint_tensor_k = input_tensors.at(4);
+        const auto& joint_tensor_v = input_tensors.at(5);
+        const auto& persistent_output_buffer_k = input_tensors.at(6);
+        const auto& persistent_output_buffer_v = input_tensors.at(7);
+        const auto& output_tensor = output_tensors.at(0);
+        const auto& joint_output_tensor = output_tensors.at(1);
+        const auto& lse_output_tensor = output_tensors.at(2);
 
         const RingAttentionAllGatherAsync* all_gather_operation =
             &(static_cast<const RingJointScaledDotProductAttention*>(operation)->all_gather_struct);
@@ -421,6 +433,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
             operation,
             program,
             {input_tensor_q,
+             input_tensor_k,
+             input_tensor_v,
              persistent_output_buffer_k,
              persistent_output_buffer_v,
              joint_tensor_q,

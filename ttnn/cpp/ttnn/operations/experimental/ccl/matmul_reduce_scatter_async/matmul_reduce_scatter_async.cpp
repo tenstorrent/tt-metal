@@ -5,8 +5,7 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
 
-namespace ttnn {
-namespace operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const ttnn::Tensor& input_tensor,
@@ -31,6 +30,7 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     return ttnn::operations::experimental::ccl::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
@@ -44,7 +44,7 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
         num_links,
         memory_config_rs,
         intermediate_memory_config_rs,
-        topology,
+        topology_,
         subdevice_id,
         memory_config_mm,
         transpose_a,
@@ -56,5 +56,4 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
         core_grid);
 }
 
-}  // namespace operations::experimental::ccl
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl

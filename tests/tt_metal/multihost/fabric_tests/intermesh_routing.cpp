@@ -12,13 +12,12 @@
 
 #include "multihost_fabric_fixtures.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
+namespace tt::tt_fabric::fabric_router_tests::multihost {
 
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
@@ -31,36 +30,46 @@ TEST_F(IntermeshSplit2x2FabricFixture, RandomizedInterMeshUnicast) {
 TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_0) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
-    std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 0)};
+    std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 2)};
     std::vector<McastRoutingInfo> routing_info = {
         McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1}};
     std::vector<std::vector<FabricNodeId>> mcast_group_node_ids = {
-        {FabricNodeId(MeshId{1}, 3)}, {FabricNodeId(MeshId{1}, 1)}};
+        {FabricNodeId(MeshId{1}, 1)}, {FabricNodeId(MeshId{1}, 3)}};
 
     const uint32_t num_mcast_reqs = mcast_req_nodes.size();
     const uint32_t num_mcast_groups = mcast_start_nodes.size();
 
     for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::InterMeshLineMcast(
-            this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups]);
+            this,
+            mcast_req_nodes[i % num_mcast_reqs],
+            mcast_start_nodes[(i / num_mcast_groups) % num_mcast_groups],
+            routing_info,
+            mcast_group_node_ids[(i / num_mcast_groups) % num_mcast_groups]);
     }
 }
 
 TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_1) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{1}, 1), FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 3), FabricNodeId(MeshId{1}, 2)};
-    std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 1)};
+    std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 3)};
     std::vector<McastRoutingInfo> routing_info = {
         McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1}};
     std::vector<std::vector<FabricNodeId>> mcast_group_node_ids = {
-        {FabricNodeId(MeshId{0}, 2)}, {FabricNodeId(MeshId{0}, 0)}};
+        {FabricNodeId(MeshId{0}, 0)}, {FabricNodeId(MeshId{0}, 2)}};
 
     const uint32_t num_mcast_reqs = mcast_req_nodes.size();
     const uint32_t num_mcast_groups = mcast_start_nodes.size();
 
     for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::InterMeshLineMcast(
-            this, mcast_req_nodes[i % num_mcast_reqs], mcast_start_nodes[i % num_mcast_groups], routing_info, mcast_group_node_ids[i % num_mcast_groups], 1, 0);
+            this,
+            mcast_req_nodes[i % num_mcast_reqs],
+            mcast_start_nodes[(i / num_mcast_groups) % num_mcast_groups],
+            routing_info,
+            mcast_group_node_ids[(i / num_mcast_groups) % num_mcast_groups],
+            1,
+            0);
     }
 }
 
@@ -220,5 +229,4 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
     distributed_context->barrier();
 }
 
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost

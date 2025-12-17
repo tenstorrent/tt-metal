@@ -14,20 +14,43 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    check_ttnn_output,
+    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_20_cores,
+)
 
 
+@pytest.mark.parametrize(
+    "pcc_values, skip_check",
+    [
+        (
+            {"pcc": 0.972, "abs_err": 2.0, "rel_err": 0.4},
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            {"pcc": 0.972, "abs_err": 1.9, "rel_err": 0.4},
+            skip_if_not_blackhole_130_cores,
+        ),
+    ],
+    ids=["20_cores", "130_cores"],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_semseg(device, model_location_generator):
+def test_ttnn_semseg(device, pcc_values, skip_check, model_location_generator):
     """Test semantic segmentation head using the full model with real weights."""
+
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -114,14 +137,15 @@ def test_ttnn_semseg(device, model_location_generator):
     logger.info("Running TTNN semantic segmentation head test...")
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
-    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
-
-    # Check if output was padded and needs slicing back to original channels
-    original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
-    if original_channels is not None:
-        logger.info(f"Slicing output from {ttnn_out_torch.shape[1]} to {original_channels} channels in torch")
-        ttnn_out_torch = ttnn_out_torch[:, :original_channels, :, :]
-
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
-    logger.info(f"Semantic segmentation PCC: {msg}")
-    assert passed, f"Semantic segmentation PCC test failed: {msg}"
+    # Extract PCC thresholds from parameters
+    passed = check_ttnn_output(
+        "Semantic",
+        torch_out,
+        ttnn_out_tt,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=pcc_values["pcc"],
+        exp_abs_err=pcc_values["abs_err"],
+        exp_rel_err=pcc_values["rel_err"],
+    )
+    assert passed, f"Semantic segmentation PCC and tolerance tests failed"

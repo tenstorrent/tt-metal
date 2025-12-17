@@ -42,7 +42,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
@@ -84,8 +84,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     bool has_ieth_cores = !device->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
-    if (!fixture->IsSlowDispatch())
+    if (!fixture->IsSlowDispatch()) {
         has_ieth_cores = false;
+    }
 
     if (has_eth_cores) {
         KernelHandle erisc_kid;
@@ -135,7 +136,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
-            for (auto &risc_str : {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
+            for (const auto& risc_str : {" brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
                 std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
                 expected_strings.push_back(expected);
             }
@@ -155,8 +156,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             expected_strings.push_back(expected);
         }
     }
-    // See #10527
-    // EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
 }
 }

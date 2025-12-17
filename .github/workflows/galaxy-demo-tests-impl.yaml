@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -20,23 +24,71 @@ on:
         required: false
         type: string
         default: "topology-6u"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate test matrix
+        id: generate
+        run: |
+          # Define test matrix with owner comments
+          # Djordje Ivanovic - llama3
+          # Miguel Tairum - llama3_long_context, llama3_evals
+          # Radoica Draskic - llama3_8b_dp, llama3_70b_dp
+          # Salar Hosseini - falcon7b (For Falcon7b, please see issue #31939)
+          # Ashai Reddy - sentence_bert
+          # Aniruddha Tupe - whisper
+          # Colman Glagovich - sd35, wan22
+          # Samuel Adesoye - flux1, motif
+          # Stuti Raizada - gpt-oss
+          # Stephen Osborne - mochi
+          # Rico Zhu - qwen3_32b, qwen3_32b_long_context
+          # Yousef Al Rawwash - deepseek
+
+          disabled_tests='[
+            { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60, "owner_id": "U03PUAKE719" },
+            { "name": "Galaxy Llama3 evals tests", "arch": "wormhole_b0", "model": "llama3_evals", "timeout": 45, "owner_id": "U03PUAKE719" },
+          ]'
+
+          all_tests='[
+            { "name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3", "timeout": 30, "owner_id": "U053W15B6JF" },
+            { "name": "Galaxy Llama3 8B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_8b_dp", "timeout": 30, "owner_id": "U08BH66EXAL" },
+            { "name": "Galaxy Llama3 70B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_70b_dp", "timeout": 30, "owner_id": "U08BH66EXAL" },
+            { "name": "Galaxy Falcon7b demo tests", "arch": "wormhole_b0", "model": "falcon7b", "timeout": 30, "owner_id": "U05RWH3QUPM" },
+            { "name": "Galaxy SentenceBert demo tests", "arch": "wormhole_b0", "model": "sentence_bert", "timeout": 30, "owner_id": "U088413NP0Q" },
+            { "name": "Galaxy Whisper demo tests", "arch": "wormhole_b0", "model": "whisper", "timeout": 30, "owner_id": "U08HL8X1ECD" },
+            { "name": "Galaxy Stable Diffusion 3.5 Large demo tests", "arch": "wormhole_b0", "model": "sd35", "timeout": 30, "owner_id": "U03FJB5TM5Y" },
+            { "name": "Galaxy Flux.1-dev demo tests", "arch": "wormhole_b0", "model": "flux1", "timeout": 30, "owner_id": "U08TED0JM9D" },
+            { "name": "Galaxy GPT-OSS demo tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 30, "owner_id": "U06F3ER8X9A" },
+            { "name": "Galaxy Motif-Image-6B-Preview demo tests", "arch": "wormhole_b0", "model": "motif", "timeout": 20, "owner_id": "U08TED0JM9D" },
+            { "name": "Galaxy Wan2.2 demo tests", "arch": "wormhole_b0", "model": "wan22", "timeout": 25, "owner_id": "U03FJB5TM5Y" },
+            { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" },
+            { "name": "Galaxy DeepSeek v3 demo tests", "arch": "wormhole_b0", "model": "deepseek_v3", "timeout": 30, "owner_id": "U08H32XUS9W" }
+          ]'
+
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            matrix="$all_tests"
+          else
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+          fi
+
+          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
+
   galaxy-demo-tests:
+    needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "Galaxy Llama3 long context demo tests", arch: wormhole_b0, model: llama3_long_context, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "Galaxy Llama3 evals tests", arch: wormhole_b0, model: llama3_evals, timeout: 45, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "Galaxy Llama3 8B data-parallel demo tests", arch: wormhole_b0, model: llama3_8b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Llama3 70B data-parallel demo tests", arch: wormhole_b0, model: llama3_70b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
-          { name: "Galaxy SentenceBert demo tests", arch: wormhole_b0, model: sentence_bert, timeout: 30, owner_id: U088413NP0Q}, # Ashai Reddy
-          { name: "Galaxy Stable Diffusion 3.5 Large demo tests", arch: wormhole_b0, model: sd35, timeout: 30, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "Galaxy GPT-OSS demo tests", arch: wormhole_b0, model: gpt-oss, timeout: 30, owner_id: U06F3ER8X9A}, # Stuti Raizada
-        ]
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -50,37 +102,225 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run demo regression tests
+      - name: Run mochi demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'mochi' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+          NO_PROMPT: 1
+        run: |
+          pytest -n auto \
+            models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py \
+            -k "4x8sp1tp0" \
+            --timeout=1500
+      - name: Run GPT-OSS demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'gpt-oss' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+        run: |
+          # Install requirements
+          pip install -r models/demos/gpt_oss/requirements.txt
+
+          # Test GPT-OSS 20B model
+          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
+            pytest models/demos/gpt_oss/demo/text_demo.py \
+            --timeout 1000
+
+          # Test GPT-OSS 120B model
+          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
+            pytest models/demos/gpt_oss/demo/text_demo.py \
+            --timeout 1000
+      - name: Run Llama3 demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'llama3' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+          FAKE_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
+      - name: Run Llama3 long context demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'llama3_long_context' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+          FAKE_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000
+      - name: Run Llama3 evals tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'llama3_evals' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+          FAKE_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000
+      - name: Run Llama3 8B data-parallel demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'llama3_8b_dp' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+          MESH_DEVICE: TG
+        run: |
+          pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
+      - name: Run Llama3 70B data-parallel demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'llama3_70b_dp' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          HF_MODEL: meta-llama/Llama-3.3-70B-Instruct
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+          MESH_DEVICE: TG
+        run: |
+          pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
+      - name: Run Falcon7b demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'falcon7b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+          pytest -n auto --disable-warnings -q -s \
+            --input-method=json \
+            --input-path='models/demos/tg/falcon7b/input_data_tg.json' \
+            models/demos/tg/falcon7b/demo_tg.py \
+            --timeout=1500
+      - name: Run SentenceBert demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'sentence_bert' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
+      - name: Run Whisper demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'whisper' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout 1500
+      - name: Run Stable Diffusion 3.5 demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'sd35' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          NO_PROMPT: 1
+          TT_MM_THROTTLE_PERF: 5
+        run: |
+          pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py \
+            -k "4x8cfg1sp0tp1" \
+            --timeout 1200
+      - name: Run Flux.1-dev demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'flux1' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          NO_PROMPT: 1
+          TT_MM_THROTTLE_PERF: 5
+        run: |
+          pytest -n auto models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py \
+            -k "4x8sp0tp1-dev" \
+            --timeout 1200
+      - name: Run Motif-Image-6B-Preview demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'motif' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          NO_PROMPT: 1
+        run: |
+          pytest -n auto models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
+      - name: Run Wan2.2 demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'wan22' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+          NO_PROMPT: 1
+        run: |
+          pytest -n auto \
+            models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+            -k "wh_4x8sp1tp0 and resolution_720p" \
+            --timeout 1500
+      - name: Run Qwen3-32B demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'qwen3_32b' && (inputs.model == 'all' || inputs.model == 'qwen3_32b') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          HF_MODEL: Qwen/Qwen3-32B
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+          MESH_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
+      - name: Run Qwen3-32B long context demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'qwen3_32b_long_context' && (inputs.model == 'all' || inputs.model == 'qwen3_32b_long_context') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          HF_MODEL: Qwen/Qwen3-32B
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+          MESH_DEVICE: TG
+        run: |
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
+      - name: Run DeepSeek v3 demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'deepseek_v3' && (inputs.model == 'all' || inputs.model == 'deepseek_v3') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+          DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
+          MESH_DEVICE: TG
+        run: |
+          pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         run: |
-          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

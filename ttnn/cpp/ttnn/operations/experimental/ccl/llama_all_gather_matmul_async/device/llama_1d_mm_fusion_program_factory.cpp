@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -19,7 +18,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
-using namespace tt::constants;
+
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -87,7 +86,7 @@ process_agmm_fusion_program_and_create_override_variables(
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
-    for (auto& cr : subdevice_cores.ranges()) {
+    for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (!intersection.empty()) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
@@ -659,10 +658,10 @@ inline void override_agmm_fusion_program_parameters(
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
+    const auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
-    auto src_buffer_a = input_tensors[0].buffer();
-    auto src_buffer_b = input_tensors[1].buffer();
+    auto* src_buffer_a = input_tensors[0].buffer();
+    auto* src_buffer_b = input_tensors[1].buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool src1_sharded = input_tensors[1].is_sharded();
@@ -713,11 +712,7 @@ void override_program_parameters(
 
 }  // namespace llama_agmm_fusion_helpers
 
-namespace ttnn {
-
-namespace operations {
-
-namespace llama_matmul {
+namespace ttnn::operations::llama_matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
     tt_metal::Program& program,
@@ -775,17 +770,14 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());          // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
-    tt_metal::Buffer* bias_buffer = nullptr;
-    tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
-        auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
+        const auto& c = bias.value();
+        TT_FATAL(
+            c.storage_type() == StorageType::DEVICE,
+            "Bias tensor storage type must be DEVICE but got {}",
+            c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-
-        bias_buffer = c.buffer();
-
-        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
     tt_metal::IDevice* device = a.device();
@@ -794,16 +786,40 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
+    TT_FATAL(
+        in0_buffer->size() % in0_single_tile_size == 0,
+        "Input buffer 0 size ({}) must be divisible by single tile size ({})",
+        in0_buffer->size(),
+        in0_single_tile_size);
+    TT_FATAL(
+        in1_buffer->size() % in1_single_tile_size == 0,
+        "Input buffer 1 size ({}) must be divisible by single tile size ({})",
+        in1_buffer->size(),
+        in1_single_tile_size);
 
     TT_FATAL(
         ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
-    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
-    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
-    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "Input A height ({}) must be divisible by tile height ({})",
+        ashape[-2],
+        in0_tile_shape[0]);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "Input A width ({}) must be divisible by tile width ({})",
+        ashape[-1],
+        in0_tile_shape[1]);
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "Input B height ({}) must be divisible by tile height ({})",
+        bshape[-2],
+        in1_tile_shape[0]);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "Input B width ({}) must be divisible by tile width ({})",
+        bshape[-1],
+        in1_tile_shape[1]);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -822,7 +838,11 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         Mt = B * Mt;
         B = 1;
     }
-    TT_FATAL(Kt % in0_block_w == 0, "Error");
+    TT_FATAL(
+        Kt % in0_block_w == 0,
+        "K dimension in tiles ({}) must be divisible by input block width ({})",
+        Kt,
+        in0_block_w);
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -1068,8 +1088,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace llama_matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::llama_matmul

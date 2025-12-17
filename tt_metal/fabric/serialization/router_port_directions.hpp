@@ -8,9 +8,9 @@
 #include <cstdint>
 #include <map>
 #include <unordered_map>
-#include "tt-metalium/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace tt::tt_fabric {
 

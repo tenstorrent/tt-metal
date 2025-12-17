@@ -25,8 +25,8 @@ class TtSDXLImg2ImgPipelineConfig(TtSDXLPipelineConfig):
 
 
 class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
-    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLImg2ImgPipelineConfig):
-        super().__init__(ttnn_device, torch_pipeline, pipeline_config)
+    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLImg2ImgPipelineConfig, tt_scheduler=None):
+        super().__init__(ttnn_device, torch_pipeline, pipeline_config, tt_scheduler)
 
         self.num_in_channels_unet = 4
         self.num_channels_image_latents = 4
@@ -48,11 +48,14 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self.pipeline_config.negative_aesthetic_score = negative_aesthetic_score
         self.generated_input_tensors = False
 
-    def _prepare_timesteps(self, timesteps=None, sigmas=None):
+    def _prepare_timesteps(self, timesteps=None, sigmas=None, denoising_start=None):
         super()._prepare_timesteps(timesteps, sigmas)
 
         self.ttnn_timesteps, self.num_inference_steps = get_timesteps(
-            self.torch_pipeline.scheduler, self.num_inference_steps, self.pipeline_config.strength, None
+            self.torch_pipeline.scheduler,
+            self.num_inference_steps,
+            self.pipeline_config.strength,
+            denoising_start,
         )
 
         if self.num_inference_steps < 1:
@@ -70,6 +73,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        denoising_start=None,
     ):
         # Generate user input tensors for the TT model.
         # Validate timesteps/sigmas at the beginning if custom values are provided
@@ -80,7 +84,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         profiler.start("prepare_latents")
 
         # This cuts number of inference steps relative by strength parameter
-        self._prepare_timesteps(timesteps, sigmas)
+        self._prepare_timesteps(timesteps, sigmas, denoising_start)
 
         num_channels_image_latents = self.torch_pipeline.vae.config.latent_channels
         height = width = 1024
@@ -91,8 +95,10 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
+        # Encode image to latents (standard img2img case)
         if start_latent_seed is not None:
             torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
+        add_noise = True if denoising_start is None else False
         img_latents = prepare_image_latents(
             self.torch_pipeline,
             self,
@@ -104,12 +110,24 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             all_prompt_embeds_torch.dtype,
             torch_image,
             False,  # No max strength path in ref img2img implementation
-            True,  # Make this configurable
+            add_noise,
             None,  # passed in latents
         )
-        B, C, H, W = img_latents.shape  # 1, 4, 128, 128
-        img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
-        tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+
+        if isinstance(img_latents, ttnn.Tensor):
+            if len(img_latents.shape) == 4 and img_latents.shape[1] == 1:
+                # Already in correct format [B, 1, H*W, C], no reshaping needed
+                tt_img_latents = img_latents
+            else:
+                # ttnn.Tensor has shape [B, C, H, W], need to reshape to [B, 1, H*W, C]
+                B, C, H, W = img_latents.shape
+                # ttnn operations: [B, C, H, W] -> [B, H, W, C] -> [B, 1, H*W, C]
+                img_latents = ttnn.permute(img_latents, (0, 2, 3, 1))  # [B, H, W, C]
+                tt_img_latents = ttnn.reshape(img_latents, (B, 1, H * W, C))  # [B, 1, H*W, C]
+        else:
+            B, C, H, W = img_latents.shape  # B, 4, 128, 128
+            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [B, H, W, C]
+            tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [B, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim

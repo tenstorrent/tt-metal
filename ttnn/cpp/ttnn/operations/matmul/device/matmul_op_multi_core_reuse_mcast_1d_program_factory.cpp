@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -19,7 +18,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt;
-using namespace tt::constants;
+
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -269,11 +268,6 @@ process_mcast_in0_program_and_create_override_variables(
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-
-    bool in3_is_dram = true;
-    if (bias_buffer != nullptr) {
-        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    }
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1127,10 +1121,6 @@ process_mcast_in1_program_and_create_override_variables(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in3_is_dram = true;
-    if (bias_buffer != nullptr) {
-        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    }
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
         (std::uint32_t)1,                // in0_tensor_stride_w
@@ -1792,7 +1782,7 @@ process_gather_in0_program_and_create_override_variables(
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
-    for (auto& cr : subdevice_cores.ranges()) {
+    for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (!intersection.empty()) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
@@ -2381,8 +2371,8 @@ inline void override_mcast_in1_program_parameters(
     TT_FATAL(
         output_tensors.size() == 1, "matmul mcast in1 requires 1 output tensor, {} provided", output_tensors.size());
 
-    auto src_buffer_a = input_tensors.at(0).buffer();
-    auto src_buffer_b = input_tensors.at(1).buffer();
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
     const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
@@ -2390,7 +2380,7 @@ inline void override_mcast_in1_program_parameters(
         bias_buffer = bias_tensor.value().buffer();
     }
 
-    auto dst_buffer = output_tensors.at(0).buffer();
+    auto* dst_buffer = output_tensors.at(0).buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool out_sharded = output_tensors[0].is_sharded();
@@ -2458,8 +2448,8 @@ inline void override_mcast_in0_program_parameters(
     TT_FATAL(
         output_tensors.size() == 1, "matmul mcast in0 requires 1 output tensor, {} provided", output_tensors.size());
 
-    auto src_buffer_a = input_tensors.at(0).buffer();
-    auto src_buffer_b = input_tensors.at(1).buffer();
+    auto* src_buffer_a = input_tensors.at(0).buffer();
+    auto* src_buffer_b = input_tensors.at(1).buffer();
     const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
@@ -2467,7 +2457,7 @@ inline void override_mcast_in0_program_parameters(
         bias_buffer = bias_tensor.value().buffer();
     }
 
-    auto dst_buffer = output_tensors.at(0).buffer();
+    auto* dst_buffer = output_tensors.at(0).buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool src1_sharded = input_tensors[1].is_sharded();
@@ -2518,10 +2508,10 @@ inline void override_gather_in0_program_parameters(
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
+    const auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
-    auto src_buffer_a = input_tensors[0].buffer();
-    auto src_buffer_b = input_tensors[1].buffer();
+    auto* src_buffer_a = input_tensors[0].buffer();
+    auto* src_buffer_b = input_tensors[1].buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool src1_sharded = input_tensors[1].is_sharded();
@@ -2583,11 +2573,7 @@ void override_program_parameters(
 
 }  // namespace reuse_mcast_1d_optimized_helpers
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
     tt_metal::Program& program,
@@ -2640,7 +2626,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
-        auto& c = bias.value();
+        const auto& c = bias.value();
         TT_FATAL(
             c.storage_type() == StorageType::DEVICE,
             "Bias tensor must be on device, got storage type: {}",
@@ -3080,17 +3066,17 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const auto in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     const auto output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
-    const auto device = a.device();
+    auto* const device = a.device();
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
     const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    const auto in0_buffer = a.buffer();
-    const auto in1_buffer = b.buffer();
-    const auto sparsity_buffer = sparsity.buffer();
-    const auto out_buffer = output_tensor.buffer();
+    auto* const in0_buffer = a.buffer();
+    auto* const in1_buffer = b.buffer();
+    auto* const sparsity_buffer = sparsity.buffer();
+    auto* const out_buffer = output_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -3417,7 +3403,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_sender_cores,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
             .defines = mm_kernel_in0_sender_writer_defines});
@@ -3429,7 +3415,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             in0_mcast_receivers,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in0_noc,
                 .compile_args = in0_receiver_compile_time_args});
     }
@@ -3440,7 +3426,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_kernel_in1_sender_writer_defines});
@@ -3547,17 +3533,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
-
-    if (!nnz.has_value()) {
-        // When nnz is not provided, we need to infer this at runtime based on the sparsity tensor.
-        // We create a circular buffer to pass this value to the compute kernel from the reader.
-        uint32_t nnz_cb_index = tt::CBIndex::c_25;
-        const auto nnz_data_format = tt::DataFormat::UInt32;
-        const auto nnz_cb_size = sparsity.logical_volume() * tt::datum_size(nnz_data_format);
-        const auto nnz_cb_config = tt_metal::CircularBufferConfig(nnz_cb_size, {{nnz_cb_index, nnz_data_format}})
-                                       .set_page_size(nnz_cb_index, nnz_cb_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, nnz_cb_config);
-    }
 
     if (interm0_data_format != output_data_format) {
         // output
@@ -3676,8 +3651,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
             };
-            tt_metal::SetRuntimeArgs(
-                program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);  // RISCV_1_default
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
@@ -3765,10 +3739,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
-            auto sparsity_buffer = input_tensors.at(2).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
+            auto* sparsity_buffer = input_tensors.at(2).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             // Manually unroll sender core
             // in0 sender
@@ -3794,8 +3768,4 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

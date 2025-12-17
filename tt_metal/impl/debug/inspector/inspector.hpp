@@ -32,16 +32,16 @@ public:
     static void program_set_binary_status(
         const detail::ProgramImpl* program, std::size_t device_id, ProgramBinaryStatus status) noexcept;
     static void program_compile_started(
-        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_compile_already_exists(
-        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_kernel_compile_finished(
         const detail::ProgramImpl* program,
         const IDevice* device,
         const std::shared_ptr<Kernel>& kernel,
         const tt::tt_metal::JitBuildOptions& build_options) noexcept;
     static void program_compile_finished(
-        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
 
     static void mesh_device_created(
         const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept;
@@ -56,6 +56,33 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
+
+    // static method for logging dispatch core info
+    static void set_dispatch_core_info(
+        const tt_cxy_pair& virtual_core,
+        const tt::tt_metal::DispatchWorkerType& type,
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
+
+    // static method for logging dispatch_s core info
+    static void set_dispatch_s_core_info(
+        const tt_cxy_pair& virtual_core,
+        const tt::tt_metal::DispatchWorkerType& type,
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
+
+    // static method for logging prefetcher core info
+    static void set_prefetcher_core_info(
+        const tt_cxy_pair& virtual_core,
+        const tt::tt_metal::DispatchWorkerType& type,
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
+
+    // static method for clearing all core info to clear stale entries
+    static void clear_all_core_info();
 
     static inspector::RpcServer& get_rpc_server();
 

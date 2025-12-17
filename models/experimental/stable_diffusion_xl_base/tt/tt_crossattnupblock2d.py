@@ -20,6 +20,7 @@ class TtCrossAttnUpBlock2D(LightweightModule):
         num_attn_heads,
         out_dim,
         has_upsample=False,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -49,12 +50,21 @@ class TtCrossAttnUpBlock2D(LightweightModule):
                     f"{module_path}.resnets.{i}",
                     model_config=model_config,
                     conv_shortcut=True,
+                    debug_mode=debug_mode,
                 )
             )
 
         self.upsamplers = (
             TtUpsample2D(
-                device, state_dict, f"{module_path}.upsamplers.0", (1, 1), (1, 1), (1, 1), 1, model_config=model_config
+                device,
+                state_dict,
+                f"{module_path}.upsamplers.0",
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                1,
+                model_config=model_config,
+                debug_mode=debug_mode,
             )
             if has_upsample
             else None
@@ -88,7 +98,7 @@ class TtCrossAttnUpBlock2D(LightweightModule):
         ttnn.ReadDeviceProfiler(self.device)
 
         if self.upsamplers is not None:
-            hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
         return hidden_states, [C, H, W]

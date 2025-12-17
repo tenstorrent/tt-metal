@@ -8,9 +8,7 @@ from typing import Optional
 
 import llama_models.llama3.reference_impl.generation as llama_reference_generation
 import requests
-from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-from llama_models.llama3.api.tokenizer import Tokenizer
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
@@ -31,7 +29,7 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
+from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -71,11 +69,12 @@ def create_multimodal_model(
     from models.demos.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, optimizations=optimizations)
+    # limit length or we'll run out of space
+    tt_model_args = ModelArgs(
+        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, max_seq_len=max_seq_len
+    )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
-    # limit length or we'll run out of space
-    tt_model_args.max_seq_len = max_seq_len
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
         tt_model_args.vision_n_layers = num_layers
@@ -246,27 +245,15 @@ def test_multimodal_demo_text(
         num_layers=num_layers,
     )
 
-    HF_MODEL = model_args[0].checkpoint_type == CheckpointType.HuggingFace
+    from transformers import AutoProcessor
 
-    if not HF_MODEL:
-        ckpt_dir = os.environ["LLAMA_DIR"]
-        tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
-
-        tokenizer = Tokenizer(model_path=tokenizer_path)
-        formatter = ChatFormat(tokenizer)
-    else:
-        from transformers import AutoProcessor
-
-        processor = AutoProcessor.from_pretrained(
-            model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
-        )
+    processor = AutoProcessor.from_pretrained(
+        model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
+    )
 
     generator = Generator(model, model_args, mesh_device)
 
-    xattn_caches = [
-        model.setup_cache(model_args[i].max_batch_size) if not HF_MODEL else None
-        for i, model in enumerate(generator.model)
-    ]
+    xattn_caches = [None for i, model in enumerate(generator.model)]
 
     # Create random images for trace capture with specific dimensions
 
@@ -363,7 +350,7 @@ def test_multimodal_demo_text(
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
-    prompt_encoder = hf_multimodal_encode if HF_MODEL else formatter.encode_dialog_prompt
+    prompt_encoder = hf_multimodal_encode
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
@@ -375,14 +362,10 @@ def test_multimodal_demo_text(
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
 
             logger.info(f"Starting processor for batch {batch_idx}")
-            batch_model_input = [
-                prompt_encoder(dialog, processor) if HF_MODEL else prompt_encoder(dialog, tool_prompt_format=False)
-                for dialog in batch_dialogs
-            ]
+            batch_model_input = [prompt_encoder(dialog, processor) for dialog in batch_dialogs]
 
-            if HF_MODEL:
-                # Use the processor's tokenizer instead of model_args tokenizer to ensure consistency
-                tokenizer = processor.tokenizer
+            # Use the processor's tokenizer instead of model_args tokenizer to ensure consistency
+            tokenizer = processor.tokenizer
 
             # Do initial prefill
             vision_images = [
@@ -397,7 +380,7 @@ def test_multimodal_demo_text(
 
             # Create padded tokens tensor for batch
             stop_tokens = model_args[0].tokenizer.stop_tokens
-            pad_id = tokenizer.pad_token_id if HF_MODEL else tokenizer.pad_id
+            pad_id = tokenizer.pad_token_id
             bsz = len(prompt_tokens)
             tokens = torch.full((bsz, max(total_lens)), pad_id, dtype=torch.long)
 
@@ -477,24 +460,15 @@ def test_multimodal_demo_text(
                         profiler.end(f"compile_decode", iteration=batch_idx)
 
                     # Disable checking for eot until I have more robust code for batch > 1
-                    if HF_MODEL:
-                        if any([t in stop_tokens for t in next_tokens]):
-                            break
-                    else:
-                        # Disable checking for eot until I have more robust code for batch > 1
-                        pass
-                        # if text in ["<|eot_id|>", "<|eom_id|>"]:
-                        #     break
+                    if any([t in stop_tokens for t in next_tokens]):
+                        break
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
-            if HF_MODEL:
-                # For HF models, get vision tokens from the processor if they exist
-                vision_tokens = []
-            else:
-                vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
+            # For HF models, get vision tokens from the processor if they exist
+            vision_tokens = []
 
             for user_id in range(max_batch_size):
                 # Remove <|image|> tokens since they break the tokenizer
@@ -593,6 +567,7 @@ def test_multimodal_demo_text(
             ml_model_type="vlm",
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens).item(),
             output_sequence_length=max_gen_len,
         )

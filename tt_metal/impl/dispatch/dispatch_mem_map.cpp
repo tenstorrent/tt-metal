@@ -9,7 +9,7 @@
 #include "dispatch_mem_map.hpp"
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch_settings.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
@@ -172,7 +172,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         scratch_db_base_ + settings.prefetch_ringbuffer_size_ <= l1_size,
         "Ringbuffer (start: {}, end: {}) extends past L1 end (size: {})",
         scratch_db_base_,
-        scratch_db_base_ + settings.prefetch_scratch_db_size_,
+        scratch_db_base_ + settings.prefetch_ringbuffer_size_,
         l1_size);
 
     TT_ASSERT(dispatch_cb_end < l1_size);

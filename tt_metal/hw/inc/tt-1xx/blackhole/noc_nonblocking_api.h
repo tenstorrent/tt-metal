@@ -11,12 +11,30 @@
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
 
+#if defined(COMPILE_FOR_AERISC)
+#include "eth_fw_api.h"
+#endif
+
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
-#else
+#elif defined(COMPILE_FOR_NCRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#elif defined(COMPILE_FOR_AERISC)
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(PHYSICAL_AERISC_ID);
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(PROCESSOR_INDEX);
+#elif defined(COMPILE_FOR_TRISC)
+// TRISC is not a data movement processor. This is just so it compiles
+constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+#else
+// Lite Fabric compile
+constexpr std::underlying_type_t<EthProcessorTypes> proc_type =
+    static_cast<std::underlying_type_t<EthProcessorTypes>>(EthProcessorTypes::DM1);
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
@@ -77,15 +95,42 @@ enum class NocBarrierType : uint8_t {
 
 static constexpr uint8_t NUM_BARRIER_TYPES = static_cast<uint32_t>(NocBarrierType::COUNT);
 
+struct BarrierCounter {
+    uint32_t barrier[NUM_BARRIER_TYPES];
+};
+
+struct RiscBarrierCounter {
+    BarrierCounter risc[MaxDMProcessorsPerCoreType];
+};
+
+struct NocBarrierCounter {
+    RiscBarrierCounter noc[NUM_NOCS];
+};
+
+// Must update the allocated size for the counters in dev_mem_map.h AND base FW if this changes
+static_assert(sizeof(NocBarrierCounter) == 80, "NocBarrierCounter size is not 80 bytes");
+
 template <uint8_t proc_t, NocBarrierType barrier_type>
 inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t noc) {
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
-    constexpr uint32_t offset =
-        MEM_NOC_COUNTER_BASE +
-        (proc_t * NUM_BARRIER_TYPES + static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type)) * NUM_NOCS *
-            MEM_NOC_COUNTER_SIZE;
-    return offset + noc * MEM_NOC_COUNTER_SIZE;
+#if defined(COMPILE_FOR_AERISC)
+    constexpr uint32_t base = MEM_AERISC_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_AERISC_NOC_COUNTER_SIZE;
+#else
+    constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
+#endif
+
+    // Calculate most of the offset at compile time. Only the noc is variable at runtime.
+    constexpr uint32_t compile_time_offset =
+        offsetof(NocBarrierCounter, noc) + proc_t * sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0])) +
+        static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) *
+            sizeof(decltype(std::declval<NocBarrierCounter>().noc[0].risc[0].barrier[0]));
+
+    constexpr uint32_t noc_stride = sizeof(decltype(std::declval<NocBarrierCounter>().noc[0]));
+
+    return base + noc * noc_stride + compile_time_offset;
 }
 
 // noc_nonposted_writes_acked
@@ -216,6 +261,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc
 inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
+}
+
+inline __attribute__((always_inline)) uint32_t noc_available_transactions(uint32_t noc, uint32_t trid) {
+    return NOC_MAX_TRANSACTION_ID_COUNT - NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid));
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
@@ -517,11 +566,17 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
 template <NocBarrierType barrier_type, uint32_t status_register>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    using underlying_tensix_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
-    constexpr underlying_tensix_processor_types_t dm0 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM0);
-    constexpr underlying_tensix_processor_types_t dm1 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM1);
+#if defined(COMPILE_FOR_AERISC)
+    // For ERISC, use EthProcessorTypes
+    using underlying_processor_types_t = std::underlying_type_t<EthProcessorTypes>;
+    constexpr underlying_processor_types_t dm0 = static_cast<underlying_processor_types_t>(EthProcessorTypes::DM0);
+    constexpr underlying_processor_types_t dm1 = static_cast<underlying_processor_types_t>(EthProcessorTypes::DM1);
+#else
+    // For Tensix, use TensixProcessorTypes
+    using underlying_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
+    constexpr underlying_processor_types_t dm0 = static_cast<underlying_processor_types_t>(TensixProcessorTypes::DM0);
+    constexpr underlying_processor_types_t dm1 = static_cast<underlying_processor_types_t>(TensixProcessorTypes::DM1);
+#endif
 
     set_noc_counter_val<dm0, barrier_type>(NOC_0, noc0_status_reg);
     set_noc_counter_val<dm0, barrier_type>(NOC_1, 0);
@@ -886,7 +941,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
 }
 
 // issue noc reads while wait for outstanding transactions done
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
@@ -895,7 +950,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     uint32_t src_addr_;
     src_addr_ = src_base_addr + src_addr;
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    } else {
+        ASSERT(noc_cmd_buf_ready(noc, cmd_buf));
+    }
     while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
@@ -1269,6 +1328,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
  * | update_val (template parameter)     | Whether to set the value to be written                 | bool     | true or false                    | False    |
  * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
  * | update_counter (template parameter) | Whether to update the write counters                   | bool     | true or false                    | False    |
+ * | dst_type (template parameter)       | Whether the write is targeting L1 or a Stream Register | InlineWriteDst     | DEFAULT, L1, REG       | False    |
  */
 // clang-format on
 template <
@@ -1277,7 +1337,8 @@ template <
     bool update_addr_hi = false,
     bool update_val = false,
     bool posted = false,
-    bool update_counter = true>
+    bool update_counter = true,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t val = 0, uint64_t dest_addr = 0) {
     static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
@@ -1294,6 +1355,10 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
+        if constexpr (dst_type != InlineWriteDst::REG) {
+            uint32_t be32 = 0xF << (dest_addr & (NOC_WORD_BYTES - 1));
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+        }
     } else if constexpr (update_addr_hi) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
     }
@@ -1675,5 +1740,26 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+}
+
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
+inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
+    for (uint32_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
+        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
     }
 }

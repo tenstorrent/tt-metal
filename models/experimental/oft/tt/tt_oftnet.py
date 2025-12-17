@@ -122,7 +122,7 @@ class TTOftNet:
         """Normalize input tensor by mean and std-dev"""
         # Normalize by mean and std-dev
         input_tensor = input_tensor - self.mean
-        input_tensor = ttnn.div(input_tensor, self.std)
+        input_tensor = ttnn.divide(input_tensor, self.std, fast_and_approximate_mode=True)
         return input_tensor
 
     def forward_lateral_layers(self, device, feats8, feats16, feats32):
@@ -311,8 +311,7 @@ class TTOftNet:
     def forward_predict_encoded_outputs(self, device, td):
         """Predict encoded outputs and slice them"""
         signpost(header="Head started")
-        out_h, out_w = 159, 159  # todo plumb return output shape from common conv wrapper
-        outputs = self.head(td)
+        outputs, (out_h, out_w) = self.head(td, return_output_dim=True)
         logger.debug(f"Head output shape: {outputs.shape}, dtype: {outputs.dtype} {out_h=} {out_w=}")
         outputs = ttnn.permute(outputs, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs = ttnn.reshape(outputs, (1, -1, 9, out_h, out_w))

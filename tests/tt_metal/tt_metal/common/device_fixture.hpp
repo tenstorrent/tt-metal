@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <limits>
 #include <algorithm>
 
@@ -52,7 +51,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -112,7 +111,7 @@ protected:
 
     virtual bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -137,7 +136,7 @@ protected:
         this->num_devices_ = this->devices_.size();
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_{};
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
     size_t num_devices_{};
 };

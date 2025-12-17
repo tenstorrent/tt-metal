@@ -14,13 +14,12 @@
 #include "multihost_fabric_fixtures.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
+namespace tt::tt_fabric::fabric_router_tests::multihost {
 
 using namespace multihost_utils;
 
@@ -113,6 +112,7 @@ using MultiHostSocketTestSplitT3K = MultiHostSocketTest<MeshDeviceSplit2x2Fixtur
 using MultiHostSocketTestDualT3K = MultiHostSocketTest<MeshDeviceDual2x4Fixture>;
 using MeshDeviceNanoExabox2x4Fixture = MultiHostSocketTest<MeshDeviceNanoExabox2x4Fixture>;
 using MeshDeviceNanoExabox1x8Fixture = MultiHostSocketTest<MeshDeviceNanoExabox1x8Fixture>;
+using MultiHostSocketTestExabox = MultiHostSocketTest<MeshDeviceExaboxFixture>;
 
 TEST_P(MultiHostSocketTestSplitT3K, SocketTests) { RunTest(); }
 
@@ -121,6 +121,8 @@ TEST_P(MultiHostSocketTestDualT3K, SocketTests) { RunTest(); }
 TEST_P(MeshDeviceNanoExabox2x4Fixture, SocketTests) { RunTest(); }
 
 TEST_P(MeshDeviceNanoExabox1x8Fixture, SocketTests) { RunTest(); }
+
+TEST_P(MultiHostSocketTestExabox, SocketTests) { RunTest(); }
 
 INSTANTIATE_TEST_SUITE_P(
     MultiHostSocketTestsSplitT3K,
@@ -145,6 +147,12 @@ INSTANTIATE_TEST_SUITE_P(
     MeshDeviceNanoExabox1x8Fixture,
     ::testing::ValuesIn(generate_socket_test_configs(SystemConfig::NANO_EXABOX)),
     generate_multihost_socket_test_name<MultiHostSocketTestDualT3K::ParamType>);
+
+INSTANTIATE_TEST_SUITE_P(
+    MultiHostSocketTestsExabox,
+    MultiHostSocketTestExabox,
+    ::testing::ValuesIn(generate_socket_test_configs(SystemConfig::EXABOX)),
+    generate_multihost_socket_test_name<MultiHostSocketTestExabox::ParamType>);
 
 TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     std::vector<int> sender_node_ranks_ctx0 = {0, 2, 3, 4};
@@ -217,5 +225,4 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost

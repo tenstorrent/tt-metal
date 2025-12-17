@@ -76,8 +76,6 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        if start_latent_seed is not None:
-            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
         # the function returns img_latents, noise but we don't use noise at the moment, so discard it
         img_latents = prepare_image_latents(
             self.torch_pipeline,
@@ -92,10 +90,23 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.pipeline_config.strength == 1,
             True,  # Make this configurable
             None,  # passed in latents
+            start_latent_seed,
+            fixed_seed_for_batch,
         )
-        B, C, H, W = img_latents.shape  # 1, 4, 128, 128
-        img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
-        tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+
+        if isinstance(img_latents, ttnn.Tensor):
+            if len(img_latents.shape) == 4 and img_latents.shape[1] == 1:
+                # Already in correct format [B, 1, H*W, C], no reshaping needed
+                tt_img_latents = img_latents
+            else:
+                # ttnn.Tensor has shape [B, C, H, W], need to reshape to [B, 1, H*W, C]
+                B, C, H, W = img_latents.shape
+                img_latents = ttnn.permute(img_latents, (0, 2, 3, 1))  # [B, H, W, C]
+                tt_img_latents = ttnn.reshape(img_latents, (B, 1, H * W, C))  # [B, 1, H*W, C]
+        else:
+            B, C, H, W = img_latents.shape  # 1, 4, 128, 128
+            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
+            tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
         mask, masked_image_latents = prepare_mask_latents_inpainting(
             self,
@@ -107,6 +118,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             all_prompt_embeds_torch.dtype,
             self.cpu_device,
             None,
+            fixed_seed_for_batch,
         )
 
         B, C, H, W = mask.shape
@@ -196,11 +208,10 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
                 self.tt_image_latents_shape,
                 self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
                 self.batch_size,
-                self.ag_persistent_buffer,
-                self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-                guidance_rescale=self.pipeline_config.guidance_rescale,
+                guidance_rescale=self.guidance_rescale,
+                one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -227,7 +238,10 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
         ]
 
         for host_tensor, device_tensor in zip(host_tensors, device_tensors):
-            ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            if host_tensor.device() is None:
+                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            else:
+                ttnn.copy(host_tensor, device_tensor)
 
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
@@ -256,14 +270,13 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.tt_image_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
             tid=self.tid if hasattr(self, "tid") else None,
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -337,8 +350,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             )
             tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
-            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            ttnn.copy_host_to_device_tensor(tt_time_ids_host, self.tt_time_ids_device)
 
     def __create_user_tensors(
         self, img_latents, masked_image_latents, mask, all_prompt_embeds_torch, torch_add_text_embeds
@@ -346,12 +358,15 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
         # Instantiation of user host input tensors for the TT model.
 
         profiler.start("create_user_tensors")
-        tt_img_latents = ttnn.from_torch(
-            img_latents,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
-        )
+        if not isinstance(img_latents, ttnn.Tensor):
+            tt_img_latents = ttnn.from_torch(
+                img_latents,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
+            )
+        else:
+            tt_img_latents = img_latents
 
         tt_masked_image_latents = ttnn.from_torch(
             masked_image_latents,
@@ -411,11 +426,10 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.tt_image_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
             capture_trace=False,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")

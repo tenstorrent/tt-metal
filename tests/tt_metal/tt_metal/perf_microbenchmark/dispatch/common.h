@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
@@ -20,7 +21,9 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <variant>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;  // test only
 
@@ -45,8 +48,7 @@ struct one_core_data_t {
 
 class DeviceData {
 private:
-    bool banked;  // TODO banked and unbanked tests still don't play nicely together
-    int amt_written;
+    int amt_written{0};
     // 10 is a hack...bigger than any core_type
     uint64_t base_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
     uint64_t base_result_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
@@ -114,8 +116,7 @@ inline DeviceData::DeviceData(
     uint32_t dram_data_addr,
     void* pcie_data_addr,
     bool is_banked,
-    uint32_t dram_data_size_words) :
-    banked(is_banked), amt_written(0) {
+    uint32_t dram_data_size_words) {
     this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
@@ -140,7 +141,7 @@ inline DeviceData::DeviceData(
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
@@ -189,7 +190,7 @@ inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
@@ -308,9 +309,7 @@ inline void DeviceData::relevel(CoreRange range) {
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
-            if (this->all_data[core][bank].data.size() > max) {
-                max = this->all_data[core][bank].data.size();
-            }
+            max = std::max(this->all_data[core][bank].data.size(), max);
         }
     }
 
@@ -485,7 +484,7 @@ inline bool DeviceData::validate(IDevice* device) {
     std::unordered_set<CoreCoord> validated_cores;
 
     for (const auto& [core, bank_device_data] : this->all_data) {
-        for (auto& [bank, one_core_data] : bank_device_data) {
+        for (const auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.data.empty()) {
                 continue;
             }
@@ -509,7 +508,7 @@ inline bool DeviceData::validate(IDevice* device) {
 
 inline void DeviceData::overflow_check(IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
-        for (auto& [bank, one_core_data] : bank_device_data) {
+        for (const auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.core_type == tt::CoreType::WORKER) {
                 TT_FATAL(
                     one_core_data.data.size() * sizeof(uint32_t) +
@@ -528,7 +527,7 @@ inline void DeviceData::overflow_check(IDevice* device) {
 }
 
 template <bool is_dram_variant, bool is_host_variant>
-void configure_kernel_variant(
+KernelHandle configure_kernel_variant(
     Program& program,
     const std::string& path,
     const std::map<std::string, std::string>& defines_in,
@@ -566,7 +565,7 @@ void configure_kernel_variant(
 
     defines.insert(defines_in.begin(), defines_in.end());
 
-    tt::tt_metal::CreateKernel(
+    return tt::tt_metal::CreateKernel(
         program,
         path,
         {my_core},
@@ -678,7 +677,7 @@ inline void generate_random_paged_payload(
             tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
 
         if (is_dram) {
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             bank_core = device->logical_core_from_dram_channel(dram_channel);
         } else {
             bank_core = device->allocator()->get_logical_core_from_bank_id(bank_id);
@@ -735,32 +734,6 @@ inline void generate_random_packed_payload(
             padded_size(cmds.size(), MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t)));
         data.pad(core, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
         first_core = false;
-    }
-}
-
-inline void generate_random_packed_large_payload(
-    std::vector<uint32_t>& generated_data, CoreRange range, DeviceData& data, uint32_t size_words) {
-    static uint32_t coherent_count = 0;
-    const uint32_t bank_id = 0;  // No interleaved pages here.
-
-    CoreCoord first_worker = range.start_coord;
-    uint32_t data_base = generated_data.size();
-    for (uint32_t i = 0; i < size_words; i++) {
-        uint32_t datum =
-            (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
-        generated_data.push_back(datum);
-    }
-    generated_data.resize(padded_size(
-        generated_data.size(), MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t)));
-
-    for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
-        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
-            CoreCoord core = {x, y};
-            for (uint32_t i = 0; i < size_words; i++) {
-                data.push_one(core, bank_id, generated_data[data_base + i]);
-            }
-            data.pad(core, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
-        }
     }
 }
 
@@ -1051,12 +1024,8 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
     if (perf_test_g) {
         TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
-        if (xfer_size_bytes > max_xfer_size_bytes_g) {
-            xfer_size_bytes = max_xfer_size_bytes_g;
-        }
-        if (xfer_size_bytes < min_xfer_size_bytes_g) {
-            xfer_size_bytes = min_xfer_size_bytes_g;
-        }
+        xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+        xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
     }
 
     std::vector<CoreCoord> gets_data;
@@ -1089,90 +1058,6 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     }
 
     gen_dispatcher_packed_write_cmd(device, cmds, gets_data, device_data, xfer_size_bytes / sizeof(uint32_t), repeat);
-}
-
-inline bool gen_rnd_dispatcher_packed_write_large_cmd(
-    IDevice* device, CoreRange workers, std::vector<uint32_t>& cmds, DeviceData& device_data, uint32_t space_available) {
-    int ntransactions = perf_test_g ? (CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS / 2)
-                                    : ((std::rand() % CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) + 1);
-
-    std::vector<uint32_t> sizes;
-    for (int i = 0; i < ntransactions; i++) {
-        constexpr uint32_t max_pages = 4;
-        uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages /
-                                                 MetalContext::instance().hal().get_alignment(HalMemType::L1))) +
-                                 1;
-        uint32_t xfer_size_words = xfer_size_16b * 4;
-        uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
-        if (perf_test_g) {
-            TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
-            if (xfer_size_bytes > max_xfer_size_bytes_g) {
-                xfer_size_bytes = max_xfer_size_bytes_g;
-            }
-            if (xfer_size_bytes < min_xfer_size_bytes_g) {
-                xfer_size_bytes = min_xfer_size_bytes_g;
-            }
-        }
-
-        if (xfer_size_bytes > space_available) {
-            if (ntransactions == 0) {
-                return true;
-            }
-            ntransactions = i;
-            break;
-        }
-
-        sizes.push_back(xfer_size_bytes);
-        space_available -= xfer_size_bytes;
-    }
-
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
-    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
-    cmd.write_packed_large.count = ntransactions;
-    cmd.write_packed_large.alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    add_bare_dispatcher_cmd(cmds, cmd);
-
-    std::vector<uint32_t> data;
-    for (int i = 0; i < ntransactions; i++) {
-        uint32_t xfer_size_bytes = sizes[i];
-
-        CoreRange range = workers;
-        if (!perf_test_g) {
-            // Not random, but gives some variation
-            uint32_t span = workers.end_coord.x - workers.start_coord.x + 1;
-            range.end_coord.x = std::rand() % span + range.start_coord.x;
-            span = workers.end_coord.y - workers.start_coord.y + 1;
-            range.end_coord.y = std::rand() % span + range.start_coord.y;
-        }
-
-        device_data.relevel(range);
-
-        CQDispatchWritePackedLargeSubCmd sub_cmd{};
-        CoreCoord physical_start = device->worker_core_from_logical_core(range.start_coord);
-        CoreCoord physical_end = device->worker_core_from_logical_core(range.end_coord);
-        sub_cmd.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
-            physical_start.x, physical_start.y, physical_end.x, physical_end.y);
-        sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
-        sub_cmd.length = xfer_size_bytes;
-        sub_cmd.num_mcast_dests =
-            (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
-        sub_cmd.flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
-
-        for (uint32_t i = 0; i < sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t); i++) {
-            cmds.push_back(((uint32_t*)&sub_cmd)[i]);
-        }
-
-        generate_random_packed_large_payload(data, range, device_data, xfer_size_bytes / sizeof(uint32_t));
-    }
-    cmds.resize(
-        padded_size(cmds.size(), MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t)));
-
-    for (uint32_t datum : data) {
-        cmds.push_back(datum);
-    }
-
-    return false;
 }
 
 inline void gen_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, DeviceData& device_data, uint32_t length) {

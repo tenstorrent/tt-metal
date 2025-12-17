@@ -5,6 +5,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include "lightmetal/lightmetal_capture.hpp"
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include "flatbuffers/flatbuffers.h"
 #include "command_generated.h"
 #include "light_metal_binary_generated.h"
@@ -16,7 +17,7 @@
 
 namespace tt::tt_metal {
 
-LightMetalCaptureContext::LightMetalCaptureContext() : is_tracing_(false), builder_() {}
+LightMetalCaptureContext::LightMetalCaptureContext() = default;
 
 // Singleton instance accessor
 LightMetalCaptureContext& LightMetalCaptureContext::get() {

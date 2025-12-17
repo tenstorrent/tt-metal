@@ -75,6 +75,7 @@ def run_unet_model(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    debug_mode,
     is_ci_env,
     is_ci_v2_env,
     model_location_generator,
@@ -107,6 +108,7 @@ def run_unet_model(
         state_dict,
         "unet",
         model_config=model_config,
+        debug_mode=debug_mode,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)
@@ -206,6 +208,7 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    debug_mode,
     is_ci_env,
     is_ci_v2_env,
     model_location_generator,
@@ -218,6 +221,7 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        debug_mode,
         is_ci_env,
         is_ci_v2_env,
         model_location_generator,

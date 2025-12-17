@@ -1289,10 +1289,7 @@ def test_transpose_21803(device):
 
 def test_transpose_29126(device):
     # Test DRAM sharding, which uses the same code path as DRAM interleaved
-    h = 8192
-    w = 2048
-
-    dram_cores = 8
+    dram_cores = device.dram_grid_size().x  # WH has 12 dram cores, P150 has 8, P100 has 7
     dram_weight_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -1301,6 +1298,10 @@ def test_transpose_29126(device):
             )
         }
     )
+
+    h = 1024 * dram_cores
+    w = 2048
+
     shard_spec = ttnn.ShardSpec(
         dram_weight_grid,
         (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
@@ -1323,3 +1324,32 @@ def test_transpose_29126(device):
     ttnn_output = ttnn.to_torch(ttnn_output.cpu())
 
     assert_with_pcc(torch_output, ttnn_output, 0.9999)
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [256])
+@pytest.mark.parametrize("w", [16])
+def test_transpose_hc_mem_config(device, n, c, h, w):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.transpose(1, 2)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # shard config
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (8192, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 1, 2, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)

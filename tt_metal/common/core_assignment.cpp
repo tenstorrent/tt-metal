@@ -12,8 +12,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     const std::vector<uint32_t>& non_worker_rows,
@@ -176,12 +175,8 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
                 non_worker_rows.push_back(y_coord);
             }
-            if (y_coord > max_worker_y_physical) {
-                max_worker_y_physical = y_coord;
-            }
-            if (y_coord < min_worker_y_physical) {
-                min_worker_y_physical = y_coord;
-            }
+            max_worker_y_physical = std::max<uint32_t>(y_coord, max_worker_y_physical);
+            min_worker_y_physical = std::min<uint32_t>(y_coord, min_worker_y_physical);
         }
     }
     std::vector<CoreCoord> dram_interface_workers;
@@ -218,5 +213,4 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     TT_THROW("Invalid Arch Name specified");
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

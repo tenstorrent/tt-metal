@@ -91,7 +91,7 @@ TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 
 ### Adding new TTNN examples
 
-TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials/2025_dx_rework` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
+TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
 
 This hook performs the following actions:
 
@@ -812,11 +812,6 @@ After that, the UI will usually delete your branch.
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
-
-### A recommended development flow for model writers
-
-Please refer to documentation for [adding a model](./models/docs/MODEL_ADD.md) and
-for [graduating](./models/docs/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 

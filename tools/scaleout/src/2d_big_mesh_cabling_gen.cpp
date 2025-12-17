@@ -161,14 +161,30 @@ int main(int argc, char** argv) {
                     connection.mutable_port_b()->add_path("dim1_node" + std::to_string((i + 1) % galaxy_nodes_1));
 
                     for (int port_id = 3; port_id <= 6; port_id++) {
-                        connection.mutable_port_a()->set_tray_id(2);
-                        connection.mutable_port_b()->set_tray_id(1);
+                        int tray_a = 0, tray_b = 0;
+                        if (config.galaxy_type == "WH_GALAXY") {
+                            tray_a = 2;
+                            tray_b = 1;
+                        } else if (config.galaxy_type == "BH_GALAXY") {
+                            tray_a = 3;
+                            tray_b = 1;
+                        }
+                        connection.mutable_port_a()->set_tray_id(tray_a);
+                        connection.mutable_port_b()->set_tray_id(tray_b);
                         connection.mutable_port_a()->set_port_id(port_id);
                         connection.mutable_port_b()->set_port_id(port_id);
                         auto* new_conn = internal_connection.add_connections();
                         new_conn->CopyFrom(connection);
-                        connection.mutable_port_a()->set_tray_id(4);
-                        connection.mutable_port_b()->set_tray_id(3);
+
+                        if (config.galaxy_type == "WH_GALAXY") {
+                            tray_a = 4;
+                            tray_b = 3;
+                        } else if (config.galaxy_type == "BH_GALAXY") {
+                            tray_a = 4;
+                            tray_b = 2;
+                        }
+                        connection.mutable_port_a()->set_tray_id(tray_a);
+                        connection.mutable_port_b()->set_tray_id(tray_b);
                         new_conn = internal_connection.add_connections();
                         new_conn->CopyFrom(connection);
                     }
@@ -196,14 +212,30 @@ int main(int argc, char** argv) {
                         connection.mutable_port_b()->add_path("dim1_node" + std::to_string(j));
 
                         for (int port_id = 1; port_id <= 2; port_id++) {
-                            connection.mutable_port_a()->set_tray_id(1);
-                            connection.mutable_port_b()->set_tray_id(3);
+                            int tray_a = 0, tray_b = 0;
+                            if (config.galaxy_type == "WH_GALAXY") {
+                                tray_a = 3;
+                                tray_b = 1;
+                            } else if (config.galaxy_type == "BH_GALAXY") {
+                                tray_a = 2;
+                                tray_b = 1;
+                            }
+                            connection.mutable_port_a()->set_tray_id(tray_a);
+                            connection.mutable_port_b()->set_tray_id(tray_b);
                             connection.mutable_port_a()->set_port_id(port_id);
                             connection.mutable_port_b()->set_port_id(port_id);
                             auto* new_conn = internal_connection.add_connections();
                             new_conn->CopyFrom(connection);
-                            connection.mutable_port_a()->set_tray_id(2);
-                            connection.mutable_port_b()->set_tray_id(4);
+
+                            if (config.galaxy_type == "WH_GALAXY") {
+                                tray_a = 4;
+                                tray_b = 2;
+                            } else if (config.galaxy_type == "BH_GALAXY") {
+                                tray_a = 4;
+                                tray_b = 3;
+                            }
+                            connection.mutable_port_a()->set_tray_id(tray_a);
+                            connection.mutable_port_b()->set_tray_id(tray_b);
                             new_conn = internal_connection.add_connections();
                             new_conn->CopyFrom(connection);
                         }

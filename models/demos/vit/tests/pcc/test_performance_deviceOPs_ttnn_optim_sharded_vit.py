@@ -13,8 +13,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor, torch_random
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
 
 
 def get_expected_times(functional_vit):

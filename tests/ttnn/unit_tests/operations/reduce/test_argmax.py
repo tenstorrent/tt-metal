@@ -11,39 +11,47 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, dim, keepdim, use_multicore, dtype",
+    argnames="tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype",
     argvalues=[
-        ([], None, True, True, torch.bfloat16),
-        ([32], -1, False, False, torch.float32),
-        ([32, 0], 1, True, True, torch.bfloat16),
-        ([64], -1, True, False, torch.bfloat16),
-        ([1, 512], -1, True, True, torch.float32),
-        ([1, 1024], -1, True, True, torch.int32),
-        ([1, 65], -1, True, True, torch.uint8),
-        ([8, 10, 129], 2, True, False, torch.bfloat16),
-        ([1, 8, 160], -1, False, True, torch.bfloat16),
-        ([1, 256, 1024 * 8], -1, False, True, torch.float32),
-        ([32, 32, 32, 1], -1, True, True, torch.float32),
-        ([128], -1, True, True, torch.float32),
-        ([256], -1, False, False, torch.bfloat16),
-        ([64, 128], -1, True, True, torch.float32),
-        ([64, 128], -1, False, True, torch.int32),
-        ([32, 64, 128], -1, True, True, torch.float32),
-        ([32, 64, 128], -1, True, False, torch.bfloat16),
-        ([16, 32, 64, 128], -1, True, True, torch.bfloat16),
-        ([16, 32, 64, 128], -1, True, False, torch.float32),
-        ([16, 32, 64, 128], -1, True, True, torch.int32),
-        ([8, 16, 32, 64], -1, True, True, torch.float32),
-        ([8, 16, 32, 64], -1, False, True, torch.bfloat16),
-        ([4, 8, 16, 32], -1, False, False, torch.float32),
-        ([100, 200], -1, True, True, torch.bfloat16),
-        ([100, 200], -1, False, False, torch.float32),
-        ([50, 100, 200], -1, True, True, torch.int32),
-        ([25, 50, 100], -1, False, True, torch.uint8),
-        ([12, 24, 48, 96], -1, True, False, torch.bfloat16),
+        ([], ttnn.ROW_MAJOR_LAYOUT, None, True, True, torch.bfloat16),
+        ([32], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
+        ([32, 0], ttnn.ROW_MAJOR_LAYOUT, 1, True, True, torch.bfloat16),
+        ([64], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
+        ([1, 512], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
+        ([1, 1024], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
+        ([1, 65], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.uint8),
+        ([8, 10, 129], ttnn.ROW_MAJOR_LAYOUT, 2, True, False, torch.bfloat16),
+        ([1, 8, 160], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.bfloat16),
+        ([1, 256, 1024 * 8], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.float32),
+        ([32, 32, 32, 1], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
+        ([128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
+        ([256], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.bfloat16),
+        ([128], ttnn.TILE_LAYOUT, -1, True, False, torch.float32),
+        ([256], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
+        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
+        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.int32),
+        ([64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.float32),
+        ([32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
+        ([32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
+        ([32, 64, 128], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
+        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.bfloat16),
+        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.float32),
+        ([16, 32, 64, 128], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
+        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
+        ([16, 32, 64, 128], ttnn.TILE_LAYOUT, -1, False, False, torch.float32),
+        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
+        ([16, 32, 70, 130], ttnn.TILE_LAYOUT, -1, False, False, torch.bfloat16),
+        ([8, 16, 32, 64], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.float32),
+        ([8, 16, 32, 64], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.bfloat16),
+        ([4, 8, 16, 32], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
+        ([100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.bfloat16),
+        ([100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, False, False, torch.float32),
+        ([50, 100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
+        ([25, 50, 100], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.uint8),
+        ([12, 24, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
     ],
 )
-def test_argmax(device, tensor_shape, dim, keepdim, use_multicore, dtype):
+def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype):
     """
     Test the compatibility of the torch and ttnn output for argmax of different
     tensor shapes, dim values, and data types.
@@ -66,9 +74,9 @@ def test_argmax(device, tensor_shape, dim, keepdim, use_multicore, dtype):
     # Convert torch uint8 to appropriate ttnn type
     if dtype == torch.uint8:  # PyTorch does not have uint32/uint16, so we use uint8
         ttnn_dtype = ttnn.uint32
-        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn_dtype)
+        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn_dtype, layout=tensor_layout)
     else:
-        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device)
+        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=tensor_layout)
 
     torch_op, ttnn_op = getattr(torch, "argmax"), getattr(ttnn, "argmax")
 

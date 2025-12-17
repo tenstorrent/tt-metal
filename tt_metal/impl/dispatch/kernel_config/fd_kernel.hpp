@@ -17,9 +17,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class IDevice;
 class Program;
@@ -82,9 +83,9 @@ static std::vector<std::string> dispatch_kernel_file_names = {
 class FDKernel {
 public:
     FDKernel(int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        node_id_(node_id),
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
+        node_id_(node_id),
         cq_id_(cq_id),
         noc_selection_(noc_selection) {}
     virtual ~FDKernel() = default;
@@ -96,6 +97,10 @@ public:
     // Populate the dependent configs for this kernel (ones that depend on static configs from other kernels). Is called
     // after GenerateStaticConfigs for all upstream/downstream kernels.
     virtual void GenerateDependentConfigs() = 0;
+
+    virtual void InitializeRuntimeArgsValues() {}
+    // Populate the runtime args for this kernel.
+    virtual void SetRuntimeArgs();
 
     // Use all configs and add this kernel to its Program. Called after GenerateStaticConfigs/GenerateDependentConfigs.
     virtual void CreateKernel() = 0;
@@ -180,10 +185,11 @@ protected:
     static uint32_t GetTunnelStop(ChipId device_id);
     // Create and populate semaphores for the EDM connection
     void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
-    tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
-    tt::tt_metal::Program* program_ = nullptr;
+    IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
+    Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
     FDKernelType kernel_type_ = FDKernelType::UNSET;
+    KernelHandle kernel_handle_{std::numeric_limits<KernelHandle>::max()};  // Invalid handle
     ChipId device_id_;
     ChipId servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;
@@ -192,10 +198,11 @@ protected:
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
+
+    std::vector<uint32_t> runtime_args_;
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace std {
 template <>

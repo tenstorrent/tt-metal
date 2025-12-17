@@ -150,7 +150,7 @@ class WanAttentionBlock:
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config, core_grid=self.core_grid)
+        x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
             x_TND, num_heads=1, transpose_key=False
         )
@@ -163,7 +163,7 @@ class WanAttentionBlock:
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
-        out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config, core_grid=self.core_grid)
+        out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config)
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
@@ -336,7 +336,7 @@ class WanCausalConv3d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
@@ -358,7 +358,7 @@ class WanCausalConv3d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -473,9 +473,7 @@ class WanResidualBlock:
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
-            self.conv_shortcut(
-                x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config, core_grid=self.core_grid
-            )
+            self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_tile_BTHWC
         )
@@ -713,7 +711,7 @@ class WanConv2d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -735,7 +733,7 @@ class WanConv2d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -1198,3 +1196,13 @@ class WanDecoder:
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         self.clear_cache()
         return (output_BCTHW, new_logical_h)
+
+
+def get_neighbor_pad_num_links(ccl_manager, input_tensor, dim):
+    """
+    Neighbor pad can use no more links than the product of the upper dimensions of the input tensor.
+    """
+    upper_dims = 1
+    for i in range(dim):
+        upper_dims *= input_tensor.shape[i]
+    return min(upper_dims, ccl_manager.num_links)

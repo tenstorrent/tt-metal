@@ -4,7 +4,7 @@
 
 #include "slice_reshard_async_op.hpp"
 #include "slice_reshard_async_program.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -57,7 +57,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks SliceReshardAsync::create_mes
 
 tt::tt_metal::operation::ProgramWithCallbacks SliceReshardAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     const auto& mesh_view = input_tensors[0].device()->get_view();

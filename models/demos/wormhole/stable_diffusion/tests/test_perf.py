@@ -252,7 +252,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (1, 50, 3600, 6.31) if is_wormhole_b0() else (1, 50, 3600, 3.50),  # Wormhole B0 vs Blackhole performance
+        (1, 50, 3600, 5.0) if is_wormhole_b0() else (1, 50, 3600, 3.15),  # Wormhole B0 vs Blackhole performance
     ],
 )
 def test_stable_diffusion_perf(
@@ -410,6 +410,7 @@ def test_stable_diffusion_perf(
         expected_inference_time=expected_inference_time,
         comments=comment,
     )
+    logger.info(f"Inference time: {second_iter_time:.4f}s")
     assert (
         second_iter_time < expected_inference_time
     ), f"Expected inference time: {expected_inference_time} Actual inference time: {second_iter_time}"
@@ -419,7 +420,7 @@ def test_stable_diffusion_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((12.8) if is_wormhole_b0() else (20.0),),
+    ((13.2) if is_wormhole_b0() else (20.0),),
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"
@@ -439,6 +440,33 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"stable_diffusion_{batch}batch",
+        batch_size=batch,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
+
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_kernel_samples_per_second",
+    ((2.95) if is_wormhole_b0() else (4.10),),
+)
+def test_stable_diffusion_vae_device_perf(expected_kernel_samples_per_second):
+    subdir = "ttnn_stable_diffusion_vae"
+    margin = 0.07
+    batch = 1
+    iterations = 1
+    command = f"pytest models/demos/wormhole/stable_diffusion/tests/vae/test_vae.py::test_decoder[4-64-64-3-512-512-device_params0]"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_kernel_samples_per_second}
+
+    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
+    prep_device_perf_report(
+        model_name=f"stable_diffusion_vae_{batch}batch",
         batch_size=batch,
         post_processed_results=post_processed_results,
         expected_results=expected_results,

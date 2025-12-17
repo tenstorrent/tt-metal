@@ -87,7 +87,7 @@ private:
     FILE* kernel_file_ = nullptr;
     FILE* kernel_elf_file_ = nullptr;
 
-    std::string exception_message_ = "";
+    std::string exception_message_;
     std::mutex exception_message_mutex_;
 
     inline static const std::string LOG_FILE_PATH = "generated/watcher/";
@@ -247,7 +247,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
         s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(":") + 2));
+        kernel_names_.push_back(s.substr(s.find(':') + 2));
     }
 }
 
@@ -360,21 +360,21 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         }
 
         // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
-        for (auto sanitize_noc : data.sanitize_noc()) {
-            sanitize_noc.noc_addr() = DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
-            sanitize_noc.l1_addr() = DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-            sanitize_noc.len() = DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-            sanitize_noc.which_risc() = DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-            sanitize_noc.return_code() = dev_msgs::DebugSanitizeNocOK;
-            sanitize_noc.is_multicast() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
-            sanitize_noc.is_write() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
-            sanitize_noc.is_target() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        for (auto sanitize : data.sanitize()) {
+            sanitize.noc_addr() = DEBUG_SANITIZE_SENTINEL_OK_64;
+            sanitize.l1_addr() = DEBUG_SANITIZE_SENTINEL_OK_32;
+            sanitize.len() = DEBUG_SANITIZE_SENTINEL_OK_32;
+            sanitize.which_risc() = DEBUG_SANITIZE_SENTINEL_OK_16;
+            sanitize.return_code() = dev_msgs::DebugSanitizeOK;
+            sanitize.is_multicast() = DEBUG_SANITIZE_SENTINEL_OK_8;
+            sanitize.is_write() = DEBUG_SANITIZE_SENTINEL_OK_8;
+            sanitize.is_target() = DEBUG_SANITIZE_SENTINEL_OK_8;
         }
 
         // Initialize debug asserts to not tripped.
-        data.assert_status().line_num() = DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data.assert_status().line_num() = DEBUG_SANITIZE_SENTINEL_OK_16;
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
-        data.assert_status().which() = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        data.assert_status().which() = DEBUG_SANITIZE_SENTINEL_OK_8;
 
         // Initialize debug ring buffer to a known init val, we'll check against this to see if any
         // data has been written.
@@ -475,7 +475,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
         auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
-        cluster.write_core(data.data(), data.size(), {device_id, virtual_core}, addr);
+        cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
     };
 
     // Initialize worker cores debug values
@@ -507,10 +507,10 @@ void WatcherServer::Impl::poll_watcher_data() {
     auto sleep_duration = std::chrono::milliseconds(rtoptions.get_watcher_interval());
 
     // Print to the user which features are disabled via env vars.
-    std::string disabled_features = "";
-    auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
+    std::string disabled_features;
+    const auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
-        for (auto& feature : disabled_features_set) {
+        for (const auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
         }
         disabled_features.pop_back();

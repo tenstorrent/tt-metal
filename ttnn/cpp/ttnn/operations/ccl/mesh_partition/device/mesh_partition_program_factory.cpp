@@ -5,18 +5,11 @@
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
@@ -31,17 +24,21 @@ uint32_t get_cluster_axis_index(
 }
 }  // namespace detail
 
-ttnn::device_operation::CachedProgram<MeshPartitionDeviceOperation::MeshPartition::shared_variables_t>
-MeshPartitionDeviceOperation::MeshPartition::create_at(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+namespace {
+
+using SliceOp = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+
+// Helper function to compute slice parameters for a given mesh coordinate
+auto compute_slice_parameters(
+    const MeshPartitionDeviceOperation::operation_attributes_t& operation_attributes,
+    const MeshPartitionDeviceOperation::tensor_args_t& tensor_args,
+    const ttnn::MeshCoordinate& mesh_coordinate) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
     uint32_t cluster_index =
         detail::get_cluster_axis_index(input_tensor.device()->get_view(), mesh_coordinate, operation_attributes);
+
     TT_FATAL(
         cluster_index < cluster_size,
         "cluster_index ({}) must be less than cluster_size ({})",
@@ -53,6 +50,7 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
     uint32_t rank = input_shape.size();
     auto partitioned_dim_size = input_shape[dim] / cluster_size;
     uint64_t begin_pos = static_cast<uint64_t>(cluster_index) * partitioned_dim_size;
+
     TT_FATAL(
         begin_pos <= std::numeric_limits<uint32_t>::max() - partitioned_dim_size,
         "Integer overflow: cluster_index ({}) * partitioned_dim_size ({}) = {} exceeds uint32_t max",
@@ -84,33 +82,40 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         ends,
         strides);
 
-    auto slice_op = ttnn::operations::data_movement::SliceDeviceOperation{
-        .slice_start = begins,
-        .slice_end = ends,
-        .step = strides,
-        .output_mem_config = operation_attributes.output_mem_config};
+    return SliceOp::invoke(
+        tensor_args.input_tensor,
+        begins,
+        ends,
+        strides,
+        operation_attributes.output_mem_config,
+        false  // use_tensor_args
+    );
+}
 
-    auto input_tensors = std::vector<ttnn::Tensor>{tensor_args.input_tensor};
-    auto output_tensors = std::vector<ttnn::Tensor>{tensor_return_value};
-    auto optional_output_tensors = std::vector<std::optional<ttnn::Tensor>>{std::nullopt};
-    slice_op.validate_with_output_tensors(input_tensors, optional_output_tensors);
+}  // anonymous namespace
 
-    auto cached_program = slice_op.create_program(input_tensors, output_tensors);
-    TT_FATAL(
-        cached_program.override_runtime_arguments_callback.has_value(),
-        "override_runtime_arguments_callback is not set for program at mesh coordinate ({}, {})",
-        mesh_coordinate[0],
-        mesh_coordinate[1]);
+ttnn::device_operation::CachedProgram<MeshPartitionDeviceOperation::MeshPartition::shared_variables_t>
+MeshPartitionDeviceOperation::MeshPartition::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto [slice_attrs, slice_tensor_args] =
+        compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-    // -- building the return value -----------------------------------
+    SliceOp::validate_on_program_cache_miss(slice_attrs, slice_tensor_args);
+    auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
+    auto program_and_shared_variables = std::visit(
+        [&](auto&& factory) -> std::pair<Program, SliceSharedVariables> {
+            auto cached_program = factory.create(slice_attrs, slice_tensor_args, tensor_return_value);
+            return {std::move(cached_program.program), std::move(cached_program.shared_variables)};
+        },
+        program_factory);
+
     shared_variables_t vars{
-        // if the optional holds a callback, move it; otherwise construct an empty
-        // std::function (== "no-op")
-        .override_runtime_arguments_callback = cached_program.override_runtime_arguments_callback.value_or(
-            OverrideRuntimeArgsCallback{}),  //   ^ empty functor
-        .slice_op = slice_op};
-
-    return {std::move(cached_program.program), std::move(vars)};
+        .slice_program_factory = program_factory,
+        .slice_shared_variables = std::move(program_and_shared_variables.second)};
+    return {std::move(program_and_shared_variables.first), std::move(vars)};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
@@ -118,13 +123,26 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    std::vector<tt::tt_metal::Tensor> input_tensors{tensor_args.input_tensor};
-    std::vector<std::optional<const tt::tt_metal::Tensor>> input_tensor_options{};
-    std::vector<tt::tt_metal::Tensor> output_tensors{tensor_return_value};
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-        shared_variables.override_runtime_arguments_callback(
-            (const void*)&shared_variables.slice_op, program, input_tensors, input_tensor_options, output_tensors);
+        auto& shared_variables = cached_workload.shared_variables.at(range);
+
+        // Get the mesh coordinate from the range (assuming single device per range)
+        auto mesh_coordinate = *range.begin();
+        auto [slice_attrs, slice_tensor_args] =
+            compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
+
+        // Visit the program factory variant and use std::get to extract the matching shared_variables
+        std::visit(
+            [&](auto&& program_factory) {
+                using Factory = std::decay_t<decltype(program_factory)>;
+                using SharedVars = typename Factory::shared_variables_t;
+
+                auto& slice_shared_vars = std::get<SharedVars>(shared_variables.slice_shared_variables);
+                auto cached_proxy_program = Factory::cached_program_t::proxy(program, slice_shared_vars);
+                program_factory.override_runtime_arguments(
+                    cached_proxy_program, slice_attrs, slice_tensor_args, tensor_return_value);
+            },
+            shared_variables.slice_program_factory);
     }
 }
 

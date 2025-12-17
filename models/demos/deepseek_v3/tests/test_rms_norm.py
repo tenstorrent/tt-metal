@@ -9,13 +9,13 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
     load_reference_io_tensors_for_module,
-    load_state_dict,
     run_module_forward,
 )
 
@@ -54,12 +54,12 @@ def test_forward_pass(
     reference_layernorm_path,
     model_path,
     hf_config,
-    tmp_path,
     cache_path,
     mesh_device,
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -78,11 +78,8 @@ def test_forward_pass(
         reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
     else:
-        state_dict = load_state_dict(model_path, reference_layernorm_path)
+        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(
             mode, reference_layernorm_path, seq_len, num_module_layers
         )

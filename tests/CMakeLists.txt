@@ -1,5 +1,10 @@
 enable_testing()
 include(GoogleTest)
+
+# Suppress narrowing warnings for tests (being cleaned up in tt_metal first)
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
+
 add_library(test_common_libs INTERFACE)
 target_include_directories(test_common_libs INTERFACE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_link_libraries(
@@ -17,6 +22,7 @@ target_link_libraries(
 
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/scale_out)
 endif(TT_METAL_BUILD_TESTS)
 
 if(TTNN_BUILD_TESTS)

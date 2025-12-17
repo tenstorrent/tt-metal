@@ -12,6 +12,7 @@ from operator import contains, eq, getitem
 from pathlib import Path
 import json
 import multiprocess
+from queue import Empty
 import signal
 import time
 import psutil
@@ -20,6 +21,7 @@ from datetime import datetime
 
 from loguru import logger
 
+from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
@@ -322,40 +324,6 @@ def device(request, device_params):
     ttnn.close_device(device)
 
 
-@pytest.fixture(scope="function")
-def pcie_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumPCIeDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = device_ids
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
-
-
-@pytest.fixture(scope="function")
-def all_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumAvailableDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
-
-
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
@@ -390,11 +358,8 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
 def get_default_fabric_tensix_config():
     import ttnn
 
-    # Default to MUX for Blackhole when fabric is enabled, DISABLED otherwise
-    if ttnn.device.is_blackhole():
-        return ttnn.FabricTensixConfig.MUX
-    else:
-        return ttnn.FabricTensixConfig.DISABLED
+    # Default to DISABLED for all architectures
+    return ttnn.FabricTensixConfig.DISABLED
 
 
 @pytest.fixture(scope="function")
@@ -435,6 +400,11 @@ def mesh_device(request, silicon_arch_name, device_params):
         if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(1, param)
+
+    override_trace_region_size = get_supported_trace_region_size(request, param)
+    if override_trace_region_size:
+        device_params["trace_region_size"] = override_trace_region_size
+        logger.info(f"Overriding trace region size to {override_trace_region_size}")
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
@@ -565,6 +535,7 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
         **updated_device_params,
@@ -638,9 +609,13 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device():
+def reset_default_device(request):
     import ttnn
 
+    # Skip applying the fixture logic for this test
+    if "no_reset_default_device" in request.keywords:
+        yield
+        return
     device = ttnn.GetDefaultDevice()
     yield
     ttnn.SetDefaultDevice(device)
@@ -649,10 +624,6 @@ def reset_default_device():
 def get_devices(request):
     if "device" in request.fixturenames:
         devices = [request.getfixturevalue("device")]
-    elif "all_devices" in request.fixturenames:
-        devices = request.getfixturevalue("all_devices")
-    elif "pcie_devices" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
@@ -940,44 +911,178 @@ def pytest_runtest_teardown(item, nextitem):
             reset_tensix(set(item.pci_ids))
 
 
-def _metal_alarm_handler(signum, frame):
-    """Alarm handler for test timeouts; collects debug info then force-kills the process."""
+# Session-scoped watchdog IPC keys
+watchdog_cmd_queue_key = pytest.StashKey()
+watchdog_process_key = pytest.StashKey()
+
+
+# Session watchdog process that supervises per-test timeouts from out-of-process
+def _ensure_watchdog_started(config):
+    cmd_queue = config.stash.get(watchdog_cmd_queue_key, None)
+    process = config.stash.get(watchdog_process_key, None)
+
+    # If watchdog process is already running, and the command queue is still valid, return it.
+    if cmd_queue is not None and process is not None and process.is_alive():
+        return cmd_queue
+
+    parent_pid = os.getpid()
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+    # Clean up stale process reference if present
+    if process is not None and not process.is_alive():
+        logger.warning(f"Stale watchdog process found, joining and cleaning up")
+        try:
+            process.join(timeout=1)
+        except Exception as e:
+            logger.warning(f"Exception during watchdog process cleanup: {e}")
+
     try:
-        logger.warning("This test seems to have hung... Timing out test case")
-        run_debug_script()
+        cmd_queue = multiprocess.Queue()
+        time.sleep(1)
+        process = multiprocess.Process(target=_watchdog_main, args=(parent_pid, cmd_queue), daemon=True)
+        process.start()
+        time.sleep(1)
+        config.stash[watchdog_cmd_queue_key] = cmd_queue
+        config.stash[watchdog_process_key] = process
+        logger.info(f"Watchdog[{worker_id}] started: watchdog_pid={process.pid} parent_pid={parent_pid}")
+        time.sleep(1)
+        return cmd_queue
     except Exception as e:
-        logger.error(f"Failed to run debug script after timeout: {e}")
-    finally:
-        # Ensure the process is terminated even if debug collection fails
-        os.kill(os.getpid(), signal.SIGKILL)
+        logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
+        return None
+
+
+# This function is the watchdog process.
+# It is started once for every pytest-xdist worker.
+# It listens for commands via a queue and executes them.
+# The commands are:
+# - "start": arm a timeout for a given test
+# - "cancel": cancel a timeout for a given test
+# - "shutdown": shutdown the watchdog process
+#
+# The watchdog process runs in a loop and checks for any expired deadlines.
+# If a deadline is expired, it kills the parent process.
+def _watchdog_main(parent_pid, cmd_queue):
+    """Simple watchdog loop.
+
+    Commands received via cmd_queue (dicts):
+      {"cmd": "start", "test_id": str, "timeout": float}
+      {"cmd": "cancel", "test_id": str}
+      {"cmd": "shutdown"}
+    """
+    logger.debug(f"Watchdog started for parent={parent_pid} pid={os.getpid()}")
+
+    # Dictionary of test_id -> deadline (float)
+    # This is used to track the deadline for each test.
+    # The deadline is the time when the test is expected to complete.
+    # If the test does not complete by the deadline, the watchdog will kill the parent process.
+    deadlines = {}
+
+    while True:
+        # Process incoming command, if any
+        try:
+            msg = cmd_queue.get(timeout=1)
+        except Empty:
+            msg = None  # normal: nothing arrived
+        except Exception as e:
+            logger.error(f"Watchdog {os.getpid()}: fatal while reading queue: {e!r}")
+            break
+
+        now = time.monotonic()
+
+        # Check for any expired deadlines
+        if deadlines:
+            expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
+            if expired:
+                logger.debug(f"Watchdog detected timeout for {expired}")
+                logger.debug(f"Watchdog killing parent process {parent_pid}")
+                os.kill(parent_pid, signal.SIGKILL)
+                break
+
+        # If no command is received, continue to the next iteration of the loop.
+        if not msg:
+            continue
+
+        cmd = msg.get("cmd")
+        if cmd == "start":
+            logger.debug(f"Watchdog received start command: {msg}")
+            try:
+                test_id = str(msg["test_id"])
+                timeout_secs = float(msg["timeout"])
+                deadlines[test_id] = time.monotonic() + timeout_secs
+                logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
+            except Exception as e:
+                logger.error(f"Watchdog failed to arm: {e}")
+        elif cmd == "cancel":
+            logger.debug(f"Watchdog received cancel command: {msg}")
+            try:
+                test_id = str(msg.get("test_id", ""))
+                deadlines.pop(test_id, None)
+            except Exception as e:
+                logger.error(f"Watchdog failed to cancel: {e}")
+        elif cmd == "shutdown":
+            logger.debug(f"Watchdog received shutdown command: {msg}; shutting down")
+            break
+        else:
+            logger.warning(f"Watchdog received unknown command: {cmd}")
+
+    logger.debug(f"Watchdog process {os.getpid()} exiting")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Shutdown watchdog process if running."""
+    cmd_queue = session.config.stash.get(watchdog_cmd_queue_key, None)
+    p = session.config.stash.get(watchdog_process_key, None)
+    if cmd_queue and p:
+        try:
+            cmd_queue.put({"cmd": "shutdown"})
+            p.join(timeout=2.0)
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=1.0)
+        except Exception as e:
+            logger.error(f"Failed to terminate watchdog process cleanly: {e}")
 
 
 # This overrides the timer setup hook from pytest-timeout.
-# If --metal-timeout is passed or when using xdist, we arm a POSIX itimer.
-# On expiry, the alarm handler runs debug collection and kills the process.
+# If --metal-timeout is passed or when using xdist, we use a watchdog process per worker to supervise the timeout.
 @pytest.hookimpl(tryfirst=True)
 def pytest_timeout_set_timer(item, settings):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
-    if metal_timeout_enabled is not None or using_xdist:
-        current_pid = os.getpid()
-        logger.debug(f"Metal timeout {settings.timeout} seconds {current_pid} for {item.nodeid}")
+    needs_watchdog = metal_timeout_enabled is not None or using_xdist
 
-        # Install handler (idempotent is fine)
-        signal.signal(signal.SIGALRM, _metal_alarm_handler)
+    if needs_watchdog:
+        cmd_queue = _ensure_watchdog_started(item.config)
+        process = item.config.stash.get(watchdog_process_key, None)
 
-        # Arm the REAL timer for this test
-        secs = float(settings.timeout)
-        signal.setitimer(signal.ITIMER_REAL, secs, 0.0)
+        if process is not None and not process.is_alive():
+            logger.warning("Watchdog process not alive; restarting")
+            cmd_queue = _ensure_watchdog_started(item.config)
 
-        # Provide a canceller for pytest-timeout
-        def cancel():
-            logger.debug("Cancelling timer")
-            # Disarm the timer
-            signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)
+        if cmd_queue is None:
+            logger.warning(f"Watchdog missing command queue; NOT arming timeout for {item.nodeid}")
+        else:
+            secs = float(settings.timeout)
+            worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+            parent_pid = os.getpid()
+            try:
+                cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
+                logger.debug(f"Watchdog[{worker_id}] armed {item.nodeid}: timeout={secs}s parent_pid={parent_pid}")
+            except Exception as e:
+                logger.error(f"Failed to arm watchdog timer for {item.nodeid}: {e}")
 
-        item.cancel_timeout = cancel
+            def cancel():
+                try:
+                    logger.debug("Cancelling watchdog timer")
+                    cmd_queue.put({"cmd": "cancel", "test_id": item.nodeid})
+                except Exception as e:
+                    logger.error(f"Failed to cancel watchdog timer: {e}")
+
+            item.cancel_timeout = cancel
+
     return True
 
 
@@ -987,41 +1092,6 @@ def pytest_timeout_set_timer(item, settings):
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
-
-
-def run_debug_script():
-    """Run the tt-triage.py debug script to check system state before cleanup."""
-
-    # Check if ttexalens module is available
-    try:
-        import ttexalens
-    except ImportError:
-        logger.warning(
-            "ttexalens module not found. Debug script requires ttexalens to be installed. Skipping debug collection."
-        )
-        return
-
-    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
-
-    if not os.path.exists(debug_script_path):
-        logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
-        return
-
-    try:
-        logger.info("Running debug script to check system state")
-        # Remove LD_LIBRARY_PATH to avoid conflicts with prebuilt libraries
-        extra_env = {
-            "LD_LIBRARY_PATH": None,
-        }
-        debug_result = run_process_and_get_result(f"python {debug_script_path}", extra_env)
-
-        logger.info(f"Debug script status: {debug_result.returncode}")
-        if debug_result.stdout:
-            logger.info(f"Debug script output: {debug_result.stdout.decode('utf-8')}")
-        if debug_result.stderr:
-            logger.info(f"Debug script stderr: {debug_result.stderr.decode('utf-8')}")
-    except Exception as e:
-        logger.error(f"Failed to run debug script: {e}")
 
 
 def reset_tensix(tt_open_devices=None):

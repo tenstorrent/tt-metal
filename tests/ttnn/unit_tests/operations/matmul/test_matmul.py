@@ -12,6 +12,7 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.activations import get_golden_function_for_activation
 
 
 # for setting up multi-device stress tests
@@ -67,7 +68,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -247,7 +247,6 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -355,7 +354,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -448,7 +447,8 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -577,7 +577,8 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         fuse_batch=fuse_batch,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -744,7 +745,8 @@ def run_matmul_2d_tiny_tile(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -790,7 +792,6 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -901,7 +902,8 @@ def run_matmul_1d_tiny_tile(
         mcast_in0=True,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -947,7 +949,6 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
@@ -1108,7 +1109,8 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         mcast_in0=mcast_in0,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -1271,8 +1273,12 @@ def test_padded_2d_matmul(device, side, tile_count):
         act,
         weight,
         program_config=program_config,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         ),
     )
     lower = ttnn.to_torch(lower_tt).float()
@@ -1354,8 +1360,12 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
         weight,
         core_grid=None if has_program_config else ttnn.CoreGrid(x=4, y=4),
         program_config=program_config,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         ),
     )
 
@@ -1445,8 +1455,8 @@ def test_matmul_does_dot_product(device, w):
 
     output = ttnn.to_torch(output)
 
-    assert torch_output_tensor.shape == ()
-    assert output.shape == ()
+    assert len(torch_output_tensor.shape) == 0
+    assert len(output.shape) == 0
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
 
 
@@ -1725,7 +1735,6 @@ def test_sharded_matmul(
         input_tensor_b = ttnn.to_memory_config(input_tensor_b, input_b_sharded_memory_config)
 
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
@@ -1981,7 +1990,8 @@ def test_matmul_in0_in1_bias_sharded(
         ),
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -2245,7 +2255,8 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
     memory_config = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=None
     )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -2447,3 +2458,135 @@ def test_matmul_padding(
 
     # Verify values match with high precision
     assert torch.allclose(golden_output, output, atol=1e-6)
+
+
+@pytest.mark.parametrize("input_shape", [(1576, 768)])
+@pytest.mark.parametrize("weight_shape", [(768, 768)])
+def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
+    """
+    Regression test for issue #32441.
+    Tests ttnn.linear with bias that has non-tile-aligned padded dimensions.
+    The bias shape [1576, 768] pads to [1600, 768] where 1600 != tile_height (32),
+    which previously caused a validation error during bias fusion.
+    """
+    torch.manual_seed(0)
+
+    # Create tensors matching the issue repro
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn(weight_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Compute expected output using PyTorch
+    # linear(input, weight, bias) with transpose_b=True means: input @ weight.T + bias
+    torch_output = torch.nn.functional.linear(torch_input, torch_weight, bias=None) + torch_bias
+
+    # Convert to ttnn tensors with DRAM memory config as in the original issue
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weight_tensor = ttnn.from_torch(
+        torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bias_tensor = ttnn.from_torch(
+        torch_bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # This should not crash with "Unsupported bias shape" error
+    output_tensor = ttnn.linear(input_tensor, weight_tensor, bias=bias_tensor, transpose_b=True)
+    output = ttnn.to_torch(output_tensor)
+
+    # Verify correctness
+    assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def test_matmul_block_sharded_input_with_padding(device):
+    """
+    Test matmul with block-sharded input where logical shape differs from physical shard shape due to padding.
+
+    This test verifies that matmul correctly handles block-sharded inputs with padding:
+    - Input 0: (4096, 16) block_sharded on 8x1 cores, logical shape (4096, 16) but physical padded to (512, 32) per shard
+    - Input 1: (16, 128) interleaved, DRAM
+    """
+    torch.manual_seed(0)
+
+    input_a_shape = (4096, 16)
+    input_b_shape = (16, 128)
+
+    torch_input_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_input_a, torch_input_b)
+
+    # Input 0: Create with TILE layout, pad width from 16 to 32, then block shard
+    ttnn_input_a = ttnn.from_torch(
+        torch_input_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_input_a = ttnn.reshape(ttnn_input_a, input_a_shape, padded_shape=(4096, 32))
+
+    # Input 1: Interleaved, DRAM
+    ttnn_input_b = ttnn.from_torch(
+        torch_input_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Block shard input 0: 8x1 cores, shard shape [512, 32]
+    input_a_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+            [512, 32],
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    )
+    ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+
+    ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=False, transpose_b=False)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def test_matmul_activation_with_sharded_input(device):
+    # Create input tensors
+    torch.manual_seed(0)
+    torch_input_a = torch.randn(32, 1024, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1024, 1024, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_a @ torch_input_b
+    activation = "silu"
+    torch_output_tensor = get_golden_function_for_activation(activation)(torch_output_tensor)
+
+    # Convert to TTNN tensors with DRAM interleaved layout
+    input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Width sharded output config
+    # When we specify only the sharding type without full shard spec,
+    # and pass it to matmul with activation, unary op needs to have full shard spec
+    output_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
+    )
+
+    # This should not crash with "validate_shard_spec" error because:
+    # 1. matmul gets called with activation="silu" and partial memory config
+    # 2. matmul internally calls unary (silu) with the output tensor's memory config
+    # 3. unary's compute_output_specs creates TensorLayout with the output tensor's full config
+    try:
+        output_tensor = ttnn.matmul(input_a, input_b, memory_config=output_mem_config, activation=activation)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_with_pcc(torch_output_tensor, output_tensor)
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception {e}")

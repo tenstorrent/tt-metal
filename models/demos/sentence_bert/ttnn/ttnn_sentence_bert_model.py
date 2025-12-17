@@ -4,10 +4,15 @@
 
 
 import ttnn
-from models.demos.sentence_bert.ttnn.common import ttnn_mean_pooling
+from models.common.utility_functions import is_blackhole
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_embeddings import TtnnSentenceBertEmbeddings
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
+
+if is_blackhole():
+    from models.demos.blackhole.sentence_bert.ttnn.common import ttnn_mean_pooling
+else:
+    from models.demos.wormhole.sentence_bert.ttnn.common import ttnn_mean_pooling
 
 
 class TtnnSentenceBertModel:

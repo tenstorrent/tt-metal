@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [-v ...]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -15,11 +15,13 @@ Options:
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
     --skip-version-check             Do not enforce debugger version check. [default: False]
+    --print-script-times             Print the execution time of each script. [default: False]
     -v                               Increase verbosity level (can be repeated: -v, -vv, -vvv).
                                      Controls which columns/fields are displayed:
                                      Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
-                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset)
+                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
+    --disable-colors                 Disable colored output. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -34,6 +36,9 @@ Description:
 # Check if tt-exalens is installed
 import inspect
 import os
+import threading
+from time import time
+import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -48,19 +53,23 @@ def find_install_debugger_script() -> str:
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
 except ImportError as e:
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     install_script = find_install_debugger_script()
     print(f"Module '{e}' not found. Please install tt-exalens by running:")
-    print(f"  {utils.GREEN}{install_script}{utils.RST}")
+    print(f"  {GREEN}{install_script}{RST}")
     exit(1)
 
 # Check if requirements are installed
 try:
     import capnp
 except ImportError as e:
+    RST = "\033[0m" if utils.should_use_color() else ""
+    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {utils.GREEN}pip install -r {requirements_path}{utils.RST}")
+    print(f"  {GREEN}pip install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -68,10 +77,14 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import importlib
 import importlib.metadata as importlib_metadata
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
+from rich.table import Table
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.elf import ElfVariable
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
@@ -128,6 +141,11 @@ def default_serializer(value) -> str:
         return str(value._id)
     elif isinstance(value, OnChipCoordinate):
         return value.to_user_str()
+    elif isinstance(value, ElfVariable):
+        try:
+            return serialize_collection(value.as_list())
+        except:
+            return str(value)
     elif isinstance(value, Iterable) and not isinstance(value, str):
         return serialize_collection(value)
     else:
@@ -202,7 +220,7 @@ class TriageScript:
         except Exception as e:
             if log_error:
                 self.failed = True
-                self.failure_message = str(e)
+                self.failure_message = traceback.format_exc()
                 return None
             else:
                 raise
@@ -315,7 +333,54 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = None) -> ScriptArguments:
+console: Console
+
+
+def init_console(args: ScriptArguments) -> None:
+    global console
+
+    # When redirecting to file, use a larger width to avoid wrapping.
+    # When in a terminal, let Rich auto-detect the terminal width.
+    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
+    width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
+
+    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
+
+
+def create_progress() -> Progress:
+    global console
+
+    return Progress(
+        SpinnerColumn(),
+        TimeElapsedColumn(),
+        BarColumn(),
+        TimeRemainingColumn(),
+        TextColumn("[progress.tasks]{task.completed}/{task.total}[/] [progress.description]{task.description}[/]"),
+        console=console,
+        transient=True,
+    )
+
+
+def process_arguments(args: ScriptArguments) -> None:
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
+
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+
+    # Initialize console
+    init_console(args)
+
+
+def parse_arguments(
+    scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
+) -> ScriptArguments:
     from docopt import (
         parse_defaults,
         parse_pattern,
@@ -353,13 +418,17 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
-    argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first=False)
+    if argv is None:
+        argv = sys.argv[1:]
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
-    matched, left, collected = combined_pattern.fix().match(argv)
+    matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if matched and left == []:
-        return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
+        arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
+        process_arguments(arguments)
+        return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
     doc = __doc__ if script_path is None else scripts[script_path].module.__doc__
@@ -376,6 +445,8 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
                 script_options = parse_defaults(script.module.__doc__)
                 if len(script_options) > 0:
                     help_message += f"\n{script.module.__doc__}\n"
+        print(help_message)
+        sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
@@ -389,30 +460,53 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
     raise DocoptExit()
 
 
+FAILURE_CHECKS_LOCK = threading.Lock()
 FAILURE_CHECKS: list[str] = []
 
 
 def log_check(success: bool, message: str) -> None:
-    global FAILURE_CHECKS
+    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
     if not success:
-        FAILURE_CHECKS.append(message)
+        with FAILURE_CHECKS_LOCK:
+            FAILURE_CHECKS.append(message)
 
 
-def serialize_result(script: TriageScript | None, result):
+def log_check_device(device: Device, success: bool, message: str) -> None:
+    formatted_message = f"Device {device._id}: {message}"
+    log_check(success, formatted_message)
+
+
+def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
+    device = location.device
+    block_type = device.get_block_type(location)
+    location_str = location.to_user_str()
+    formatted_message = f"{block_type} [{location_str}]: {message}"
+    log_check_device(device, success, formatted_message)
+
+
+def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
+    formatted_message = f"{risc_name}: {message}"
+    log_check_location(location, success, formatted_message)
+
+
+def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
     if script is not None:
         print()
-        utils.INFO(f"{script.name}:")
+        utils.INFO(f"{script.name}{execution_time}:")
 
-    global FAILURE_CHECKS
-    failures = FAILURE_CHECKS
-    FAILURE_CHECKS = []
+    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
+    with FAILURE_CHECKS_LOCK:
+        failures = FAILURE_CHECKS
+        FAILURE_CHECKS = []
     if result is None:
-        if len(failures) > 0:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
+            if script.failed:
+                utils.ERROR(f"    {script.failure_message}")
         else:
             utils.INFO("  pass")
         return
@@ -429,7 +523,7 @@ def serialize_result(script: TriageScript | None, result):
         if not isinstance(result, list):
             result = [result]
 
-        def generate_header(header: list[str], obj, flds):
+        def generate_header(table: Table, obj, flds):
             for field in flds:
                 metadata = field.metadata
                 # Skip field if it requires higher verbosity level
@@ -440,9 +534,10 @@ def serialize_result(script: TriageScript | None, result):
                 elif "recurse" in metadata and metadata["recurse"]:
                     value = getattr(obj, field.name)
                     assert is_dataclass(value)
-                    generate_header(header, value, fields(value))
+                    generate_header(table, value, fields(value))
                 elif "serialized_name" in metadata:
-                    header.append(metadata["serialized_name"] if metadata["serialized_name"] else field.name)
+                    justify = metadata.get("justify", "left")
+                    table.add_column(metadata.get("serialized_name", field.name), justify=justify)
 
         def generate_row(row: list[str], obj, flds):
             for field in flds:
@@ -464,35 +559,18 @@ def serialize_result(script: TriageScript | None, result):
                     )
                     assert "serializer" in metadata, "Serializer must be provided for combined field."
                     row.append(metadata["serializer"](all_values))
-                else:
+                elif "serializer" in metadata:
                     row.append(metadata["serializer"](getattr(obj, field.name)))
 
+        table = Table()
+
         # Create table header
-        header = []
-        generate_header(header, result[0], fields(result[0]))
-        table = [header]
+        generate_header(table, result[0], fields(result[0]))
         for item in result:
-            row = []
+            row: list[str] = []
             generate_row(row, item, fields(item))
-            multilined_row = [r.splitlines() for r in row]
-            multirow = max([len(r) for r in multilined_row])
-            if multirow == 1:
-                table.append(row)
-            else:
-                # If multirow, add empty rows for each line in the row
-                for i in range(multirow):
-                    multirow_row = []
-                    for lines in multilined_row:
-                        if i < len(lines):
-                            multirow_row.append(lines[i])
-                        else:
-                            multirow_row.append("")
-                    table.append(multirow_row)
-
-        from tabulate import tabulate
-        from utils import DEFAULT_TABLE_FORMAT
-
-        print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+            table.add_row(*row)
+        console.print(table)
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -510,12 +588,13 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     except Exception:
         skip_check = False
 
-    scripts_dir = os.path.dirname(find_install_debugger_script())
+    install_script = find_install_debugger_script()
+    scripts_dir = os.path.dirname(install_script)
     ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
 
     try:
         with open(ref_path, "r", encoding="utf-8") as f:
-            approved_ref = f.read().strip()
+            approved_version = f.read().strip()
     except FileNotFoundError:
         utils.WARN("ttexalens_ref.txt not found. Skipping debugger version check. " f"Expected at: {ref_path}")
         return
@@ -523,48 +602,34 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         utils.WARN(f"Failed to read ttexalens_ref.txt: {e}. Skipping debugger version check.")
         return
 
-    if not approved_ref:
+    if not approved_version:
         utils.WARN("ttexalens_ref.txt is empty. Skipping debugger version check.")
         return
 
     # Get installed version string
     try:
-        installed_version = importlib_metadata.version("ttexalens")
-        utils.DEBUG(f"Installed ttexalens version: {installed_version}")
+        installed_version = importlib_metadata.version("tt-exalens")
+        utils.DEBUG(f"Installed tt-exalens version: {installed_version}")
     except importlib_metadata.PackageNotFoundError:
         utils.WARN(
-            "Required debugger component is not installed. Please run scripts/install_debugger.sh to install debugger dependencies."
+            f"Required debugger component is not installed. Please run {install_script} to install debugger dependencies."
         )
-        raise TTTriageError("Debugger dependency is not installed")
+        console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
+        console.print(f"  [command]{install_script}[/]")
+        exit(1)
 
-    # Expected version format from setup.py: 0.1.<date>+dev.<short_hash>
-    installed_hash: str | None = None
-    if "+dev." in installed_version:
-        try:
-            installed_hash = installed_version.split("+dev.", 1)[1]
-        except Exception:
-            installed_hash = None
-
-    expected_hash: str | None = approved_ref
-
-    # Match by prefix to allow short-vs-long
-    match_ok = False
-    if installed_hash and expected_hash:
-        if expected_hash.startswith(installed_hash) or installed_hash.startswith(expected_hash):
-            match_ok = True
-
-    if not match_ok:
-        message = (
-            "Debugger version mismatch.\n"
-            f"  Installed: {installed_version} (hash: {installed_hash or 'unknown'})\n"
-            f"  Approved:  hash: {approved_ref}\n"
-            "Use scripts/install_debugger.sh to install the approved version, or run with --skip-version-check"
-        )
+    # Check if installed version matches approved version
+    if approved_version != installed_version:
+        message = f"Debugger version mismatch.\n  Installed: {installed_version}\n  Approved:  {approved_version}"
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
-            raise TTTriageError(message)
+            console.print(message)
+            console.print(f"Please install tt-exalens by running:")
+            console.print(f"  [command]{install_script}[/]")
+            console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
+            exit(1)
 
 
 def _init_ttexalens(args: ScriptArguments) -> Context:
@@ -575,7 +640,11 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
+    script_path: str | None = None,
+    args: ScriptArguments | None = None,
+    context: Context | None = None,
+    argv: list[str] | None = None,
+    return_result: bool = False,
 ) -> Any:
     # Resolve script path
     if script_path is None:
@@ -602,15 +671,7 @@ def run_script(
 
     # Parse arguments
     if args is None:
-        args = parse_arguments(scripts, script_path)
-
-        # Setting verbosity level
-        try:
-            verbosity = int(args["--verbosity"])
-            utils.Verbosity.set(verbosity)
-        except:
-            utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-        utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+        args = parse_arguments(scripts, script_path, argv)
 
     # Initialize context if not provided
     if context is None:
@@ -627,6 +688,8 @@ def run_script(
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
     script = scripts[script_path] if script_path in scripts else None
+    if return_result:
+        return result
     serialize_result(script, result)
 
 
@@ -637,6 +700,8 @@ class TTTriageError(Exception):
 
 
 def main():
+    triage_start = time()
+
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
     script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
@@ -678,40 +743,65 @@ def main():
     # Parse common command line arguments
     args = parse_arguments(scripts)
 
-    # Setting verbosity level
-    try:
-        verbosity = int(args["--verbosity"])
-        utils.Verbosity.set(verbosity)
-    except:
-        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
-
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
 
-    # Check if we should run specific scripts
-    if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
-        for script_name in args["--run"]:
-            run_script(script_name, args, context)
-    else:
-        # Execute all scripts
-        for script in script_queue:
-            if not all(not dep.failed for dep in script.depends):
-                utils.INFO(f"{script.name}:")
-                utils.WARN(f"  Cannot run script due to failed dependencies.")
-                script.failed = True
-                script.failure_message = "Cannot run script due to failed dependencies."
-            else:
-                result = script.run(args=args, context=context)
-                if script.config.data_provider and result is None:
+    with create_progress() as progress:
+        scripts_task = progress.add_task("Script execution", total=len(script_queue))
+
+        # Check if we should run specific scripts
+        if args["--run"] is not None and (len(args["--run"]) != 1 or args["--run"][0] != "all"):
+            progress.update(scripts_task, total=len(args["--run"]))
+            for script_name in args["--run"]:
+                progress.update(scripts_task, description=f"Running {script_name}")
+                run_script(script_name, args, context)
+                progress.advance(scripts_task)
+        else:
+            # Execute all scripts
+            triage_init_end = time()
+            if args["--print-script-times"]:
+                utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
+            total_time = triage_init_end - triage_start
+            serialization_time = 0.0
+            progress.update(scripts_task, total=len(script_queue))
+            for script in script_queue:
+                progress.update(scripts_task, description=f"Running {script.name}")
+                if not all(not dep.failed for dep in script.depends):
                     utils.INFO(f"{script.name}:")
-                    if script.failure_message is not None:
-                        utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                    utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    script.failed = True
+                    script.failure_message = "Cannot run script due to failed dependencies."
+                else:
+                    start_time = time()
+                    result = script.run(args=args, context=context)
+                    end_time = time()
+                    total_time += end_time - start_time
+                    execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
+                    if script.config.data_provider:
+                        if result is None:
+                            print()
+                            utils.INFO(f"{script.name}{execution_time}:")
+                            if script.failure_message is not None:
+                                utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                            else:
+                                utils.ERROR(f"  Data provider script did not return any data.")
+                        elif execution_time:
+                            print()
+                            utils.INFO(f"{script.name}{execution_time}:")
+                            utils.INFO("  pass")
                     else:
-                        utils.ERROR(f"  Data provider script did not return any data.")
-                if not script.config.data_provider:
-                    serialize_result(script, result)
+                        start_time = time()
+                        serialize_result(script, result, execution_time)
+                        end_time = time()
+                        total_time += end_time - start_time
+                        serialization_time += end_time - start_time
+                progress.advance(scripts_task)
+            if args["--print-script-times"]:
+                print()
+                utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
+                utils.INFO(f"Total execution time: {total_time:.2f}s")
+        progress.remove_task(scripts_task)
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     // Constants
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& compute_kernel_config = attributes.compute_kernel_config;
-    const auto device = input_tensor.device();
+    auto* const device = input_tensor.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     const auto shape = input_tensor.padded_shape();
@@ -185,7 +185,7 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
 
     const auto& input = tensor_args.input_tensor;
     const auto& compute_kernel_config = attributes.compute_kernel_config;
-    const auto device = input.device();
+    auto* const device = input.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     const auto shape = input.padded_shape();
@@ -320,7 +320,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     // Constants
     const auto& input = tensor_args.input_tensor;
     const auto& compute_kernel_config = attributes.compute_kernel_config;
-    const auto device = input.device();
+    auto* const device = input.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     const auto shape = input.padded_shape();
@@ -456,7 +456,7 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
     // Constants
     const auto& input = tensor_args.input_tensor;
     const auto& compute_kernel_config = attributes.compute_kernel_config;
-    const auto device = input.device();
+    auto* const device = input.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     const auto shape = input.padded_shape();
@@ -593,7 +593,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto& input = tensor_args.input_tensor;
     const auto dim = static_cast<int>(static_cast<unsigned char>(attributes.dim));
     const auto& compute_kernel_config = attributes.compute_kernel_config;
-    const auto device = input.device();
+    auto* const device = input.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     const auto shape = input.padded_shape();
@@ -732,8 +732,8 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
     const auto& shape_unpadded = tensor_args.input_tensor.logical_shape();
-    const auto src0_buffer = tensor_args.input_tensor.buffer();
-    const auto out0_buffer = output_tensor.buffer();
+    auto* const src0_buffer = tensor_args.input_tensor.buffer();
+    auto* const out0_buffer = output_tensor.buffer();
 
     bool mask_padded_data = false;
     uint32_t num_datum_padded = 0;
@@ -799,9 +799,14 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     uint32_t cb_length = in0_t;
     bool use_large_kernel = false;
     // Noisy CB estimator, if the cbs used take up 90% of L1 switch to large kernel implementation
-    uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size);
+    constexpr uint32_t single_tile_cb_count = 5;  // approximate
+    uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size) + (out0_t * out0_tile_size) +
+                                 (single_tile_cb_count * im_tile_size);
+    if (attributes.numeric_stable) {
+        cb_size_sum_bytes += im4_t * im_tile_size;
+    }
     if (tensor_args.mask.has_value()) {
-        cb_size_sum_bytes += (im3_t * im_tile_size) + (im4_t * im_tile_size);
+        cb_size_sum_bytes += (im3_t * im_tile_size) + (in3_t * scalar_tile_size) + (in4_t * mask_tile_size);
     }
 
     // Program specific checks
@@ -813,9 +818,6 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         im0_t = 80;
         im3_t = 80;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
-        // TODO: fix the hang, which occurs when numeric_stable is true for large softmax
-        // See issue #28509
-        TT_FATAL(!attributes.numeric_stable, "For softmax, cannot enable both large_kernel and numeric_stable");
     }
     if (!use_large_kernel) {
         TT_FATAL(
@@ -1129,8 +1131,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
     uint32_t num_tile_rows = NC * Ht;
-    auto all_device_cores = CoreRange(
-        {0, 0}, {cached_program.shared_variables.grid_size.x - 1, cached_program.shared_variables.grid_size.y - 1});
     auto
         [num_cores,
          all_cores,
@@ -1274,6 +1274,11 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     tt::tt_metal::Program program{};
     auto* device = tensor_args.input_tensor.device();
 
+    // Guard against non-sharded inputs when using a sharded program config
+    TT_FATAL(
+        tensor_args.input_tensor.is_sharded() && tensor_args.input_tensor.shard_spec().has_value(),
+        "Input tensor must be sharded when using SoftmaxShardedMultiCoreProgramConfig");
+
     // convert data format
     tt::DataFormat in0_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
@@ -1331,8 +1336,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t scale_tile_size = tt::tile_size(scale_cb_data_format);
     uint32_t scalar_tile_size = tt::tile_size(scalar_cb_data_format);
     // in out buffer
-    auto src0_buffer = tensor_args.input_tensor.buffer();
-    auto out0_buffer = output_tensor.buffer();
+    auto* src0_buffer = tensor_args.input_tensor.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -1481,7 +1486,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
         cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
         // in3 attn mask
         if (tensor_args.mask->is_sharded()) {
-            auto mask_buffer = tensor_args.mask->buffer();
+            auto* mask_buffer = tensor_args.mask->buffer();
             auto c_in3_config = CircularBufferConfig(in3_CB_size, {{tt::CBIndex::c_3, mask_cb_data_format}})
                                     .set_page_size(tt::CBIndex::c_3, mask_tile_size)
                                     .set_globally_allocated_address(*mask_buffer);
@@ -1630,9 +1635,9 @@ void SoftmaxShardedProgramFactoryAttentionOptimized::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto in0_buffer = tensor_args.input_tensor.buffer();
-    auto& mask_tensor = tensor_args.mask;
-    auto out_buffer = output_tensor.buffer();
+    auto* in0_buffer = tensor_args.input_tensor.buffer();
+    const auto& mask_tensor = tensor_args.mask;
+    auto* out_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_in0_id, *in0_buffer);
     UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_out0_id, *out_buffer);

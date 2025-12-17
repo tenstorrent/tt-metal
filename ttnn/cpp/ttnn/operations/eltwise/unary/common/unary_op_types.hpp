@@ -83,6 +83,7 @@ enum class UnaryOpType {
     UNARY_LE,
     TILED_PROD,
     TYPECAST,
+    BITCAST,
     BITWISE_XOR,
     BITWISE_NOT,
     BITWISE_AND,
@@ -119,6 +120,8 @@ enum class UnaryOpType {
     SELU,
     RPOW,
     CBRT,
+    LOGSIGMOID,
+    LOGIT,
 };
 
 enum class VecMode {
@@ -236,6 +239,8 @@ using BasicFusedActivations = std::vector<ttnn::operations::unary::BasicUnaryWit
 using EltwiseFusedActivations = std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>;
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
+
+using ScalarVariant = std::variant<std::uint32_t, std::int32_t, float>;
 
 }  // namespace ttnn::operations::unary
 

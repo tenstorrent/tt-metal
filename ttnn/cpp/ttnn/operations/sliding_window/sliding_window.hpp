@@ -14,7 +14,7 @@
 namespace ttnn::operations::sliding_window {
 
 struct ParallelConfig {
-    CoreRangeSet grid = {};
+    CoreRangeSet grid;
     tt::tt_metal::TensorMemoryLayout shard_scheme{0};
     tt::tt_metal::ShardOrientation shard_orientation{0};
 
@@ -56,7 +56,6 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
-    bool is_avg_pool = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;
@@ -114,27 +113,15 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
 
-std::vector<ShardBoundary> generate_shard_boundaries(
-    const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata);
+std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config);
 
 std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height);
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
 
-std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
-    const std::vector<PixelMetadata>& tensor_metadata,
-    const std::vector<ShardBoundary>& shard_boundaries,
-    bool is_block_sharded,
-    bool transpose_mcast,
-    bool remote_read,
-    bool is_in_tiled,
-    tt::tt_metal::IDevice* device,
-    uint32_t num_cores_x,
-    uint32_t max_out_nsticks_per_core = INT_MAX,
-    uint32_t in_nsticks_per_core = 0,
-    bool in_place = false,
-    uint32_t in_out_shard_size_delta = 0);
+uint32_t calculate_precise_halo_output_elems(
+    const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape);
 
 struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config0;
@@ -154,6 +141,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size);
+
+void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,

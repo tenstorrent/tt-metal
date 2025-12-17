@@ -4,7 +4,7 @@
 
 #pragma once
 
-enum SfpuType {
+enum class SfpuType {
     tanh,
     hardtanh,
     gelu,
@@ -81,6 +81,9 @@ enum SfpuType {
     sub_uint16,
     mul_uint16,
     mul_int32,
+    div_int32,
+    div_int32_floor,
+    div_int32_trunc,
     lt,
     gt,
     ge,
@@ -131,4 +134,7 @@ enum SfpuType {
     rpow,
     cbrt,  // cube root
     hardmish,
+    reduce,
+    add_top_row,
+    rdiv,
 };

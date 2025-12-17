@@ -53,15 +53,17 @@ target_sources(
         test_add.cpp
         test_add_int.cpp
         test_broadcast_to.cpp
+        test_convert_to_hwc_gather.cpp
         test_generic_op.cpp
         test_graph_add.cpp
         test_graph_basic.cpp
+        test_levelized_graph.cpp
         test_graph_capture_arguments_morehdot.cpp
         test_graph_capture_arguments_transpose.cpp
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
-        test_matmul_benchmark.cpp
+        test_relational_int.cpp
         test_rsub_int.cpp
         test_sub_int.cpp
 )

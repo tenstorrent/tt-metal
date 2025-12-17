@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -20,16 +20,28 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::interleaved_to_sharded {
 
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
-    const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
+// Hardcoded for non-partial interleaved_to_sharded operation
+// to keep backward compatibility after migration to new infra
+// https://github.com/tenstorrent/tt-metal/issues/32752
+constexpr uint32_t num_slices = 1;
+constexpr uint32_t slice_index = 0;
+
+InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input_tensor;
+    const auto& output = tensor_return_value;
+    // Keep explicit bool init to match legacy behavior which forced it true
+    bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
+
     tt::tt_metal::Program program{};
-    keep_l1_aligned = true;
+
     uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
-
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -42,8 +54,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
@@ -64,9 +76,11 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_offset = num_units_per_row;
         uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
-            num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            num_units_per_shard_height -
+            (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
-            num_units_per_shard_width - (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
+            num_units_per_shard_width -
+            (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
         input_unit_size = shard_spec.shape[1] * input.element_size();
@@ -78,15 +92,15 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_offset = 1;
         uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
-            num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            num_units_per_shard_height -
+            (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
-        //Adjust accordingly to l1 alignment, do it for all archs
-        if(keep_l1_aligned){
+        // Adjust accordingly to l1 alignment, do it for all archs
+        if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
-        }
-        else {
+        } else {
             padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
         }
     }
@@ -101,7 +115,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         out_cb_index = tt::CBIndex::c_16;
         uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(
+                num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_out_config);
     }
@@ -113,13 +128,12 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
-    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole or keep_l1_aligned) {
+    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
-        //scratchpad going to be used to align DRAM (64B) to L1 (16B)
+        // scratchpad going to be used to align DRAM (64B) to L1 (16B)
         if (is_blackhole) {
             scratch_cb_page_size = tt::align(input_unit_size, hal::get_l1_alignment());
-        }
-        else {
+        } else {
             scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
         }
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
@@ -135,7 +149,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+            "reader_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
@@ -154,19 +169,21 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     if (dst_is_dram) {
         if (input.layout() == Layout::TILE) {
-            writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
+            writer_kernel = std::string(
+                "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                "writer_unary_sharded_blocks_start_id.cpp");
         } else {
-            writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");
+            writer_kernel = std::string(
+                "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                "writer_unary_sharded_stick_layout_start_id.cpp");
         }
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
     } else {
-        writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");
+        writer_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");
     }
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        writer_kernel,
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        program, writer_kernel, all_cores, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
     if (convert_df) {
@@ -177,7 +194,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             tt::tt_metal::ComputeConfig{});
     }
 
-    uint32_t starting_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = detail::calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -289,20 +306,20 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
             uint32_t dram_alignment = hal::get_dram_alignment();
             uint32_t l1_alignment = hal::get_l1_alignment();
-            bool aligned = (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0) : true);
-            //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
+            bool aligned =
+                (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0)
+                             : true);
+            // for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
             aligned = aligned and !(is_blackhole);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
-                //TODO: is this right, leaving non BH case the same for now, should investigate
-                if(!is_blackhole) {
+                // TODO: is this right, leaving non BH case the same for now, should investigate
+                if (!is_blackhole) {
                     aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
-                }
-                else {
-                    if(src_is_dram) {
+                } else {
+                    if (src_is_dram) {
                         aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
-                    }
-                    else {
+                    } else {
                         aligned_width_offset = tt::round_down(curr_idx_w, l1_alignment);
                     }
                 }
@@ -340,8 +357,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                     shard_width,
                     padded_offset_bytes,
                     start_id,
-                    output_width_in_pages
-                };
+                    output_width_in_pages};
                 shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
             } else {
                 writer_run_time_args = {curr_num_units_per_shard};
@@ -360,46 +376,41 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
-
-            bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-            bool partial_op = num_slices > 1;
-            uint32_t starting_idx_h = 0;
-            if (partial_op) {
-                uint32_t runtime_slice_index = static_cast<const InterleavedToShardedPartialDeviceOperation*>(operation)->slice_index;
-                starting_idx_h = calculate_starting_idx_h(input_tensors.at(0), num_slices, runtime_slice_index);
-            }
-
-            auto& runtime_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
-            for (const auto& core : cores) {
-                auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_buffer->address();
-                if (partial_op) {
-                    runtime_args[7] = starting_idx_h;
-                }
-            }
-
-            if (dst_is_dram) {
-                auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-                for (const auto& core : cores) {
-                    auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
-            } else {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices}};
 }
 
+void InterleavedToShardedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
+
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    auto& shared_variables = cached_program.shared_variables;
+    auto& program = cached_program.program;
+    auto unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+    auto unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+    auto cb_output = shared_variables.cb_output;
+    const auto& cores = shared_variables.cores;
+
+    auto& runtime_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
+    for (const auto& core : cores) {
+        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        runtime_args[0] = src_buffer->address();
+    }
+
+    if (dst_is_dram) {
+        auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
+        for (const auto& core : cores) {
+            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            runtime_args[0] = dst_buffer->address();
+        }
+    } else {
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+    }
 }
+
+}  // namespace ttnn::operations::data_movement::interleaved_to_sharded

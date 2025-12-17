@@ -1,0 +1,80 @@
+name: "[internal] Data Movement Perf Tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+
+jobs:
+  bare-metal-tests:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "WH Data Movement Regressions",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
+          }, # Ata Tuzuner
+          {
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "in-service"],
+            name: "BH Data Movement Regressions",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
+          }, # Ata Tuzuner
+        ]
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        # All of these tests need this environment variable...
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        # We make extensive use of device profiler
+        TT_METAL_DEVICE_PROFILER: 1
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run microbenchmark tests
+        timeout-minutes: 45
+        run: ${{ matrix.test-group.cmd }}
+      - name: Upload microbenchmark report csvs
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
+          path: /work/generated/profiler/.logs
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

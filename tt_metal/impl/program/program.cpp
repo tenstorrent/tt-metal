@@ -9,7 +9,6 @@
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
-#include <persistent_kernel_cache.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
@@ -52,7 +51,6 @@
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
@@ -75,7 +73,11 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
-#include "kernels/kernel_impl.hpp"
+#include "kernels/kernel.hpp"
+#include "tt_stl/reflection.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <llrt/tt_cluster.hpp>
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -95,7 +97,7 @@ using namespace tt::tt_metal;
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator()->get_config().l1_unreserved_base -
+        return device->allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     } else {
@@ -103,30 +105,16 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     }
 }
 
-void validate_kernel_placement(IDevice* device, bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
     // Placement rules:
-    //  Slow dispatch:
-    //      - kernels cannot be on storage only cores
     //  Fast dispatch (tensix):
-    //      - kernels cannot be on storage only cores an
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
-    //      - kernels cannot be on storage only cores
     //      - eth kernels cannot be on idle eth cores
     bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     tt::CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    const std::vector<CoreCoord>& storage_cores =
-        MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
-    bool on_storage_only_core =
-        std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
-            return kernel->is_on_logical_core(storage_core);
-        });
-    TT_FATAL(
-        not on_storage_only_core,
-        "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!",
-        kernel->name());
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -166,7 +154,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     try {
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        KernelImpl::from(*kernel).generate_binaries(device, build_options);
+        kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
     }
@@ -176,7 +164,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
@@ -213,12 +201,10 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
+
+    cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
-    id(program_counter++),
-    runtime_id(0),
-    local_circular_buffer_allocation_needed_(false),
-    finalized_(false),
-    cached_device_hash_(std::nullopt) {
+    id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -243,21 +229,25 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
-    for (auto& cb_descriptor : descriptor.cbs) {
+    for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
-    for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
-        auto& semaphore_descriptor = descriptor.semaphores[i];
+    for (const auto& semaphore_descriptor : descriptor.semaphores) {
         internal_->add_semaphore(
-            semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
+            semaphore_descriptor.core_ranges,
+            semaphore_descriptor.id,
+            semaphore_descriptor.initial_value,
+            semaphore_descriptor.core_type);
     }
 
-    for (auto& kernel_descriptor : descriptor.kernels) {
+    for (const auto& kernel_descriptor : descriptor.kernels) {
         bool is_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
         std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
+        std::unordered_map<std::string, uint32_t> named_compile_args(
+            kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
         auto config = std::visit(
             tt::stl::overloaded{
@@ -265,14 +255,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
-                        {},
+                        std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
-                        {},
+                        std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
@@ -283,7 +273,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .noc_mode = dm_descriptor.noc_mode,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
                     };
                 },
@@ -298,7 +288,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .math_approx_mode = compute_descriptor.math_approx_mode,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                     };
                 },
@@ -310,7 +300,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .processor = ethernet_descriptor.processor,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
@@ -423,7 +413,7 @@ KernelGroup::KernelGroup(
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
     programmable_core_type_index(programmable_core_type_index),
-    core_ranges(CoreRangeSet()),
+
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
     go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
@@ -454,27 +444,46 @@ KernelGroup::KernelGroup(
         }
         auto class_id = kernel->dispatch_class();
 
-        if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-            // The code below sets the brisc_noc_id for use by the device firmware
-            // Use 0 if neither brisc nor ncrisc specify a noc
-            if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
-                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                // Use brisc's noc if brisc specifies a noc
-                kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
-                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
-                }
-            } else if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
-                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-                kernel_config.brisc_noc_id() = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
-                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
-                }
-            }
+        // Dynamic NOC assignment is only supported on certain core types
+        const bool is_tensix_core =
+            hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX;
+        const bool is_supported_eth_core =
+            hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::ACTIVE_ETH &&
+            !hal.get_eth_fw_is_cooperative();
+        if (is_tensix_core || is_supported_eth_core) {
+            std::visit(
+                [&](auto&& arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, EthernetConfig>) {
+                        // The code below sets the brisc_noc_id for use by the device firmware
+                        // Use 0 if neither brisc nor ncrisc specify a noc
+                        if (class_id ==
+                            ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+                            noc_modes.insert(arg.noc_mode);
+                            // Use brisc's noc if brisc specifies a noc
+                            kernel_config.brisc_noc_id() = arg.noc;
+                            // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
+                            // DM_DEDICATED_NOC
+                            if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                            }
+                        } else if (
+                            class_id ==
+                            ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+                            noc_modes.insert(arg.noc_mode);
+                            // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
+                            // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
+                            // validation
+                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
+                            // DM_DEDICATED_NOC
+                            if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                                kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
+                            }
+                        }
+                    }
+                },
+                kernel->config());
         }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
@@ -520,18 +529,12 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         const auto& handle_to_kernel = kernels_[programmable_core_type_index];
         for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
-                if (core.x > grid_extent_[programmable_core_type_index].x) {
-                    grid_extent_[programmable_core_type_index].x = core.x;
-                }
-                if (core.y > grid_extent_[programmable_core_type_index].y) {
-                    grid_extent_[programmable_core_type_index].y = core.y;
-                }
-                if (core.x < base.x) {
-                    base.x = core.x;
-                }
-                if (core.y < base.y) {
-                    base.y = core.y;
-                }
+                grid_extent_[programmable_core_type_index].x =
+                    std::max(core.x, grid_extent_[programmable_core_type_index].x);
+                grid_extent_[programmable_core_type_index].y =
+                    std::max(core.y, grid_extent_[programmable_core_type_index].y);
+                base.x = std::min(core.x, base.x);
+                base.y = std::min(core.y, base.y);
             }
         }
         grid_extent_[programmable_core_type_index].x++;
@@ -935,9 +938,31 @@ void detail::ProgramImpl::init_semaphores(
     }
 }
 
+void detail::ProgramImpl::validate_semaphore_id(
+    const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const {
+    TT_FATAL(semaphore_id < NUM_SEMAPHORES, "Semaphore id {} exceeds max value {}", semaphore_id, NUM_SEMAPHORES - 1);
+
+    for (const auto& core_range : crs.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                auto existing_semaphores = semaphores_on_core(logical_core, core_type);
+                for (const auto& semaphore : existing_semaphores) {
+                    TT_FATAL(
+                        semaphore.get().id() != semaphore_id,
+                        "Semaphore id {} already in use on core {}",
+                        semaphore_id,
+                        logical_core.str());
+                }
+            }
+        }
+    }
+}
+
 void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
+    validate_semaphore_id(crs, semaphore_id, core_type);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
@@ -946,7 +971,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     std::vector<std::set<CoreCoord>> unique_cores;
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < kernels_.size();
          programmable_core_type_index++) {
-        auto& kernels = this->kernels_[programmable_core_type_index];
+        const auto& kernels = this->kernels_[programmable_core_type_index];
         cores_in_program.push_back({});
         unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
@@ -970,7 +995,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
         TT_FATAL(
             kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
     }
-    std::string align_code = "";
+    std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
     std::unordered_set<uint8_t> remote_cb_indices;
     for (auto logical_cr : kernel->logical_coreranges()) {
@@ -1079,9 +1104,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            auto& kernel_impl = KernelImpl::from(*kernel);
-            const auto& binaries = kernel_impl.binaries(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+            const auto& binaries =
+                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1106,7 +1130,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                         page_offsets[transfer_info_index] =
                             binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                         lengths[transfer_info_index] = len * sizeof(uint32_t);
-                        processor_ids[transfer_info_index] = kernel_impl.get_kernel_processor_type(sub_kernel_index);
+                        processor_ids[transfer_info_index] = kernel->get_kernel_processor_type(sub_kernel_index);
 
                         binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                         binaries_data.resize(
@@ -1252,10 +1276,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                        const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
+                        const auto& sub_device_cores =
+                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
                         if (!intersection.empty()) {
-                            used_sub_device_ids.insert(SubDeviceId{i});
+                            used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
                             num_intersections += intersection.num_cores();
                         }
                     }
@@ -1297,11 +1322,11 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        ttsl::hash::hash_combine(device_hash, device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -1339,7 +1364,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1378,10 +1403,10 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
 
-    if (compiled_.contains(build_env.build_key)) {
-        Inspector::program_compile_already_exists(this, device, build_env.build_key);
+    if (compiled_.contains(build_env.build_key())) {
+        Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;
     }
     // Clear the determined sub_device_ids when we compile the program for the first time
@@ -1390,7 +1415,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
 
-    Inspector::program_compile_started(this, device, build_env.build_key);
+    Inspector::program_compile_started(this, device, build_env.build_key());
 
     TT_FATAL(
         device->is_initialized(),
@@ -1402,26 +1427,26 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(device, force_slow_dispatch, kernel);
+            validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
                 [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(build_env.build_env);
-                    KernelImpl::from(*kernel).set_build_options(build_options);
+                    kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
                         this->set_remote_circular_buffer_init(kernel);
                     }
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key);
+                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
                     const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
+                    kernel->register_kernel_elf_paths_with_watcher(*device);
 
-                    if (enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device)) {
+                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
@@ -1441,7 +1466,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
-            launch_build_step([kernel, device] { KernelImpl::from(*kernel).read_binaries(device); }, events);
+            launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
         }
     }
     sync_build_steps(events);
@@ -1449,9 +1474,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
 
-    compiled_.insert(build_env.build_key);
+    compiled_.insert(build_env.build_key());
 
-    Inspector::program_compile_finished(this, device, build_env.build_key);
+    Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
@@ -1745,7 +1770,7 @@ void detail::ProgramCompileGroup::add_program(
 void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
-        auto pgm = program.get();
+        auto* pgm = program.get();
         launch_build_step(
             [device, pgm, force_slow_dispatch]() { pgm->impl().compile(device, force_slow_dispatch); }, events);
     }

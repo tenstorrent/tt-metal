@@ -8,12 +8,16 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from models.demos.sentence_bert.ttnn.common import custom_preprocessor
 from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+if is_blackhole():
+    from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor
+else:
+    from models.demos.wormhole.sentence_bert.ttnn.common import custom_preprocessor
 
 
 def load_ttnn_model(device, torch_model, config):
@@ -103,6 +107,8 @@ class SentenceBERTPerformanceRunnerInfra:
         self, input_ids=None, token_type_ids=None, position_ids=None, extended_mask=None, attention_mask=None
     ):
         if is_wormhole_b0():
+            grid_size = ttnn.CoreGrid(y=8, x=8)
+        elif is_blackhole():
             grid_size = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")

@@ -17,6 +17,7 @@ file(
     groupnorm/device/kernels/*
     layernorm/device/kernels/*
     layernorm_distributed/device/kernels/*
+    rmsnorm_distributed/device/kernels/*
     softmax/device/kernels/*
     kernel_util/compute/*
 )
@@ -29,6 +30,7 @@ target_sources(
         FILES
             layernorm/layernorm.hpp
             layernorm/device/layernorm_types.hpp
+            layernorm_distributed/device/layernorm_distributed_types.hpp
             rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp
@@ -45,11 +47,17 @@ target_sources(
         batch_norm/device/running_statistics_device_operation.cpp
         batch_norm/device/running_statistics_program_factory.cpp
         batch_norm/device/batch_norm_utils.cpp
-        groupnorm/device/groupnorm_op.cpp
-        groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
+        groupnorm/device/groupnorm_program_utils.cpp
+        groupnorm/device/groupnorm_device_operation.cpp
+        groupnorm/device/groupnorm_sharded_program_factory.cpp
+        groupnorm/device/groupnorm_no_mcast_program_factory.cpp
+        groupnorm/device/groupnorm_mcast_program_factory.cpp
         groupnorm/groupnorm.cpp
-        layernorm/device/layernorm_op.cpp
-        layernorm/device/multi_core/layernorm_op_multi_core.cpp
+        groupnorm/groupnorm_input_mask.cpp
+        layernorm/device/layernorm_device_operation.cpp
+        layernorm/device/layernorm_common.cpp
+        layernorm/device/layernorm_op_multi_core.cpp
+        layernorm/device/layernorm_op_multi_core_sharded.cpp
         layernorm/layernorm.cpp
         layernorm_distributed/device/layernorm_post_all_gather_op.cpp
         layernorm_distributed/device/layernorm_pre_all_gather_op.cpp
