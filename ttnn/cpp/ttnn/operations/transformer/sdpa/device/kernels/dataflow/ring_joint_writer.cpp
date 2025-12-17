@@ -115,20 +115,21 @@ void kernel_main() {
         const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
 
-        DPRINT << "ring id: " << ring_id
-               << " ring iter needs global N mask: " << (uint32_t)ring_iter_needs_global_n_mask
-               << "with global N within ring iter: " << global_n_within_ring_iter << ENDL();
+        // DPRINT << "ring id: " << ring_id
+        //        << " ring iter needs global N mask: " << (uint32_t)ring_iter_needs_global_n_mask
+        //        << "with global N within ring iter: " << global_n_within_ring_iter << ENDL();
 
         // LOCAL N MASK
         const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
-               << ENDL();
+        // DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
+        //        << ENDL();
 
         // JOINT L MASK
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-        DPRINT << "ring id: " << ring_id << " ring iter needs joint N mask: " << (uint32_t)ring_iter_needs_joint_n_mask
-               << ENDL();
+        // DPRINT << "ring id: " << ring_id << " ring iter needs joint N mask: " <<
+        // (uint32_t)ring_iter_needs_joint_n_mask
+        //        << ENDL();
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
@@ -137,15 +138,19 @@ void kernel_main() {
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
             if (ring_iter_needs_global_n_mask) {
-                DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
+                // DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_n_within_ring_iter);
+                DPRINT << "ring id: " << ring_id << " Generated global N mask at index " << global_n_within_ring_iter
+                       << ENDL();
             } else if (local_n_needs_masking) {
                 // DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, local_padded_N);
+                DPRINT << "ring id: " << ring_id << " Generated local N mask at index " << local_padded_N << ENDL();
             }
             if (ring_iter_needs_joint_n_mask) {
                 // DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, L);
+                DPRINT << "ring id: " << ring_id << " Generated joint N mask at index " << L << ENDL();
             }
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
