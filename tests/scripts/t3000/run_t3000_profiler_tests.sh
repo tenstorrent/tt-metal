@@ -146,7 +146,6 @@ run_trace_only_resnet() {
         TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -p --device-trace-profiler -m \
             pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
     fi
-    
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
         echo "No verification as test was skipped"
