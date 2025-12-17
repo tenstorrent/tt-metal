@@ -63,22 +63,27 @@ def test_clip_encoder(
     )
     ccl_manager = None
 
+    # Build kwargs conditionally to avoid transformers subfolder=None bug
+    model_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
+    tokenizer_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
+
+    if not is_ci_v2_env:
+        model_kwargs["subfolder"] = clip_path
+        tokenizer_kwargs["subfolder"] = tokenizer_path
+
     if has_projection:
         hf_model = CLIPTextModelWithProjection.from_pretrained(
-            model_name_checkpoint if not is_ci_v2_env else model_location,
-            subfolder=clip_path if not is_ci_v2_env else None,
-            local_files_only=is_ci_env or is_ci_v2_env,
+            model_location if is_ci_v2_env else model_name_checkpoint,
+            **model_kwargs,
         )
     else:
         hf_model = CLIPTextModel.from_pretrained(
-            model_name_checkpoint if not is_ci_v2_env else model_location,
-            subfolder=clip_path if not is_ci_v2_env else None,
-            local_files_only=is_ci_env or is_ci_v2_env,
+            model_location if is_ci_v2_env else model_name_checkpoint,
+            **model_kwargs,
         )
     tokenizer = CLIPTokenizer.from_pretrained(
-        model_name_checkpoint if not is_ci_v2_env else tokenizer_location,
-        subfolder=tokenizer_path if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
+        tokenizer_location if is_ci_v2_env else model_name_checkpoint,
+        **tokenizer_kwargs,
     )
 
     hf_model.eval()
