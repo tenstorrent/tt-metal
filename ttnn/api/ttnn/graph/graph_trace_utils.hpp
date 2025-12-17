@@ -23,7 +23,7 @@ struct PeakMemoryUsagePerCore {
     size_t peak_total = 0;
 };
 
-enum class ExecutionStatus { Success, Error };
+enum class ExecutionStatus : std::uint8_t { Success, Error };
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
 

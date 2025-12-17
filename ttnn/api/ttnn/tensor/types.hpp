@@ -26,7 +26,7 @@ namespace tt::tt_metal {
 
 static constexpr std::uint8_t VERSION_ID = 5;
 
-enum class DataType {
+enum class DataType : std::uint8_t {
     BFLOAT16 = 0,
     FLOAT32 = 1,
     UINT32 = 2,
@@ -64,7 +64,7 @@ bool is_floating_point(DataType dtype);
 bool is_block_float(DataType dtype);
 
 // Specifies Tensor storage type.
-enum class StorageType {
+enum class StorageType : std::uint8_t {
     HOST = 0,
     DEVICE = 1,
 };

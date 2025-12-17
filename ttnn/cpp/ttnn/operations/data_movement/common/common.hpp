@@ -206,7 +206,7 @@ ttnn::Shape compute_padded_shape(
  */
 ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
-enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
+enum class ShardStrategy : std::uint8_t { BLOCK, HEIGHT, WIDTH };
 
 // Helper function for creating a sharded memory configuration for a tensor
 // based on its logical shape, a shard strategy and orientation, and a core

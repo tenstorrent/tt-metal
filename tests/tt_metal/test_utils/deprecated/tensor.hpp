@@ -13,7 +13,7 @@ using SHAPE = std::array<std::uint32_t, 4>;
 
 namespace tt::deprecated {
 
-enum class Initialize { ZEROS = 0, ONES = 1, INCREMENT = 2, RANDOM = 3 };
+enum class Initialize : std::uint8_t { ZEROS = 0, ONES = 1, INCREMENT = 2, RANDOM = 3 };
 
 template <class T>
 class Tensor {

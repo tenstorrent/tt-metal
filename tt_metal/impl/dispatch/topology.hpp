@@ -18,7 +18,7 @@
 namespace tt::tt_metal {
 
 class IDevice;
-enum DispatchWorkerType : uint32_t;
+enum DispatchWorkerType : std::uint8_t;
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
 // is required when setting up Command Queue objects on host.

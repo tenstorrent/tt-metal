@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace tt::tt_metal {
-enum class DataType;
+enum class DataType : std::uint8_t;
 }
 
 namespace ttnn::operations::binary::utils {

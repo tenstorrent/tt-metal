@@ -22,7 +22,7 @@
 namespace tt::tt_fabric {
 
 // Forward declarations
-enum class FabricTensixCoreType : uint32_t;
+enum class FabricTensixCoreType : std::uint8_t;
 
 // Shared struct for mux/relay connection info (used by both mux→mux and relay→mux connections)
 struct MuxConnectionInfo {
@@ -39,7 +39,7 @@ struct MuxConnectionInfo {
     size_t stream_id;                    // Receiver mux's stream ID for credit tracking
 };
 
-enum class ChannelTypes : uint32_t {
+enum class ChannelTypes : std::uint8_t {
     WORKER_CHANNEL = 0,
     ROUTER_CHANNEL = 1,
     RELAY_TO_MUX_CHANNEL = 2,
@@ -47,14 +47,14 @@ enum class ChannelTypes : uint32_t {
     NUM_CHANNEL_TYPES = 4
 };
 
-enum class UdmMuxRelayToMuxChannelId : uint32_t {
+enum class UdmMuxRelayToMuxChannelId : std::uint8_t {
     LOCAL_RELAY_CHANNEL = 0,          // Relay connects to mux on this channel
     EAST_OR_NORTH_RELAY_CHANNEL = 1,  // Upstream East or North Relay connects to mux on this channel
     WEST_OR_SOUTH_RELAY_CHANNEL = 2,  // Upstream West or South Relay connects to mux on this channel
     NUM_CHANNELS = 3
 };
 
-enum class UdmMuxInterMuxChannelId : uint32_t {
+enum class UdmMuxInterMuxChannelId : std::uint8_t {
     // ==================================================================================
     // Inter-Mux channels
     // Used for forwarding local fabric requests to the correct router endpoint
@@ -86,7 +86,7 @@ enum class UdmMuxInterMuxChannelId : uint32_t {
  * UDM Mode Relay Channel Assignments
  * - Relay has only one channel for upstream fabric router traffic
  */
-enum class UdmRelayChannelId : uint32_t {
+enum class UdmRelayChannelId : std::uint8_t {
     ROUTER_CHANNEL = 0,  // Upstream fabric router connects to relay on this channel
     NUM_CHANNELS = 1
 };
@@ -94,7 +94,7 @@ enum class UdmRelayChannelId : uint32_t {
 /**
  * NoC Assignment for mux and relay
  */
-enum class UdmNoCSelection : uint32_t {
+enum class UdmNoCSelection : std::uint8_t {
     mux_noc = 0,
     relay_noc = 1  // this should be the same as edm_to_local_chip_noc, need to have it in some common files between
                    // host and device.

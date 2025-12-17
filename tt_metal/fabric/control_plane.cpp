@@ -1432,7 +1432,7 @@ void write_to_worker_or_fabric_tensix_cores(
         dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
     }
 
-    enum class CoreType { Worker, FabricTensixExtension, DispatcherMux };
+    enum class CoreType : std::uint8_t { Worker, FabricTensixExtension, DispatcherMux };
 
     auto get_core_type = [&](const CoreCoord& core_coord) -> CoreType {
         if (fabric_mux_cores_translated.find(core_coord) != fabric_mux_cores_translated.end()) {

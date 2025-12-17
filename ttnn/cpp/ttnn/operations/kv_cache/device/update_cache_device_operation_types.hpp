@@ -8,9 +8,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::kv_cache {
-enum class UpdateCacheOpParallelizationStrategy { MULTI_CORE };
+enum class UpdateCacheOpParallelizationStrategy : std::uint8_t { MULTI_CORE };
 
-enum class UpdateCacheOpType { FILL, UPDATE };
+enum class UpdateCacheOpType : std::uint8_t { FILL, UPDATE };
 
 struct operation_attributes_t {
     uint32_t batch_idx = 0;

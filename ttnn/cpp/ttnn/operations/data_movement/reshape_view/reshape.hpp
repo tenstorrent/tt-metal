@@ -10,7 +10,7 @@
 
 namespace ttnn {
 
-enum class TileReshapeMapMode {
+enum class TileReshapeMapMode : std::uint8_t {
     CACHE,
     RECREATE,
 

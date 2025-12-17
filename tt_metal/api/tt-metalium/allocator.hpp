@@ -23,7 +23,7 @@ struct Statistics {
 };
 
 class Buffer;
-enum class BufferType;
+enum class BufferType : std::uint8_t;
 class AllocatorState;
 
 // This is the internal representation for Allocator, not exposed for general usage.

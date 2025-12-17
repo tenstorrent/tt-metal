@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-enum class DataMovementProcessor {
+enum class DataMovementProcessor : std::uint8_t {
     RISCV_0 = 0,  // BRISC
     RISCV_1 = 1,  // NCRISC
 };

@@ -59,7 +59,7 @@ public:
     bool is_local(const distributed::MeshCoordinate& coord) const;
 
     // Specifies the execution policy for the `transform` and `apply` functions.
-    enum class ProcessShardExecutionPolicy {
+    enum class ProcessShardExecutionPolicy : std::uint8_t {
         SEQUENTIAL,
         PARALLEL,
     };

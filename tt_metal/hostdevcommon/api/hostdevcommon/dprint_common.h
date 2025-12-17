@@ -122,7 +122,7 @@ struct TileSliceHostDev {
     uint8_t data[MAX_BYTES];
 } ATTR_PACK;
 
-enum dprint_tileslice_return_code_enum {
+enum dprint_tileslice_return_code_enum : std::uint8_t {
     DPrintOK = 2,
     DPrintErrorBadTileIdx = 3,
     DPrintErrorBadPointer = 4,
@@ -130,7 +130,7 @@ enum dprint_tileslice_return_code_enum {
     DPrintErrorMath = 6,
     DPrintErrorEthernet = 7,
 };
-enum TypedU32_ARRAY_Format {
+enum TypedU32_ARRAY_Format : std::uint8_t {
     TypedU32_ARRAY_Format_INVALID,
 
     TypedU32_ARRAY_Format_Raw,                                      // A raw uint32_t array

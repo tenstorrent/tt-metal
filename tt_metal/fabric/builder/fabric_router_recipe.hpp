@@ -15,7 +15,7 @@ namespace tt::tt_fabric {
  * Types of channel pools supported by the fabric router.
  * Must match the enum in fabric_static_channels_ct_args.hpp
  */
-enum class FabricChannelPoolType : uint32_t {
+enum class FabricChannelPoolType : std::uint8_t {
     STATIC = 0,
     ELASTIC = 1,
 };

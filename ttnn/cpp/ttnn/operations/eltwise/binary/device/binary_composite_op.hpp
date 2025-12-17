@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::binary {
 
-enum class BinaryCompositeOpType {
+enum class BinaryCompositeOpType : std::uint8_t {
     NEXTAFTER,
     ISCLOSE,
     ATAN2,

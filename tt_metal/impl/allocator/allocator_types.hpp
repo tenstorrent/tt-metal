@@ -14,7 +14,7 @@
 namespace tt::tt_metal {
 
 // Setup what each core-type is
-enum class AllocCoreType {
+enum class AllocCoreType : std::uint8_t {
     Dispatch,
     ComputeOnly,
     ComputeAndStore,

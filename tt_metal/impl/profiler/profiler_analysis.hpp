@@ -17,9 +17,9 @@
 
 namespace tt::tt_metal {
 
-enum class AnalysisType { PROGRAM_FIRST_TO_LAST_MARKER };
+enum class AnalysisType : std::uint8_t { PROGRAM_FIRST_TO_LAST_MARKER };
 
-enum class AnalysisDimension { PROGRAM };
+enum class AnalysisDimension : std::uint8_t { PROGRAM };
 
 using AnalysisRiscTypes = std::unordered_set<tracy::RiscType>;
 inline const AnalysisRiscTypes AnalysisRiscTypesAny = {

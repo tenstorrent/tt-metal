@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::ternary {
 
-enum class KernelName {
+enum class KernelName : std::uint8_t {
     ReaderNoBcastTTT,
     ReaderNoBcastTST,
     ReaderNoBcastTTS,

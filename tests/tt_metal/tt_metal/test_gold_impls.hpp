@@ -46,7 +46,7 @@ inline std::vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, st
 };
 
 struct BcastDim {
-    enum Enum : uint32_t {
+    enum Enum : std::uint8_t {
         W = 2,   // broadcast an H-tensor over destination's W
         H = 1,   // broadcast a W-tensor over destination's H
         HW = 4,  // broadcast a 1-element tensor over destination's HW
@@ -57,7 +57,7 @@ struct BcastDim {
 };
 
 struct BcastOp {
-    enum Enum : uint32_t {
+    enum Enum : std::uint8_t {
         ADD = 0,
         SUB = 1,
         MUL = 2,

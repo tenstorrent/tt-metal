@@ -10,7 +10,7 @@
  * @brief Enumeration of code profiling timer types as bitfield
  * Each timer type is a unique bit position, allowing multiple timers to be enabled simultaneously
  */
-enum class CodeProfilingTimerType : uint32_t {
+enum class CodeProfilingTimerType : std::uint8_t {
     NONE = 0,
     RECEIVER_CHANNEL_FORWARD = 1 << 0,
     // Future timers can be added here:

@@ -53,7 +53,7 @@ using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
 
-enum class EthRouterMode : uint32_t {
+enum class EthRouterMode : std::uint8_t {
     IDLE = 0,
     FABRIC_ROUTER = 1,
 };

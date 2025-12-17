@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 class Allocator;
 class BankManager;
 class Buffer;
-enum class BufferType;
+enum class BufferType : std::uint8_t;
 
 /**
  * @brief Represents the complete allocation state across all buffer types

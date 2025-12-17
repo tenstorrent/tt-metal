@@ -243,7 +243,7 @@ constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
 
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT = 4;
-enum CQDispatchCmdPackedWriteType {
+enum CQDispatchCmdPackedWriteType : std::uint8_t {
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK = 0xf << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA = 0x1 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
@@ -294,7 +294,7 @@ get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cm
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
 
-enum CQDispatchCmdPackedWriteLargeType {
+enum CQDispatchCmdPackedWriteLargeType : std::uint8_t {
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN = 0,
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS = 1,
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES = 2,

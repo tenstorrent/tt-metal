@@ -20,7 +20,7 @@ struct CoreSemPair {
     CoreSemPair(CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
 };
 
-enum class FusedOpSignalerMode {
+enum class FusedOpSignalerMode : std::uint8_t {
     // When signaling the fused op, only one core is signaled
     // when a tensor slice is ready to be processed by the fused op
     SINGLE,
@@ -119,7 +119,7 @@ struct ReduceScatterFusedOpSignaler {
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
 
-enum class MatmulFusedOpSignalerType {
+enum class MatmulFusedOpSignalerType : std::uint8_t {
     ALL_GATHER,
     REDUCE_SCATTER,
     EMPTY,

@@ -9,8 +9,8 @@
 
 namespace ttnn {
 
-enum class BcastOpMath { ADD, SUB, MUL };
-enum class BcastOpDim { H, W, HW };
+enum class BcastOpMath : std::uint8_t { ADD, SUB, MUL };
+enum class BcastOpDim : std::uint8_t { H, W, HW };
 
 namespace bcast_op_utils {
 std::map<std::string, std::string> get_defines(ttnn::BcastOpDim bcast_dim, ttnn::BcastOpMath bcast_math);

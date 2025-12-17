@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace ttnn::operations::loss {
 
 // /**
@@ -14,14 +16,14 @@ namespace ttnn::operations::loss {
 //  * NLL: https://pytorch.org/docs/stable/generated/torch.nn.NLLLoss.html#torch.nn.NLLLoss
 // */
 
-enum class LossFunction {
+enum class LossFunction : std::uint8_t {
     MSE,  // Mean Squared Error - squared L2 norm
     MAE,  // Mean Absolute Error - L1 norm
     CEL,  // Cross Entropy Loss
     NLL,  // Negative Log Likelihood -
 };
 
-enum class LossReductionMode {
+enum class LossReductionMode : std::uint8_t {
     NONE,
     MEAN,
     SUM,

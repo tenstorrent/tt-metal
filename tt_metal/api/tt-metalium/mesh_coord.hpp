@@ -92,7 +92,7 @@ public:
     // Returns a neighbor along the given dimension.
     // `BoundaryMode` specifies how to handle coordinates that are out of bounds.
     // Negative offsets and dim are allowed, and the input coordinate must be within bounds.
-    enum class BoundaryMode { WRAP, CLAMP, NONE };
+    enum class BoundaryMode : std::uint8_t { WRAP, CLAMP, NONE };
 
     std::optional<MeshCoordinate> get_neighbor(
         const MeshShape& shape, int32_t offset, int32_t dim, BoundaryMode mode = BoundaryMode::WRAP) const;

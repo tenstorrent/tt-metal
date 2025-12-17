@@ -60,7 +60,7 @@
 #include <experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_metal {
-enum class FabricConfig : uint32_t;
+enum class FabricConfig : std::uint8_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
 

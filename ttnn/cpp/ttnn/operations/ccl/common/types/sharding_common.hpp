@@ -10,7 +10,7 @@
 
 namespace shard_addr_gen_consts {
 
-enum class ContiguityType {
+enum class ContiguityType : std::uint8_t {
     // Indicates logical sharding placed padding between pages so no contiguous pages exist
     L1_PADDING_BETWEEN_PAGES = 0,
     // Indicates some padding exists in the rightmost shard since the pages did not divide evenly into shards

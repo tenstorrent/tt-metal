@@ -22,7 +22,7 @@ struct Event;
 class Trace;
 
 // Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType {
+enum class EnqueueCommandType : std::uint8_t {
     ENQUEUE_READ_BUFFER,
     ENQUEUE_WRITE_BUFFER,
     GET_BUF_ADDR,

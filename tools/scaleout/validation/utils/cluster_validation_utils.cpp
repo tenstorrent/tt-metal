@@ -63,7 +63,7 @@ struct LinkMetricsResult {
     std::vector<EthernetLinkMetrics> unhealthy_links;  // Only unhealthy links
 };
 
-enum class WorkloadResult { Completed, TimedOut };
+enum class WorkloadResult : std::uint8_t { Completed, TimedOut };
 
 struct ClusterContext {
     PhysicalSystemDescriptor& physical_system_descriptor;

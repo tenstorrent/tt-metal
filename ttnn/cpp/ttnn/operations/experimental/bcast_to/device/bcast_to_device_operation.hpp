@@ -13,7 +13,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
-enum class SubtileBroadcastType {
+enum class SubtileBroadcastType : std::uint8_t {
     NONE,    // both tensors have equal tile dimensions (H & W)
     SCALAR,  // input is a scalar (H = 1, W = 1)
     ROW,     // input has a single tile row

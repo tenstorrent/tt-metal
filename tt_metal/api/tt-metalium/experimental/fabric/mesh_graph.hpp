@@ -39,7 +39,7 @@ struct ChipSpec {
     std::uint32_t num_z_ports;
 };
 
-enum class RoutingDirection {
+enum class RoutingDirection : std::uint8_t {
     N = 0,
     E = 1,
     S = 2,

@@ -17,7 +17,7 @@ namespace tt::tt_metal::logging {
  * verbose (trace) to most severe (critical), with an option to disable
  * logging completely (off).
  */
-enum class level {
+enum class level : std::uint8_t {
     trace,     ///< Most detailed logging level, for tracing program execution
     debug,     ///< Debugging information, useful during development
     info,      ///< General informational messages about program operation

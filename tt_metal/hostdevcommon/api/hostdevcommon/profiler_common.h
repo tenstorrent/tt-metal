@@ -14,7 +14,7 @@ namespace kernel_profiler {
 
 static constexpr int SUM_COUNT = 2;
 
-enum BufferIndex {
+enum BufferIndex : std::uint8_t {
     ID_HH,
     ID_HL,
     ID_LH,
@@ -30,7 +30,7 @@ enum BufferIndex {
     CUSTOM_MARKERS
 };
 
-enum ControlBuffer {
+enum ControlBuffer : std::uint8_t {
     HOST_BUFFER_END_INDEX_BR_ER,
     HOST_BUFFER_END_INDEX_NC,
     HOST_BUFFER_END_INDEX_T0,
@@ -54,7 +54,7 @@ enum ControlBuffer {
     TRACE_REPLAY_STATUS
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };
+enum PacketTypes : std::uint8_t { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;

@@ -31,7 +31,7 @@ namespace tt::tt_fabric {
 template <class>
 inline constexpr bool always_false_v = false;
 
-enum TerminationSignal : uint32_t {
+enum TerminationSignal : std::uint8_t {
     KEEP_RUNNING = 0,
 
     // Wait for messages to drain

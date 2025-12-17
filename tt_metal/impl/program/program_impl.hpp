@@ -52,7 +52,7 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
-enum dispatch_core_processor_classes {
+enum dispatch_core_processor_classes : std::uint8_t {
     // Tensix processor classes
     DISPATCH_CLASS_TENSIX_DM0 = 0,
     DISPATCH_CLASS_TENSIX_DM1 = 1,

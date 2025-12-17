@@ -92,7 +92,7 @@ struct ResolvedGraphInstance {
     std::unordered_map<PortType, std::vector<PortConnection>> internal_connections;
 };
 
-enum class CableLength { CABLE_0P5, CABLE_1, CABLE_2P5, CABLE_3, CABLE_5, UNKNOWN };
+enum class CableLength : std::uint8_t { CABLE_0P5, CABLE_1, CABLE_2P5, CABLE_3, CABLE_5, UNKNOWN };
 
 CableLength calc_cable_length(
     const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type);

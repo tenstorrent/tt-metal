@@ -16,7 +16,7 @@
 #include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
-enum class BufferType;
+enum class BufferType : std::uint8_t;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {

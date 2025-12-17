@@ -24,7 +24,7 @@
 namespace tt::tt_fabric {
 
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
-enum class FabricTensixCoreType : uint32_t {
+enum class FabricTensixCoreType : std::uint8_t {
     MUX = 0,   // BRISC - runs MUX kernel
     RELAY = 1  // NCRISC - runs Relay kernel (UDM mode only)
 };

@@ -59,7 +59,7 @@ struct LocalMeshBinding {
 
 // In multi-host context, APIs parameterized with MeshScope, can return
 // results for local mesh or global mesh.
-enum class MeshScope {
+enum class MeshScope : std::uint8_t {
     LOCAL,
     GLOBAL,
 };

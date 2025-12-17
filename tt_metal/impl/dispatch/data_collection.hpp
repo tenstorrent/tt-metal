@@ -16,7 +16,7 @@ class Program;
 struct KernelGroup;
 }  // namespace tt_metal
 
-enum data_collector_t {
+enum data_collector_t : std::uint8_t {
     DISPATCH_DATA_CB_CONFIG,
     DISPATCH_DATA_SEMAPHORE,
     DISPATCH_DATA_RTARGS,

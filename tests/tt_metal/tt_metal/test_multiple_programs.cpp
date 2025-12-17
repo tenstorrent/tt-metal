@@ -46,7 +46,7 @@ using std::vector;
 using namespace tt;
 
 struct BinaryOpType {
-    enum Enum { ADD = 0, SUB = 1, MUL = 2 };
+    enum Enum : std::uint8_t { ADD = 0, SUB = 1, MUL = 2 };
     static vector<Enum> all() { return {ADD, SUB, MUL}; }
 };
 

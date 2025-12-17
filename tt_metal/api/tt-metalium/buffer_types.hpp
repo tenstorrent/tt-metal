@@ -8,26 +8,26 @@
 
 namespace tt::tt_metal {
 
-enum class TensorMemoryLayout {
+enum class TensorMemoryLayout : std::uint8_t {
     INTERLEAVED = 0,
     HEIGHT_SHARDED = 2,
     WIDTH_SHARDED = 3,
     BLOCK_SHARDED = 4,
 };
 
-enum class ShardOrientation {
+enum class ShardOrientation : std::uint8_t {
     ROW_MAJOR = 0,
     COL_MAJOR,
 };
 
-enum class ShardDistributionStrategy {
+enum class ShardDistributionStrategy : std::uint8_t {
     // Distribute each shard to each of the cores in a linearized list in a round-robin manner.
     ROUND_ROBIN_1D = 0,
     // Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.
     GRID_2D = 1,
 };
 
-enum class BufferType {
+enum class BufferType : std::uint8_t {
     DRAM,
     L1,
     SYSTEM_MEMORY,

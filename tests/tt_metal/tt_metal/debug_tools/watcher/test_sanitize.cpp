@@ -46,7 +46,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-enum watcher_features_t {
+enum watcher_features_t : std::uint8_t {
     SanitizeNOCAddress,
     SanitizeNOCAlignmentL1Write,
     SanitizeNOCAlignmentL1Read,

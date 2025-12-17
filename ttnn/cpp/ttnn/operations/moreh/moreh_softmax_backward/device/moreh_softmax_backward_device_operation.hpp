@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
-enum class MorehSoftmaxBackwardOpParallelizationStrategy {
+enum class MorehSoftmaxBackwardOpParallelizationStrategy : std::uint8_t {
     NONE,
     SMALL_W,
     SMALL_H,
@@ -18,7 +18,7 @@ enum class MorehSoftmaxBackwardOpParallelizationStrategy {
     LARGE_C,
 };
 
-enum class MorehSoftmaxBackwardOp {
+enum class MorehSoftmaxBackwardOp : std::uint8_t {
     SOFTMAX,
     SOFTMIN,
     LOGSOFTMAX,

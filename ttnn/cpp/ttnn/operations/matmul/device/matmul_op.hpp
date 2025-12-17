@@ -17,7 +17,7 @@ namespace ttnn::operations::matmul {
 
 // shared variables between override and program
 
-enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
+enum class Matmul1DType : std::uint8_t { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
 
 struct matmul_mcast_1d_common_override_variables_t {
     std::vector<tt::tt_metal::KernelHandle> kernels;

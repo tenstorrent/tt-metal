@@ -25,7 +25,7 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
-enum class AllGatherAsyncVersion {
+enum class AllGatherAsyncVersion : std::uint8_t {
     LLAMA_MINIMAL_SHARDED = 0,
     MINIMAL_DEFAULT = 1,
 };

@@ -61,7 +61,7 @@ struct NDShardingSqueezeRankParams {
     Shape expected_tensor_shape_pages;
     Shape expected_shard_shape_pages;
 };
-enum class ShardingTensorSpecMethod {
+enum class ShardingTensorSpecMethod : std::uint8_t {
     ShardedAcrossDims,
     ShardedAcrossDimsExcept,
     WidthSharded,

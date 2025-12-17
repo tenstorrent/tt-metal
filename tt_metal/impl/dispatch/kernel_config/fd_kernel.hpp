@@ -24,7 +24,7 @@ namespace tt::tt_metal {
 
 class IDevice;
 class Program;
-enum DispatchWorkerType : uint32_t;
+enum DispatchWorkerType : std::uint8_t;
 enum NOC : uint8_t;
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
@@ -36,7 +36,7 @@ struct noc_selection_t {
     tt::tt_metal::NOC downstream_noc;    // For communicating with downstream dispatch modules
 };
 
-enum class FDKernelType : uint32_t {
+enum class FDKernelType : std::uint8_t {
     UNSET = 0,
     VIRTUAL,   // Not a real kernel
     DISPATCH,  // Dispatch kernels

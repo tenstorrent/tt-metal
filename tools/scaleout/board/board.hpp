@@ -30,7 +30,7 @@ namespace tt::scaleout_tools {
 using PortId = ttsl::StrongType<uint32_t, struct PortIdTag>;
 using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
-enum class PortType {
+enum class PortType : std::uint8_t {
     TRACE,
     QSFP_DD,
     WARP100,

@@ -45,7 +45,7 @@
 namespace tt::tt_metal {
 class IDevice;
 class Kernel;
-enum class HalProgrammableCoreType;
+enum class HalProgrammableCoreType : std::uint8_t;
 }  // namespace tt::tt_metal
 
 namespace {

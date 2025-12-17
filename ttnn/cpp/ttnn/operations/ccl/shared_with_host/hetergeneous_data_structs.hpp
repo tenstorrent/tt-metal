@@ -26,16 +26,16 @@
 
 namespace ttnn::ccl {
 
-enum EriscDataMoverBufferSharingMode : uint32_t {
+enum EriscDataMoverBufferSharingMode : std::uint8_t {
     NOT_SHARED = 0,
     ROUND_ROBIN = 1,
     SHARED = 2,
     ROUND_ROBIN_AND_SHARED = 3
 };
 
-enum EriscDataMoverTerminationMode : uint32_t { MESSAGE_COUNT_REACHED = 0, WORKER_INITIATED = 1 };
+enum EriscDataMoverTerminationMode : std::uint8_t { MESSAGE_COUNT_REACHED = 0, WORKER_INITIATED = 1 };
 
-enum EriscDataMoverWorkerSignal : uint32_t {
+enum EriscDataMoverWorkerSignal : std::uint8_t {
     NEXT_MESSAGE_AVAILABLE = 1,
     NEXT_MESSAGE_IS_LAST = 2,
     TERMINATE_IMMEDIATELY = 3,

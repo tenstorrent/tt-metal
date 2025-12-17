@@ -205,7 +205,8 @@ class CodeGen:
             print(enum)
         for struct in self.structs:
             print(
-                f"struct {struct.name} : {self.driver_ns}::StructBuffer<{struct.name}> {{\n" "enum class Field {",
+                f"struct {struct.name} : {self.driver_ns}::StructBuffer<{struct.name}> {{\n"
+                "enum class Field : uint8_t {",
                 end=" ",
             )
             print(*[field.name for field in struct.fields], sep=", ")

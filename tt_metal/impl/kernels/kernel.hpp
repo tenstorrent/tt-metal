@@ -22,7 +22,7 @@
 namespace tt::tt_metal {
 
 struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
+    enum SourceType : std::uint8_t { FILE_PATH, SOURCE_CODE };
 
     std::string source_;
     SourceType source_type_;

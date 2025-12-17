@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::complex_unary {
 
-enum class ComplexUnaryOpType {
+enum class ComplexUnaryOpType : std::uint8_t {
     REAL,
     IMAG,
     ANGLE,

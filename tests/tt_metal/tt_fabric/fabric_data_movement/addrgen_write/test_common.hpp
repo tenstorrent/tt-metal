@@ -15,7 +15,7 @@ namespace tt::tt_fabric::test {
 using ChipId = tt::tt_metal::distributed::ChipId;
 
 // API variants for addrgen overload testing
-enum class AddrgenApiVariant {
+enum class AddrgenApiVariant : std::uint8_t {
     UnicastWrite,                           // fabric_unicast_noc_unicast_write
     UnicastWriteWithState,                  // fabric_unicast_noc_unicast_write_with_state
     UnicastWriteSetState,                   // fabric_unicast_noc_unicast_write_set_state + _with_state

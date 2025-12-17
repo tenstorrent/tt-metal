@@ -7,9 +7,9 @@
 
 namespace ttnn::operations::data_movement::transpose {
 
-enum class TransposeOpDim { WH, HC, CN, NH, NW, CW };
+enum class TransposeOpDim : std::uint8_t { WH, HC, CN, NH, NW, CW };
 
-enum class TransposeOpParallelizationStrategy { MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN };
+enum class TransposeOpParallelizationStrategy : std::uint8_t { MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN };
 
 struct operation_attributes_t {
     TransposeOpDim dim{};

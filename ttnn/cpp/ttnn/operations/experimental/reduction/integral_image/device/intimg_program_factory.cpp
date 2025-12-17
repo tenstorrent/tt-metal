@@ -18,7 +18,7 @@ namespace {
 using namespace tt::tt_metal;
 using namespace tt::stl;
 
-enum class IntImgCB : uint32_t {
+enum class IntImgCB : std::uint8_t {
     START,
     INPUT,
     ACC,

@@ -14,7 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
-enum class HalProgrammableCoreType;
+enum class HalProgrammableCoreType : std::uint8_t;
 
 constexpr uint32_t kernel_config_entry_count = 8;
 

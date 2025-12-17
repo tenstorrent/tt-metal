@@ -37,7 +37,7 @@ const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "
 // ENVIRONMENT VARIABLE IDs
 // ============================================================================
 // Full definition of EnvVarID enum (forward-declared in rtoptions.hpp)
-enum class EnvVarID {
+enum class EnvVarID : std::uint8_t {
     // ========================================
     // PATH CONFIGURATION
     // ========================================

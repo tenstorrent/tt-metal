@@ -19,10 +19,10 @@
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 // System Types currently supported for testing
-enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX };
+enum class SystemConfig : std::uint8_t { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX };
 
 // Socket Test Variants
-enum class TestVariant { SINGLE_CONN_BWD, SINGLE_CONN_FWD, MULTI_CONN_FWD, MULTI_CONN_BIDIR };
+enum class TestVariant : std::uint8_t { SINGLE_CONN_BWD, SINGLE_CONN_FWD, MULTI_CONN_FWD, MULTI_CONN_BIDIR };
 
 std::string get_system_config_name(SystemConfig system_config);
 

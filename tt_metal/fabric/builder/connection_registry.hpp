@@ -14,11 +14,11 @@ namespace tt::tt_fabric {
 /**
  * ConnectionType - Categorizes the type of connection between routers
  */
-enum class ConnectionType {
+enum class ConnectionType : std::uint8_t {
     INVALID,
-    INTRA_MESH,   // Connection between mesh routers on different devices
-    MESH_TO_Z,    // Connection from mesh router to Z router (same device)
-    Z_TO_MESH,    // Connection from Z router to mesh router (same device)
+    INTRA_MESH,  // Connection between mesh routers on different devices
+    MESH_TO_Z,   // Connection from mesh router to Z router (same device)
+    Z_TO_MESH,   // Connection from Z router to mesh router (same device)
 };
 
 /**

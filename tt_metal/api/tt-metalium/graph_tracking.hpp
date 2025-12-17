@@ -32,7 +32,7 @@ class Program;
 
 class IGraphProcessor {
 public:
-    enum class RunMode {
+    enum class RunMode : std::uint8_t {
         NORMAL,      // running everything as is
         NO_DISPATCH  // don't do memory allocations and program runs.
     };

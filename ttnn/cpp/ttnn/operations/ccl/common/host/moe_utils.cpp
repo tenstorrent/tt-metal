@@ -40,7 +40,7 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     const std::optional<uint32_t> axis) {
     // For readability use symbolic indices instead of raw numbers when accessing the
     // `directions` array `{East, West, North, South}`.
-    enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
+    enum Direction : std::uint8_t { East = 0, West = 1, North = 2, South = 3 };
     auto boundary_mode = detail::get_boundary_mode(topology);
 
     std::vector<ttnn::MeshCoordinate> neighbors;
