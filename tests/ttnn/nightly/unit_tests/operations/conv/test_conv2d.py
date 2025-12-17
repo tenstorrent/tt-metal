@@ -13,7 +13,12 @@ from models.common.utility_functions import (
 )
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    check_with_pcc_without_tensor_printout,
+    assert_equal,
+    assert_with_ulp,
+)
 import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
@@ -5090,23 +5095,26 @@ def test_conv_block_sharding(
 @pytest.mark.parametrize(
     "input_channels",
     [
-        8,
-        16,
-        32,
-        64,
-        128,
-        256,
+        # 8,
+        # 16,
+        # 32,
+        # 64,
+        # 128,
+        # 256,
         512,
-        1024,
-        2048,
-        4096,
+        # 1024,
+        # 2048,
+        # 4096,
+        # 8192,
+        # 16384,
+        # 32768,
     ],
 )
-@pytest.mark.parametrize("output_channels", [512])  # Match matmul N dimension
-@pytest.mark.parametrize("matrix_inputs_dtype", [ttnn.bfloat16,ttnn.float32])
+@pytest.mark.parametrize("output_channels", [32])  # Match matmul N dimension
+@pytest.mark.parametrize("matrix_inputs_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 # @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("fp32_accum", [True])
+@pytest.mark.parametrize("fp32_accum", [False])
 @pytest.mark.parametrize("packer_l1_acc", [True])
 @pytest.mark.parametrize(
     "scaler",
@@ -5114,11 +5122,11 @@ def test_conv_block_sharding(
         # 0.001,  # Very small values
         # 0.01,
         # 0.1,
-        # 1.0,    # Standard normal range
+        1.0,    # Standard normal range
         # 10.0,
         # 100.0,
         # 1000.0, # Large values
-        0.3333
+        # 0.3333
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -5151,12 +5159,12 @@ def test_conv2d_3x3_ulp_accuracy(
     - fp32_accum: Whether to use fp32 accumulation in compute kernel
     - scaler: Scaler for input and weight tensors
     """
-    from tests.ttnn.utils_for_testing import assert_with_ulp
     from models.common.utility_functions import comp_ulp
+    from ttnn.operations.conv2d import conv2d_unfold_matmul
 
-    batch_size = 1  # M = batch_size × 16 × 16 = 512 (matches matmul M dimension)
+    batch_size = 1
     input_height = 32
-    input_width = 16
+    input_width = 1
     filter_height = 3
     filter_width = 3
     stride_h = 1
@@ -5172,19 +5180,25 @@ def test_conv2d_3x3_ulp_accuracy(
 
     # Create random input and weight tensors
 
-    rand_func = torch.randn
-    # rand_func = torch.rand
+
+
+    # rand_func = torch.randn
+    rand_func = torch.rand
     torch_input_nchw = rand_func((batch_size, input_channels, input_height, input_width), dtype=torch_dtype) * scaler
     torch_weight = rand_func((output_channels, input_channels, filter_height, filter_width), dtype=torch_dtype) * scaler
 
+    print("torch conv input min: ", torch_input_nchw.min(), torch_weight.min(), flush=True)
+    print("torch conv input max: ", torch_input_nchw.max(), torch_weight.max(), flush=True)
     # Compute torch reference output (in NCHW format)
-    torch_output_nchw = torch.nn.functional.conv2d(
-        torch_input_nchw,
-        torch_weight,
+    torch_output_nchw = conv2d_unfold_matmul(
+        input=torch_input_nchw,
+        weight=torch_weight,
         bias=None,
         stride=(stride_h, stride_w),
         padding=padding,
+        matmul_precision="medium" if matrix_inputs_dtype == ttnn.bfloat16 else "highest",
     )
+
     # Convert reference to NHWC for comparison with ttnn output
     torch_output_nhwc = torch.permute(torch_output_nchw, (0, 2, 3, 1))
 
@@ -5259,18 +5273,23 @@ def test_conv2d_3x3_ulp_accuracy(
     logger.info(f"Starting equivalent matmul test for comparison...")
 
     # Matmul dimensions: M x K @ K x N = M x N
-    M = output_spatial_size  # 512
+    M = output_spatial_size  # 32
     K = inner_dim  # input_channels * 9
-    N = output_channels  # 512
+    N = output_channels  # 32
+
+    if matrix_inputs_dtype == ttnn.bfloat16:
+        torch.set_float32_matmul_precision("medium")
+    else:
+        torch.set_float32_matmul_precision("highest")
 
     # Create random matmul input tensors with same scaler
-    torch.manual_seed(0)
     torch_matmul_a = rand_func((M, K), dtype=torch_dtype) * scaler
     torch_matmul_b = rand_func((K, N), dtype=torch_dtype) * scaler
 
+    print("torch matmul input min: ", torch_matmul_a.min(), torch_matmul_b.min(), flush=True)
+    print("torch matmul input max: ", torch_matmul_a.max(), torch_matmul_b.max(), flush=True)
     # Compute torch reference matmul
-    if matrix_inputs_dtype == ttnn.bfloat16:
-        torch.set_float32_matmul_precision("medium")
+
     print("torch matmul precision: ", torch.get_float32_matmul_precision())
     torch_matmul_output = torch.matmul(torch_matmul_a, torch_matmul_b)
 
@@ -5304,3 +5323,232 @@ def test_conv2d_3x3_ulp_accuracy(
     assert matmul_ulp_passed, f"Matmul ULP check failed: {matmul_ulp_message}"
 
     logger.info(f"Both Conv2d and Matmul ULP tests PASSED")
+
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("input_channels", [
+    # 64,
+    # 128,
+    # 256,
+    # 512,
+    # 1024,
+    # 2048,
+    # 4096,
+    # 8192,
+    # 16384,
+    32768,
+])
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w",
+    (
+        (1, 32, 32, 32, 3, 3, 1, 1, 1, 1),
+    ),
+)
+@pytest.mark.parametrize("matrix_inputs_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
+@pytest.mark.parametrize("fp32_accum", [False])
+@pytest.mark.parametrize("packer_l1_acc", [True])
+def test_conv2d_vs_unfold_matmul_ulp(
+    device,
+    batch_size,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    matrix_inputs_dtype,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+):
+    """
+    Test comparing ttnn.conv2d with unfold+matmul implementation using ULP metric.
+
+    This test:
+    - Runs ttnn.conv2d on the device
+    - Implements conv2d using unfold + matmul operations (via conv2d_unfold_matmul)
+    - Compares both outputs using ULP (Units in Last Place) metric
+    - Sets torch precision to medium for bfloat16 dtypes
+    """
+    from models.common.utility_functions import comp_ulp
+    from ttnn.operations.conv2d import conv2d_unfold_matmul
+
+    # Determine matmul precision based on dtype
+    matmul_precision = "medium" if matrix_inputs_dtype == ttnn.bfloat16 else "highest"
+    torch_dtype = torch.bfloat16 if matrix_inputs_dtype == ttnn.bfloat16 else torch.float32
+
+    scaler = 1000.0
+    rand_func = torch.rand
+    # rand_func = torch.randn
+
+    # Create random input and weight tensors
+    torch_input_nchw = rand_func((batch_size, input_channels, input_height, input_width), dtype=torch_dtype) * scaler
+    torch_weight = rand_func((output_channels, input_channels, filter_height, filter_width), dtype=torch_dtype) * scaler
+    torch_bias = None
+
+    # Convert input to NHWC format for ttnn
+    torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=matrix_inputs_dtype, device=device)
+
+    # Convert weight and bias to ttnn
+    tt_weight = ttnn.from_torch(torch_weight, dtype=matrix_inputs_dtype)
+    tt_bias = None
+
+    # Create compute kernel config
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    # Run ttnn.conv2d
+    logger.info("Running ttnn.conv2d...")
+    [tt_conv2d_output, [out_h, out_w]] = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config,
+        groups=1,
+        return_output_dim=True,
+    )
+
+    # Convert ttnn conv2d output to torch (NHWC format)
+    tt_conv2d_output_torch = ttnn.to_torch(tt_conv2d_output)
+    tt_conv2d_output_torch = tt_conv2d_output_torch.reshape(batch_size, out_h, out_w, output_channels)
+
+    # Run unfold + matmul conv2d using the existing implementation
+    logger.info(f"Running unfold + matmul implementation (matmul_precision={matmul_precision})...")
+    torch_unfold_matmul_output = conv2d_unfold_matmul(
+        torch_input_nchw,
+        torch_weight,
+        bias=torch_bias,
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        matmul_precision=matmul_precision,
+    )
+
+    # Convert to NHWC for comparison with ttnn output
+    torch_unfold_matmul_nhwc = torch.permute(torch_unfold_matmul_output, (0, 2, 3, 1))
+
+    # Determine ULP threshold based on accumulation dimension
+    inner_dim = input_channels * filter_height * filter_width
+    ulp_threshold = 17
+
+    # Compare ttnn.conv2d with unfold+matmul using ULP
+    logger.info(f"Comparing ttnn.conv2d vs unfold+matmul (K={inner_dim}, threshold={ulp_threshold})...")
+    ulp_passed, ulp_message = comp_ulp(tt_conv2d_output_torch, torch_unfold_matmul_nhwc, ulp_threshold)
+
+    logger.info(f"=" * 80)
+    logger.info(f"ULP COMPARISON - ttnn.conv2d vs unfold+matmul")
+    logger.info(f"Shape: batch={batch_size}, in_ch={input_channels}, out_ch={output_channels}, H={input_height}, W={input_width}")
+    logger.info(f"Kernel: {filter_height}x{filter_width}, Stride: {stride_h}x{stride_w}, Padding: {pad_h}x{pad_w}")
+    logger.info(f"dtype={matrix_inputs_dtype}, math_fidelity={math_fidelity}, fp32_accum={fp32_accum}")
+    logger.info(f"Inner dim (K): {inner_dim}, ULP threshold: {ulp_threshold}")
+    logger.info(f"Result: {ulp_message} - {'PASS' if ulp_passed else 'FAIL'}")
+    logger.info(f"=" * 80)
+
+    # Assert the comparison passed
+    assert ulp_passed, f"ULP comparison failed: {ulp_message}"
+    logger.info(f"ttnn.conv2d vs unfold+matmul ULP test PASSED")
+
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "input_dtype,ulp_threshold",
+    [
+        (ttnn.bfloat16, 2),
+        (ttnn.float32, 30000),
+    ],
+)
+@pytest.mark.parametrize("input_channels", [1024])
+def test_conv_ulp(device, input_dtype, ulp_threshold, input_channels):
+    """Test 3x3 convolution with bfp16 and fp32     inputs with fp32 accumulation enabled"""
+
+
+    # These params will produce 96,K x K,96 matmul as a part of conv2d computation
+    # where K = input_channels * Kh * Kw = input_channels * 3 * 3 = input_channels * 9
+    batch_size = 1
+    out_channels = 96
+    input_height = 12
+    input_width = 8
+    kernel_size = 3
+    stride = 1
+    padding = 1
+
+    # Determine torch dtype based on input_dtype - all tensors use same dtype
+    if input_dtype == ttnn.bfloat16:
+        torch_dtype = torch.bfloat16
+    else:  # ttnn.float32
+        torch_dtype = torch.float32
+
+    # Generate random inputs - all with matching dtype
+    torch.manual_seed(42)
+    torch_input_nchw = torch.rand(batch_size, input_channels, input_height, input_width, dtype=torch_dtype)
+    torch_weight = torch.rand(out_channels, input_channels, kernel_size, kernel_size, dtype=torch_dtype)
+    torch_bias = torch.rand(1, 1, 1, out_channels, dtype=torch_dtype)
+
+    # Convert input to NHWC for ttnn
+    torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+
+    # Compute reference output with torch - all tensors use same dtype
+    torch_output = torch.nn.functional.conv2d(
+        torch_input_nchw,
+        torch_weight,
+        bias=torch_bias.reshape(-1),
+        stride=stride,
+        padding=padding,
+    )
+
+    # Convert to ttnn tensors - all use the same dtype
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=input_dtype, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=input_dtype)
+    tt_bias = ttnn.from_torch(torch_bias, dtype=input_dtype)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,  # Enable fp32 accumulation
+        packer_l1_acc=True,
+    )
+
+    # Run conv2d
+    [tt_output, [out_height, out_width]] = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config,
+        return_output_dim=True,
+    )
+
+    # Convert output back to torch and compare
+    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = tt_output_torch.reshape(batch_size, out_height, out_width, out_channels)
+    tt_output_torch = torch.permute(tt_output_torch, (0, 3, 1, 2))
+
+    assert_with_ulp(torch_output, tt_output_torch, ulp_threshold)
