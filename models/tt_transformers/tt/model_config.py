@@ -1914,8 +1914,8 @@ class ModelArgs:
                         break
                 if actual_vocab and actual_vocab != self.vocab_size:
                     self.vocab_size = actual_vocab
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to infer vocab_size from checkpoint weights: {e}")
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
