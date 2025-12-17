@@ -5,7 +5,7 @@ from torch import nn
 from transformers import SpeechT5ForTextToSpeech, SpeechT5HifiGan, SpeechT5Processor
 
 from models.tt_symbiote.modules.activation import TTNNSilu
-from models.tt_symbiote.modules.linear import TTNNLinearLLama
+from models.tt_symbiote.modules.linear import TTNNLinear
 from models.tt_symbiote.modules.normalization import TTNNLayerNorm
 from models.tt_symbiote.utils.device_management import set_device
 from models.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -15,7 +15,7 @@ def test_speech_t5(device):
     """Test SpeechT5 model with TTNN acceleration."""
 
     nn_to_ttnn = {
-        nn.Linear: TTNNLinearLLama,
+        nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
         nn.LayerNorm: TTNNLayerNorm,
     }
