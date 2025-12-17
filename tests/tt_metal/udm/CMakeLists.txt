@@ -8,6 +8,7 @@ set(UDM_TEST_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_copy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_add.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_reduction.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_reduction_interleaved.cpp
 )
 
 add_executable(udm_tests ${UDM_TEST_SRCS})

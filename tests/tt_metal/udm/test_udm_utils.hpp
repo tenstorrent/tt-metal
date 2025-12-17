@@ -101,9 +101,10 @@ inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_block_sharded_mes
 }
 
 /**
- * @brief Create mesh mapper for height-sharded distribution (replicate on width)
- * Shards tensor on height dimension across mesh rows, replicates across mesh columns
- * Useful for reduction outputs where width is reduced to a single tile
+ * @brief Create mesh mapper for height-sharded distribution
+ * Shards tensor on height dimension across mesh rows, replicates across columns.
+ * For 1xN mesh: output is replicated across all devices (single mesh row).
+ * For 2xN mesh: height is sharded across 2 rows, replicated across columns.
  */
 inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_height_sharded_mesh_mapper(
     tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
@@ -232,6 +233,29 @@ inline ttnn::Tensor create_block_distributed_interleaved_bfloat16_tensor(
 
     auto host_tensor = create_bfloat16_tensor_with_random_values(global_shape, tensor_spec);
     auto mapper = create_block_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+}
+
+/**
+ * @brief Create tensor: mesh height-distributed, grid interleaved
+ * Height is sharded across mesh devices. Initialized with zeros.
+ */
+inline ttnn::Tensor create_height_distributed_interleaved_bfloat16_tensor(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, const tt::tt_metal::Shape& global_shape) {
+    tt::tt_metal::MemoryConfig mem_config(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+    tt::tt_metal::TensorSpec tensor_spec(
+        global_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+
+    uint32_t volume = 1;
+    for (size_t i = 0; i < global_shape.rank(); ++i) {
+        volume *= global_shape[i];
+    }
+    std::vector<bfloat16> src_data(volume, bfloat16(0.0f));
+    auto host_tensor = ttnn::Tensor::from_vector(src_data, tensor_spec);
+
+    auto mapper = create_height_sharded_mesh_mapper(mesh_device, global_shape.rank());
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 
