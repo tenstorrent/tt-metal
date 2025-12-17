@@ -216,157 +216,62 @@ bool requires_forced_assignment_to_noc1() {
 }
 }  // anonymous namespace
 
-FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
-    const bool is_2D_routing = is_2D_topology(topology);
-    uint32_t num_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
-    uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
-    // Global
-    size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+// Helper to compute L1 layout parameters for EriscL1Layout construction
+namespace {
+struct L1LayoutParams {
+    size_t base_address;
+    size_t max_address;
+    bool enable_telemetry;
+    bool enable_code_profiling;
+    bool enable_multi_txq;
+    bool is_blackhole;
+};
 
-    // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
-    // memory for the telemetry buffer in Blackhole
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_bw_telemetry() ||
-        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        // Avoid a bug on BH, always allocate the space for the telemetry buffer
-        this->perf_telemetry_buffer_address = next_l1_addr;
-        next_l1_addr += 32;
-    }
-
-    // Allocate code profiling buffer (conditionally enabled)
+L1LayoutParams compute_l1_layout_params(size_t sender_txq_id, size_t receiver_txq_id) {
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
-        // Buffer size: max timer types * 16 bytes per result
-        constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
-        this->code_profiling_buffer_address = next_l1_addr;
-        next_l1_addr += code_profiling_buffer_size;
-    } else {
-        this->code_profiling_buffer_address = 0; // Not allocated
-    }
 
-    this->handshake_addr = next_l1_addr;
-    next_l1_addr += eth_channel_sync_size;
-
-    // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
-    // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (is_fabric_two_erisc_enabled()) {
-        this->receiver_txq_id = 1;
-    }
-    this->num_riscv_cores = get_num_riscv_cores();
-    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-        this->risc_configs.emplace_back(risc_id);
-    }
-    // temporary work-around for BH until 2-erisc is enabled. We are required to switch entirely to noc1 for
-    // routers when only using a single erisc because erisc0 will be used by base FW and may periodically use
-    // noc0 for link health related functionality.
-    if (requires_forced_assignment_to_noc1()) {
-        for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-            this->risc_configs[risc_id].set_configured_noc(tt::tt_metal::NOC::NOC_1);
-        }
-    }
-
-    if (this->sender_txq_id != this->receiver_txq_id) {
-        // counters are packed contiguously in memory, This can lead to resends of values but
-        // this is safe for free running counters, which are enabled in this mode.
-        size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
-        this->router_buffer_clear_size_words = num_words_consumed_per_counter;
-
-        next_l1_addr = tt::align(next_l1_addr, field_size);
-
-        this->to_sender_channel_remote_ack_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_words_consumed_per_counter;
-
-        this->to_sender_channel_remote_completion_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_words_consumed_per_counter;
-
-        this->receiver_channel_remote_ack_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_words_consumed_per_counter;
-
-        this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_words_consumed_per_counter;
-    }
-
-    this->edm_channel_ack_addr = next_l1_addr;
-    this->termination_signal_address =
-        edm_channel_ack_addr +
-        (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
-    this->edm_local_sync_address = termination_signal_address + field_size;
-    this->edm_status_address = edm_local_sync_address + field_size;
-
-    uint32_t buffer_address = edm_status_address + field_size;
-
-    // ----------- Sender Channels
-    for (uint32_t i = 0; i < num_sender_channels; i++) {
-        this->sender_channels_buffer_index_address[i] = buffer_address;
-        buffer_address += field_size;
-        // Connection info layout:
-        // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
-        // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in
-        // worker's L1 2: WorkerXY (as uint32_t) 3: Hold's EDM's rdptr for the buffer index in the channel
-        this->sender_channels_worker_conn_info_base_address[i] = buffer_address;
-        buffer_address += sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
-        this->sender_channels_local_flow_control_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
-        this->sender_channels_producer_terminate_connection_address[i] = buffer_address;
-        buffer_address += field_size;
-        // persistent mode field
-        this->sender_channels_connection_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
-        // persistent mode field
-        this->sender_channels_buffer_index_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
-    }
-    // ----------- Receiver Channels
-    for (uint32_t i = 0; i < num_downstream_edms; i++) {
-        // temporarily padded to have exact parity with addresses pre-refactor
-        // because receiver_channels_local_buffer_index_address was removed (as dead code) and is no longer
-        // needed. We still waste the L1 to minimize the incremental changes in builder refactor
-        buffer_address += field_size;
-
-        // persistent mode field
-        this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
-        this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
-    }
-
-    // ----------- Local Tensix Relay Connection (UDM mode only)
-    // Dedicated connection buffer index for the local tensix relay interface
-    this->tensix_relay_connection_buffer_index_id = buffer_address;
-    buffer_address += field_size;
-
-    // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
-    // the hang is root caused for multiprocess test.
-    this->edm_local_tensix_sync_address = buffer_address;
-    buffer_address += field_size;
-
-    // location for temporarily store the src address when performing inline writes to L1 with spoof
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        this->notify_worker_of_read_counter_update_src_address = buffer_address;
-        buffer_address += field_size;
-    }
-
-    // Channel Allocations
-    this->max_l1_loading_size =
-        tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
-    auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
-    this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
+    return L1LayoutParams{
+        .base_address = hal.get_erisc_l1_unreserved_base(),
+        .max_address = hal.get_erisc_l1_unreserved_base() + hal.get_erisc_l1_unreserved_size(),
+        .enable_telemetry = rtoptions.get_enable_fabric_bw_telemetry() || hal.get_arch() == tt::ARCH::BLACKHOLE,
+        .enable_code_profiling = rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd(),
+        .enable_multi_txq = (sender_txq_id != receiver_txq_id),
+        .is_blackhole = hal.get_arch() == tt::ARCH::BLACKHOLE};
 }
+}  // anonymous namespace
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
+    const MeshChannelSpec& channel_spec,
     std::size_t channel_buffer_size_bytes,
     Topology topology,
-    FabricEriscDatamoverOptions options,
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
-    FabricEriscDatamoverConfig(topology) {
-
-    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
-
-    // Set channel counts from parameters
+    FabricEriscDatamoverOptions options) :
+    channel_spec_(channel_spec),
+    topology(topology),
+    channel_buffer_size_bytes(channel_buffer_size_bytes),
+    l1_layout_([&]() {
+        // Compute receiver_txq_id to determine enable_multi_txq
+        size_t receiver_txq_id = 0;
+        if (is_fabric_two_erisc_enabled()) {
+            receiver_txq_id = 1;
+        }
+        auto params = compute_l1_layout_params(sender_txq_id, receiver_txq_id);
+        return EriscL1Layout(
+            params.base_address,
+            params.max_address,
+            channel_spec,
+            params.enable_telemetry,
+            params.enable_code_profiling,
+            params.enable_multi_txq,
+            params.is_blackhole);
+    }()),
+    noc_config_(RouterNocConfig::create_for_default(
+        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+        requires_forced_assignment_to_noc1())) {
+    // Extract channel counts from spec
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        this->num_used_sender_channels_per_vc[vc] = sender_channels_per_vc[vc];
-        this->num_used_receiver_channels_per_vc[vc] = receiver_channels_per_vc[vc];
+        this->num_used_sender_channels_per_vc[vc] = channel_spec_.sender_channels_per_vc[vc];
+        this->num_used_receiver_channels_per_vc[vc] = channel_spec_.receiver_channels_per_vc[vc];
         log_debug(
             tt::LogFabric,
             "  VC{}: {} senders, {} receivers",
@@ -376,12 +281,91 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     // Set total counts for backward compatibility
-    this->num_used_sender_channels = std::accumulate(this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
-    this->num_used_receiver_channels = std::accumulate(this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
+    this->num_used_sender_channels = std::accumulate(
+        this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
+    this->num_used_receiver_channels = std::accumulate(
+        this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
 
     // num_fwd_paths = total sender channels - 1 (worker channel)
     this->num_fwd_paths = this->num_used_sender_channels - 1;
 
+    // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
+    // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
+    if (is_fabric_two_erisc_enabled()) {
+        this->receiver_txq_id = 1;
+    }
+
+    this->num_riscv_cores = get_num_riscv_cores();
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+        this->risc_configs.emplace_back(risc_id);
+    }
+
+    // temporary work-around for BH until 2-erisc is enabled
+    if (requires_forced_assignment_to_noc1()) {
+        for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+            this->risc_configs[risc_id].set_configured_noc(tt::tt_metal::NOC::NOC_1);
+        }
+    }
+
+    // Populate address fields from L1 layout (l1_layout_ was constructed in initializer list)
+    this->handshake_addr = l1_layout_.get(L1Block::HANDSHAKE).start_address;
+    this->edm_channel_ack_addr = l1_layout_.get(L1Block::EDM_CHANNEL_ACK).start_address;
+    this->termination_signal_address = l1_layout_.get(L1Block::TERMINATION_SIGNAL).start_address;
+    this->edm_local_sync_address = l1_layout_.get(L1Block::EDM_LOCAL_SYNC).start_address;
+    this->edm_local_tensix_sync_address = l1_layout_.get(L1Block::EDM_LOCAL_TENSIX_SYNC).start_address;
+    this->edm_status_address = l1_layout_.get(L1Block::EDM_STATUS).start_address;
+    this->perf_telemetry_buffer_address = l1_layout_.get(L1Block::TELEMETRY_BUFFER).start_address;
+    this->code_profiling_buffer_address = l1_layout_.get(L1Block::CODE_PROFILING_BUFFER).start_address;
+    this->tensix_relay_connection_buffer_index_id = l1_layout_.get(L1Block::TENSIX_RELAY_BUFFER_INDEX).start_address;
+    this->notify_worker_of_read_counter_update_src_address =
+        l1_layout_.get(L1Block::NOTIFY_WORKER_SRC_ADDR).start_address;
+
+    // Remote counter bases (multi-TXQ mode)
+    const auto& counter_bases = l1_layout_.get(L1Block::REMOTE_COUNTER_BASES);
+    if (counter_bases.size > 0) {
+        size_t num_words_per_counter = tt::align(sizeof(uint32_t) * this->num_used_sender_channels, field_size);
+        this->router_buffer_clear_size_words = num_words_per_counter;
+        this->to_sender_channel_remote_ack_counters_base_addr = counter_bases.start_address;
+        this->to_sender_channel_remote_completion_counters_base_addr =
+            counter_bases.start_address + num_words_per_counter;
+        this->receiver_channel_remote_ack_counters_base_addr = counter_bases.start_address + 2 * num_words_per_counter;
+        this->receiver_channel_remote_completion_counters_base_addr =
+            counter_bases.start_address + 3 * num_words_per_counter;
+    }
+
+    // Sender channel control addresses (strided layout)
+    const auto& sender_control = l1_layout_.get(L1Block::SENDER_CHANNEL_CONTROL);
+    if (sender_control.size > 0) {
+        size_t stride = EriscL1Layout::get_block_stride(L1Block::SENDER_CHANNEL_CONTROL);
+        for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+            size_t base = sender_control.start_address + i * stride;
+            this->sender_channels_buffer_index_address[i] = base;
+            this->sender_channels_worker_conn_info_base_address[i] = base + field_size;
+            this->sender_channels_local_flow_control_semaphore_address[i] =
+                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
+            this->sender_channels_producer_terminate_connection_address[i] =
+                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) + field_size;
+            this->sender_channels_connection_semaphore_address[i] =
+                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) + 2 * field_size;
+            this->sender_channels_buffer_index_semaphore_address[i] =
+                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) + 3 * field_size;
+        }
+    }
+
+    // Receiver downstream control addresses (strided layout)
+    const auto& receiver_control = l1_layout_.get(L1Block::RECEIVER_DOWNSTREAM_CONTROL);
+    if (receiver_control.size > 0) {
+        size_t stride = EriscL1Layout::get_block_stride(L1Block::RECEIVER_DOWNSTREAM_CONTROL);
+        size_t num_downstream = channel_spec_.get_total_downstream_edms();
+        for (uint32_t i = 0; i < num_downstream; i++) {
+            size_t base = receiver_control.start_address + i * stride;
+            // Skip padding field (first field_size bytes)
+            this->receiver_channels_downstream_flow_control_semaphore_address[i] = base + field_size;
+            this->receiver_channels_downstream_teardown_semaphore_address[i] = base + 2 * field_size;
+        }
+    }
+
+    // Validation: sender addresses must be aligned
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         TT_FATAL(
             (sender_channels_buffer_index_address[i] % eth_word_l1_alignment == 0),
@@ -419,20 +403,22 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     TT_FATAL(
         channel_buffer_size_bytes >= min_buffer_size,
         "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than "
-        "minimum "
-        "size of {}",
+        "minimum size of {}",
         min_buffer_size);
-    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
 
-    // Compute available channel buffering space from memory regions
-    size_t available_channel_buffering_space = std::accumulate(
-        this->available_buffer_memory_regions.begin(),
-        this->available_buffer_memory_regions.end(),
-        size_t{0},
-        [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
+    // Channel buffer memory region
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& buffer_region = l1_layout_.get(L1Block::CHANNEL_BUFFERS);
+    this->max_l1_loading_size = hal.get_erisc_l1_unreserved_size() + hal.get_erisc_l1_unreserved_base();
+    this->available_buffer_memory_regions = {MemoryRegion(buffer_region.start_address, buffer_region.size)};
 
-    // Create a default recipe with a single static pool for backward compatibility
-    // All channels map to pool 0 (the single static pool)
+    // Compute available channel buffering space
+    size_t available_channel_buffering_space = buffer_region.size;
+
+    // Apply edm_noc_vc from noc_config_
+    this->edm_noc_vc = noc_config_.edm_noc_vc;
+
+    // Create allocators (same as before)
     auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
         this->num_used_sender_channels, this->num_used_receiver_channels);
     auto remote_channels_recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
@@ -441,20 +427,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // Create the single static pool allocator with per-VC channel distribution
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
         topology,
+        channel_spec_,
         options,
-        this->num_used_sender_channels_per_vc,
-        this->num_used_receiver_channels_per_vc,
         this->channel_buffer_size_bytes,
         available_channel_buffering_space,
         this->available_buffer_memory_regions);
 
-    // Assign static allocator directly to channel_allocator (composition, not wrapped)
+    // Assign static allocator directly to channel_allocator
     this->channel_allocator = static_allocator;
 
-    // Create remote channels allocator from the static allocator
+    // Create remote channels allocator
     this->remote_channels_allocator = std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
 
-    // Create multi-pool coordinator that manages the pool allocators
+    // Create multi-pool coordinator
     std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>> pool_allocators;
     pool_allocators.push_back(static_allocator);
 
@@ -468,32 +453,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipe);
     this->remote_channel_to_pool_mapping =
         std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(remote_channels_recipe);
-
-    // set default noc and cmd bufs (current setup in TG 4U)
-    for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
-        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
-        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
-        this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
-        this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
-
-        if (requires_forced_assignment_to_noc1()) {
-            this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
-            this->receiver_channel_local_write_noc_ids[i] =
-                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
-            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
-        }
-    }
-    for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
-        this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
-
-        if (requires_forced_assignment_to_noc1()) {
-            this->sender_channel_ack_noc_ids[i] =
-                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
-        }
-    }
-    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -1099,39 +1058,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(this->sender_channel_is_traffic_injection_channel_array.at(i));
     }
 
-    // Sender channel args
-    for (size_t i = 0; i < num_sender_channels; i++) {
-        ct_args.push_back(config.sender_channel_ack_noc_ids[i]);
-    }
-
-    // Populate the sender ack cmd buf ids for each datapath
-    for (size_t i = 0; i < num_sender_channels; i++) {
-        ct_args.push_back(config.sender_channel_ack_cmd_buf_ids[i]);
-    }
-
-    for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(config.receiver_channel_forwarding_noc_ids[i]);
-    }
-    for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(
-            config.receiver_channel_forwarding_data_cmd_buf_ids[i]);  // maps to
-                                                                      // receiver_channel_forwarding_data_cmd_buf_ids
-    }
-    for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(
-            config.receiver_channel_forwarding_sync_cmd_buf_ids[i]);  // maps to
-                                                                      // receiver_channel_forwarding_sync_cmd_buf_ids
-    }
-    for (size_t i = 0; i < num_receiver_channels; i++) {
-        // TODO: pass this to the tranmission file
-        ct_args.push_back(
-            config.receiver_channel_local_write_noc_ids[i]);  // maps to receiver_channel_local_write_noc_ids
-    }
-    for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(
-            config.receiver_channel_local_write_cmd_buf_ids[i]);  // maps to receiver_channel_local_write_cmd_buf_ids
-    }
-    ct_args.push_back(config.edm_noc_vc);
+    // Emit NOC/CmdBuf configuration via RouterNocConfig helper
+    config.get_noc_config().emit_ct_args(ct_args, config.get_channel_spec());
 
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);

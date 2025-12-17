@@ -18,7 +18,7 @@
 namespace tt::tt_fabric {
 
 class FabricContext;
-
+struct MeshChannelSpec;
 
 /**
  * IntermeshVCMode - Defines intermesh VC requirements
@@ -128,13 +128,9 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
 
-    // ============ Max Channel Counts ============
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_sender_channels_per_vc() const {
-        return max_sender_channels_per_vc_;
-    }
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_receiver_channels_per_vc() const {
-        return max_receiver_channels_per_vc_;
-    }
+    // ============ Channel Spec ============
+    // Returns the mesh channel spec (single source of truth for channel structure)
+    const MeshChannelSpec& get_mesh_channel_spec() const { return mesh_channel_spec_; }
 
     // ============ Tensix Config ============
     void initialize_tensix_config();
@@ -170,9 +166,8 @@ private:
 
     IntermeshVCConfig intermesh_vc_config_;
 
-    // Computed max channel counts based on actual router types in this fabric
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_{};
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_{};
+    // Mesh channel spec - single source of truth for channel structure
+    MeshChannelSpec mesh_channel_spec_;
 
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;
@@ -193,9 +188,6 @@ private:
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
-
-    // Helper to compute max channel counts for this fabric instance
-    void compute_max_channel_counts();
 };
 
 }  // namespace tt::tt_fabric

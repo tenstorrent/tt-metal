@@ -28,21 +28,21 @@ struct RouterNocConfig {
     // ═══════════════════════════════════════════════════════════
 
     // Forwarding (receiver → downstream sender)
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_forwarding_noc{};
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_forwarding_data_cmd_buf{};
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_forwarding_sync_cmd_buf{};
+    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_noc{};
+    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf{};
+    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf{};
 
     // Local write (receiver → local L1)
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_local_write_noc{};
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_local_write_cmd_buf{};
+    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_noc{};
+    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf{};
 
     // ═══════════════════════════════════════════════════════════
     // Sender Channel Config
     // ═══════════════════════════════════════════════════════════
 
     // Ack (sender receives acks from remote)
-    std::array<size_t, builder_config::num_max_sender_channels> sender_ack_noc{};
-    std::array<size_t, builder_config::num_max_sender_channels> sender_ack_cmd_buf{};
+    std::array<size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc{};
+    std::array<size_t, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf{};
 
     // ═══════════════════════════════════════════════════════════
     // Global NOC Config
@@ -81,20 +81,33 @@ struct RouterNocConfig {
         size_t cmd_buf;
     };
 
-    ForwardingConfig get_receiver_forwarding(size_t ch) const {
+    ForwardingConfig get_receiver_channel_forwarding(size_t ch) const {
         return {
-            receiver_forwarding_noc[ch], receiver_forwarding_data_cmd_buf[ch], receiver_forwarding_sync_cmd_buf[ch]};
+            receiver_channel_forwarding_noc[ch],
+            receiver_channel_forwarding_data_cmd_buf[ch],
+            receiver_channel_forwarding_sync_cmd_buf[ch]};
     }
 
-    LocalWriteConfig get_receiver_local_write(size_t ch) const {
-        return {receiver_local_write_noc[ch], receiver_local_write_cmd_buf[ch]};
+    LocalWriteConfig get_receiver_channel_local_write(size_t ch) const {
+        return {receiver_channel_local_write_noc[ch], receiver_channel_local_write_cmd_buf[ch]};
     }
 
-    AckConfig get_sender_ack(size_t ch) const { return {sender_ack_noc[ch], sender_ack_cmd_buf[ch]}; }
+    AckConfig get_sender_channel_ack(size_t ch) const {
+        return {sender_channel_ack_noc[ch], sender_channel_ack_cmd_buf[ch]};
+    }
 
     // EDM NOC VC accessors (runtime modifiable)
     size_t get_edm_noc_vc() const { return edm_noc_vc; }
     void set_edm_noc_vc(size_t vc) { edm_noc_vc = vc; }
+
+    // Setters for individual channel NOC assignments
+    void set_receiver_channel_forwarding_noc(size_t ch, uint8_t noc_id) {
+        receiver_channel_forwarding_noc[ch] = noc_id;
+    }
+    void set_receiver_channel_local_write_noc(size_t ch, uint8_t noc_id) {
+        receiver_channel_local_write_noc[ch] = noc_id;
+    }
+    void set_sender_channel_ack_noc(size_t ch, uint8_t noc_id) { sender_channel_ack_noc[ch] = noc_id; }
 
     // ═══════════════════════════════════════════════════════════
     // CT Args Emission Helper

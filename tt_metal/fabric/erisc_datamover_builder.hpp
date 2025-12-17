@@ -26,6 +26,9 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
+#include "tt_metal/fabric/builder/erisc_l1_layout.hpp"
+#include "tt_metal/fabric/builder/router_noc_config.hpp"
 
 namespace tt::tt_fabric {
 
@@ -196,19 +199,7 @@ struct StreamRegAssignments {
 };
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
-    static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
-    static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-    static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
-    static constexpr uint32_t DEFAULT_NOC_VC = 2;
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
-
-    static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
-    static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
-    static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
-    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC = 1;
-    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
-    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
@@ -278,11 +269,10 @@ struct FabricEriscDatamoverConfig {
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
+        const MeshChannelSpec& channel_spec,
         std::size_t channel_buffer_size_bytes,
         Topology topology,
-        FabricEriscDatamoverOptions options,
-        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
+        FabricEriscDatamoverOptions options);
 
     std::size_t channel_buffer_size_bytes = 0;
 
@@ -296,18 +286,6 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
-
-    // add the noc-usage and cmd_buf-usage here
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
-
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
@@ -328,8 +306,17 @@ struct FabricEriscDatamoverConfig {
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
+    // Accessors for component members
+    const RouterNocConfig& get_noc_config() const { return noc_config_; }
+    const MeshChannelSpec& get_channel_spec() const { return channel_spec_; }
+
 private:
-    FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
+    // ═══════════════════════════════════════════════════════════
+    // Component Members (private - access via public fields/methods above)
+    // ═══════════════════════════════════════════════════════════
+    MeshChannelSpec channel_spec_;  // Channel structure definition
+    EriscL1Layout l1_layout_;       // L1 memory layout
+    RouterNocConfig noc_config_;    // NOC/CmdBuf assignments
 };
 
 struct FabricRiscConfig {
