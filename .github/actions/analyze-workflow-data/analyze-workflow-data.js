@@ -75,8 +75,7 @@ const {
   computeLatestRunInfo,
   getMainWindowRuns,
   computeStatusChanges,
-  enrichRegressions,
-  enrichStayedFailing,
+  enrichFailingDetails,
   detectJobLevelRegressions,
   buildRegressionsSection,
   buildStayedFailingSection,
@@ -184,10 +183,10 @@ async function run() {
     );
 
     // Enrich regressions with first failing run within the window
-    await enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
+    await enrichFailingDetails(regressedDetails, filteredGrouped, errorSnippetsCache, changes, github.context, 'success_to_fail');
 
     // Enrich stayed failing with first failing run within the window
-    await enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
+    await enrichFailingDetails(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, github.context, 'stayed_failing');
 
     // Detect job-level regressions in stayed_failing workflows
     // This identifies NEW failing jobs in pipelines that were already failing

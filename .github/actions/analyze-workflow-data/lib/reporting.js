@@ -606,15 +606,18 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
 }
 
 /**
- * Enriches regression details with first failing run, commits, authors, and error snippets
- * @param {Array} regressedDetails - Array of regression detail objects (modified in place)
+ * Enriches failing workflow details with first failing run, commits, authors, and error snippets
+ * @param {Array} details - Array of failing detail objects (modified in place)
  * @param {Map} filteredGrouped - Map of workflow names to their runs
  * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
  * @param {Array} changes - Array of change objects (will be updated with enrichment data)
  * @param {object} context - GitHub Actions context
+ * @param {string} changeType - Type of change: 'success_to_fail' or 'stayed_failing'
  */
-async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context) {
-  for (const item of regressedDetails) {
+async function enrichFailingDetails(details, filteredGrouped, errorSnippetsCache, changes, context, changeType) {
+  const isRegression = changeType === 'success_to_fail';
+
+  for (const item of details) {
     try {
       const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
       const res = findFirstFailInWindow(windowRuns);
@@ -653,35 +656,39 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
             if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
             resolveOwnersForSnippet(sn, item.name);
           }
-          const ownerSet = new Map();
-          const genericExitOrigOwners = new Map();
-          const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(String(s).trim());
-          for (const sn of (item.error_snippets || [])) {
-            if (Array.isArray(sn.owner)) {
-              for (const o of sn.owner) {
-                if (!o) continue;
-                const k = `${o.id || ''}|${o.name || ''}`;
-                ownerSet.set(k, o);
+
+          // Owner extraction logic (only for regressions)
+          if (isRegression) {
+            const ownerSet = new Map();
+            const genericExitOrigOwners = new Map();
+            for (const sn of (item.error_snippets || [])) {
+              if (Array.isArray(sn.owner)) {
+                for (const o of sn.owner) {
+                  if (!o) continue;
+                  const k = `${o.id || ''}|${o.name || ''}`;
+                  ownerSet.set(k, o);
+                }
               }
-            }
-            // Always include original pipeline owners if they exist (even when infra is assigned)
-            if (Array.isArray(sn.original_owners)) {
-              for (const oo of sn.original_owners) {
-                const nm = (oo && (oo.name || oo.id)) || '';
-                if (nm) genericExitOrigOwners.set(nm, true);
-                if (oo) {
-                  const k2 = `${oo.id || ''}|${oo.name || ''}`;
-                  ownerSet.set(k2, { id: oo.id, name: oo.name });
+              // Always include original pipeline owners if they exist (even when infra is assigned)
+              if (Array.isArray(sn.original_owners)) {
+                for (const oo of sn.original_owners) {
+                  const nm = (oo && (oo.name || oo.id)) || '';
+                  if (nm) genericExitOrigOwners.set(nm, true);
+                  if (oo) {
+                    const k2 = `${oo.id || ''}|${oo.name || ''}`;
+                    ownerSet.set(k2, { id: oo.id, name: oo.name });
+                  }
                 }
               }
             }
+            let owners = Array.from(ownerSet.values());
+            if (!owners.length) {
+              owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
+            }
+            item.owners = owners;
+            item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
           }
-          let owners = Array.from(ownerSet.values());
-          if (!owners.length) {
-            owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
-          }
-          item.owners = owners;
-          item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
+
           // Extract failing jobs with their URLs and owners (deduplicated by job name)
           const failingJobsMap = new Map();
           for (const sn of (item.error_snippets || [])) {
@@ -720,9 +727,9 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
         } catch (_) { /* ignore */ }
 
         item.repeated_errors = [];
-        const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
+        const changeRef = changes.find(c => c.name === item.name && c.change === changeType);
         if (changeRef) {
-          Object.assign(changeRef, {
+          const changeData = {
             first_failed_run_id: item.first_failed_run_id,
             first_failed_run_url: item.first_failed_run_url,
             first_failed_created_at: item.first_failed_created_at,
@@ -736,15 +743,31 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
             error_snippets: item.error_snippets || [],
             repeated_errors: item.repeated_errors || [],
             failing_jobs: item.failing_jobs || [],
-            owners: item.owners || [],
-            original_owner_names_for_generic_exit: item.original_owner_names_for_generic_exit || [],
-          });
+          };
+          // Only include owners fields for regressions
+          if (isRegression) {
+            changeData.owners = item.owners || [];
+            changeData.original_owner_names_for_generic_exit = item.original_owner_names_for_generic_exit || [];
+          }
+          Object.assign(changeRef, changeData);
         }
       }
     } catch (e) {
       core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
     }
   }
+}
+
+/**
+ * Enriches regression details with first failing run, commits, authors, and error snippets
+ * @param {Array} regressedDetails - Array of regression detail objects (modified in place)
+ * @param {Map} filteredGrouped - Map of workflow names to their runs
+ * @param {Map} errorSnippetsCache - Cache for error snippets (will be populated)
+ * @param {Array} changes - Array of change objects (will be updated with enrichment data)
+ * @param {object} context - GitHub Actions context
+ */
+async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context) {
+  return enrichFailingDetails(regressedDetails, filteredGrouped, errorSnippetsCache, changes, context, 'success_to_fail');
 }
 
 /**
@@ -756,105 +779,7 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
  * @param {object} context - GitHub Actions context
  */
 async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, context) {
-  for (const item of stayedFailingDetails) {
-    try {
-      const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
-      const res = findFirstFailInWindow(windowRuns);
-      if (res && res.run) {
-        item.first_failed_run_id = res.run.id;
-        item.first_failed_run_url = res.run.html_url;
-        item.first_failed_created_at = res.run.created_at;
-        item.first_failed_head_sha = res.run.head_sha;
-        item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-        item.no_success_in_window = !!res.noSuccessInWindow;
-        if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
-          item.commits_between = listCommitsBetweenOffline(context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
-        }
-        if (item.first_failed_head_sha) {
-          const author = await fetchCommitAuthor(item.first_failed_head_sha);
-          item.first_failed_author_login = author.login;
-          item.first_failed_author_name = author.name;
-          item.first_failed_author_url = author.htmlUrl;
-        }
-        if (item.run_id) {
-          item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
-            item.run_id,
-            Number.POSITIVE_INFINITY,
-            undefined,
-            getAnnotationsDirForRunId(item.run_id)
-          );
-          if (!errorSnippetsCache.has(item.run_id)) {
-            errorSnippetsCache.set(item.run_id, item.error_snippets);
-          }
-        } else {
-          item.error_snippets = [];
-        }
-        try {
-          for (const sn of (item.error_snippets || [])) {
-            const inferred = inferJobAndTestFromSnippet(sn);
-            if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
-            resolveOwnersForSnippet(sn, item.name);
-          }
-          // Extract failing jobs with their URLs and owners (same logic as in enrichRegressions)
-          const failingJobsMap = new Map();
-          for (const sn of (item.error_snippets || [])) {
-            const jobName = (sn && sn.job) ? String(sn.job) : '';
-            const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
-            if (jobName) {
-              if (!failingJobsMap.has(jobName)) {
-                failingJobsMap.set(jobName, { name: jobName, url: jobUrl, owners: [] });
-              }
-              // Merge owners from all snippets for this job (dedupe by id)
-              const job = failingJobsMap.get(jobName);
-              const snippetOwners = Array.isArray(sn.owner) ? sn.owner : [];
-              for (const owner of snippetOwners) {
-                if (owner && owner.id && !job.owners.some(o => o.id === owner.id)) {
-                  job.owners.push(owner);
-                }
-              }
-            }
-          }
-          // For each job: if there are non-infra owners, remove infra; if no owners, add infra as default
-          const infraId = DEFAULT_INFRA_OWNER.id;
-          for (const job of failingJobsMap.values()) {
-            const nonInfraOwners = job.owners.filter(o => o.id !== infraId);
-            if (nonInfraOwners.length > 0) {
-              // Has specific owners - use only those (no infra)
-              job.owners = nonInfraOwners;
-            } else if (job.owners.length === 0) {
-              // No owners from snippets - try findOwnerForLabel as fallback
-              const labelOwners = findOwnerForLabel(job.name) || findOwnerForLabel(`${item.name} / ${job.name}`) || [];
-              const nonInfraLabelOwners = labelOwners.filter(o => o.id !== infraId);
-              job.owners = nonInfraLabelOwners.length > 0 ? nonInfraLabelOwners : [DEFAULT_INFRA_OWNER];
-            }
-            // else: job.owners only has infra, which is fine as the default
-          }
-          item.failing_jobs = Array.from(failingJobsMap.values());
-        } catch (_) { /* ignore */ }
-        item.repeated_errors = [];
-      }
-      const changeRef = changes.find(c => c.name === item.name && c.change === 'stayed_failing');
-      if (changeRef) {
-        Object.assign(changeRef, {
-          first_failed_run_id: item.first_failed_run_id,
-          first_failed_run_url: item.first_failed_run_url,
-          first_failed_created_at: item.first_failed_created_at,
-          first_failed_head_sha: item.first_failed_head_sha,
-          first_failed_head_short: item.first_failed_head_short,
-          no_success_in_window: item.no_success_in_window,
-          first_failed_author_login: item.first_failed_author_login,
-          first_failed_author_name: item.first_failed_author_name,
-          first_failed_author_url: item.first_failed_author_url,
-          commits_between: item.commits_between || [],
-          error_snippets: item.error_snippets || [],
-          repeated_errors: item.repeated_errors || [],
-          failing_jobs: item.failing_jobs || [],
-        });
-      }
-    } catch (e) {
-      core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
-    }
-  }
+  return enrichFailingDetails(stayedFailingDetails, filteredGrouped, errorSnippetsCache, changes, context, 'stayed_failing');
 }
 
 /**
@@ -1130,6 +1055,7 @@ module.exports = {
   computeLatestRunInfo,
   getMainWindowRuns,
   computeStatusChanges,
+  enrichFailingDetails,
   enrichRegressions,
   enrichStayedFailing,
   detectJobLevelRegressions,
