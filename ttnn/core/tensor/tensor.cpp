@@ -814,9 +814,7 @@ Tensor create_tt_tensor_from_host_data(
 
     switch (src_dtype) {
         case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B:
-            // TODO: used to be float, need to connect directly with the logic from create_strategy
-            return create_tensor_from_host_buffer.operator()<bfloat16>();
+        case DataType::BFLOAT4_B: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
@@ -848,13 +846,14 @@ DataType create_strategy(ttnn::PyDType src_dtype, const DataType& dst_dtype) {
             case ttnn::PyDType::UINT32: return DataType::UINT32;
             case ttnn::PyDType::UINT8: return DataType::UINT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
+            case ttnn::PyDType::BOOL: return DataType::UINT8;
             default: TT_THROW("Unsupported PyDType {}", type);
         }
     };
 
     if (!is_pytype_borrowable(src_dtype)) {
         if ((dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)) {
-            return DataType::BFLOAT16;
+            return DataType::FLOAT32;
         }
         return dst_dtype;
     }
