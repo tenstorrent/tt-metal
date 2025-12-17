@@ -105,11 +105,14 @@ def test_chunked_prefill_single_user(
         max_num_blocks=page_params["page_max_num_blocks"],
     )
     # Implied shuffling of blocks
-    permutation = torch.randperm(paged_attention_config.max_num_blocks)
-    # Page table which maps virtual blocks to physical
-    reverse_permutation = torch.argsort(permutation) + 1  # +1 to skip block 0
+    # Physical block 0 is reserved as null block in vLLM, so use blocks 1 to max_num_blocks-1
+    # (permute max_num_blocks-1 values, then add 1 to shift range from 0..max-2 to 1..max-1)
+    num_usable_blocks = paged_attention_config.max_num_blocks - 1
+    permutation = torch.randperm(num_usable_blocks)
+    # Page table which maps virtual blocks to physical (offset by 1 to skip block 0)
+    reverse_permutation = torch.argsort(permutation) + 1
     static_page_table = reverse_permutation.reshape(
-        model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        model_args.max_batch_size, num_usable_blocks // model_args.max_batch_size
     )
 
     # Load TTNN model
