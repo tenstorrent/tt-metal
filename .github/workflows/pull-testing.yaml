@@ -1,0 +1,23 @@
+name: ZZ - Pull testing
+
+on:
+  push:
+    branches:
+      - jjpulltest
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
+jobs:
+  hello:
+    name: "hello"
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    container:
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:f8c5778c5718a09e7f72c6110b488662ee89a6a8
+    steps:
+      - name: hello
+        run: echo "hello world"
