@@ -121,6 +121,8 @@ void kernel_main() {
 
         // LOCAL N MASK
         const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
+        // If global N is in the ring iter, it supersedes the local N mask.
+        const bool ring_iter_needs_local_n_mask = local_n_needs_masking && !global_n_is_within_ring_iter;
         // DPRINT << "ring id: " << ring_id << " ring iter needs local N mask: " << (uint32_t)local_n_needs_masking
         //        << ENDL();
 
@@ -136,19 +138,20 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+            DPRINT << "ring id: " << ring_id << " Processing Q chunk: " << global_q_chunk << ENDL();
 
             if (ring_iter_needs_global_n_mask) {
-                // DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
+                DPRINT << "ring id: " << ring_id << " Generating global N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_n_within_ring_iter);
                 DPRINT << "ring id: " << ring_id << " Generated global N mask at index " << global_n_within_ring_iter
                        << ENDL();
-            } else if (local_n_needs_masking) {
-                // DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
+            } else if (ring_iter_needs_local_n_mask) {
+                DPRINT << "ring id: " << ring_id << " Generating local N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, local_padded_N);
                 DPRINT << "ring id: " << ring_id << " Generated local N mask at index " << local_padded_N << ENDL();
             }
             if (ring_iter_needs_joint_n_mask) {
-                // DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
+                DPRINT << "ring id: " << ring_id << " Generating joint N mask" << ENDL();
                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, L);
                 DPRINT << "ring id: " << ring_id << " Generated joint N mask at index " << L << ENDL();
             }
@@ -185,6 +188,7 @@ void kernel_main() {
 
             if (ring_iter > 0) {
                 // Read previous output for this Q chunk
+                DPRINT << "ring id: " << ring_id << " Reading previous output for Q chunk" << ENDL();
                 read_block(
                     is_joint_q ? joint_out_generator : out_generator,
                     out_slice,
@@ -192,8 +196,9 @@ void kernel_main() {
                     cb_prev_out,
                     tile_bytes,
                     false);
-
+                DPRINT << "ring id: " << ring_id << " Read previous output for Q chunk" << ENDL();
                 // Read previous LSE for this Q chunk
+                DPRINT << "ring id: " << ring_id << " Reading previous LSE for Q chunk" << ENDL();
                 cb_reserve_back(cb_lse_in, Sq_chunk_t);
                 uint32_t lse_addr = get_write_ptr(cb_lse_in);
 
@@ -203,6 +208,7 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_lse_in, Sq_chunk_t);
+                DPRINT << "ring id: " << ring_id << " Read previous LSE for Q chunk" << ENDL();
             }
 
             write_block(is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
