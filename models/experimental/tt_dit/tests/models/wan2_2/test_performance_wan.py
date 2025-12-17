@@ -173,7 +173,6 @@ def test_pipeline_performance(
             with torch.no_grad():
                 pipeline(
                     prompt=prompts[prompt_idx],
-                    negative_prompt=negative_prompt,
                     height=height,
                     width=width,
                     num_frames=num_frames,
