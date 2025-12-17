@@ -203,11 +203,11 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_commit();
 
-    // Reader is sending full blocks that evenly divide the CB size,
-    // so we need to pop the entire last block to stay in sync
-    const auto last_block_is_partial = generic::blocks(Wt, blk).back().is_partial();
-    const auto num_to_pop = last_block_is_partial ? generic::blocks(Wt, blk).back().full_block_size() : 1;
-    cb_pop_front(cb_in, num_to_pop);
+    // Reader is sending full blocks, so we need to stay in sync
+    const auto last_block = generic::blocks(Wt, blk).back();
+    const auto num_to_sync = last_block.full_block_size() - last_block.size();
+    cb_wait_front(cb_in, num_to_sync);
+    cb_pop_front(cb_in, num_to_sync);
 }
 
 void MAIN {
@@ -379,10 +379,9 @@ void MAIN {
             }
             cb_pop_front(cb_in, block.full_block_size());
 
-            reconfig_data_format_srca(cb_in, cb_ex2pe);
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
-                reconfig_data_format_srca(cb_ex2pe, cb_inb);
+                reconfig_data_format_srca(cb_in, cb_inb);
                 binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
                 cb_wait_front(cb_inb, block.full_block_size());
                 for (auto i : block.local()) {
@@ -393,6 +392,7 @@ void MAIN {
             }
 
             // Multiply by 1/(√(Var(X) + ε))
+            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, i);
