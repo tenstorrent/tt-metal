@@ -75,6 +75,9 @@ struct ConnectionData {
     // TODO: Remove after MGD 1.0 is deprecated
     proto::RoutingDirection routing_direction;
 
+    // Flag to assign Z direction to intermesh connections (dev/testing feature)
+    bool assign_z_direction = false;
+
 private:
     static ConnectionId generate_next_global_id() {
         static std::atomic_uint32_t next_global_id_ = 0;
