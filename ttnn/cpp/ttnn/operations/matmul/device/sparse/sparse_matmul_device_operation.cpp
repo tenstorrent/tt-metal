@@ -6,7 +6,6 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
-#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <tt-metalium/work_split.hpp>
 
