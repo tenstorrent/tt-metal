@@ -134,12 +134,6 @@ class Generator:
         tt_out_logits_all_users=None,
         start_pos: list[int] = None,  # Cached prefixes lengths, ignored for now
     ):
-        print(f"Prefill start_pos: {start_pos}")
-        print(f"Prefill tokens: {tokens}")
-        print(f"Prefill page_table: {page_table}")
-        print(f"Prefill prompt_lens: {prompt_lens}")
-        print(f"Prefill empty_slots: {empty_slots}")
-
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
                 tokens,
