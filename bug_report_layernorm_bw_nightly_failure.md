@@ -248,10 +248,16 @@ Use circular buffer for accumulator persistence across loop iterations:
 
 ## Files
 
-- **Bug location:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp`
-- **Device operation:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp`
-- **Program factory:** `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp`
-- **Test file:** `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`
+**Repository Ownership:** All files listed below belong to the **tt-train** subproject within the tt-metal repository (`github.com/tenstorrent/tt-metal`). The `tt-train/` directory is NOT a git submodule or external dependency - it is a subdirectory within tt-metal, tracked directly in tt-metal's git history. The bug and all affected code are entirely within tt-train.
+
+| File | Path | Description |
+|------|------|-------------|
+| **Bug location** | `tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp` | Compute kernel with accumulation bug |
+| **Device operation** | `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp` | TTNN operation registration |
+| **Program factory** | `tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp` | Kernel program setup |
+| **High-level wrapper** | `tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp` | TTML operation entry point |
+| **Test file** | `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp` | Bug reproduction tests |
+
 - **Branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2`
 
 ## Reporter
